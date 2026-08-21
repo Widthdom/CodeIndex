@@ -134,6 +134,10 @@ public partial class DbReader
         var unknownExtensionExtensionCounts = UnknownExtensionClassifier.DeserializeCounts(TryGetMetaStringInternal(DbContext.UnknownExtensionExtensionCountsMetaKey));
         var unknownExtensionCategoryCounts = UnknownExtensionClassifier.DeserializeCounts(TryGetMetaStringInternal(DbContext.UnknownExtensionCategoryCountsMetaKey));
         var unknownExtensionGroups = UnknownExtensionClassifier.DeserializeGroups(TryGetMetaStringInternal(DbContext.UnknownExtensionGroupsMetaKey));
+        var unknownExtensionGroupCount = ParseMetaLong(TryGetMetaStringInternal(DbContext.UnknownExtensionGroupCountMetaKey));
+        var unknownExtensionGroupsTruncated = ParseMetaBool(TryGetMetaStringInternal(DbContext.UnknownExtensionGroupsTruncatedMetaKey));
+        var unknownExtensionGroupLimit = ParseMetaLong(TryGetMetaStringInternal(DbContext.UnknownExtensionGroupLimitMetaKey));
+        var unknownExtensionGroupOmittedCount = ParseMetaLong(TryGetMetaStringInternal(DbContext.UnknownExtensionGroupOmittedCountMetaKey));
         if (unknownExtensionFiles != null)
         {
             unknownExtensionFilesTruncated ??= unknownExtensionFileCount.HasValue
@@ -211,6 +215,13 @@ public partial class DbReader
             UnknownExtensionExtensionCounts = unknownExtensionExtensionCounts,
             UnknownExtensionCategoryCounts = unknownExtensionCategoryCounts,
             UnknownExtensionGroups = unknownExtensionGroups,
+            UnknownExtensionGroupCount = unknownExtensionGroupCount,
+            UnknownExtensionGroupsTruncated = unknownExtensionGroupsTruncated,
+            UnknownExtensionGroupLimit = unknownExtensionGroupLimit,
+            UnknownExtensionGroupOmittedCount = unknownExtensionGroupOmittedCount,
+            UnknownExtensionGuidance = unknownExtensionFileCount > 0
+                ? UnknownExtensionClassifier.Guidance
+                : null,
             IndexedAt = freshness.IndexedAt,
             LastWorkspaceFreshenedAt = lastIndexRun?.StartedAt ?? indexedHeadTimestamp?.UtcDateTime,
             LatestModified = freshness.LatestModified,

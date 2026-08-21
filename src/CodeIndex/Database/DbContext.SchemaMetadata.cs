@@ -172,10 +172,10 @@ public partial class DbContext : IDisposable
     public const string IndexCompletenessMetaKey = "index_completeness";
     public const string IndexIncompleteReasonsMetaKey = "index_incomplete_reasons_json";
     // Issue #1585: count of files seen by the most recent successful full-repository scan
-    // whose non-empty extension did not map to a known language. This is a scan coverage
+    // whose filename or extension did not map to a known language. This is a scan coverage
     // signal, not an indexed-file count, and is omitted by readers until a current index pass
     // has stamped it.
-    // Issue #1585: 直近成功した全体 scan で、非空の拡張子が既知言語に対応しなかった
+    // Issue #1585: 直近成功した全体 scan で、ファイル名または拡張子が既知言語に対応しなかった
     // ファイル数。index 済み件数ではなく scan coverage の信号であり、現行 index が stamp
     // するまでは reader 側で省略する。
     public const string UnknownExtensionFileCountMetaKey = "unknown_extension_file_count";
@@ -185,6 +185,10 @@ public partial class DbContext : IDisposable
     public const string UnknownExtensionExtensionCountsMetaKey = "unknown_extension_extension_counts_json";
     public const string UnknownExtensionCategoryCountsMetaKey = "unknown_extension_category_counts_json";
     public const string UnknownExtensionGroupsMetaKey = "unknown_extension_groups_json";
+    public const string UnknownExtensionGroupCountMetaKey = "unknown_extension_group_count";
+    public const string UnknownExtensionGroupsTruncatedMetaKey = "unknown_extension_groups_truncated";
+    public const string UnknownExtensionGroupLimitMetaKey = "unknown_extension_group_limit";
+    public const string UnknownExtensionGroupOmittedCountMetaKey = "unknown_extension_group_omitted_count";
     public const int UnknownExtensionFilePathSampleLimit = 50;
     public const string BatchInProgressMetaKey = "batch_in_progress";
     // Issue #1546: case-sensitivity of the workspace filesystem the most recent successful

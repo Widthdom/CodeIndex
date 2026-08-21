@@ -168,7 +168,7 @@ visible here as a compact compatibility index.
 | Workspace and HEAD freshness | `indexed_head_commit`, `worktree_head_changed`, `indexed_head_sha`, `indexed_head_branch`, `indexed_head_timestamp`, `commits_ahead_of_indexed_head`, `head_freshness`. |
 | Workspace-check path samples | `workspace_check.changed_files`, `workspace_check.missing_files`, `workspace_check.outside_sparse_cone_files`, `workspace_check.unindexed_files`, `workspace_check.unverifiable_files`, and `workspace_check.scan_errors`, each paired with authoritative `*_count`, `*_truncated`, `*_path_limit`, and `*_omitted_count` fields. |
 | Version compatibility | `index_writer_version`, `index_newer_than_reader`, `index_newer_than_reader_reason`. |
-| Extension and extractor diagnostics | `unknown_extension_file_count`, `unknown_extension_files`, `unknown_extension_files_truncated`, `unknown_extension_file_path_limit`, `unknown_extension_extension_counts`, `unknown_extension_category_counts`, `unknown_extension_groups`, `extractors`, `hooks`, `hook_diagnostics`. |
+| Extension and extractor diagnostics | `unknown_extension_file_count`, `unknown_extension_files`, `unknown_extension_files_truncated`, `unknown_extension_file_path_limit`, `unknown_extension_extension_counts`, `unknown_extension_category_counts`, `unknown_extension_groups`, `unknown_extension_group_count`, `unknown_extension_groups_truncated`, `unknown_extension_group_limit`, `unknown_extension_group_omitted_count`, `unknown_extension_guidance`, `extractors`, `hooks`, `hook_diagnostics`. |
 | Runtime trust and permissions | `trust_overrides`, `git_executable`, `path_case_sensitive`, `data_dir_mode`, `db_file_mode`, `database_permission_policy`, `database_permission_diagnostics`, `mac_profile`, `mac_profile_diagnostics`. |
 | Check context and run diagnostics | `stale_after_seconds`, `index_age_seconds`, `query_context.check_mode`, `query_context.stale_after_seconds`, `process`, `last_index_run`, `last_workspace_freshened_at`, `last_failed_or_partial_index_run`. |
 | Last-run detail | `last_index_run.bytes_read_skipped_file_count`, `last_index_run.bytes_read_incomplete`, `last_index_run.diagnostics`, `last_index_run.diagnostic_count`, `last_index_run.diagnostics_truncated`, `last_index_run.reference_extraction_cap_hits`, `last_index_run.rebuild_reclaim`, `last_failed_or_partial_index_run.progress_persisted`, `last_failed_or_partial_index_run.recovery_hint`, `last_failed_or_partial_index_run.file_errors`. |
@@ -177,6 +177,11 @@ visible here as a compact compatibility index.
 | Database size attribution | `database_size_attribution`. |
 | Remediation | `degraded_root_cause`, `degraded_reason`, `recommended_action`, `alternative_action`, `readiness_degradations`, `repair_commands`. |
 | MCP-only session diagnostics | `mcp_session`, `mcp_session.metrics`, `queue_capacity`, `queue_depth`, `queued_event_count`, `written_event_count`, `dropped_event_count`, `queue_full_drop_count`, `serialization_failure_count`, `write_failure_count`, `rotation_failure_count`, `batch_flush_count`, `consecutive_failure_count`, `recovery_count`, `next_retry_at`, `last_recovery_at`, `last_failure`, `mcp_session.audit_log`, `queued_record_count`, `written_record_count`, `mcp.rate_limit.bucket_limit`, `mcp.rate_limit.bucket_limit_rejection_count`. |
+
+Full index completion, the watch initial scan, and full-scan dry runs also report
+the unknown-language file count, the top 10 extension groups, explicit omission
+metadata, and remediation guidance. `status --compact` includes the persisted
+equivalent from the most recent successful full scan.
 
 Use `cdidx status --explain <field>` for bounded field guidance. Detailed
 semantics, repair-action structure, readiness degradation, SQLite/WAL handling,
@@ -379,7 +384,7 @@ field group を表に残します。
 | workspace / HEAD freshness | `indexed_head_commit`、`worktree_head_changed`、`indexed_head_sha`、`indexed_head_branch`、`indexed_head_timestamp`、`commits_ahead_of_indexed_head`、`head_freshness`。 |
 | workspace-check の path sample | `workspace_check.changed_files`、`workspace_check.missing_files`、`workspace_check.outside_sparse_cone_files`、`workspace_check.unindexed_files`、`workspace_check.unverifiable_files`、`workspace_check.scan_errors`。各一覧には authoritative な `*_count`、`*_truncated`、`*_path_limit`、`*_omitted_count` が対応します。 |
 | version compatibility | `index_writer_version`、`index_newer_than_reader`、`index_newer_than_reader_reason`。 |
-| extension / extractor diagnostics | `unknown_extension_file_count`、`unknown_extension_files`、`unknown_extension_files_truncated`、`unknown_extension_file_path_limit`、`unknown_extension_extension_counts`、`unknown_extension_category_counts`、`unknown_extension_groups`、`extractors`、`hooks`、`hook_diagnostics`。 |
+| extension / extractor diagnostics | `unknown_extension_file_count`、`unknown_extension_files`、`unknown_extension_files_truncated`、`unknown_extension_file_path_limit`、`unknown_extension_extension_counts`、`unknown_extension_category_counts`、`unknown_extension_groups`、`unknown_extension_group_count`、`unknown_extension_groups_truncated`、`unknown_extension_group_limit`、`unknown_extension_group_omitted_count`、`unknown_extension_guidance`、`extractors`、`hooks`、`hook_diagnostics`。 |
 | runtime trust / permissions | `trust_overrides`、`git_executable`、`path_case_sensitive`、`data_dir_mode`、`db_file_mode`、`database_permission_policy`、`database_permission_diagnostics`、`mac_profile`、`mac_profile_diagnostics`。 |
 | check context / run diagnostics | `stale_after_seconds`、`index_age_seconds`、`query_context.check_mode`、`query_context.stale_after_seconds`、`process`、`last_index_run`、`last_workspace_freshened_at`、`last_failed_or_partial_index_run`。 |
 | last-run detail | `last_index_run.bytes_read_skipped_file_count`、`last_index_run.bytes_read_incomplete`、`last_index_run.diagnostics`、`last_index_run.diagnostic_count`、`last_index_run.diagnostics_truncated`、`last_index_run.reference_extraction_cap_hits`、`last_index_run.rebuild_reclaim`、`last_failed_or_partial_index_run.progress_persisted`、`last_failed_or_partial_index_run.recovery_hint`、`last_failed_or_partial_index_run.file_errors`。 |
@@ -388,6 +393,11 @@ field group を表に残します。
 | database size attribution | `database_size_attribution`。 |
 | remediation | `degraded_root_cause`、`degraded_reason`、`recommended_action`、`alternative_action`、`readiness_degradations`、`repair_commands`。 |
 | MCP-only session diagnostics | `mcp_session`、`mcp_session.metrics`、`queue_capacity`、`queue_depth`、`queued_event_count`、`written_event_count`、`dropped_event_count`、`queue_full_drop_count`、`serialization_failure_count`、`write_failure_count`、`rotation_failure_count`、`batch_flush_count`、`consecutive_failure_count`、`recovery_count`、`next_retry_at`、`last_recovery_at`、`last_failure`、`mcp_session.audit_log`、`queued_record_count`、`written_record_count`、`mcp.rate_limit.bucket_limit`、`mcp.rate_limit.bucket_limit_rejection_count`。 |
+
+全体 index の完了時、watch の初回 scan、全体 scan の dry-run でも、言語未対応
+ファイル数、上位 10 個の拡張子 group、明示的な省略 metadata、対処 guidance を
+返します。`status --compact` には、直近に成功した全体 scan で永続化された同等の
+診断が含まれます。
 
 上限付きの field guidance は `cdidx status --explain <field>` で確認できます。
 repair action、readiness degradation、SQLite/WAL、MCP diagnostic の詳細は

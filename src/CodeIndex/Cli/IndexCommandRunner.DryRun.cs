@@ -121,6 +121,7 @@ public static partial class IndexCommandRunner
         var csharpWorkspaceEstimateUnavailable = false;
         var unsupportedTotal = 0;
         var unknownExtensionTotal = 0;
+        var unknownExtensionPaths = new List<string>();
         using var symbolExtractionWorker = new LazyDisposable<SymbolExtractionWorkerClient>(
             () => new SymbolExtractionWorkerClient(options.MaxFileSizeBytes));
         var normalizedUpdatePaths = options.UpdateFiles.Count > 0
@@ -213,6 +214,7 @@ public static partial class IndexCommandRunner
         if (authoritativeFullScan)
         {
             unknownExtensionTotal = dryScanMetadata.UnknownExtensionFiles.Count;
+            unknownExtensionPaths.AddRange(dryScanMetadata.UnknownExtensionFiles);
             unsupportedTotal = CountUnsupportedNonIndexablePaths(dryScanMetadata);
         }
 
@@ -301,7 +303,11 @@ public static partial class IndexCommandRunner
             if (!probe.Supported)
             {
                 if (probe.UnknownExtension)
+                {
                     unknownExtensionTotal++;
+                    if (!authoritativeFullScan)
+                        unknownExtensionPaths.Add(displayRelativePath);
+                }
                 else if (probe.Unsupported)
                     unsupportedTotal++;
 
@@ -499,6 +505,22 @@ public static partial class IndexCommandRunner
 
         var estimatedTableMutations = mutationEstimates.BuildValues();
         var estimatedTableMutationDetails = mutationEstimates.BuildDetails();
+        var unknownExtensionClassification = UnknownExtensionClassifier.Classify(unknownExtensionPaths);
+        var unknownExtensionGroups = unknownExtensionClassification.Groups
+            .Take(UnknownExtensionClassifier.MaxCompletionGroups)
+            .ToList();
+        var unknownExtensionGroupOmittedCount = Math.Max(
+            0,
+            unknownExtensionClassification.GroupCount - unknownExtensionGroups.Count);
+        var unknownExtensionWarning = unknownExtensionClassification.ActionableFileCount > 0
+            ? $"{unknownExtensionClassification.ActionableFileCount} file(s) were excluded because no language mapping or extractor was available. {UnknownExtensionClassifier.Guidance}"
+            : null;
+        if (unknownExtensionWarning != null)
+        {
+            warningCount++;
+            if (warningSamples.Count < DryRunWarningSampleLimit)
+                warningSamples.Add(new CliJsonMessage("<unknown_extensions>", unknownExtensionWarning));
+        }
 
         if (options.MemoryTrace)
         {
@@ -524,6 +546,17 @@ public static partial class IndexCommandRunner
                 ProjectedReferenceCapHits = projectedReferenceCapHits,
                 UnsupportedTotal = unsupportedTotal,
                 UnknownExtensionTotal = unknownExtensionTotal,
+                UnknownExtensionFileCount = unknownExtensionTotal,
+                UnknownExtensionGroups = unknownExtensionGroups.Count > 0 ? unknownExtensionGroups : null,
+                UnknownExtensionGroupCount = unknownExtensionClassification.GroupCount,
+                UnknownExtensionGroupsTruncated = unknownExtensionGroupOmittedCount > 0,
+                UnknownExtensionGroupLimit = UnknownExtensionClassifier.MaxCompletionGroups,
+                UnknownExtensionGroupOmittedCount = unknownExtensionGroupOmittedCount,
+                UnknownExtensionDiagnosticsScope = authoritativeFullScan ? "workspace" : "candidate_scope",
+                UnknownExtensionFileCountLowerBound = candidatePathsTruncated,
+                UnknownExtensionGuidance = unknownExtensionTotal > 0
+                    ? UnknownExtensionClassifier.Guidance
+                    : null,
                 CandidatePathLimit = dryRunPathLimit,
                 CandidatePathsProcessed = candidatePathsProcessed,
                 CandidatePathsTruncated = candidatePathsTruncated,
@@ -558,6 +591,14 @@ public static partial class IndexCommandRunner
         {
             var lowerBound = candidatePathsTruncated ? " (truncated; totals are lower bounds)" : string.Empty;
             CommandOutputWriter.WriteLine($"Dry run: {dryFileCount} indexable files inspected{lowerBound}");
+            if (unknownExtensionTotal > 0)
+            {
+                CommandOutputWriter.WriteLine($"  unknown extensions {unknownExtensionTotal,6}{(candidatePathsTruncated ? " (lower bound)" : string.Empty)}");
+                foreach (var group in unknownExtensionGroups)
+                    CommandOutputWriter.WriteLine($"    {group.Extension}: {ConsoleUi.FormatNumber(group.Count)} ({group.RecommendedAction})");
+                if (unknownExtensionGroupOmittedCount > 0)
+                    CommandOutputWriter.WriteLine($"    ... {ConsoleUi.FormatNumber(unknownExtensionGroupOmittedCount)} more extension groups");
+            }
             if (candidatePathsTruncated)
                 CommandOutputWriter.WriteLine($"  candidate paths processed {candidatePathsProcessed.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)} of limit {dryRunPathLimit.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)}");
             CommandOutputWriter.WriteLine($"  projected updates {projectedFileUpdates,6}");
@@ -586,6 +627,8 @@ public static partial class IndexCommandRunner
                 CommandOutputWriter.WriteLine(
                     $"  language detection {detection.Path}: {detection.Language} ({detection.Source}, confidence {detection.Confidence})");
             }
+            if (unknownExtensionWarning != null)
+                ConsoleUi.PrintWarning(unknownExtensionWarning);
         }
         return CommandExitCodes.Success;
     }

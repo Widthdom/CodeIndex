@@ -122,7 +122,7 @@ public partial class FileIndexer
         {
             var relativeFile = ToRelativePath(file);
             scanState.RecordNonIndexablePath(relativeFile);
-            if (HasUnknownExtension(file) && !IsInternalIndexArtifactPath(relativeFile))
+            if (HasUnknownLanguageMapping(file) && !IsInternalIndexArtifactPath(relativeFile))
                 scanState.RecordUnknownExtensionFile(relativeFile);
             return false;
         }

@@ -6,12 +6,24 @@ namespace CodeIndex.Database;
 internal sealed record UnknownExtensionClassification(
     Dictionary<string, long> ExtensionCounts,
     Dictionary<string, long> CategoryCounts,
-    List<StatusUnknownExtensionGroup> Groups);
+    List<StatusUnknownExtensionGroup> Groups,
+    int GroupCount,
+    long ActionableFileCount)
+{
+    public bool GroupsTruncated => GroupCount > Groups.Count;
+    public int GroupLimit => UnknownExtensionClassifier.MaxPersistedGroups;
+    public int GroupOmittedCount => Math.Max(0, GroupCount - Groups.Count);
+}
 
 internal static class UnknownExtensionClassifier
 {
     internal const int MaxPersistedGroups = 128;
+    internal const int MaxCompletionGroups = 10;
     internal const int MaxSamplePathsPerGroup = 5;
+    internal const string Guidance =
+        "Inspect an extension with `cdidx languages --extension <extension> --json`; " +
+        "then add a trusted mapping in `.cdidx-langmap.yaml`, register an extractor, " +
+        "or ignore intentional non-code files.";
     private const int MaxDictionaryEntries = 256;
     private const int MaxRawJsonCharacters = 512 * 1024;
     private const int MaxDecodedStringCharacters = 64 * 1024;
@@ -29,6 +41,7 @@ internal static class UnknownExtensionClassifier
         var extensionCounts = new Dictionary<string, long>(StringComparer.Ordinal);
         var categoryCounts = new Dictionary<string, long>(StringComparer.Ordinal);
         var groups = new Dictionary<string, StatusUnknownExtensionGroup>(StringComparer.Ordinal);
+        var actionableFileCount = 0L;
 
         foreach (var path in paths.OrderBy(p => p, StringComparer.Ordinal))
         {
@@ -37,6 +50,8 @@ internal static class UnknownExtensionClassifier
 
             var extension = GetExtensionKey(path);
             var (category, action) = ClassifyPath(path, extension);
+            if (!string.Equals(action, "ignore_configuration", StringComparison.Ordinal))
+                actionableFileCount++;
             Increment(extensionCounts, extension);
             Increment(categoryCounts, category);
 
@@ -70,7 +85,9 @@ internal static class UnknownExtensionClassifier
         return new UnknownExtensionClassification(
             OrderCounts(extensionCounts),
             OrderCounts(categoryCounts),
-            orderedGroups);
+            orderedGroups,
+            groups.Count,
+            actionableFileCount);
     }
 
     public static string SerializeCounts(IReadOnlyDictionary<string, long> counts)

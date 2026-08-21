@@ -5825,7 +5825,7 @@ public sealed class Caller
     }
 
     [Fact]
-    public void Run_VerboseReportsUnknownExtensionCountAndStatusJsonStampsCount()
+    public void Run_CompletionAndStatusReportBoundedUnknownExtensionDiagnostics_Issue5100()
     {
         var projectRoot = CreateTempProject();
         try
@@ -5838,13 +5838,17 @@ public sealed class Caller
             var (exitCode, stdout, stderr) = RunAndCaptureStreams([projectRoot, "--verbose"]);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (statusExitCode, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
+            var (jsonExitCode, completionJson) = RunAndCaptureJson([projectRoot, "--json"]);
+            var (compactExitCode, compactJson) = RunProgramAndCaptureJson(
+                ["status", "--db", dbPath, "--compact", "--max-json-bytes", "50000"],
+                projectRoot);
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Contains("Unknown extension files: 3", stdout);
-            Assert.Contains(".cdidxignore", stdout);
-            Assert.Contains("data.unmapped", stdout);
-            Assert.Contains("notes.mystery", stdout);
+            Assert.Contains("Unknown extensions", stdout);
+            Assert.Contains(".mystery: 1 (language_support)", stdout);
+            Assert.Contains("sample: data.unmapped", stdout);
+            Assert.Contains("2 file(s) were excluded", stderr);
+            Assert.Contains("languages --extension", stderr);
             Assert.Equal(CommandExitCodes.Success, statusExitCode);
             Assert.Equal(3, statusJson.GetProperty("unknown_extension_file_count").GetInt64());
             Assert.False(statusJson.GetProperty("unknown_extension_files_truncated").GetBoolean());
@@ -5873,10 +5877,104 @@ public sealed class Caller
                 Assert.Equal("language_support", group.GetProperty("recommended_action").GetString());
                 Assert.Equal(1, group.GetProperty("count").GetInt64());
             });
+            Assert.Equal(3, statusJson.GetProperty("unknown_extension_group_count").GetInt64());
+            Assert.False(statusJson.GetProperty("unknown_extension_groups_truncated").GetBoolean());
+            Assert.Equal(UnknownExtensionClassifier.MaxPersistedGroups, statusJson.GetProperty("unknown_extension_group_limit").GetInt64());
+            Assert.Equal(0, statusJson.GetProperty("unknown_extension_group_omitted_count").GetInt64());
+            Assert.Contains(".cdidx-langmap.yaml", statusJson.GetProperty("unknown_extension_guidance").GetString());
+
+            Assert.Equal(CommandExitCodes.Success, jsonExitCode);
+            Assert.Equal(3, completionJson.GetProperty("unknown_extension_file_count").GetInt32());
+            Assert.Equal("workspace", completionJson.GetProperty("unknown_extension_diagnostics_scope").GetString());
+            Assert.False(completionJson.GetProperty("unknown_extension_file_count_lower_bound").GetBoolean());
+            Assert.Equal(3, completionJson.GetProperty("unknown_extension_group_count").GetInt32());
+            Assert.Equal(UnknownExtensionClassifier.MaxCompletionGroups, completionJson.GetProperty("unknown_extension_group_limit").GetInt32());
+            Assert.Equal(3, completionJson.GetProperty("unknown_extension_groups").GetArrayLength());
+            Assert.Equal(1, completionJson.GetProperty("summary").GetProperty("warnings").GetInt32());
+
+            Assert.Equal(CommandExitCodes.Success, compactExitCode);
+            var compactResult = Assert.Single(compactJson.GetProperty("results").EnumerateArray());
+            Assert.Equal(3, compactResult.GetProperty("unknown_extension_file_count").GetInt64());
+            Assert.Equal(3, compactResult.GetProperty("unknown_extension_groups").GetArrayLength());
+            Assert.Equal(3, compactResult.GetProperty("unknown_extension_group_count").GetInt64());
+            Assert.Contains("languages --extension", compactResult.GetProperty("unknown_extension_guidance").GetString());
         }
         finally
         {
             DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UnsupportedOnlyPreservesCaseAndExtensionlessGroups_Issue5100()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "source.MYSTERY"), "unknown extension\n");
+            File.WriteAllText(Path.Combine(projectRoot, "archive.part.UNMAPPED"), "unknown extension\n");
+            File.WriteAllText(Path.Combine(projectRoot, "extensionless_source"), "unknown extension\n");
+            for (var index = 0; index < 9; index++)
+                File.WriteAllText(Path.Combine(projectRoot, $"source.unknown{index:D3}"), "unknown extension\n");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("files_total").GetInt64());
+            Assert.Equal(12, json.GetProperty("unknown_extension_file_count").GetInt32());
+            var groups = json.GetProperty("unknown_extension_groups").EnumerateArray().ToArray();
+            Assert.Equal(10, groups.Length);
+            Assert.Contains(groups, group => group.GetProperty("extension").GetString() == ".mystery");
+            Assert.Equal(12, json.GetProperty("unknown_extension_group_count").GetInt32());
+            Assert.True(json.GetProperty("unknown_extension_groups_truncated").GetBoolean());
+            Assert.Equal(2, json.GetProperty("unknown_extension_group_omitted_count").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("warnings").GetInt32());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_IgnoredOnlyDoesNotWarnAndCustomMappingsClearDiagnostics_Issue5100()
+    {
+        var ignoredRoot = CreateTempProject();
+        var mappedRoot = CreateTempProject();
+        LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
+        try
+        {
+            File.WriteAllText(Path.Combine(ignoredRoot, ".cdidxignore"), "ignored.mystery\n");
+            File.WriteAllText(Path.Combine(ignoredRoot, "ignored.mystery"), "ignored\n");
+
+            var (ignoredExitCode, ignoredJson) = RunAndCaptureJson([ignoredRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, ignoredExitCode);
+            Assert.Equal(1, ignoredJson.GetProperty("unknown_extension_file_count").GetInt32());
+            Assert.Equal("ignore_configuration", ignoredJson.GetProperty("unknown_extension_groups")[0].GetProperty("recommended_action").GetString());
+            Assert.Equal(0, ignoredJson.GetProperty("summary").GetProperty("warnings").GetInt32());
+
+            File.WriteAllText(
+                Path.Combine(mappedRoot, LanguageMapOverrides.WorkspaceFileName),
+                "entries:\n  - extension: \".custom\"\n    language: \"csharp\"\n  - extension: \".kts.in\"\n    language: \"kotlin\"\n");
+            File.WriteAllText(Path.Combine(mappedRoot, "App.CUSTOM"), "public class App { }\n");
+            File.WriteAllText(Path.Combine(mappedRoot, "build.KTS.IN"), "fun main() = Unit\n");
+
+            var (mappedExitCode, mappedJson) = RunAndCaptureJson([mappedRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, mappedExitCode);
+            Assert.Equal(0, mappedJson.GetProperty("unknown_extension_file_count").GetInt32());
+            Assert.Equal(0, mappedJson.GetProperty("summary").GetProperty("warnings").GetInt32());
+            Assert.True(
+                !mappedJson.TryGetProperty("unknown_extension_guidance", out var mappedGuidance)
+                || mappedGuidance.ValueKind == JsonValueKind.Null);
+        }
+        finally
+        {
+            LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
+            DeleteDirectory(ignoredRoot);
+            DeleteDirectory(mappedRoot);
         }
     }
 

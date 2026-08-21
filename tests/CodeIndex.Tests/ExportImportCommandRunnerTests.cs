@@ -2435,6 +2435,12 @@ public class ExportImportCommandRunnerTests
         writer.SetMeta(DbContext.UnknownExtensionExtensionCountsMetaKey, "{\".bar\":1,\".foo\":1}");
         writer.SetMeta(DbContext.UnknownExtensionCategoryCountsMetaKey, "{\"language_support\":2}");
         writer.SetMeta(DbContext.UnknownExtensionGroupsMetaKey, "[]");
+        writer.SetMeta(DbContext.UnknownExtensionGroupCountMetaKey, "2");
+        writer.SetMeta(DbContext.UnknownExtensionGroupsTruncatedMetaKey, bool.FalseString);
+        writer.SetMeta(
+            DbContext.UnknownExtensionGroupLimitMetaKey,
+            UnknownExtensionClassifier.MaxPersistedGroups.ToString(CultureInfo.InvariantCulture));
+        writer.SetMeta(DbContext.UnknownExtensionGroupOmittedCountMetaKey, "0");
     }
 
     private static void AssertPartialArchiveStatus(string dbPath)

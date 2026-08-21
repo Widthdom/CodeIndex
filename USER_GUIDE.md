@@ -2765,6 +2765,37 @@ The database reflects the working tree at the time of the last index. After swit
 | File deleted after checkout | Purged from DB |
 | File added after checkout | Indexed as new |
 
+## Unsupported-file diagnostics
+
+A successful full index is still successful when files lack a language mapping,
+but completion output no longer makes those omissions look like an empty project.
+Human output reports the total and the top 10 normalized extension groups; JSON
+adds `unknown_extension_file_count`, `unknown_extension_groups`, group count,
+limit, truncation/omission metadata, diagnostic scope, lower-bound state, and
+`unknown_extension_guidance`. Group samples use the same normalized relative
+paths as full status and remain capped at five paths per group. Uppercase suffixes
+are normalized, multi-dot aliases are resolved before an unsupported file is
+grouped, and an unsupported extensionless file uses `<none>`.
+
+The warning count increases once when at least one group needs language or
+structural extraction support. Files classified as intentional metadata/assets
+with `ignore_configuration` remain visible but do not create that warning.
+Ignored files are excluded before classification, and a valid workspace mapping
+or extractor registration removes the diagnostic on the next full scan. Inspect
+an extension with `cdidx languages --extension <extension> --json`, then add a
+trusted mapping to `.cdidx-langmap.yaml`, register an extractor, or add an ignore
+rule for intentional non-code files.
+
+Full-scan dry runs report the same workspace-authoritative diagnostics without
+writing. Scoped dry runs use `unknown_extension_diagnostics_scope: "candidate_scope"`;
+a reached candidate-path limit also sets
+`unknown_extension_file_count_lower_bound: true`. The initial scan for
+`index --watch` uses the normal full-scan completion contract. Non-dry scoped
+updates (`--files`, `--commits`, or `--changed-between`) do not claim a new
+workspace inventory; persisted `status` diagnostics continue to describe the
+most recent successful full scan. `status --compact` includes those bounded
+persisted diagnostics by default.
+
 ## Supported languages
 
 CLI JSON and MCP `languages` responses share one catalog snapshot and expose `language_capability_counts`. Every count carries an explicit `scope`, `capability`, `count`, and `available` field. The `catalog` scope describes the complete runtime catalog, `matched_catalog` describes rows remaining after language/capability/indexed filters but before pagination, and `indexed_workspace` describes catalog languages currently present in the configured database. Capabilities are reported separately for detection, symbol extraction, reference extraction, outline, and graph queries, so catalog size and indexed-language totals are never interchangeable.
@@ -6277,6 +6308,33 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 | ファイル内容が変更 | 再インデックス |
 | checkout後にファイル削除 | DBからパージ |
 | checkout後にファイル追加 | 新規インデックス |
+
+## 未対応ファイルの診断
+
+言語 mapping がないファイルを含む全体 index も成功扱いですが、完了出力ではその
+省略を空の project と区別して表示します。human 出力は総数と正規化済み拡張子 group
+の上位 10 件を表示します。JSON は `unknown_extension_file_count`、
+`unknown_extension_groups`、group 総数、上限、切り詰め/省略 metadata、診断 scope、
+lower-bound 状態、`unknown_extension_guidance` を返します。group の sample path は
+full status と同じ正規化済み相対 path を使い、1 group あたり 5 件に制限されます。
+大文字 suffix は正規化され、複合拡張子 alias は未対応 group 化の前に解決されます。
+未対応の拡張子なしファイルは `<none>` で表します。
+
+言語または構造抽出の対応が必要な group が 1 件以上ある場合、warning 件数を 1 増やします。
+意図的な metadata/asset として `ignore_configuration` に分類されたファイルは可視化
+しますが、その warning は発生させません。ignore 済みファイルは分類前に除外され、
+有効な workspace mapping または extractor 登録後の次回全体 scan では診断が消えます。
+`cdidx languages --extension <extension> --json` で拡張子を確認し、信頼済み mapping を
+`.cdidx-langmap.yaml` に追加するか、extractor を登録するか、意図的な非 code ファイルを
+ignore rule に追加してください。
+
+全体 scan の dry-run は書き込みを行わず、同じ workspace-authoritative な診断を返します。
+scoped dry-run は `unknown_extension_diagnostics_scope: "candidate_scope"` を使い、candidate
+path 上限に達した場合は `unknown_extension_file_count_lower_bound: true` も設定します。
+`index --watch` の初回 scan は通常の全体 scan 完了契約を使います。非 dry-run の scoped
+update（`--files`、`--commits`、`--changed-between`）は新しい workspace inventory を
+主張せず、永続化済み `status` 診断は直近に成功した全体 scan を表し続けます。
+`status --compact` はその上限付き永続化診断を既定で含めます。
 
 ## 対応言語
 

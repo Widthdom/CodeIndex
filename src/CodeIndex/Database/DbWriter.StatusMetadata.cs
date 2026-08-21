@@ -76,7 +76,11 @@ public partial class DbWriter
                 (DbContext.UnknownExtensionFilePathLimitMetaKey, DbContext.UnknownExtensionFilePathSampleLimit.ToString(System.Globalization.CultureInfo.InvariantCulture)),
                 (DbContext.UnknownExtensionExtensionCountsMetaKey, "{}"),
                 (DbContext.UnknownExtensionCategoryCountsMetaKey, "{}"),
-                (DbContext.UnknownExtensionGroupsMetaKey, "[]"));
+                (DbContext.UnknownExtensionGroupsMetaKey, "[]"),
+                (DbContext.UnknownExtensionGroupCountMetaKey, "0"),
+                (DbContext.UnknownExtensionGroupsTruncatedMetaKey, false.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                (DbContext.UnknownExtensionGroupLimitMetaKey, UnknownExtensionClassifier.MaxPersistedGroups.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                (DbContext.UnknownExtensionGroupOmittedCountMetaKey, "0"));
             return;
         }
 
@@ -91,6 +95,10 @@ public partial class DbWriter
             (DbContext.UnknownExtensionFilePathLimitMetaKey, DbContext.UnknownExtensionFilePathSampleLimit.ToString(System.Globalization.CultureInfo.InvariantCulture)),
             (DbContext.UnknownExtensionExtensionCountsMetaKey, UnknownExtensionClassifier.SerializeCounts(classification.ExtensionCounts)),
             (DbContext.UnknownExtensionCategoryCountsMetaKey, UnknownExtensionClassifier.SerializeCounts(classification.CategoryCounts)),
-            (DbContext.UnknownExtensionGroupsMetaKey, UnknownExtensionClassifier.SerializeGroups(classification.Groups)));
+            (DbContext.UnknownExtensionGroupsMetaKey, UnknownExtensionClassifier.SerializeGroups(classification.Groups)),
+            (DbContext.UnknownExtensionGroupCountMetaKey, classification.GroupCount.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            (DbContext.UnknownExtensionGroupsTruncatedMetaKey, classification.GroupsTruncated.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            (DbContext.UnknownExtensionGroupLimitMetaKey, classification.GroupLimit.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            (DbContext.UnknownExtensionGroupOmittedCountMetaKey, classification.GroupOmittedCount.ToString(System.Globalization.CultureInfo.InvariantCulture)));
     }
 }
