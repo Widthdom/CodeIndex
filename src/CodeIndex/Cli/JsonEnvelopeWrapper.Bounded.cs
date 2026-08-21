@@ -71,6 +71,19 @@ internal static partial class JsonEnvelopeWrapper
         "unused_contract_domain",
     ];
 
+    private static readonly string[] PartialFamilyContinuationProjectionFields =
+    [
+        "partial_family_id",
+        "family_members_truncated",
+        "family_member_total_count",
+        "family_member_total_count_authoritative",
+        "family_member_returned_count",
+        "family_member_omitted_count",
+        "family_member_remaining_count",
+        "family_members_recovery_cursor",
+        "family_members_next_cursor",
+    ];
+
     internal static bool ShouldAutoWrapBoundedResponse(string command, string[] args)
     {
         if (!BoundedResponseCommands.Contains(command)
@@ -380,7 +393,8 @@ internal static partial class JsonEnvelopeWrapper
         var effectiveFields = controls.EffectiveFields(
             command,
             extraction.PrimaryCollection,
-            suppressRuntimeMetadata);
+            suppressRuntimeMetadata,
+            groupedSymbolsRequest: command == "symbols" && HasArgument(args, "--group-partials"));
         var pageItems = availableItems
             .Take(controls.PageLimit)
             .Select(item => ProjectResponseItem(
@@ -2334,7 +2348,8 @@ internal static partial class JsonEnvelopeWrapper
         public IReadOnlyList<string>? EffectiveFields(
             string command,
             string? primaryCollection,
-            bool statusExplainRequest)
+            bool statusExplainRequest,
+            bool groupedSymbolsRequest)
         {
             var preserveFullDiscoveryRows = command is "search" or "languages"
                                             || command == "symbols"
@@ -2358,11 +2373,28 @@ internal static partial class JsonEnvelopeWrapper
                 .Select(field => field[(primaryCollection.Length + 1)..])
                 .ToList();
             if (dotted.Count > 0)
-                return dotted;
+                return PreservePartialFamilyContinuationFields(
+                    dotted,
+                    command,
+                    groupedSymbolsRequest);
             if (selected.Contains(primaryCollection, StringComparer.Ordinal))
                 return null;
-            return selected.Where(field => !field.Contains('.')).ToList();
+            return PreservePartialFamilyContinuationFields(
+                selected.Where(field => !field.Contains('.')).ToList(),
+                command,
+                groupedSymbolsRequest);
         }
+
+        private static IReadOnlyList<string> PreservePartialFamilyContinuationFields(
+            IReadOnlyList<string> selected,
+            string command,
+            bool groupedSymbolsRequest)
+            => command == "symbols" && groupedSymbolsRequest
+                ? selected
+                    .Concat(PartialFamilyContinuationProjectionFields)
+                    .Distinct(StringComparer.Ordinal)
+                    .ToArray()
+                : selected;
     }
 
     private sealed record ResponseExtraction(

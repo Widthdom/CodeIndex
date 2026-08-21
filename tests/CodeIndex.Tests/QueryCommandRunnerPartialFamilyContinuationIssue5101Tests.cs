@@ -128,8 +128,7 @@ public partial class QueryCommandRunnerTests
 
             var metadataOnlyArgs = commonArgs.Concat([
                 "--fields",
-                "path,partial_family_id,family_member_total_count,family_member_returned_count,"
-                + "family_member_omitted_count,family_members_recovery_cursor,family_members_next_cursor",
+                "path",
                 "--max-json-bytes", "12000",
             ]).ToArray();
             var metadataOnlyPage = RunIssue5101FamilyPage(
