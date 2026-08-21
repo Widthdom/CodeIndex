@@ -433,14 +433,15 @@ For `references`, `callers`, `callees`, and `impact`, `--body` returns two
 independent evidence windows from indexed source. The existing `body_*` fields
 remain the definition or containing-symbol excerpt. Additive `callsite_*`
 fields center a second excerpt on the deterministic `first_reference` edge and
-report its 1-based line, column, span length, grouped reference count, and
-`callsite_omitted_reference_count`. The grouped representative is the lowest
-line/column pair; a single `references` row reports one selected reference and
-zero omitted references. Call-site content uses the same line-width, snippet,
+report its 1-based line, available persisted column and span length, grouped
+reference count, and `callsite_omitted_reference_count`. The grouped
+representative is the lowest source position; a single `references` row reports
+one selected reference and zero omitted references. Call-site content uses the same line-width, snippet,
 byte-budget, truncation-reason, redacted recovery-command, and cursor rules as
 body content. If indexed source cannot supply the excerpt,
 `callsite_content_unavailable_reason` is returned instead of reading the live
-workspace file.
+workspace file. Legacy rows omit a column or span that was not indexed, and an
+excerpt is unavailable when indexed chunks do not contain the exact focus line.
 
 `--body` and `--snippet-lines` describe this requested evidence work
 independently of `--fields`. A projection that omits every `body_*` and
@@ -4028,12 +4029,13 @@ client 側で判断できます。
 `references`、`callers`、`callees`、`impact` で `--body` を指定すると、indexed source
 から独立した2つの証拠 window を返します。既存の `body_*` field は定義または包含 symbol
 の抜粋のままです。追加の `callsite_*` field は、決定的に選んだ `first_reference` edge を
-中心に別の抜粋を作り、1-based の行・列、span 長、group 内の参照件数、
-`callsite_omitted_reference_count` を返します。group の代表は行・列が最小の組で、
+中心に別の抜粋を作り、1-based の行、永続化済みの場合の列と span 長、group 内の参照件数、
+`callsite_omitted_reference_count` を返します。group の代表は source position が最小の参照で、
 `references` の各 row は選択参照1件、省略0件です。call-site content にも body content と
 同じ行幅、snippet、byte budget、truncation reason、伏字化した recovery command、cursor
 の規則を適用します。indexed source から抜粋を作れない場合は live workspace file を読まず、
-`callsite_content_unavailable_reason` を返します。
+`callsite_content_unavailable_reason` を返します。座標または span を index していない legacy row
+では該当 field を省略し、indexed chunk に正確な focus 行がない場合も抜粋を利用不能として扱います。
 
 `--body` と `--snippet-lines` が表す証拠取得意図は `--fields` から独立しています。
 すべての `body_*` と `callsite_*` field を省く投影も有効で、その場合は materialization を

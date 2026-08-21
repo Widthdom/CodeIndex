@@ -503,6 +503,7 @@ public partial class DbReader
         var selfReferenceSql = _referenceColumns.Contains("is_self_reference") ? "r.is_self_reference" : "0";
         var mutualRecursionSql = _referenceColumns.Contains("is_mutual_recursion") ? "r.is_mutual_recursion" : "0";
         var sourceSymbolIdSql = _referenceColumns.Contains("source_symbol_id") ? "r.source_symbol_id" : "NULL";
+        var referenceSpanLengthSql = _referenceColumns.Contains("span_length") ? "r.span_length" : "NULL";
         var hasIdentityTargetScope = targetSymbolIds is { Count: > 0 }
                                      && _referenceColumns.Contains("target_symbol_id")
                                      && _referenceColumns.Contains("resolution_state")
@@ -581,6 +582,7 @@ public partial class DbReader
                 SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.reference_kind, r.line, r.column_number,
                        {sourceSymbolIdSql} AS source_symbol_id,
                        {targetSymbolIdSql} AS target_symbol_id,
+                       MIN(CASE WHEN {referenceSpanLengthSql} > 0 THEN {referenceSpanLengthSql} ELSE NULL END) AS span_length,
                        MAX({selfReferenceSql}) AS is_self_reference,
                        MAX({mutualRecursionSql}) AS is_mutual_recursion
                 FROM symbol_references r
@@ -604,14 +606,31 @@ public partial class DbReader
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
         sql += @"
                 GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.reference_kind, r.file_id, r.line, r.column_number, source_symbol_id, target_symbol_id
+            ),
+            ranked_references AS (
+                SELECT r.*,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY path, lang, " + BuildCallerKindProjectionSql("r") + @",
+                                        CASE WHEN lang = 'solution' AND reference_kind = 'project_reference' THEN path
+                                             ELSE " + BuildCallerNameProjectionSql("r") + @" END,
+                                        symbol_name, reference_kind, source_symbol_id
+                           ORDER BY line,
+                                    CASE WHEN column_number IS NULL THEN 1 ELSE 0 END,
+                                    column_number,
+                                    CASE WHEN span_length IS NULL OR span_length <= 0 THEN 1 ELSE 0 END,
+                                    COALESCE(span_length, 0),
+                                    COALESCE(target_symbol_id, -1)
+                       ) AS location_rank
+                FROM logical_references r
             )
             SELECT path, lang, " + BuildCallerKindProjectionSql("r") + @" AS container_kind,
                    CASE WHEN lang = 'solution' AND reference_kind = 'project_reference' THEN path
                         ELSE " + BuildCallerNameProjectionSql("r") + @" END AS container_name,
                    symbol_name,
                    reference_kind,
-                   (MIN(CAST(line AS INTEGER) * 4294967296 + column_number) / 4294967296) AS first_line,
-                   (MIN(CAST(line AS INTEGER) * 4294967296 + column_number) % 4294967296) AS first_column,
+                   MAX(CASE WHEN location_rank = 1 THEN line END) AS first_line,
+                   COALESCE(MAX(CASE WHEN location_rank = 1 THEN column_number END), 0) AS first_column,
+                   MAX(CASE WHEN location_rank = 1 THEN span_length END) AS first_length,
                    COUNT(*) AS reference_count,
                    MAX(is_self_reference) AS is_self_reference,
                    MAX(is_mutual_recursion) AS is_mutual_recursion,
@@ -622,7 +641,7 @@ public partial class DbReader
                        ELSE NULL
                    END AS target_symbol_id,
                    GROUP_CONCAT(DISTINCT target_symbol_id) AS target_symbol_ids
-            FROM logical_references r
+            FROM ranked_references r
             GROUP BY path, lang, container_kind, container_name, symbol_name, reference_kind, source_symbol_id";
         sql += $" ORDER BY {GetPathBucketOrderSql("r.path")}, reference_count DESC, r.path, COALESCE(r.container_name, ''), COALESCE(r.container_kind, ''), r.symbol_name, reference_kind, first_line, COALESCE(source_symbol_id, -1) LIMIT @limit OFFSET @offset";
 
@@ -669,18 +688,19 @@ public partial class DbReader
                 ReferenceKinds = [reader.GetString(5)],
                 ReferenceKindCounts = new Dictionary<string, int>(StringComparer.Ordinal)
                 {
-                    [reader.GetString(5)] = reader.GetInt32(8),
+                    [reader.GetString(5)] = reader.GetInt32(9),
                 },
                 FirstLine = reader.GetInt32(6),
                 FirstColumn = reader.GetInt32(7),
-                ReferenceCount = reader.GetInt32(8),
-                HasSelfReference = reader.GetInt32(9) != 0,
-                HasMutualRecursion = reader.GetInt32(10) != 0,
-                CallerSymbolId = reader.IsDBNull(11) ? null : reader.GetInt64(11),
-                CalleeSymbolId = reader.IsDBNull(12) ? null : reader.GetInt64(12),
-                CalleeSymbolIds = reader.IsDBNull(13)
+                FirstLength = GetNullableInt32(reader, 8),
+                ReferenceCount = reader.GetInt32(9),
+                HasSelfReference = reader.GetInt32(10) != 0,
+                HasMutualRecursion = reader.GetInt32(11) != 0,
+                CallerSymbolId = reader.IsDBNull(12) ? null : reader.GetInt64(12),
+                CalleeSymbolId = reader.IsDBNull(13) ? null : reader.GetInt64(13),
+                CalleeSymbolIds = reader.IsDBNull(14)
                     ? Array.Empty<long>()
-                    : reader.GetString(13)
+                    : reader.GetString(14)
                         .Split(',', StringSplitOptions.RemoveEmptyEntries)
                         .Select(long.Parse)
                         .Order()

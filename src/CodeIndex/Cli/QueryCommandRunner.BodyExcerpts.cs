@@ -32,7 +32,7 @@ public static partial class QueryCommandRunner
                 result.Path,
                 result.Line,
                 NormalizeCallsiteColumn(result.Column),
-                Math.Max(1, result.SymbolName.Length),
+                NormalizeCallsiteLength(result.SpanLength),
                 snippetLines,
                 maxLineWidth);
             ApplyCallsiteExcerpt(result, callsiteExcerpt);
@@ -53,7 +53,7 @@ public static partial class QueryCommandRunner
                 result.Path,
                 result.FirstLine,
                 NormalizeCallsiteColumn(result.FirstColumn),
-                Math.Max(1, result.CalleeName.Length),
+                NormalizeCallsiteLength(result.FirstLength),
                 snippetLines,
                 maxLineWidth);
             ApplyCallsiteExcerpt(result, callsiteExcerpt);
@@ -72,7 +72,7 @@ public static partial class QueryCommandRunner
                 result.Path,
                 result.FirstLine,
                 NormalizeCallsiteColumn(result.FirstColumn),
-                result.FirstLength ?? Math.Max(1, result.CalleeName.Length),
+                NormalizeCallsiteLength(result.FirstLength),
                 snippetLines,
                 maxLineWidth);
             ApplyCallsiteExcerpt(result, callsiteExcerpt);
@@ -93,7 +93,7 @@ public static partial class QueryCommandRunner
                 result.Path,
                 result.FirstLine,
                 result.FirstColumn,
-                Math.Max(1, result.CalleeName.Length),
+                NormalizeCallsiteLength(result.FirstLength),
                 snippetLines,
                 maxLineWidth);
             ApplyCallsiteExcerpt(result, callsiteExcerpt);
@@ -153,7 +153,7 @@ public static partial class QueryCommandRunner
         string path,
         int line,
         int? column,
-        int length,
+        int? length,
         int snippetLines,
         int maxLineWidth)
     {
@@ -164,18 +164,24 @@ public static partial class QueryCommandRunner
         var linesBefore = cappedLines / 2;
         var startLine = (int)Math.Max(1L, (long)line - linesBefore);
         var endLine = (int)Math.Min(int.MaxValue, (long)startLine + cappedLines - 1);
-        return reader.GetExcerpt(
+        var excerpt = reader.GetExcerpt(
             path,
             startLine,
             endLine,
             maxLineWidth: maxLineWidth,
             focusLine: line,
             focusColumn: column,
-            focusLength: Math.Max(1, length));
+            focusLength: length ?? 1);
+        return excerpt?.ContentLineSpans.Any(span => span.SourceLine == line) == true
+            ? excerpt
+            : null;
     }
 
     private static int? NormalizeCallsiteColumn(int? column)
         => column is > 0 ? column : null;
+
+    private static int? NormalizeCallsiteLength(int? length)
+        => length is > 0 ? length : null;
 
     private static void ApplyBodyExcerpt(ReferenceResult result, FileExcerptResult? excerpt)
     {
@@ -246,7 +252,7 @@ public static partial class QueryCommandRunner
         ApplyCallsiteSelection(result, referenceCount: 1);
         result.CallsiteLine = result.Line;
         result.CallsiteColumn = NormalizeCallsiteColumn(result.Column);
-        result.CallsiteLength = Math.Max(1, result.SymbolName.Length);
+        result.CallsiteLength = NormalizeCallsiteLength(result.SpanLength);
         if (excerpt == null)
         {
             result.CallsiteContentUnavailableReason = GetCallsiteUnavailableReason(result.CallsiteColumn);
@@ -269,7 +275,7 @@ public static partial class QueryCommandRunner
         ApplyCallsiteSelection(result, result.ReferenceCount);
         result.CallsiteLine = result.FirstLine;
         result.CallsiteColumn = NormalizeCallsiteColumn(result.FirstColumn);
-        result.CallsiteLength = Math.Max(1, result.CalleeName.Length);
+        result.CallsiteLength = NormalizeCallsiteLength(result.FirstLength);
         if (excerpt == null)
         {
             result.CallsiteContentUnavailableReason = GetCallsiteUnavailableReason(result.CallsiteColumn);
@@ -292,7 +298,7 @@ public static partial class QueryCommandRunner
         ApplyCallsiteSelection(result, result.ReferenceCount);
         result.CallsiteLine = result.FirstLine;
         result.CallsiteColumn = NormalizeCallsiteColumn(result.FirstColumn);
-        result.CallsiteLength = result.FirstLength ?? Math.Max(1, result.CalleeName.Length);
+        result.CallsiteLength = NormalizeCallsiteLength(result.FirstLength);
         if (excerpt == null)
         {
             result.CallsiteContentUnavailableReason = GetCallsiteUnavailableReason(result.CallsiteColumn);
@@ -315,7 +321,7 @@ public static partial class QueryCommandRunner
         ApplyCallsiteSelection(result, result.ReferenceCount);
         result.CallsiteLine = result.FirstLine;
         result.CallsiteColumn = result.FirstColumn;
-        result.CallsiteLength = Math.Max(1, result.CalleeName.Length);
+        result.CallsiteLength = NormalizeCallsiteLength(result.FirstLength);
         if (excerpt == null)
         {
             result.CallsiteContentUnavailableReason = GetCallsiteUnavailableReason(result.CallsiteColumn);

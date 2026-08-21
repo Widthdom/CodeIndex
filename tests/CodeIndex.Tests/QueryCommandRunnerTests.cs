@@ -5973,6 +5973,7 @@ public partial class QueryCommandRunnerTests
         string? expectedCallsiteContent = null,
         int? expectedCallsiteLine = null,
         int? expectedCallsiteColumn = null,
+        int? expectedCallsiteLength = null,
         int? expectedCallsiteReferenceCount = null,
         int? expectedCallsiteOmittedReferenceCount = null,
         bool? expectedCallsiteContentTruncated = null,
@@ -5998,6 +5999,7 @@ public partial class QueryCommandRunnerTests
                 expectedCallsiteContent,
                 expectedCallsiteLine ?? throw new ArgumentNullException(nameof(expectedCallsiteLine)),
                 expectedCallsiteColumn ?? throw new ArgumentNullException(nameof(expectedCallsiteColumn)),
+                expectedCallsiteLength ?? throw new ArgumentNullException(nameof(expectedCallsiteLength)),
                 expectedCallsiteReferenceCount ?? throw new ArgumentNullException(nameof(expectedCallsiteReferenceCount)),
                 expectedCallsiteOmittedReferenceCount ?? throw new ArgumentNullException(nameof(expectedCallsiteOmittedReferenceCount)),
                 expectedCallsiteContentTruncated ?? throw new ArgumentNullException(nameof(expectedCallsiteContentTruncated)),
@@ -6010,6 +6012,7 @@ public partial class QueryCommandRunnerTests
         string expectedContent,
         int expectedLine,
         int expectedColumn,
+        int expectedLength,
         int expectedReferenceCount,
         int expectedOmittedReferenceCount,
         bool expectedContentTruncated,
@@ -6019,6 +6022,7 @@ public partial class QueryCommandRunnerTests
         Assert.Equal(expectedLine, result.GetProperty("callsite_end_line").GetInt32());
         Assert.Equal(expectedLine, result.GetProperty("callsite_line").GetInt32());
         Assert.Equal(expectedColumn, result.GetProperty("callsite_column").GetInt32());
+        Assert.Equal(expectedLength, result.GetProperty("callsite_length").GetInt32());
         Assert.Equal("first_reference", result.GetProperty("callsite_selection").GetString());
         Assert.Equal(expectedReferenceCount, result.GetProperty("callsite_reference_count").GetInt32());
         Assert.Equal(expectedOmittedReferenceCount, result.GetProperty("callsite_omitted_reference_count").GetInt32());

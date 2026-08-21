@@ -820,6 +820,8 @@ public class ReferenceResult
     public string ReferenceKind { get; set; } = string.Empty;
     public int Line { get; set; }
     public int Column { get; set; }
+    [JsonIgnore]
+    public int? SpanLength { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Uri { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -931,6 +933,8 @@ public class CallerResult
     public double ReferenceWeightScore { get; set; }
     public int FirstLine { get; set; }
     public int FirstColumn { get; set; }
+    [JsonIgnore]
+    public int? FirstLength { get; set; }
     public int ReferenceCount { get; set; }
     public bool HasSelfReference { get; set; }
     public bool HasMutualRecursion { get; set; }
@@ -1086,6 +1090,8 @@ public class ImpactResult
     public int FirstLine { get; set; }
     [JsonIgnore]
     public int? FirstColumn { get; set; }
+    [JsonIgnore]
+    public int? FirstLength { get; set; }
     public int ReferenceCount { get; set; }
     public string ReferenceKind { get; set; } = string.Empty;
     public IReadOnlyList<string> ReferenceKinds { get; set; } = Array.Empty<string>();

@@ -234,6 +234,7 @@ public partial class DbReader
             {
                 result.FirstLine = caller.FirstLine;
                 result.FirstColumn = callerColumn;
+                result.FirstLength = caller.FirstLength;
                 result.CalleeName = caller.CalleeName;
             }
         }
