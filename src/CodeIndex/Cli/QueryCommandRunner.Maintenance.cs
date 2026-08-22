@@ -54,8 +54,23 @@ public static partial class QueryCommandRunner
                         MaintenanceDatabaseFailureKind.NotWritable));
             }
 
+            var validationDbPath = options.DbPath;
+            var queryOnlyDbPath = options.DbPath;
+            if (options.DryRun
+                && SqliteFileUri.StartsWithFileScheme(options.DbPath)
+                && DbPathResolver.TryNormalizeDbPath(options.DbPath, out var normalizedDbPath, out _)
+                && !SqliteFileUri.StartsWithFileScheme(normalizedDbPath))
+            {
+                validationDbPath = Path.GetFullPath(normalizedDbPath);
+                if (options.DbPath.StartsWith("file:/", StringComparison.OrdinalIgnoreCase)
+                    && !options.DbPath.StartsWith("file://", StringComparison.OrdinalIgnoreCase))
+                {
+                    queryOnlyDbPath = CanonicalizeSingleSlashFileUri(options.DbPath, validationDbPath);
+                }
+            }
+
             if (!DbContext.TryValidateExistingCodeIndexDb(
-                    options.DbPath,
+                    validationDbPath,
                     requireWritable: !options.DryRun,
                     requireSupportedUserVersion: false,
                     out _,
@@ -82,7 +97,7 @@ public static partial class QueryCommandRunner
             DbContext.VacuumGenerationWitness? vacuumGenerationWitness;
             using (var db = DbContext.CreateUnpooled(
                 options.DryRun ? DbOpenIntent.QueryOnly : DbOpenIntent.Repair,
-                options.DbPath,
+                options.DryRun ? queryOnlyDbPath : options.DbPath,
                 cancellationToken))
             {
                 db.SuppressPlannerStatisticsMaintenanceOnClose();
@@ -162,5 +177,12 @@ public static partial class QueryCommandRunner
     {
         if (before.HasValue && after.HasValue)
             Console.WriteLine(ConsoleUi.FormatSummaryLine(label, $"{before.Value:N0} -> {after.Value:N0} bytes"));
+    }
+
+    private static string CanonicalizeSingleSlashFileUri(string originalDbUri, string normalizedDbPath)
+    {
+        var queryIndex = originalDbUri.IndexOf('?', StringComparison.Ordinal);
+        var querySuffix = queryIndex >= 0 ? originalDbUri[queryIndex..] : string.Empty;
+        return CodeIndex.FileUriPolicy.PathToFileUri(normalizedDbPath) + querySuffix;
     }
 }
