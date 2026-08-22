@@ -732,7 +732,7 @@ public class GitHelperTests : IDisposable
 
         var fakeGitDir = Path.Combine(_tempDir, "fake-git-timeout");
         Directory.CreateDirectory(fakeGitDir);
-        WriteFakeGitThatHangsOnDiffTree(fakeGitDir);
+        WriteFakeGitThatHangsOnDiffTree(fakeGitDir, commitId);
         var fakeGitPidPath = Path.Combine(fakeGitDir, "diff-tree.pid");
 
         var oldGitExecutablePath = GitHelper.GitExecutablePathOverride;
@@ -971,7 +971,8 @@ public class GitHelperTests : IDisposable
         Directory.CreateDirectory(repoDir);
         var fakeGitDir = Path.Combine(_tempDir, "fake-git-cancel");
         Directory.CreateDirectory(fakeGitDir);
-        WriteFakeGitThatHangsOnDiffTree(fakeGitDir);
+        const string commitId = "0123456789abcdef";
+        WriteFakeGitThatHangsOnDiffTree(fakeGitDir, commitId);
 
         var oldGitExecutablePath = GitHelper.GitExecutablePathOverride;
         GitHelper.GitExecutablePathOverride = Path.Combine(fakeGitDir, "git");
@@ -982,7 +983,7 @@ public class GitHelperTests : IDisposable
             var stopwatch = Stopwatch.StartNew();
 
             var ex = Assert.Throws<OperationCanceledException>(
-                () => GitHelper.GetChangedFilesFromCommit(repoDir, "0123456789abcdef", cts.Token));
+                () => GitHelper.GetChangedFilesFromCommit(repoDir, commitId, cts.Token));
 
             stopwatch.Stop();
             Assert.Equal(cts.Token, ex.CancellationToken);
@@ -1835,27 +1836,29 @@ exit 0
             File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
     }
 
-    private static void WriteFakeGitThatHangsOnDiffTree(string directory)
+    private static void WriteFakeGitThatHangsOnDiffTree(string directory, string verifiedCommit)
     {
         var script = Path.Combine(directory, "git");
-        File.WriteAllText(script, $$"""
+        File.WriteAllText(script, """
 #!/bin/sh
 if [ "$1" = "rev-parse" ]; then
   if [ "$2" = "--symbolic-full-name" ]; then
     exit 0
   fi
   if [ "$2" = "--verify" ]; then
-    printf '%s\n' '0123456789abcdef0123456789abcdef01234567'
+    printf '%s\n' '__VERIFIED_COMMIT__'
     exit 0
   fi
 fi
 if [ "$1" = "diff-tree" ]; then
   printf '%s\n' "$$" > "$(dirname "$0")/diff-tree.pid"
-  sleep {{FakeGitHangSeconds}}
+  sleep __HANG_SECONDS__
   exit 0
 fi
 exit 1
-""");
+"""
+            .Replace("__VERIFIED_COMMIT__", verifiedCommit, StringComparison.Ordinal)
+            .Replace("__HANG_SECONDS__", FakeGitHangSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture), StringComparison.Ordinal));
         if (!OperatingSystem.IsWindows())
             File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
     }
