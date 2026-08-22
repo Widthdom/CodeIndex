@@ -22,6 +22,8 @@ public static partial class SymbolExtractor
         var applicablePatterns = extraction.ApplicablePatterns;
         var applyRequiredLiteralMatchInputGate = extraction.ApplyRequiredLiteralMatchInputGate;
         var requiredLiteralGateCounts = extraction.RequiredLiteralGateCounts;
+        var applyCSharpRegexProbeOptimizations = extraction.ApplyCSharpRegexProbeOptimizations;
+        var csharpRegexProbeCounts = extraction.CSharpRegexProbeCounts;
         var csharpMatchLines = extraction.ScanInputs.CSharpMatchLines;
         var javaLeadingAnnotationOffset = 0;
         Match match;
@@ -43,7 +45,9 @@ public static partial class SymbolExtractor
                     pattern,
                     patternMatchLine.AsSpan(lineOffset),
                     applyRequiredLiteralMatchInputGate,
-                    requiredLiteralGateCounts))
+                    requiredLiteralGateCounts,
+                    applyCSharpRegexProbeOptimizations,
+                    csharpRegexProbeCounts))
             {
                 // Preserve the existing failed-helper fallback attempt. This is
                 // intentionally gated again because it is a distinct regex call.
@@ -54,7 +58,9 @@ public static partial class SymbolExtractor
                      pattern,
                      patternMatchLine.AsSpan(lineOffset),
                      applyRequiredLiteralMatchInputGate,
-                     requiredLiteralGateCounts))
+                     requiredLiteralGateCounts,
+                     applyCSharpRegexProbeOptimizations,
+                     csharpRegexProbeCounts))
         {
             match = pattern.Regex.Match(patternMatchLine[lineOffset..]);
         }
@@ -85,17 +91,27 @@ public static partial class SymbolExtractor
             // 先頭モディファイアが無くても識別子行単体でマッチするため、この
             // 分岐は修飾子が識別子と同行に必要な constructor / static ctor
             // シェイプでのみ発火する。Closes #348.
-            var wrappedInfo = TryFindCSharpWrappedHeaderModifier(csharpMatchLines!, i);
+            var wrappedInfo = GetCSharpWrappedHeaderModifier(
+                csharpMatchLines!,
+                i,
+                ref patternStartState,
+                applyCSharpRegexProbeOptimizations,
+                csharpRegexProbeCounts);
             if (wrappedInfo != null)
             {
-                foreach (var candidatePrefix in EnumerateCSharpWrappedModifierCandidates(wrappedInfo.Value.Prefix))
+                foreach (var candidatePrefix in EnumerateCSharpWrappedModifierCandidates(wrappedInfo.Value))
                 {
-                    var wrappedMatchLine = candidatePrefix + " " + patternMatchLine.TrimStart();
+                    var wrappedMatchLine = BuildCSharpWrappedPatternMatchLine(
+                        candidatePrefix,
+                        patternMatchLine,
+                        csharpRegexProbeCounts);
                     if (!ShouldAttemptPatternRegex(
                             pattern,
                             wrappedMatchLine.AsSpan(),
                             applyRequiredLiteralMatchInputGate,
-                            requiredLiteralGateCounts))
+                            requiredLiteralGateCounts,
+                            applyCSharpRegexProbeOptimizations,
+                            csharpRegexProbeCounts))
                     {
                         continue;
                     }
@@ -173,7 +189,9 @@ public static partial class SymbolExtractor
                             attributeParenDepth: 0,
                             applicablePatterns,
                             applyRequiredLiteralMatchInputGate,
-                            requiredLiteralGateCounts)
+                            requiredLiteralGateCounts,
+                            applyCSharpRegexProbeOptimizations,
+                            csharpRegexProbeCounts)
                         : patternStartState.RecoverableCSharpPattern ??=
                             TryMatchAnyRecoverableCSharpPattern(
                                 matchLine,
@@ -182,7 +200,9 @@ public static partial class SymbolExtractor
                                 attributeParenDepth: 0,
                                 applicablePatterns,
                                 applyRequiredLiteralMatchInputGate,
-                                requiredLiteralGateCounts))))
+                                requiredLiteralGateCounts,
+                                applyCSharpRegexProbeOptimizations,
+                                csharpRegexProbeCounts))))
             {
                 lineOffset = FindNextSameLineBraceStatementStart(matchLine, lineOffset + 1, lang);
                 return PatternScanResult.ContinueAt(lineOffset);

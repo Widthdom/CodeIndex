@@ -150,7 +150,12 @@ public static partial class SymbolExtractor
         var csharpPropertyCandidate = extraction.Lang == "csharp"
             && pattern.Kind is "property" or "function"
                 ? patternStartState.CSharpPropertyCandidateForLine ??=
-                    BuildCSharpPropertyMatchLine(lines, csharpMatchLines!, i)
+                    BuildCSharpPropertyMatchLine(
+                        lines,
+                        csharpMatchLines!,
+                        i,
+                        extraction.ApplyCSharpRegexProbeOptimizations,
+                        extraction.CSharpRegexProbeCounts)
                 : new CSharpPropertyMatchCandidate(
                     lineContext.PreparedLine.MatchLine,
                     i,

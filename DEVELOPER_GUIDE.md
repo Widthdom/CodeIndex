@@ -2041,6 +2041,16 @@ retain a pattern because its literal appears in a comment, string, annotation, o
 the exact-input check then recovers that lost optimization without changing matches. Patterns without
 `RequiredLiteral`, including custom and plugin patterns, still run unchanged.
 
+C# adds three narrower, proof-preserving gates on top of that general contract. Property-header
+lookahead returns before its prefix regexes for empty inputs and completed `;` / `}` lines; a trailing
+`=` is skipped only when no `(` is present, preserving multiline default arguments. The built-in
+plain-field regex is attempted only when its exact transformed input contains `=` or `;`, which every
+successful path must consume. Wrapped-modifier recovery caches both found and absent prefixes for all
+function patterns at one scan offset, rejects predecessor lines with characters outside the regex's
+lowercase-ASCII-plus-whitespace alphabet, and materializes a confirmed prefix once in forward order.
+These are private built-in optimizations: pattern/plugin APIs, symbol fields, diagnostic output,
+cancellation points, and same-line column mapping remain unchanged.
+
 JavaScript and TypeScript export/reference details:
 
 | Area | Behavior |
@@ -5936,6 +5946,15 @@ header の結合、Fortran continuation の連結、Java / Kotlin annotation の
 wrapper は引き続き試さなければなりません。comment、string、annotation、別 declaration にだけ literal
 がある場合は exact-input 判定が失われた最適化を回収し、match は変えません。custom / plugin pattern を
 含む `RequiredLiteral` のない pattern は従来どおり実行します。
+
+C# では、この一般契約に加えて、成功可能性を変えない3つの狭い gate を使います。property-header
+lookahead は、空 input と `;` / `}` で完結した行で prefix regex より前に戻ります。末尾 `=` は
+`(` が無い場合だけ skip し、複数行 default argument を保持します。built-in plain-field regex は、全成功経路が
+必ず消費する `=` または `;` が、変換後の実 input にある場合だけ実行します。wrapped-modifier recovery は、
+同一 scan offset の function pattern 間で、見つかった prefix と見つからなかった null の両方を cache します。
+また、確認 regex の lowercase ASCII + whitespace の形に合わない直前行を先に除外し、確定した prefix は前向きに
+1回だけ materialize します。これらは private な built-in 最適化であり、pattern / plugin API、symbol field、diagnostic output、
+cancellation point、same-line column mapping は変えません。
 
 JavaScript / TypeScript の export / reference 詳細:
 

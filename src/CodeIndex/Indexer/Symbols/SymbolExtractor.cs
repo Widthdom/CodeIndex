@@ -348,6 +348,34 @@ public static partial class SymbolExtractor
         public int MatchInputLiteralSkipCount { get; set; }
     }
 
+    private sealed class CSharpRegexProbeCounts
+    {
+        public int PropertyPrefixSuffixSkipCount { get; set; }
+        public int PropertyHeaderRegexAttemptCount { get; set; }
+        public int MethodHeaderRegexAttemptCount { get; set; }
+        public int PlainFieldTerminatorSkipCount { get; set; }
+        public int PlainFieldRegexAttemptCount { get; set; }
+        public int RecoverablePlainFieldTerminatorSkipCount { get; set; }
+        public int WrappedModifierLookupCount { get; set; }
+        public int WrappedModifierAsciiShapeSkipCount { get; set; }
+        public int WrappedModifierLineRegexAttemptCount { get; set; }
+        public int WrappedModifierPrefixMaterializationCount { get; set; }
+        public int WrappedModifierMatchInputMaterializationCount { get; set; }
+    }
+
+    internal readonly record struct CSharpRegexProbeMetrics(
+        int PropertyPrefixSuffixSkipCount,
+        int PropertyHeaderRegexAttemptCount,
+        int MethodHeaderRegexAttemptCount,
+        int PlainFieldTerminatorSkipCount,
+        int PlainFieldRegexAttemptCount,
+        int RecoverablePlainFieldTerminatorSkipCount,
+        int WrappedModifierLookupCount,
+        int WrappedModifierAsciiShapeSkipCount,
+        int WrappedModifierLineRegexAttemptCount,
+        int WrappedModifierPrefixMaterializationCount,
+        int WrappedModifierMatchInputMaterializationCount);
+
     internal static List<SymbolRecord> ExtractForRequiredLiteralGateTesting(
         long fileId,
         string lang,
@@ -382,6 +410,48 @@ public static partial class SymbolExtractor
         applicablePatternCount = counts.ApplicablePatternCount;
         regexAttemptCount = counts.RegexAttemptCount;
         matchInputLiteralSkipCount = counts.MatchInputLiteralSkipCount;
+        return symbols;
+    }
+
+    internal static List<SymbolRecord> ExtractForCSharpRegexProbeTesting(
+        long fileId,
+        string content,
+        bool applyCSharpRegexProbeOptimizations,
+        out CSharpRegexProbeMetrics metrics,
+        string? filePath = null,
+        string? projectRoot = null,
+        CancellationToken cancellationToken = default)
+    {
+        var counts = new CSharpRegexProbeCounts();
+        var symbols = ExtractCore(
+            fileId,
+            "csharp",
+            content,
+            contentIsNormalized: false,
+            hasOversizeLine: null,
+            conflictMarkerLine: null,
+            filePath,
+            projectRoot,
+            patternConfigsAlreadyLoaded: false,
+            cancellationToken: cancellationToken,
+            maxSymbols: null,
+            applyRequiredLiteralFileGate: true,
+            applyRequiredLiteralMatchInputGate: true,
+            requiredLiteralGateCounts: null,
+            applyCSharpRegexProbeOptimizations: applyCSharpRegexProbeOptimizations,
+            csharpRegexProbeCounts: counts);
+        metrics = new CSharpRegexProbeMetrics(
+            counts.PropertyPrefixSuffixSkipCount,
+            counts.PropertyHeaderRegexAttemptCount,
+            counts.MethodHeaderRegexAttemptCount,
+            counts.PlainFieldTerminatorSkipCount,
+            counts.PlainFieldRegexAttemptCount,
+            counts.RecoverablePlainFieldTerminatorSkipCount,
+            counts.WrappedModifierLookupCount,
+            counts.WrappedModifierAsciiShapeSkipCount,
+            counts.WrappedModifierLineRegexAttemptCount,
+            counts.WrappedModifierPrefixMaterializationCount,
+            counts.WrappedModifierMatchInputMaterializationCount);
         return symbols;
     }
 

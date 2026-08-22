@@ -43,6 +43,8 @@ public static partial class SymbolExtractor
             DeferCSharpEvent = null;
             DeferCSharpDelegate = null;
             RecoverableCSharpPattern = null;
+            CSharpWrappedHeaderModifierLookupCompleted = false;
+            CSharpWrappedHeaderModifierInfo = null;
         }
 
         public CSharpPropertyMatchCandidate? CSharpPropertyCandidateForLine;
@@ -51,6 +53,8 @@ public static partial class SymbolExtractor
         public bool? DeferCSharpEvent;
         public bool? DeferCSharpDelegate;
         public bool? RecoverableCSharpPattern;
+        public bool CSharpWrappedHeaderModifierLookupCompleted;
+        public CSharpWrappedHeaderModifierInfo? CSharpWrappedHeaderModifierInfo;
     }
 
     private struct PatternCandidateScan

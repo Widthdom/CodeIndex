@@ -23,7 +23,9 @@ public static partial class SymbolExtractor
         int? maxSymbols = null,
         bool applyRequiredLiteralFileGate = true,
         bool applyRequiredLiteralMatchInputGate = true,
-        RequiredLiteralGateCounts? requiredLiteralGateCounts = null)
+        RequiredLiteralGateCounts? requiredLiteralGateCounts = null,
+        bool applyCSharpRegexProbeOptimizations = true,
+        CSharpRegexProbeCounts? csharpRegexProbeCounts = null)
     {
         var originalLang = lang;
         if (TryPrepareSymbolExtraction(
@@ -67,7 +69,9 @@ public static partial class SymbolExtractor
             maxSymbols,
             applyRequiredLiteralFileGate,
             applyRequiredLiteralMatchInputGate,
-            requiredLiteralGateCounts);
+            requiredLiteralGateCounts,
+            applyCSharpRegexProbeOptimizations,
+            csharpRegexProbeCounts);
         if (preparation.ImmediateSymbols != null)
             return preparation.ImmediateSymbols;
 
@@ -117,7 +121,9 @@ public static partial class SymbolExtractor
         SymbolPattern pattern,
         ReadOnlySpan<char> matchInput,
         bool applyRequiredLiteralMatchInputGate,
-        RequiredLiteralGateCounts? requiredLiteralGateCounts)
+        RequiredLiteralGateCounts? requiredLiteralGateCounts,
+        bool applyCSharpRegexProbeOptimizations = true,
+        CSharpRegexProbeCounts? csharpRegexProbeCounts = null)
     {
         // This second-stage proof must inspect the exact transformed input for one regex call.
         // Callers treat false as a failed match and must still run language-specific recovery.
@@ -130,6 +136,26 @@ public static partial class SymbolExtractor
             if (requiredLiteralGateCounts != null)
                 requiredLiteralGateCounts.MatchInputLiteralSkipCount++;
             return false;
+        }
+
+        if (ReferenceEquals(pattern.Regex, CSharpPlainFieldRegex))
+        {
+            // Every successful plain-field path consumes `=` or `;`. Inspect the exact
+            // transformed input rather than its final character because a same-line class
+            // segment can contain the field terminator before a later sibling or `}`.
+            // plain-field の全成功経路は `=` または `;` を必ず消費する。same-line class
+            // segment では field 終端の後ろに sibling / `}` が続き得るため、末尾文字ではなく
+            // regex に渡す変換済み input 全体を検査する。
+            if (applyCSharpRegexProbeOptimizations
+                && matchInput.IndexOfAny('=', ';') < 0)
+            {
+                if (csharpRegexProbeCounts != null)
+                    csharpRegexProbeCounts.PlainFieldTerminatorSkipCount++;
+                return false;
+            }
+
+            if (csharpRegexProbeCounts != null)
+                csharpRegexProbeCounts.PlainFieldRegexAttemptCount++;
         }
 
         if (requiredLiteralGateCounts != null)

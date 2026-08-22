@@ -528,6 +528,12 @@ public static partial class SymbolExtractor
     private static readonly Regex CSharpEnumDeclarationRegex = new($@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+|(?:file|new)\s+)*enum\s+(?<name>{CSharpIdentifierPattern})", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CSharpEnumMemberRegex = new($@"^\s*(?<name>{CSharpIdentifierPattern})\s*(?:=\s*(?:-?\d|0x|{CSharpIdentifierPattern}(?:\s*\|\s*{CSharpIdentifierPattern})*)[^""']*)?,?\s*$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CSharpEnumMemberNameRegex = new($@"^\s*(?<name>{CSharpIdentifierPattern})\b", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CSharpPlainFieldRegex = new(
+        $@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|readonly|volatile|new|unsafe|extern|required)\s+)*"
+      + @"(?!(?:public|private|protected|internal|static|readonly|volatile|new|unsafe|extern|required|abstract|virtual|override|sealed|async|partial|file|ref|var|class|struct|interface|enum|record|namespace|delegate\b(?!\*)|event|const|using|return|throw|yield|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await|try|do|typeof|sizeof|nameof|default|operator|this|base)\b)"
+      + $@"(?<returnType>{CSharpTypePattern})\s+"
+      + @"(?<name>" + CSharpIdentifierPattern + @")\s*(?:=(?![=>])|;)",
+        RegexOptions.Compiled);
     private static readonly Regex JavaCompactConstructorRegex = new(
         @"^\s*(?:(?<visibility>public|private|protected)\s+)?(?<name>\w+)\s*(?=\{|$)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -986,13 +992,7 @@ public static partial class SymbolExtractor
             // sequence (e.g. `static public int X;`). Closes #355.
             // 修飾子順序は自由で、visibility を修飾子列の任意位置に置ける
             // （例: `static public int X;`）。Closes #355.
-            new("property",  new Regex(
-                $@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|readonly|volatile|new|unsafe|extern|required)\s+)*"
-              + @"(?!(?:public|private|protected|internal|static|readonly|volatile|new|unsafe|extern|required|abstract|virtual|override|sealed|async|partial|file|ref|var|class|struct|interface|enum|record|namespace|delegate\b(?!\*)|event|const|using|return|throw|yield|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await|try|do|typeof|sizeof|nameof|default|operator|this|base)\b)"
-              + $@"(?<returnType>{CSharpTypePattern})\s+"
-              + @"(?<name>" + CSharpIdentifierPattern + @")\s*(?:=(?![=>])|;)",
-                RegexOptions.Compiled),
-                BodyStyle.None, "visibility", "returnType"),
+            new("property", CSharpPlainFieldRegex, BodyStyle.None, "visibility", "returnType"),
             // Interface — visibility optional; modifier order is free, so visibility may appear
             // anywhere in the modifier sequence (e.g. `partial public interface`, `file interface`,
             // `new public interface` for nested types). Closes #355.
