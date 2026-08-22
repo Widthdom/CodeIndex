@@ -2097,6 +2097,251 @@ public class IndexWatchRunnerTests
     }
 
     [Theory]
+    [InlineData(FileIndexer.SymlinkPolicy.None, false)]
+    [InlineData(FileIndexer.SymlinkPolicy.Internal, true)]
+    [InlineData(FileIndexer.SymlinkPolicy.All, true)]
+    public void PollingSnapshot_AllowedInternalDirectorySymlinkIsTrackedOnceAndUpdated_Issue5124(
+        FileIndexer.SymlinkPolicy symlinkPolicy,
+        bool expectTracked)
+    {
+        var projectRoot = CreateTempProject();
+        var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+        try
+        {
+            var targetDirectory = Path.Combine(projectRoot, "ignored-target");
+            var targetPath = Path.Combine(targetDirectory, "tracked.cs");
+            var firstLink = Path.Combine(projectRoot, "allowed-link-a");
+            var secondLink = Path.Combine(projectRoot, "allowed-link-b");
+            Directory.CreateDirectory(targetDirectory);
+            File.WriteAllText(Path.Combine(projectRoot, ".gitignore"), "ignored-target/\n");
+            File.WriteAllText(targetPath, "public class BeforeDirectorySymlink5124 { }\n");
+            try
+            {
+                Directory.CreateSymbolicLink(firstLink, targetDirectory);
+                Directory.CreateSymbolicLink(secondLink, targetDirectory);
+                Directory.CreateSymbolicLink(Path.Combine(targetDirectory, "cycle"), projectRoot);
+            }
+            catch (Exception ex) when (ShouldSkipWatchSymlinkFixtureFailure(ex))
+            {
+                return;
+            }
+
+            var candidatePaths = new[]
+            {
+                Path.Combine(firstLink, "tracked.cs"),
+                Path.Combine(secondLink, "tracked.cs"),
+            };
+            var snapshotPaths = IndexWatchRunner.CapturePollingSnapshotPathsForTesting(
+                projectRoot,
+                projectRoot,
+                dbPath,
+                ignoreCase: false,
+                dbPathExplicit: true,
+                symlinkPolicy);
+            var trackedSnapshotPaths = snapshotPaths
+                .Where(path => candidatePaths.Contains(path, StringComparer.Ordinal))
+                .ToArray();
+
+            if (!expectTracked)
+            {
+                Assert.Empty(trackedSnapshotPaths);
+                return;
+            }
+
+            var trackedPath = Assert.Single(trackedSnapshotPaths);
+            var updatedPaths = IndexWatchRunner.CapturePollingUpdatePathsForTesting(
+                projectRoot,
+                projectRoot,
+                dbPath,
+                ignoreCase: false,
+                dbPathExplicit: true,
+                symlinkPolicy,
+                () => File.WriteAllText(
+                    targetPath,
+                    "public class AfterDirectorySymlink5124 { public void Changed() { } }\n"));
+
+            Assert.Contains(trackedPath, updatedPaths);
+            Assert.Single(updatedPaths.Where(path => candidatePaths.Contains(path, StringComparer.Ordinal)));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData(FileIndexer.SymlinkPolicy.None, false)]
+    [InlineData(FileIndexer.SymlinkPolicy.Internal, false)]
+    [InlineData(FileIndexer.SymlinkPolicy.All, true)]
+    public void PollingSnapshot_OnlyAllTracksExternalDirectorySymlinkUpdates_Issue5124(
+        FileIndexer.SymlinkPolicy symlinkPolicy,
+        bool expectTracked)
+    {
+        var projectRoot = CreateTempProject();
+        var externalRoot = CreateTempProject();
+        var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+        try
+        {
+            var targetPath = Path.Combine(externalRoot, "external.cs");
+            var linkDirectory = Path.Combine(projectRoot, "external-link");
+            var linkedPath = Path.Combine(linkDirectory, "external.cs");
+            File.WriteAllText(targetPath, "public class BeforeExternalDirectorySymlink5124 { }\n");
+            try
+            {
+                Directory.CreateSymbolicLink(linkDirectory, externalRoot);
+            }
+            catch (Exception ex) when (ShouldSkipWatchSymlinkFixtureFailure(ex))
+            {
+                return;
+            }
+
+            var snapshotPaths = IndexWatchRunner.CapturePollingSnapshotPathsForTesting(
+                projectRoot,
+                projectRoot,
+                dbPath,
+                ignoreCase: false,
+                dbPathExplicit: true,
+                symlinkPolicy);
+            Assert.Equal(expectTracked, snapshotPaths.Contains(linkedPath));
+            if (!expectTracked)
+                return;
+
+            var updatedPaths = IndexWatchRunner.CapturePollingUpdatePathsForTesting(
+                projectRoot,
+                projectRoot,
+                dbPath,
+                ignoreCase: false,
+                dbPathExplicit: true,
+                symlinkPolicy,
+                () => File.WriteAllText(
+                    targetPath,
+                    "public class AfterExternalDirectorySymlink5124 { public void Changed() { } }\n"));
+
+            Assert.Contains(linkedPath, updatedPaths);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+            DeleteDirectory(externalRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData(FileIndexer.SymlinkPolicy.Internal)]
+    [InlineData(FileIndexer.SymlinkPolicy.All)]
+    public void PollingSnapshot_DirectoryAliasToInternalArtifactsIsExcluded_Issue5124(
+        FileIndexer.SymlinkPolicy symlinkPolicy)
+    {
+        var projectRoot = CreateTempProject();
+        var dataDirectory = Path.Combine(projectRoot, "ignored-state");
+        var dbPath = Path.Combine(dataDirectory, "codeindex.db");
+        var aliasDirectory = Path.Combine(projectRoot, "state-alias");
+        var ordinaryTargetPath = Path.Combine(dataDirectory, "ordinary.cs");
+        var ordinaryAliasPath = Path.Combine(aliasDirectory, "ordinary.cs");
+        try
+        {
+            Directory.CreateDirectory(dataDirectory);
+            File.WriteAllText(Path.Combine(projectRoot, ".gitignore"), "ignored-state/\n");
+            File.WriteAllText(dbPath, "initial-db");
+            File.WriteAllText(dbPath + "-wal", "initial-wal");
+            File.WriteAllText(ordinaryTargetPath, "public class BeforeInternalDirectoryAlias5124 { }\n");
+            try
+            {
+                Directory.CreateSymbolicLink(aliasDirectory, dataDirectory);
+            }
+            catch (Exception ex) when (ShouldSkipWatchSymlinkFixtureFailure(ex))
+            {
+                return;
+            }
+
+            var snapshotPaths = IndexWatchRunner.CapturePollingSnapshotPathsForTesting(
+                projectRoot,
+                projectRoot,
+                dbPath,
+                ignoreCase: false,
+                dbPathExplicit: true,
+                symlinkPolicy);
+            Assert.DoesNotContain(Path.Combine(aliasDirectory, "codeindex.db"), snapshotPaths);
+            Assert.DoesNotContain(Path.Combine(aliasDirectory, "codeindex.db-wal"), snapshotPaths);
+            Assert.Contains(ordinaryAliasPath, snapshotPaths);
+
+            var updatedPaths = IndexWatchRunner.CapturePollingUpdatePathsForTesting(
+                projectRoot,
+                projectRoot,
+                dbPath,
+                ignoreCase: false,
+                dbPathExplicit: true,
+                symlinkPolicy,
+                () =>
+                {
+                    File.WriteAllText(dbPath + "-wal", $"updated-wal-{Guid.NewGuid():N}");
+                    File.WriteAllText(
+                        ordinaryTargetPath,
+                        "public class AfterInternalDirectoryAlias5124 { public void Changed() { } }\n");
+                });
+            Assert.DoesNotContain(Path.Combine(aliasDirectory, "codeindex.db-wal"), updatedPaths);
+            Assert.Contains(ordinaryAliasPath, updatedPaths);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData(FileIndexer.SymlinkPolicy.Internal)]
+    [InlineData(FileIndexer.SymlinkPolicy.All)]
+    public void PollingSnapshot_DirectoryAliasSelectionMatchesDepthFirstScannerOrder_Issue5124(
+        FileIndexer.SymlinkPolicy symlinkPolicy)
+    {
+        var projectRoot = CreateTempProject();
+        var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+        try
+        {
+            var parentDirectory = Path.Combine(projectRoot, "a-parent");
+            var targetDirectory = Path.Combine(projectRoot, "ignored-target");
+            var nestedAlias = Path.Combine(parentDirectory, "nested-link");
+            var directAlias = Path.Combine(projectRoot, "z-direct-link");
+            Directory.CreateDirectory(parentDirectory);
+            Directory.CreateDirectory(targetDirectory);
+            File.WriteAllText(Path.Combine(projectRoot, ".gitignore"), "ignored-target/\n");
+            File.WriteAllText(
+                Path.Combine(targetDirectory, "tracked.cs"),
+                "public class DepthFirstDirectorySymlink5124 { }\n");
+            try
+            {
+                Directory.CreateSymbolicLink(nestedAlias, targetDirectory);
+                Directory.CreateSymbolicLink(directAlias, targetDirectory);
+            }
+            catch (Exception ex) when (ShouldSkipWatchSymlinkFixtureFailure(ex))
+            {
+                return;
+            }
+
+            var rootDirectories = Directory.EnumerateDirectories(projectRoot).ToArray();
+            var parentPrecedesDirectAlias =
+                Array.IndexOf(rootDirectories, parentDirectory) < Array.IndexOf(rootDirectories, directAlias);
+
+            var nestedPath = Path.Combine(nestedAlias, "tracked.cs");
+            var directPath = Path.Combine(directAlias, "tracked.cs");
+            var snapshotPaths = IndexWatchRunner.CapturePollingSnapshotPathsForTesting(
+                projectRoot,
+                projectRoot,
+                dbPath,
+                ignoreCase: false,
+                dbPathExplicit: true,
+                symlinkPolicy);
+
+            Assert.Contains(parentPrecedesDirectAlias ? nestedPath : directPath, snapshotPaths);
+            Assert.DoesNotContain(parentPrecedesDirectAlias ? directPath : nestedPath, snapshotPaths);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
     [InlineData(FileIndexer.SymlinkPolicy.Internal)]
     [InlineData(FileIndexer.SymlinkPolicy.All)]
     public void PollingSnapshot_ResolvedInternalArtifactSymlinksAreExcludedFromSnapshotAndUpdates_Issue5091(

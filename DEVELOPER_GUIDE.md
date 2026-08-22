@@ -531,7 +531,7 @@ scans.
 | Malformed rule | Reports a scan error, skips that line, and continues the run. |
 | Symlink modes | `none` is the default. `internal` follows targets under the workspace root; `all` follows every resolvable target. |
 | Target identity | Discovery, dry-run, C# preflight, and content loading share one resolved identity. Stable allowed external targets are indexed; links retargeted after preflight are rejected as source drift. |
-| Watch symlink reconciliation | Under `--watch --follow-symlinks internal`, an event for a lexical in-workspace symlink that now resolves outside the workspace remains a reconciliation input. The scoped update removes any stale indexed row without opening or indexing the disallowed target. |
+| Watch symlink reconciliation | Under `--watch --follow-symlinks internal`, an event for a lexical in-workspace symlink that now resolves outside the workspace remains a reconciliation input. The scoped update removes any stale indexed row without opening or indexing the disallowed target. The polling backend traverses allowed directory links under `internal` / `all` in the full scanner's depth-first order, preserves the scanner-selected lexical alias, deduplicates resolved directory identities to bound cycles, and excludes internal database artifacts reached through directory aliases. |
 | Explicit-file preflight | Explicit `--files` updates retain each directly supplied token and its normalization provenance, classify that complete list before any database write, and atomically return `UsageError` when a token is invalid, is a directory, or resolves to a duplicate canonical target. A bare `--files` is rejected before artifacts instead of becoming a full scan. `--project` expansion remains derived scope input in `UpdateFiles` and is not reclassified as a direct `--files` selection. Real and dry-run modes expose the same `rejected_paths` entries (`input_index`, support-safe `path`, stable `reason`) and bounded count/truncation metadata for outside-root, symlink-escaping or symlink-policy-disallowed, nonexistent, filtered, unsupported, and duplicate selections. Canonical duplicate checks use each resolved target's filesystem casing rather than the workspace-wide policy, and `none` mode detects actual symlink/reparse segments instead of treating native spelling normalization as a link. Windows 8.3 ancestor aliases canonicalize to the spelling already established in indexed-path membership (#5122). Indexed missing, filtered, or unsupported paths remain valid cleanup targets; indexed control files that become directories, FIFOs, or policy-disallowed symlinks remain tombstones and are classified without opening or following the object. Existing relevant ancestor ignore files remain valid reconciliation controls. In-workspace extractor/configuration inputs, including missing or deleted inputs used as reconciliation signals, also remain valid; generated code remains a valid explicit target. TypeScript path-alias configuration reads carry the active `none` / `internal` / `all` policy into both in-process and worker extraction, resolve only targets permitted by that policy, and secure-open only regular files. Failure to read indexed-path membership fails closed with `E008_DB_ERROR`. This validation does not change the successful zero-file contract for implicit full scans without `--files`. |
 | Symlink warnings | Dangling links and directory-target permission failures are scan warnings. Dry-run exposes them through `warnings_total` and `warnings` while retaining successful exit behavior. |
 | Windows attributes | Hidden or System paths are rejected before language detection. Clear those attributes on project-owned source because ignore rules cannot re-include the path. |
@@ -2164,10 +2164,11 @@ batch from being stranded by a transient path-shape race.
 Polling snapshots resolve immediate and final symlink/reparse targets before
 adding a path. Aliases of the configured database, SQLite sidecars, lock/info,
 checkpoint, restore/backup, and atomic-temporary artifacts are excluded, as are
-ancestor-ignore aliases that resolve to those artifacts. Ordinary file symlinks
-allowed by `internal` or `all` remain tracked, with target-directory casing used
-for internal-artifact identity. Polling does not yet traverse allowed
-directory-symlink subtrees; #5124 tracks policy-aware, cycle-safe traversal.
+ancestor-ignore aliases that resolve to those artifacts. Ordinary file and
+directory symlinks allowed by `internal` or `all` remain tracked. Directory
+subtrees use full-scanner depth-first lexical alias selection, resolve descendant
+paths only while beneath an alias, and deduplicate resolved directory identities
+to bound cycles and duplicate targets.
 
 `--commits` uses `git diff-tree --no-commit-id -r --name-only` to resolve changed file paths.
 `--changed-between` uses `git diff --name-status -M <old-ref> <new-ref>` and includes both old and new rename paths so stale indexed paths can be purged.
@@ -4468,7 +4469,7 @@ literal、`origin: decode_replacement` が不正 byte に対して decoder が�
 | malformed rule | scan error を報告してその行だけを skip し、run は継続します。 |
 | symlink mode | 既定は `none` です。`internal` は workspace root 内の target、`all` は解決可能な全 target を追跡します。 |
 | target identity | discovery、dry-run、C# preflight、content loading は同じ解決済み identity を使います。安定した許可済み外部 target は index し、preflight 後に retarget された link は source drift として拒否します。 |
-| watch の symlink reconciliation | `--watch --follow-symlinks internal` では、workspace 内にある lexical symlink が workspace 外へ解決されるようになっても、その event を reconciliation input として保持します。scoped update は禁止された target を open / index せず、残っている stale indexed row を削除します。 |
+| watch の symlink reconciliation | `--watch --follow-symlinks internal` では、workspace 内にある lexical symlink が workspace 外へ解決されるようになっても、その event を reconciliation input として保持します。scoped update は禁止された target を open / index せず、残っている stale indexed row を削除します。polling backend は `internal` / `all` で許可された directory link を full scanner と同じ depth-first 順で辿り、scanner が選択した lexical alias を維持し、解決済み directory identity の重複排除で cycle を bounded に保ち、directory alias 経由で到達する内部 DB artifact を除外します。 |
 | 明示 file の preflight | 明示的な `--files` 更新では、直接指定された各 token と正規化 provenance を保持し、DB へ書き込む前にそのリスト全体を分類します。無効な token、directory、または同じ canonical target に解決される重複が 1 件でもあれば、要求全体を atomic に `UsageError` とします。path token のない `--files` は artifact 作成前に拒否し、full scan へ移行しません。`--project` の展開結果は `UpdateFiles` 内の導出済み scope input のままとし、直接指定された `--files` 選択として再分類しません。通常実行と dry-run は、project root 外、symlink escape、選択した symlink policy で許可されない path、存在しない path、filter 対象、未対応、重複について、同じ `rejected_paths` entry（`input_index`、support-safe な `path`、安定した `reason`）と上限・件数・truncation metadata を返します。canonical duplicate 判定には workspace 全体の policy ではなく解決済み target ごとの filesystem casing を使い、`none` mode は native spelling の正規化差を link とみなさず、実在する symlink/reparse segment を検出します。Windows の 8.3 ancestor alias は indexed-path membership に確立済みの spelling へ canonicalize します (#5122)。既に index 済みで現在は missing / filtered / unsupported となった path は cleanup 対象として有効なままであり、indexed control file が directory、FIFO、または policy で禁止された symlink に変わっても tombstone として保持し、その object を open / follow せず分類します。既存の関連 ancestor ignore file は reconciliation control として許可します。workspace 内の extractor/configuration input も、reconciliation signal として使う missing / deleted input を含めて許可し、generated code も正常な明示対象として扱います。TypeScript path alias の configuration read は in-process / worker extraction の両方へ active な `none` / `internal` / `all` policy を渡し、その policy で許可された target だけを解決して regular file のみ secure-open します。indexed path membership を読めない場合は `E008_DB_ERROR` で fail closed します。この検証は、`--files` のない暗黙の full scan が 0 件でも成功する契約を変更しません。 |
 | symlink warning | dangling link と directory target の permission failure は scan warning です。dry-run は `warnings_total` / `warnings` に出し、成功終了を維持します。 |
 | Windows 属性 | Hidden / System path は言語検出前に拒否します。ignore rule では再包含できないため、project 所有 source では先に属性を外してください。 |
@@ -6047,10 +6048,10 @@ phase で `--files` を付けない workspace 全体 rescan をちょうど 1 �
 polling snapshot は path を追加する前に symlink / reparse の immediate target と final
 target を解決する。configured DB、SQLite sidecar、lock/info、checkpoint、restore/backup、
 atomic temporary artifact の alias と、それら artifact に解決される ancestor ignore
-alias は除外する。`internal` / `all` で許可される通常の file symlink は追跡を維持し、
-internal artifact identity には target directory の casing を使う。polling は現時点で
-許可済み directory symlink の subtree を traverse せず、policy-aware かつ cycle-safe
-な traversal は #5124 で追跡する。
+alias は除外する。`internal` / `all` で許可される通常の file / directory symlink は
+追跡を維持する。directory subtree は full scanner と同じ depth-first の lexical alias
+選択を使い、alias 配下だけ descendant path を解決し、解決済み directory identity を
+重複排除して cycle と重複 target を bounded に保つ。
 
 `--commits` は `git diff-tree --no-commit-id -r --name-only` で変更ファイルパスを解決します。
 `--changed-between` は `git diff --name-status -M <old-ref> <new-ref>` を使い、rename の旧パスと新パスを両方含めるため、古い indexed path も purge できます。
