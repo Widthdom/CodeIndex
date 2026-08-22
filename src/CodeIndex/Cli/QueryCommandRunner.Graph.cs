@@ -378,6 +378,8 @@ public static partial class QueryCommandRunner
             WriteHdlGraphContractWarningIfNeeded(options.Json, hdlGraphSignal);
             if (results.Count == 0)
             {
+                if (options.Json && TryWriteEmptyFormattedResult(options, jsonOptions))
+                    return ZeroResultExitCode(options);
                 if (options.Json)
                     WriteGraphZeroJsonResult(reader, "callees", jsonOptions, graphAvailable: reader._hasReferencesTable, exact ? exactSignal : (ExactQuerySignal?)null, exactZeroHint, queryOptions: options, extraFields: payload => AddGraphContractJsonFields(payload, reader, jsonOptions, sqlGraphSignal, hdlGraphSignal));
                 else if (!options.Json)

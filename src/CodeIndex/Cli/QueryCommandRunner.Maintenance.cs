@@ -54,8 +54,17 @@ public static partial class QueryCommandRunner
                         MaintenanceDatabaseFailureKind.NotWritable));
             }
 
+            var queryOnlyDbPath = options.DryRun
+                ? StripFileUriFragment(options.DbPath)
+                : options.DbPath;
+            if (options.DryRun
+                && TryCanonicalizeSingleSlashFileUri(queryOnlyDbPath, out var canonicalDbUri))
+            {
+                queryOnlyDbPath = canonicalDbUri;
+            }
+
             if (!DbContext.TryValidateExistingCodeIndexDb(
-                    options.DbPath,
+                    options.DryRun ? queryOnlyDbPath : options.DbPath,
                     requireWritable: !options.DryRun,
                     requireSupportedUserVersion: false,
                     out _,
@@ -82,7 +91,7 @@ public static partial class QueryCommandRunner
             DbContext.VacuumGenerationWitness? vacuumGenerationWitness;
             using (var db = DbContext.CreateUnpooled(
                 options.DryRun ? DbOpenIntent.QueryOnly : DbOpenIntent.Repair,
-                options.DbPath,
+                options.DryRun ? queryOnlyDbPath : options.DbPath,
                 cancellationToken))
             {
                 db.SuppressPlannerStatisticsMaintenanceOnClose();
@@ -162,5 +171,35 @@ public static partial class QueryCommandRunner
     {
         if (before.HasValue && after.HasValue)
             Console.WriteLine(ConsoleUi.FormatSummaryLine(label, $"{before.Value:N0} -> {after.Value:N0} bytes"));
+    }
+
+    private static bool TryCanonicalizeSingleSlashFileUri(string originalDbUri, out string canonicalDbUri)
+    {
+        canonicalDbUri = originalDbUri;
+        if (!originalDbUri.StartsWith("file:/", StringComparison.OrdinalIgnoreCase)
+            || originalDbUri.StartsWith("file://", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (!DbPathResolver.TryNormalizeDbPath(originalDbUri, out var normalizedDbPath, out _)
+            || SqliteFileUri.StartsWithFileScheme(normalizedDbPath))
+        {
+            return false;
+        }
+
+        var queryIndex = originalDbUri.IndexOf('?', StringComparison.Ordinal);
+        var querySuffix = queryIndex >= 0 ? originalDbUri[queryIndex..] : string.Empty;
+        canonicalDbUri = CodeIndex.FileUriPolicy.PathToFileUri(Path.GetFullPath(normalizedDbPath)) + querySuffix;
+        return true;
+    }
+
+    private static string StripFileUriFragment(string dbPath)
+    {
+        if (!SqliteFileUri.StartsWithFileScheme(dbPath))
+            return dbPath;
+
+        var fragmentIndex = dbPath.IndexOf('#', StringComparison.Ordinal);
+        return fragmentIndex >= 0 ? dbPath[..fragmentIndex] : dbPath;
     }
 }

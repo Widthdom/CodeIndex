@@ -82,6 +82,8 @@ internal static class PathUriNormalizer
                 var relativePath = Uri.UnescapeDataString(pathText["file:".Length..]);
                 if (string.IsNullOrWhiteSpace(relativePath))
                     return true;
+                if (OperatingSystem.IsWindows() && HasSingleSlashWindowsDrivePrefix(relativePath))
+                    relativePath = relativePath[1..];
                 normalizedPath = Path.GetFullPath(relativePath);
                 return true;
             }
@@ -125,6 +127,13 @@ internal static class PathUriNormalizer
         => path.Length >= 2
             && path[1] == ':'
             && ((path[0] >= 'A' && path[0] <= 'Z') || (path[0] >= 'a' && path[0] <= 'z'));
+
+    private static bool HasSingleSlashWindowsDrivePrefix(string path)
+        => path.Length >= 4
+            && path[0] is '/' or '\\'
+            && path[2] == ':'
+            && path[3] is '/' or '\\'
+            && ((path[1] >= 'A' && path[1] <= 'Z') || (path[1] >= 'a' && path[1] <= 'z'));
 
     private static string StripQuery(string uri)
     {
