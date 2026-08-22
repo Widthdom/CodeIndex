@@ -1952,7 +1952,7 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void Run_DryRunAndFullScan_ClassifyDanglingSymlinkAsWarning_Issue4829()
+    public void Run_DryRunAndFullScan_ClassifyDanglingSymlinkAsWarningAndUseHumanSkippedLabel_Issue4829_Issue5139()
     {
         var projectRoot = CreateTempProject();
         try
@@ -2002,6 +2002,16 @@ public partial class IndexCommandRunnerTests
                     .GetProperty("message")
                     .GetString(),
                 StringComparison.OrdinalIgnoreCase);
+
+            var (humanExitCode, humanOutput) = RunAndCaptureOutput([
+                projectRoot,
+                "--follow-symlinks",
+                "all",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, humanExitCode);
+            Assert.Contains("Dangling symlinks: 1 skipped", humanOutput, StringComparison.Ordinal);
+            Assert.DoesNotContain("output.Skipped", humanOutput, StringComparison.Ordinal);
         }
         finally
         {

@@ -789,6 +789,7 @@ Candidate-ordered parallel-index recovery tests must prove that the fatal result
 - The `dotnet.yml` SDK setup has one conditional retry for transient SDK download failures. Keep the first attempt marked `continue-on-error` only while the retry is guarded by its failed outcome, so a second failure still fails the job.
 - `IndexCommandRunnerTests.cs`
   Numeric `index` option coverage owns inclusive boundaries, zero/negative/overflow/non-numeric forms, duplicate precedence, text and JSON `E010_USAGE_ERROR` output before database mutation, and structured environment fallback warnings with source/effective-value provenance. Keep every numeric option in the shared matrix when its range or parsing changes.
+  The dangling-symlink fixture reuses one link across dry-run JSON, full-scan JSON, and human full-scan completion output. Keep the human summary pinned to the `skipped` label and reject leaked implementation identifiers.
 - `DbRecoveryTests.cs`
   Database corruption recovery and graceful degradation behavior. Filesystem setup failures for `cdidx index` (read-only DB files and unwritable DB parent directories) are covered in `IndexCommandRunnerTests.cs` so they exercise the same CLI JSON/stderr boundary users see.
 - `Issue4857ManagedRestoreBackupTests.cs`
@@ -1886,6 +1887,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   `dotnet.yml` と `release.yml` の Windows lane は、temp 固定と Defender 除外 setup をこのスクリプトで共有します。通常の `TMP` / `TEMP` は runner の高速な `RUNNER_TEMP\cdidx-temp` を使います。実行可能な plugin / hook / Git fixture だけは `USERPROFILE\cdidx-trusted-test-temp` を使い、current-user 限定の protected ACL と trusted な祖先 chain で production の executable-boundary contract を満たします。この専用 root は `CDIDX_TEST_TRUSTED_TEMP_ROOT` として helper へ渡します。Windows の実行時間を大きく増やすため、通常の SQLite / filesystem fixture を protected root へ移してはいけません。スクリプトは両 root を含む候補 path を正規化・重複排除して監査表示します。`WinDefend` service が稼働中なら、生成した string array を1回の `Add-MpPreference` 呼び出しで登録し、Defender preference を読み戻して欠けた path があれば失敗します。service が停止中または利用不能なら除外は意味を持たないため、warning を出して host setup を継続します。それ以外の Defender 設定失敗や検証失敗は引き続き fatal です。この split、batching、availability、audit、verification、または workflow 呼び出し contract を変更するときは `CiWorkflowTests` も更新してください。
 - `IndexCommandRunnerTests.cs`
   数値 `index` オプションの coverage は、両端を含む境界値、ゼロ / 負数 / overflow / 非数値、重複指定の優先順位、database mutation 前の text / JSON `E010_USAGE_ERROR`、および source / 実効値の provenance を持つ構造化環境変数 fallback warning を扱います。範囲や parse を変更するときは、共有 matrix にすべての数値オプションを残してください。
+  dangling symlink の fixture は、1つの link を dry-run JSON、full-scan JSON、human full-scan completion output で再利用します。human summary は `skipped` label に固定し、実装識別子の露出を拒否してください。
 - `DbRecoveryTests.cs`
   DB破損からの復旧とグレースフル劣化のテスト。`cdidx index` の filesystem setup failure（read-only DB file や書き込み不可の DB 親ディレクトリ）は、ユーザーが見る CLI JSON/stderr 境界を通すため `IndexCommandRunnerTests.cs` で扱います。
 - `Issue4857ManagedRestoreBackupTests.cs`

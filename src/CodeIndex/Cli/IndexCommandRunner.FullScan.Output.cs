@@ -237,7 +237,7 @@ public static partial class IndexCommandRunner
             CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Symbols", ConsoleUi.FormatNumber(totalSymbols), indent: "  "));
             CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Refs", ConsoleUi.FormatNumber(totalReferences), indent: "  "));
             if (output.Skipped > 0) CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Skipped", $"{ConsoleUi.FormatNumber(output.Skipped)} (unchanged)", indent: "  "));
-            if (output.ScanResult.DanglingSymlinks.Count > 0) CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Dangling symlinks", $"{ConsoleUi.FormatNumber(output.ScanResult.DanglingSymlinks.Count)} output.Skipped", indent: "  "));
+            if (output.ScanResult.DanglingSymlinks.Count > 0) CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Dangling symlinks", $"{ConsoleUi.FormatNumber(output.ScanResult.DanglingSymlinks.Count)} skipped", indent: "  "));
             if (output.ScanResult.UnknownExtensionFiles.Count > 0)
             {
                 CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine(
