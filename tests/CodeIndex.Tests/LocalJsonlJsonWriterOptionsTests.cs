@@ -42,6 +42,62 @@ public class LocalJsonlJsonWriterOptionsTests
     }
 
     [Fact]
+    public void SourceEnumerationPrunesBuildOutputBeforeTraversingChildren()
+    {
+        var repositoryRoot = Path.Combine(Path.GetTempPath(), "repository");
+        var sourceRoot = Path.Combine(repositoryRoot, "src", "CodeIndex");
+        var sourceFeatureRoot = Path.Combine(sourceRoot, "Feature");
+        var testRoot = Path.Combine(repositoryRoot, "tests", "CodeIndex.Tests");
+        var sourceBinRoot = Path.Combine(sourceRoot, "bin");
+        var testObjRoot = Path.Combine(testRoot, "obj");
+        var buildOutputRoots = new HashSet<string>(StringComparer.Ordinal)
+        {
+            sourceBinRoot,
+            testObjRoot,
+        };
+        var directoryChildren = new Dictionary<string, string[]>(StringComparer.Ordinal)
+        {
+            [sourceRoot] = [sourceFeatureRoot, sourceBinRoot],
+            [sourceFeatureRoot] = [],
+            [testRoot] = [testObjRoot],
+        };
+        var filesByDirectory = new Dictionary<string, string[]>(StringComparer.Ordinal)
+        {
+            [sourceRoot] = [Path.Combine(sourceRoot, "Program.cs")],
+            [sourceFeatureRoot] = [Path.Combine(sourceFeatureRoot, "Worker.cs")],
+            [testRoot] = [Path.Combine(testRoot, "GuardTests.cs")],
+        };
+
+        IEnumerable<string> EnumerateDirectories(string directory)
+        {
+            Assert.DoesNotContain(directory, buildOutputRoots);
+            return directoryChildren.TryGetValue(directory, out var children) ? children : [];
+        }
+
+        IEnumerable<string> EnumerateFiles(string directory)
+        {
+            Assert.DoesNotContain(directory, buildOutputRoots);
+            return filesByDirectory.TryGetValue(directory, out var files) ? files : [];
+        }
+
+        var files = EnumerateSourceFiles(
+                repositoryRoot,
+                enumerateFiles: EnumerateFiles,
+                enumerateDirectories: EnumerateDirectories)
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Equal(
+            new[]
+            {
+                Path.Combine(sourceFeatureRoot, "Worker.cs"),
+                Path.Combine(sourceRoot, "Program.cs"),
+                Path.Combine(testRoot, "GuardTests.cs"),
+            }.OrderBy(path => path, StringComparer.Ordinal),
+            files);
+    }
+
+    [Fact]
     public void Create_PreservesHtmlLikeCharactersWhileKeepingJsonlLineParseable()
     {
         const string message = "tail<>&\"' / </script><script>alert(\"x\")</script>\nnext";
@@ -91,30 +147,41 @@ public class LocalJsonlJsonWriterOptionsTests
         Assert.Empty(offenders);
     }
 
-    private static IEnumerable<string> EnumerateSourceFiles(string repositoryRoot)
+    private static IEnumerable<string> EnumerateSourceFiles(
+        string repositoryRoot,
+        Func<string, IEnumerable<string>>? enumerateFiles = null,
+        Func<string, IEnumerable<string>>? enumerateDirectories = null)
     {
-        foreach (var root in new[] { "src/CodeIndex", "tests/CodeIndex.Tests" })
+        enumerateFiles ??= directory =>
+            Directory.EnumerateFiles(directory, "*.cs", SearchOption.TopDirectoryOnly);
+        enumerateDirectories ??= Directory.EnumerateDirectories;
+
+        foreach (var root in new[]
+                 {
+                     Path.Combine("src", "CodeIndex"),
+                     Path.Combine("tests", "CodeIndex.Tests"),
+                 })
         {
             var fullRoot = Path.Combine(repositoryRoot, root);
-            foreach (var path in Directory.EnumerateFiles(fullRoot, "*.cs", SearchOption.AllDirectories))
+            var pendingDirectories = new Stack<string>();
+            pendingDirectories.Push(fullRoot);
+
+            while (pendingDirectories.TryPop(out var directory))
             {
-                if (IsBuildOutput(path))
-                    continue;
-                yield return path;
+                foreach (var path in enumerateFiles(directory))
+                    yield return path;
+
+                foreach (var childDirectory in enumerateDirectories(directory))
+                {
+                    if (!IsBuildOutputDirectory(childDirectory))
+                        pendingDirectories.Push(childDirectory);
+                }
             }
         }
     }
 
-    private static bool IsBuildOutput(string path)
-    {
-        foreach (var segment in path.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
-        {
-            if (segment is "bin" or "obj")
-                return true;
-        }
-
-        return false;
-    }
+    private static bool IsBuildOutputDirectory(string path) =>
+        Path.GetFileName(Path.TrimEndingDirectorySeparator(path)) is "bin" or "obj";
 
     private static string NormalizeRelativePath(string path) =>
         path.Replace(Path.DirectorySeparatorChar, '/').Replace(Path.AltDirectorySeparatorChar, '/');
