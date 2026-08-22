@@ -191,6 +191,36 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SwiftSequentialPropertyCalls_ReusedResolverDoesNotLeakPreviousLine()
+    {
+        const string content = """
+            class C {
+                var first: Int = 0 {
+                    didSet { firstCall() }
+                }
+                var second: Int = 0 {
+                    didSet { secondCall() }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        var first = Assert.Single(references.Where(reference =>
+            reference.SymbolName == "firstCall"
+            && reference.ReferenceKind == "call"));
+        Assert.Equal("property", first.ContainerKind);
+        Assert.Equal("first", first.ContainerName);
+
+        var second = Assert.Single(references.Where(reference =>
+            reference.SymbolName == "secondCall"
+            && reference.ReferenceKind == "call"));
+        Assert.Equal("property", second.ContainerKind);
+        Assert.Equal("second", second.ContainerName);
+    }
+
+    [Fact]
     public void Extract_SwiftTypedThrows_RecordsThrownErrorType()
     {
         const string content = """

@@ -977,6 +977,15 @@ Container ownership follows the same contract. If references repeatedly resolve
 an extracted declaration by name and source range, index candidates by name once
 and scan only that name's ordered range list. Preserve first-candidate behavior
 for duplicate names and keep the index local to one extraction call.
+The core reference loop owns one `CoreReferenceLineContainerResolver` per
+extraction and resets its line coordinates, fallback container, and
+language-specific state immediately before each non-empty line. Its bound
+container delegates are created once, consumed synchronously by that prepared
+line, and must not be retained past it. Exceptions and cancellation abandon the
+extraction-local resolver; do not pool it or make it static. C# declaration
+generic-parameter discovery may share an empty `IReadOnlySet` only after the
+line has no `<` marker. Consumers must keep that set read-only, while any line
+with `<` continues through the full callable/type declaration parser.
 For C#, both symbol assignment and reference resolution prefer the narrowest
 active callable range, including `test.method` and nested local functions, before
 an enclosing type. Named lambdas without a complete body range attach to that
@@ -4888,6 +4897,13 @@ container ownership にも同じ契約を適用する。reference が extracted 
 source range で繰り返し解決する場合は、candidate を name ごとに一度だけ索引化し、その name の
 ordered range list だけを走査する。duplicate name の first-candidate behavior を維持し、index は
 1 回の extraction call 内だけに保持する。
+core reference loop は extraction ごとに1つの `CoreReferenceLineContainerResolver` を所有し、
+空でない各行の直前に line 座標、fallback container、言語固有 state を reset する。bound 済みの
+container delegate は1回だけ生成し、その prepared line 内で同期的に消費し、後続行へ保持しては
+ならない。例外または cancellation では extraction-local resolver を破棄し、pool 化や static 化を
+しない。C# declaration の generic parameter 検出が空の `IReadOnlySet` を共有できるのは、行に
+`<` marker がないことを確認した場合だけである。consumer はこの集合を read-only のまま扱い、
+`<` を含む行は従来どおり callable / type declaration の完全な parser を通す。
 C# では symbol assignment と reference resolution の両方が、enclosing type より先に、
 `test.method` や nested local function を含む最も狭い active callable range を選ぶ。
 完全な body range を持たない named lambda はその enclosing callable に所属し、

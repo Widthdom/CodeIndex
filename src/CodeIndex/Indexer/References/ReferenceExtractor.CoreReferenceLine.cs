@@ -137,8 +137,8 @@ public static partial class ReferenceExtractor
                     loop.Lookups.GetEnclosingTypeCandidates);
         }
 
-        var containerResolver = new CoreReferenceLineContainerResolver(
-            loop,
+        var containerResolver = state.LineContainerResolver;
+        containerResolver.ResetForLine(
             lineIndex,
             lineNumber,
             container,

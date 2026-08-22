@@ -484,8 +484,19 @@ public static partial class ReferenceExtractor
         }
     }
 
-    private static HashSet<string> CollectCSharpGenericParameterNamesForDeclaration(string line)
+    private static readonly IReadOnlySet<string>
+        EmptyCSharpGenericParameterNames =
+            new HashSet<string>(StringComparer.Ordinal);
+
+    private static IReadOnlySet<string>
+        CollectCSharpGenericParameterNamesForDeclaration(string line)
     {
+        // A declaration cannot introduce generic parameters without an angle
+        // bracket. Most source lines take this path, so share the immutable-by-
+        // contract empty set instead of tokenizing and allocating a new set.
+        if (line.IndexOf('<') < 0)
+            return EmptyCSharpGenericParameterNames;
+
         if (TryFindCallableParameterList(line, "csharp", out var callableNameStart, out var paramStart, out _))
         {
             var nameEnd = callableNameStart;
@@ -499,7 +510,7 @@ public static partial class ReferenceExtractor
 
         var tokens = GetTopLevelTokenSpans(line);
         if (tokens.Count < 2)
-            return [];
+            return EmptyCSharpGenericParameterNames;
 
         for (int i = 0; i < tokens.Count; i++)
         {
@@ -508,15 +519,15 @@ public static partial class ReferenceExtractor
                 continue;
             var nameIndex = i + 1;
             if (nameIndex >= tokens.Count)
-                return [];
+                return EmptyCSharpGenericParameterNames;
             var nameToken = line.Substring(tokens[nameIndex].Start, tokens[nameIndex].Length);
             var genericOpen = nameToken.IndexOf('<');
             if (genericOpen < 0)
-                return [];
+                return EmptyCSharpGenericParameterNames;
             return CollectCSharpGenericParameterNamesFromClause(line, tokens[nameIndex].Start + genericOpen);
         }
 
-        return [];
+        return EmptyCSharpGenericParameterNames;
     }
 
     private static HashSet<string> CollectCSharpGenericParameterNamesFromClause(string line, int genericOpen)

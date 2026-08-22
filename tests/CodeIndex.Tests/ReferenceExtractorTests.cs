@@ -509,14 +509,69 @@ public partial class ReferenceExtractorTests
         Assert.DoesNotContain("Phantom", masked[2], StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("csharp")]
+    [InlineData("java")]
+    [InlineData("kotlin")]
+    public async Task Extract_ReusedContainerResolverDelegates_RemainLineAndExtractionScoped(
+        string language)
+    {
+        var (content, firstContainer) = language switch
+        {
+            "csharp" => (
+                "class Demo {\n    void alpha() { firstCall(); }\n\n    void beta() { secondCall(); }\n}\n",
+                "alpha"),
+            "java" => (
+                "class Demo {\n    Demo() { firstCall(); }\n\n    void beta() { secondCall(); }\n}\n",
+                "Demo"),
+            "kotlin" => (
+                "class Demo {\n    fun alpha() { firstCall() }\n\n    fun beta() { secondCall() }\n}\n",
+                "alpha"),
+            _ => throw new ArgumentOutOfRangeException(nameof(language)),
+        };
+        var symbols = SymbolExtractor.Extract(1, language, content);
+
+        // Each Extract call owns one mutable resolver. Its bound delegates are
+        // consumed synchronously for the current prepared line; if they escape
+        // a line or an extraction, these concurrent calls can cross-attribute
+        // either the first or the second reference.
+        var extractionTasks = Enumerable.Range(0, 4)
+            .Select(_ => Task.Run(() =>
+                ReferenceExtractor.Extract(1, language, content, symbols)))
+            .ToArray();
+        var results = await Task.WhenAll(extractionTasks);
+
+        foreach (var references in results)
+        {
+            var first = Assert.Single(references.Where(reference =>
+                reference.SymbolName == "firstCall"
+                && reference.ReferenceKind == "call"));
+            Assert.Equal(firstContainer, first.ContainerName);
+
+            var second = Assert.Single(references.Where(reference =>
+                reference.SymbolName == "secondCall"
+                && reference.ReferenceKind == "call"));
+            Assert.Equal("beta", second.ContainerName);
+        }
+    }
+
     [Fact]
-    public void Extract_CancelledToken_ThrowsBeforeWork()
+    public void Extract_CancelledToken_PreservesTokenAndDoesNotLeakResolverState()
     {
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
 
-        Assert.Throws<OperationCanceledException>(() =>
+        var exception = Assert.Throws<OperationCanceledException>(() =>
             ReferenceExtractor.Extract(1, "csharp", "public class App { }", [], cancellationToken: cancellation.Token));
+        Assert.Equal(cancellation.Token, exception.CancellationToken);
+
+        const string content = "class App { void run() { afterCancellation(); } }";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "afterCancellation"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "run");
     }
 
     [Fact]

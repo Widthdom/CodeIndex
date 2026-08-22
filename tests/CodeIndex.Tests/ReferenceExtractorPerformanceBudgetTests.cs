@@ -100,15 +100,16 @@ public sealed class ReferenceExtractorPerformanceBudgetTests
 #else
     [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
 #endif
-    public void Extract_CSharpJavaKotlinMarkerlessDecoyFiles_ProduceNoReferencesWithinPracticalBudget()
+    public void Extract_CSharpJavaKotlinTenThousandMarkerlessLines_StayWithinAllocationBudgets()
     {
         ReferenceExtractorWarmup.EnsurePerformanceWarmup();
 
+        const int declarationLineCount = 10_000;
         var fixtureContents = new[]
         {
-            (Language: "csharp", Content: BuildBraceLanguageFixture("class BasicTask", useKotlinProperties: false)),
-            (Language: "java", Content: BuildBraceLanguageFixture("class BasicTask", useKotlinProperties: false)),
-            (Language: "kotlin", Content: BuildBraceLanguageFixture("class BasicTask", useKotlinProperties: true)),
+            (Language: "csharp", Content: BuildBraceLanguageFixture("class BasicTask", useKotlinProperties: false, declarationLineCount)),
+            (Language: "java", Content: BuildBraceLanguageFixture("class BasicTask", useKotlinProperties: false, declarationLineCount)),
+            (Language: "kotlin", Content: BuildBraceLanguageFixture("class BasicTask", useKotlinProperties: true, declarationLineCount)),
         };
         var fixtures = fixtureContents
             .Select(fixture => (
@@ -124,37 +125,59 @@ public sealed class ReferenceExtractorPerformanceBudgetTests
             Assert.Empty(warmupReferences);
         }
 
-        var referencesByFixture = new IReadOnlyList<ReferenceRecord>[fixtures.Length];
-        var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
-        var started = Stopwatch.GetTimestamp();
+        var measurements = new (
+            string Language,
+            IReadOnlyList<ReferenceRecord> References,
+            TimeSpan Elapsed,
+            long AllocatedBytes)[fixtures.Length];
         for (var index = 0; index < fixtures.Length; index++)
         {
             var fixture = fixtures[index];
-            referencesByFixture[index] = ReferenceExtractor.Extract(
+            var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+            var started = Stopwatch.GetTimestamp();
+            var references = ReferenceExtractor.Extract(
                 1, fixture.Language, fixture.Content, fixture.Symbols);
+            measurements[index] = (
+                fixture.Language,
+                references,
+                Stopwatch.GetElapsedTime(started),
+                GC.GetAllocatedBytesForCurrentThread() - allocatedBefore);
         }
-        var elapsed = Stopwatch.GetElapsedTime(started);
-        var allocatedBytes = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
 
-        foreach (var references in referencesByFixture)
-            Assert.Empty(references);
+        foreach (var measurement in measurements)
+        {
+            Assert.Empty(measurement.References);
+            var allocationBudget = measurement.Language switch
+            {
+                "csharp" => 20_000_000L,
+                "java" => 12_500_000L,
+                "kotlin" => 40_000_000L,
+                _ => throw new InvalidOperationException(
+                    $"Missing markerless allocation budget for {measurement.Language}."),
+            };
+            Assert.True(
+                measurement.AllocatedBytes < allocationBudget,
+                $"{measurement.Language} markerless extraction allocated "
+                + $"{measurement.AllocatedBytes:N0} bytes for {declarationLineCount:N0} declaration lines; "
+                + $"expected < {allocationBudget:N0} bytes.");
+        }
 
-        // The fixture currently allocates about 15.9 MiB on the primary target. Keep enough
-        // headroom for runtime variation while still catching a return to per-pattern work.
-        const long allocationBudget = 24L * 1024 * 1024;
-        Assert.True(
-            allocatedBytes < allocationBudget,
-            $"Markerless decoy extraction allocated {allocatedBytes:N0} bytes, expected < {allocationBudget:N0} bytes.");
+        var elapsed = measurements.Aggregate(
+            TimeSpan.Zero,
+            (total, measurement) => total + measurement.Elapsed);
         var runawayBudget = TimeSpan.FromSeconds(3);
         Assert.True(
             elapsed < runawayBudget,
             $"Markerless decoy extraction took {elapsed.TotalSeconds:F2}s, expected < {runawayBudget.TotalSeconds:F0}s runaway guard.");
 
-        static string BuildBraceLanguageFixture(string header, bool useKotlinProperties)
+        static string BuildBraceLanguageFixture(
+            string header,
+            bool useKotlinProperties,
+            int declarationLines)
         {
             var builder = new StringBuilder();
             builder.AppendLine(header).AppendLine("{");
-            for (var index = 0; index < 400; index++)
+            for (var index = 0; index < declarationLines / 5; index++)
             {
                 if (useKotlinProperties)
                 {
