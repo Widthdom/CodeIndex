@@ -2318,11 +2318,11 @@ public partial class DbWriter
                 while (reader.Read())
                 {
                     var id = reader.GetInt64(0);
-                    var fileId = reader.GetInt64(1);
-                    var line = reader.GetInt32(2);
-                    var context = reader.GetString(3);
-                    var key = (fileId, line, context);
-                    lineIds.SetReferenceLineId(key, id);
+                    var rowIndex = ResolveReferenceLineInputRowIndex(
+                        i,
+                        statementRowCount,
+                        reader.IsDBNull(1) ? null : reader.GetInt32(1));
+                    lineIds.SetReferenceLineId(rowIndex, id);
                 }
             }
             finally
@@ -2349,13 +2349,17 @@ public partial class DbWriter
             end,
             cancellationToken);
         var rows = new List<(long FileId, int Line, string Context)>(lineIds.ReferenceLineCount);
+        var rowOrdinals = new List<int>(lineIds.ReferenceLineCount);
         for (var ordinal = 0; ordinal < lineIds.Keys.Length; ordinal++)
         {
             var key = lineIds.Keys[ordinal];
             if (knownLineIds.TryGetValue(key, out var knownId))
                 lineIds.SetReferenceLineId(ordinal, knownId);
             else
+            {
                 rows.Add(key);
+                rowOrdinals.Add(ordinal);
+            }
         }
 
         int rowsPerStatement = useCallerTransactionParameterBudget
@@ -2381,11 +2385,13 @@ public partial class DbWriter
                 while (reader.Read())
                 {
                     var id = reader.GetInt64(0);
-                    var fileId = reader.GetInt64(1);
-                    var line = reader.GetInt32(2);
-                    var context = reader.GetString(3);
-                    var key = (fileId, line, context);
-                    lineIds.SetReferenceLineId(key, id);
+                    var rowIndex = ResolveReferenceLineInputRowIndex(
+                        i,
+                        statementRowCount,
+                        reader.IsDBNull(1) ? null : reader.GetInt32(1));
+                    var lineOrdinal = rowOrdinals[rowIndex];
+                    var key = rows[rowIndex];
+                    lineIds.SetReferenceLineId(lineOrdinal, id);
                     knownLineIds[key] = id;
                 }
             }
@@ -2399,26 +2405,66 @@ public partial class DbWriter
         return lineIds;
     }
 
+    private static int ResolveReferenceLineInputRowIndex(
+        int statementStart,
+        int statementRowCount,
+        int? inputOrdinal)
+    {
+        if (inputOrdinal is not { } ordinal
+            || (uint)ordinal >= (uint)statementRowCount)
+        {
+            throw new InvalidDataException(
+                $"Reference-line materialization returned invalid input ordinal {inputOrdinal?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL"} for {statementRowCount} rows.");
+        }
+
+        return checked(statementStart + ordinal);
+    }
+
+    internal static void ValidateReferenceLineMaterializedOrdinalsForTesting(
+        int expectedCount,
+        IReadOnlyList<int?> inputOrdinals)
+    {
+        ArgumentNullException.ThrowIfNull(inputOrdinals);
+        if (expectedCount < 0)
+            throw new ArgumentOutOfRangeException(nameof(expectedCount));
+
+        var keys = new (long FileId, int Line, string Context)[expectedCount];
+        var referenceLineOrdinals = new int[expectedCount];
+        for (var ordinal = 0; ordinal < expectedCount; ordinal++)
+            referenceLineOrdinals[ordinal] = ordinal;
+        var lineIds = new ReferenceLineBatchMap(
+            referenceStart: 0,
+            keys,
+            referenceLineOrdinals);
+        for (var resultIndex = 0; resultIndex < inputOrdinals.Count; resultIndex++)
+        {
+            var ordinal = ResolveReferenceLineInputRowIndex(
+                statementStart: 0,
+                statementRowCount: expectedCount,
+                inputOrdinals[resultIndex]);
+            lineIds.SetReferenceLineId(ordinal, resultIndex + 1L);
+        }
+        lineIds.CompleteMaterialization();
+    }
+
     private sealed class ReferenceLineBatchMap
     {
         private readonly int _referenceStart;
         private readonly int[] _referenceLineOrdinals;
         private readonly long[] _referenceLineIds;
         private readonly bool[] _hasReferenceLineIds;
-        private Dictionary<(long FileId, int Line, string Context), int>? _keyOrdinals;
+        private bool _materializationComplete;
 
-        private ReferenceLineBatchMap(
+        internal ReferenceLineBatchMap(
             int referenceStart,
             (long FileId, int Line, string Context)[] keys,
-            int[] referenceLineOrdinals,
-            Dictionary<(long FileId, int Line, string Context), int> keyOrdinals)
+            int[] referenceLineOrdinals)
         {
             _referenceStart = referenceStart;
             Keys = keys;
             _referenceLineOrdinals = referenceLineOrdinals;
             _referenceLineIds = new long[keys.Length];
             _hasReferenceLineIds = new bool[keys.Length];
-            _keyOrdinals = keyOrdinals;
         }
 
         internal (long FileId, int Line, string Context)[] Keys { get; }
@@ -2463,25 +2509,26 @@ public partial class DbWriter
             return new ReferenceLineBatchMap(
                 start,
                 keys.ToArray(),
-                referenceLineOrdinals,
-                keyOrdinals);
-        }
-
-        internal void SetReferenceLineId(
-            (long FileId, int Line, string Context) key,
-            long id)
-        {
-            var keyOrdinals = _keyOrdinals
-                ?? throw new InvalidOperationException("Reference-line materialization is already complete.");
-            if (!keyOrdinals.TryGetValue(key, out var ordinal))
-                throw new KeyNotFoundException($"Unexpected materialized reference-line key: {key}.");
-
-            _referenceLineIds[ordinal] = id;
-            _hasReferenceLineIds[ordinal] = true;
+                referenceLineOrdinals);
         }
 
         internal void SetReferenceLineId(int ordinal, long id)
         {
+            if (_materializationComplete)
+                throw new InvalidOperationException("Reference-line materialization is already complete.");
+            if ((uint)ordinal >= (uint)_referenceLineIds.Length)
+            {
+                throw new InvalidDataException(
+                    $"Reference-line materialization returned out-of-range ordinal {ordinal} for {_referenceLineIds.Length} rows.");
+            }
+            if (id <= 0)
+                throw new InvalidDataException("Reference-line materialization returned a non-positive ID.");
+            if (_hasReferenceLineIds[ordinal])
+            {
+                throw new InvalidDataException(
+                    $"Reference-line materialization returned duplicate ordinal {ordinal}.");
+            }
+
             _referenceLineIds[ordinal] = id;
             _hasReferenceLineIds[ordinal] = true;
         }
@@ -2493,18 +2540,16 @@ public partial class DbWriter
                 if (_hasReferenceLineIds[ordinal])
                     continue;
 
-                throw new KeyNotFoundException(
-                    $"Reference-line ID was not materialized for key: {Keys[ordinal]}.");
+                throw new InvalidDataException(
+                    $"Reference-line ID was not materialized for input ordinal {ordinal}.");
             }
 
-            // Insert binding is ordinal-only. Release the tuple lookup table before the
-            // symbol_references command walks the batch, so repeated contexts are not rehashed.
-            _keyOrdinals = null;
+            _materializationComplete = true;
         }
 
         internal long GetReferenceLineId(int referenceIndex)
         {
-            if (_keyOrdinals != null)
+            if (!_materializationComplete)
                 throw new InvalidOperationException("Reference-line materialization is incomplete.");
 
             var offset = referenceIndex - _referenceStart;

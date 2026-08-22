@@ -147,12 +147,32 @@ public partial class DbWriter
     }
 
     private static string BuildReferenceLineUpsertSql(int rowCount)
-        => BuildReferenceLineWriteSql(rowCount, " ON CONFLICT(file_id, line, context) DO NOTHING");
+        => BuildReferenceLineValuesInsertSql(
+            rowCount,
+            " ON CONFLICT(file_id, line, context) DO NOTHING");
 
     private static string BuildReferenceLineInsertSql(int rowCount)
-        => BuildReferenceLineWriteSql(rowCount, " RETURNING id, file_id, line, context");
+    {
+        var rows = BuildReferenceLineInputRows(rowCount);
+        return $@"
+                WITH input(input_ordinal, file_id, line, context) AS (
+                    VALUES {rows}
+                )
+                INSERT INTO reference_lines (file_id, line, context)
+                SELECT file_id, line, context
+                FROM input
+                RETURNING id,
+                          (SELECT input_ordinal
+                           FROM input
+                           WHERE input.file_id = reference_lines.file_id
+                             AND input.line = reference_lines.line
+                             AND input.context = reference_lines.context)";
+    }
 
-    private static string BuildReferenceLineWriteSql(int rowCount, string suffix)
+    internal static string BuildReferenceLineInsertSqlForTesting(int rowCount)
+        => BuildReferenceLineInsertSql(rowCount);
+
+    private static string BuildReferenceLineValuesInsertSql(int rowCount, string suffix)
     {
         var sql = CreateBatchSqlBuilder(rowCount, estimatedCharsPerRow: 64);
         sql.Append("INSERT INTO reference_lines (file_id, line, context) VALUES ");
@@ -168,28 +188,40 @@ public partial class DbWriter
 
     private static string BuildReferenceLineLookupSql(int rowCount)
     {
-        var rows = CreateBatchSqlBuilder(rowCount, estimatedCharsPerRow: 48);
-        var parameterIndex = 0;
-        for (var row = 0; row < rowCount; row++)
-        {
-            if (row > 0)
-                rows.Append(", ");
-            AppendBatchParameterTuple(rows, ref parameterIndex, columnCount: 3);
-        }
+        var rows = BuildReferenceLineInputRows(rowCount);
         return $@"
-                WITH lookup(file_id, line, context) AS (
+                WITH lookup(input_ordinal, file_id, line, context) AS (
                     VALUES {rows}
                 )
-                SELECT rl.id, rl.file_id, rl.line, rl.context
+                SELECT rl.id, l.input_ordinal
                 FROM reference_lines rl
                 JOIN lookup l
-                  ON l.file_id = rl.file_id
+                 ON l.file_id = rl.file_id
                  AND l.line = rl.line
                  AND l.context = rl.context";
     }
 
     internal static string BuildReferenceLineLookupSqlForTesting(int rowCount)
         => BuildReferenceLineLookupSql(rowCount);
+
+    private static StringBuilder BuildReferenceLineInputRows(int rowCount)
+    {
+        var rows = CreateBatchSqlBuilder(rowCount, estimatedCharsPerRow: 64);
+        var parameterIndex = 0;
+        for (var row = 0; row < rowCount; row++)
+        {
+            if (row > 0)
+                rows.Append(", ");
+            rows.Append('(').Append(row);
+            for (var column = 0; column < 3; column++)
+            {
+                rows.Append(", ");
+                AppendBatchParameter(rows, ref parameterIndex);
+            }
+            rows.Append(')');
+        }
+        return rows;
+    }
 
     private static void AddReferenceLineParameters(
         SqliteCommand cmd,

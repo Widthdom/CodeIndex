@@ -391,13 +391,16 @@ index catalog so every path converges on an identical schema.
 Reference context text is normalized into `reference_lines`; the legacy
 `symbol_references.context` column is therefore written as a SQL `NULL` literal
 rather than bound once per reference. Reference-line materialization builds a
-batch-local key-to-ordinal map, resolves each unique line ID, then releases the
-tuple lookup before binding `symbol_references` from ordinal arrays. Preserve
-this path for both new-file inserts and replacement upserts, including atomic
-file windows, so large multi-language reference sets do not rehash file/line/
-context tuples for every persisted edge. Atomic window sizing uses the worst-case
-rows-per-statement bound and leaves the materializer as the only tuple-hash pass;
-do not restore a duplicate key-sizing set before it.
+batch-local key-to-ordinal map and releases it as soon as the unique input array
+is built. Both new-file `RETURNING` and replacement lookup SQL project only the
+materialized ID plus the batch-local input ordinal; they must not return context
+text or reconstruct tuple keys in managed code. Ordinal bounds, duplicates,
+missing rows, and non-positive IDs fail closed before `symbol_references` binding.
+Preserve this path across atomic file windows so large multi-language reference
+sets do not copy or rehash file/line/context tuples after deduplication. Atomic
+window sizing uses the worst-case rows-per-statement bound and leaves the
+materializer as the only tuple-hash pass; do not restore a duplicate key-sizing
+set before it.
 
 Use the same secondary-index deferral for an existing-database full scan when
 the established FTS dirty-byte policy selects bulk loading. Scoped updates have
@@ -4349,10 +4352,12 @@ repair は同じ canonical index catalog を使い、すべての経路が同一
 reference の context text は `reference_lines` へ正規化されるため、legacy な
 `symbol_references.context` column は reference ごとの parameter ではなく SQL の `NULL`
 literal として書き込みます。reference-line materialization は batch-local な key-to-ordinal
-map を構築し、unique な line ID を解決した後、`symbol_references` を ordinal array から bind
-する前に tuple lookup を解放します。巨大な multi-language reference 集合で file / line /
-context tuple を edge ごとに再 hash しないよう、新規 file insert と replacement upsert の両方、
-atomic file window を含む全経路でこの契約を維持してください。
+map でuniqueなinput arrayを構築した直後にmapを解放します。新規fileの`RETURNING`とreplacement
+lookup SQLはいずれもmaterialized IDとbatch-local input ordinalだけを返し、context textを返したり
+managed codeでtuple keyを再構築したりしません。ordinalの範囲外・重複・欠落と非正のIDは
+`symbol_references` bind前にfail-closedとします。巨大なmulti-language reference集合でdedupe後の
+file / line / context tupleを再copy・再hashしないよう、atomic file windowを含む全経路でこの契約を
+維持してください。
 atomic window の size は rows-per-statement の最悪ケース境界から算出し、materializer だけを
 tuple-hash pass として保ちます。その前段に重複した key-sizing set を戻さないでください。
 

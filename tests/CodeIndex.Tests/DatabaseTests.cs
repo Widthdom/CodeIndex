@@ -9003,6 +9003,12 @@ public class DatabaseTests : IDisposable
         const int StatementRowCount = 5;
         var sql = DbWriter.BuildReferenceLineLookupSqlForTesting(StatementRowCount);
 
+        Assert.Contains(
+            "WITH lookup(input_ordinal, file_id, line, context)",
+            sql,
+            StringComparison.Ordinal);
+        Assert.Contains("SELECT rl.id, l.input_ordinal", sql, StringComparison.Ordinal);
+        Assert.DoesNotContain("SELECT rl.id, rl.file_id", sql, StringComparison.Ordinal);
         Assert.DoesNotContain("@p", sql, StringComparison.Ordinal);
         Assert.DoesNotContain("?0", sql, StringComparison.Ordinal);
         Assert.Contains("?1", sql, StringComparison.Ordinal);
@@ -9024,6 +9030,52 @@ public class DatabaseTests : IDisposable
             detail => detail.Contains(
                 "sqlite_autoindex_reference_lines_1",
                 StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void ReferenceLineFreshInsert_ReturnsOnlyIdAndInputOrdinal()
+    {
+        const int StatementRowCount = 4;
+        var sql = DbWriter.BuildReferenceLineInsertSqlForTesting(StatementRowCount);
+
+        Assert.Contains(
+            "WITH input(input_ordinal, file_id, line, context)",
+            sql,
+            StringComparison.Ordinal);
+        Assert.Contains("RETURNING id,", sql, StringComparison.Ordinal);
+        Assert.Contains("SELECT input_ordinal", sql, StringComparison.Ordinal);
+        Assert.DoesNotContain("RETURNING id, file_id", sql, StringComparison.Ordinal);
+        Assert.Contains("?1", sql, StringComparison.Ordinal);
+        Assert.Contains("?12", sql, StringComparison.Ordinal);
+
+        var fileIds = Enumerable.Range(0, StatementRowCount)
+            .Select(row => UpsertTestFile(
+                $"src/reference-line-ordinal-{row}.cs",
+                checksum: $"reference-line-ordinal-{row}"))
+            .ToArray();
+        using var command = _db.Connection.CreateCommand();
+        command.CommandText = sql;
+        for (var row = 0; row < StatementRowCount; row++)
+        {
+            var parameterBase = row * 3;
+            command.Parameters.AddWithValue($"?{parameterBase + 1}", fileIds[row]);
+            command.Parameters.AddWithValue($"?{parameterBase + 2}", row + 20);
+            command.Parameters.AddWithValue($"?{parameterBase + 3}", $"文脈-{row}-😀");
+        }
+
+        command.Prepare();
+        using var reader = command.ExecuteReader();
+        var returned = new List<(long Id, int Ordinal)>();
+        while (reader.Read())
+        {
+            Assert.Equal(2, reader.FieldCount);
+            returned.Add((reader.GetInt64(0), reader.GetInt32(1)));
+        }
+
+        Assert.Equal(
+            Enumerable.Range(0, StatementRowCount),
+            returned.Select(static row => row.Ordinal).OrderBy(static ordinal => ordinal));
+        Assert.All(returned, static row => Assert.True(row.Id > 0));
     }
 
     [Fact]
