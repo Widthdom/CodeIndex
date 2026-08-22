@@ -8,8 +8,6 @@ using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Models;
 using CodeIndex.PluginIsolationFixture;
 
-[assembly: CdidxPlugin(ExtractorPluginRegistry.CurrentApiVersion, ExtractorPluginRegistry.CurrentApiVersion)]
-
 namespace CodeIndex.Tests;
 
 [Collection("Plugin registry sensitive")]
@@ -25,6 +23,18 @@ public class ExtractorPluginRegistryTests
     internal const string ThrowingPluginConstructorEnvironmentVariable = PluginIsolationFixtureEnvironment.ThrowingConstructor;
     internal const string SlowPluginConstructorEnvironmentVariable = PluginIsolationFixtureEnvironment.SlowConstructor;
     internal const string CrashingPluginConstructorEnvironmentVariable = PluginIsolationFixtureEnvironment.CrashingConstructor;
+
+    [Fact]
+    public void PluginFixture_IsDedicatedAndBounded_Issue5121()
+    {
+        var testAssembly = typeof(ExtractorPluginRegistryTests).Assembly;
+        var pluginAssembly = typeof(CollectiblePluginSymbolExtractor).Assembly;
+
+        Assert.NotSame(testAssembly, pluginAssembly);
+        Assert.Empty(testAssembly.GetCustomAttributes<CdidxPluginAttribute>());
+        Assert.Single(pluginAssembly.GetCustomAttributes<CdidxPluginAttribute>());
+        Assert.InRange(pluginAssembly.GetTypes().Length, 1, ExtractorPluginRegistry.MaxExtensionAssemblyTypes);
+    }
 
     [Fact]
     public void DoctorIntegrations_DoesNotStartConfiguredPluginWorker_Issue5102()
@@ -337,7 +347,7 @@ public class ExtractorPluginRegistryTests
             try
             {
                 Directory.CreateDirectory(pluginDirectory);
-                File.Copy(Assembly.GetExecutingAssembly().Location, Path.Combine(pluginDirectory, "plugin.dll"));
+                File.Copy(pluginAssemblyFixturePath, Path.Combine(pluginDirectory, "plugin.dll"));
 
                 ExtractorPluginRegistry.ResetForTests();
                 File.SetUnixFileMode(
