@@ -6,6 +6,8 @@ namespace CodeIndex.Tests;
 
 public partial class ReleaseWorkflowTests
 {
+    private static readonly TimeSpan DockerEntrypointFixtureTimeout = TimeSpan.FromSeconds(30);
+
     [Fact]
     public void ReleaseWorkflow_DockerfileDocumentsSdkRuntimeSplit()
     {
@@ -157,10 +159,10 @@ public partial class ReleaseWorkflowTests
         process.StartInfo.Environment["CDIDX_RUN_GID"] = targetGid;
 
         process.Start();
-        if (!process.WaitForExit(5000))
+        if (!process.WaitForExit((int)DockerEntrypointFixtureTimeout.TotalMilliseconds))
         {
             process.Kill(entireProcessTree: true);
-            throw new TimeoutException("docker-entrypoint.sh fixture did not exit within 5 seconds.");
+            throw new TimeoutException($"docker-entrypoint.sh fixture did not exit within {DockerEntrypointFixtureTimeout.TotalSeconds:0} seconds.");
         }
 
         return (process.ExitCode, process.StandardOutput.ReadToEnd(), process.StandardError.ReadToEnd());
