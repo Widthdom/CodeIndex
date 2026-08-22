@@ -130,7 +130,7 @@ jobs:
           path: |
             ~/.nuget/packages
             ~\AppData\Local\NuGet\packages
-          key: ${{ runner.os }}-release-nuget-${{ hashFiles('src/CodeIndex/packages.lock.json', 'tests/CodeIndex.HookIsolationFixture/packages.lock.json', 'tests/CodeIndex.PluginIsolationFixture/packages.lock.json', 'tests/CodeIndex.Tests/packages.lock.json', 'tools/CodeIndex.Changelog/packages.lock.json', 'tools/CodeIndex.PackageNormalize/packages.lock.json', 'tools/CodeIndex.TestTelemetry/packages.lock.json') }}
+          key: ${{ runner.os }}-release-nuget-${{ hashFiles('src/CodeIndex/packages.lock.json', 'tests/CodeIndex.HookIsolationFixture/packages.lock.json', 'tests/CodeIndex.PostExtractionHookFixture/packages.lock.json', 'tests/CodeIndex.PluginIsolationFixture/packages.lock.json', 'tests/CodeIndex.Tests/packages.lock.json', 'tools/CodeIndex.Changelog/packages.lock.json', 'tools/CodeIndex.PackageNormalize/packages.lock.json', 'tools/CodeIndex.TestTelemetry/packages.lock.json') }}
 
       - name: Cache publish-only NuGet packages
         if: ${{ !matrix.run_tests }}

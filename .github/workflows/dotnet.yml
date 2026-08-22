@@ -130,7 +130,7 @@ jobs:
             ~\AppData\Local\NuGet\packages
           # Locked restore keeps package inputs honest; avoid evicting the cache for project-only test edits.
           # locked restore がパッケージ入力を検証するため、テスト用 project だけの変更ではキャッシュを失効させない。
-          key: ${{ runner.os }}-dotnet-nuget-${{ hashFiles('src/CodeIndex/packages.lock.json', 'tests/CodeIndex.HookIsolationFixture/packages.lock.json', 'tests/CodeIndex.PluginIsolationFixture/packages.lock.json', 'tests/CodeIndex.Tests/packages.lock.json', 'tools/CodeIndex.Changelog/packages.lock.json', 'tools/CodeIndex.PackageNormalize/packages.lock.json', 'tools/CodeIndex.TestTelemetry/packages.lock.json') }}
+          key: ${{ runner.os }}-dotnet-nuget-${{ hashFiles('src/CodeIndex/packages.lock.json', 'tests/CodeIndex.HookIsolationFixture/packages.lock.json', 'tests/CodeIndex.PostExtractionHookFixture/packages.lock.json', 'tests/CodeIndex.PluginIsolationFixture/packages.lock.json', 'tests/CodeIndex.Tests/packages.lock.json', 'tools/CodeIndex.Changelog/packages.lock.json', 'tools/CodeIndex.PackageNormalize/packages.lock.json', 'tools/CodeIndex.TestTelemetry/packages.lock.json') }}
 
       # --locked-mode requires every resolved package to match the committed
       # packages.lock.json so an unexpected transitive bump (including silent
