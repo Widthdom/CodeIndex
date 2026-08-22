@@ -75,6 +75,34 @@ public sealed class JsonEnvelopeWrapperIssue4585Tests
                         Assert.True(document.RootElement.GetProperty("results")[0].TryGetProperty("file", out _));
                 }
             }
+
+            var zeroCalleeCases = new[]
+            {
+                new[]
+                {
+                    "callees", "DefinitelyNoSuchSymbol", "--exact-name", "--json", "--compact",
+                    "--limit", "1", "--max-json-bytes", "8192", "--db", dbPath,
+                },
+                new[]
+                {
+                    "callees", "DefinitelyNoSuchSymbol", "--exact-name", "--json", "--compact",
+                    "--fields", "path,line", "--limit", "1", "--max-json-bytes", "8192", "--db", dbPath,
+                },
+            };
+            foreach (var args in zeroCalleeCases)
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(args, _jsonOptions, "1.0.0-test"));
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                using var document = JsonDocument.Parse(stdout);
+                var root = document.RootElement;
+                Assert.Equal("compact", root.GetProperty("format").GetString());
+                Assert.Equal(0, root.GetProperty("count").GetInt32());
+                Assert.Empty(root.GetProperty("results").EnumerateArray());
+                Assert.Equal(0, root.GetProperty("metadata").GetProperty("result_count").GetInt32());
+                Assert.Equal(0, root.GetProperty("metadata").GetProperty("total_count").GetInt32());
+            }
         }
         finally
         {
