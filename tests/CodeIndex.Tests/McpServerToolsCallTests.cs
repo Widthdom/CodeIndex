@@ -7786,15 +7786,24 @@ public partial class McpServerTests
             .OrderBy(static indexName => indexName, StringComparer.Ordinal)
             .ToArray();
         var deferredGraphPreparedIndexNames = ReferenceSecondaryIndexSql.RawPersistenceRequired
+            .Concat(ReferenceSecondaryIndexSql.AuthoritativeFreshPersistenceDeferred)
             .Concat(ReferenceSecondaryIndexSql.DeferredGraphPreparation)
             .Select(static definition => definition.Name)
+            .Distinct(StringComparer.Ordinal)
             .OrderBy(static indexName => indexName, StringComparer.Ordinal)
             .ToArray();
         var initialBulkPersistenceIndexNames = ReferenceSecondaryIndexSql.RawPersistenceRequired
+            .Concat(ReferenceSecondaryIndexSql.AuthoritativeFreshPersistenceDeferred)
             .Concat(ReferenceSecondaryIndexSql.CandidatePopulationDeferred)
             .Select(static definition => definition.Name)
+            .Distinct(StringComparer.Ordinal)
             .OrderBy(static indexName => indexName, StringComparer.Ordinal)
             .ToArray();
+        var authoritativeFreshPersistenceIndexNames =
+            ReferenceSecondaryIndexSql.AuthoritativeFreshPersistenceDeferred
+                .Select(static definition => definition.Name)
+                .OrderBy(static indexName => indexName, StringComparer.Ordinal)
+                .ToArray();
         var hotspotIndexNames = HotspotReferenceAggregateSql.Indexes
             .Select(static definition => definition.Name)
             .OrderBy(static indexName => indexName, StringComparer.Ordinal)
@@ -7909,6 +7918,11 @@ public partial class McpServerTests
             var restoredStateIndex = referenceIndexStates.FindIndex(
                 static state => state.Phase == "restored");
             Assert.Equal(referenceIndexStates.Count - 1, restoredStateIndex);
+            Assert.All(
+                referenceIndexStates,
+                state => Assert.All(
+                    authoritativeFreshPersistenceIndexNames,
+                    indexName => Assert.Contains(indexName, state.PresentIndexNames)));
             Assert.Equal(
                 initialBulkPersistenceIndexNames,
                 Assert.Single(referenceIndexStates, static state => state.Phase == "dropped")

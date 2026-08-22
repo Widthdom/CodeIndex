@@ -3415,7 +3415,11 @@ public partial class IndexCommandRunnerTests
         var projectRoot = CreateTempProject();
         var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
         var previousBarrierHook = IndexCommandRunner.FullScanInputSnapshotBarrierForTesting;
+        var previousReferenceIndexHook = DbWriter.ReferenceSecondaryIndexBulkLoadStateForTesting;
+        var previousStatisticsHook = DbWriter.FreshBulkLoadPlannerStatisticsStateForTesting;
         var injected = 0;
+        ReferenceIndexStageSnapshot? droppedSnapshot = null;
+        var statisticsPhases = new List<string>();
         try
         {
             File.WriteAllText(Path.Combine(projectRoot, "app.py"), "def run():\n    return 1\n");
@@ -3458,12 +3462,27 @@ public partial class IndexCommandRunnerTests
                     ],
                     refreshMutualRecursionFlags: false);
             };
+            DbWriter.ReferenceSecondaryIndexBulkLoadStateForTesting = (connection, phase) =>
+            {
+                if (string.Equals(phase, "dropped", StringComparison.Ordinal))
+                    droppedSnapshot = CaptureReferenceIndexSnapshot(phase, connection);
+                previousReferenceIndexHook?.Invoke(connection, phase);
+            };
+            DbWriter.FreshBulkLoadPlannerStatisticsStateForTesting = (connection, phase) =>
+            {
+                statisticsPhases.Add(phase);
+                previousStatisticsHook?.Invoke(connection, phase);
+            };
 
             var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json", "--quiet"]);
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal("success", json.GetProperty("status").GetString());
             Assert.Equal(1, injected);
+            Assert.Equal(
+                GetInitialBulkPersistenceReferenceIndexNames(),
+                Assert.IsType<ReferenceIndexStageSnapshot>(droppedSnapshot).Names);
+            Assert.Empty(statisticsPhases);
             using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var command = db.Connection.CreateCommand();
             command.CommandText =
@@ -3492,6 +3511,8 @@ public partial class IndexCommandRunnerTests
         finally
         {
             IndexCommandRunner.FullScanInputSnapshotBarrierForTesting = previousBarrierHook;
+            DbWriter.ReferenceSecondaryIndexBulkLoadStateForTesting = previousReferenceIndexHook;
+            DbWriter.FreshBulkLoadPlannerStatisticsStateForTesting = previousStatisticsHook;
             DeleteDirectory(projectRoot);
             SqliteConnection.ClearAllPools();
         }

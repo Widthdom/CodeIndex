@@ -10461,7 +10461,8 @@ public class DatabaseTests : IDisposable
     private static HashSet<string> ReadReferenceSecondaryIndexNames(
         SqliteConnection connection)
     {
-        var indexes = ReadIndexNames(connection, "symbol_references");
+        var indexes = ReadIndexNames(connection, "reference_lines");
+        indexes.UnionWith(ReadIndexNames(connection, "symbol_references"));
         indexes.UnionWith(ReadIndexNames(connection, "symbol_reference_candidates"));
         indexes.RemoveWhere(static name =>
             name.StartsWith("sqlite_autoindex_", StringComparison.Ordinal));

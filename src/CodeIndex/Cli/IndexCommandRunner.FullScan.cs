@@ -513,6 +513,10 @@ public static partial class IndexCommandRunner
             // authoritative full refreshのまま維持し、既存candidate-free referenceは通常のfull SQLで正規化する。
             referenceGraphRefresh.DisableFreshReferenceResolutionDefaults();
         }
+        var deferAuthoritativeFreshPersistenceIndexes =
+            referenceGraphRefresh.FreshReferenceResolutionDefaultsPending
+            && !options.SymbolsOnly
+            && useFtsBulkLoad;
         fullScanWritePhaseStarted = true;
         writer.SetMeta(
             DbContext.WorkspaceVerificationPendingPathsCompleteMetaKey,
@@ -551,7 +555,9 @@ public static partial class IndexCommandRunner
                 enabled: !options.SymbolsOnly && useFtsBulkLoad,
                 cancellationToken,
                 refreshPlannerStatisticsBeforeCandidatePopulation:
-                    useFreshReferenceResolutionDefaults);
+                    deferAuthoritativeFreshPersistenceIndexes,
+                deferAuthoritativeFreshPersistenceIndexes:
+                    deferAuthoritativeFreshPersistenceIndexes);
         using var ftsBulkLoad = FtsBulkLoadTriggerGuard.Start(writer, useFtsBulkLoad);
 
         if (staleFilePurgePlan.Count > 0)

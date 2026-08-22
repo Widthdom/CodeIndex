@@ -361,8 +361,16 @@ dropped only when an actual graph refresh is about to delete or materialize
 candidate rows, so marker-only and high-cardinality no-op updates do not rebuild
 that whole index. The candidate primary key remains available for reference-scoped
 materialization and resolution, and the file and reference-line maintenance indexes
-remain available during the load, while identity and resolution finalization
-continues without query indexes. The
+normally remain available during the load. The sole exception is an authoritative
+empty-database first CLI full scan whose transaction-local recheck still owns the
+fresh-resolution claim: while it persists raw references, it also defers
+`idx_symbol_refs_reference_line` and `idx_reference_lines_file_line`. It restores
+both before the first candidate, deferred-graph, mutual-recursion, or completion
+boundary (and therefore before fresh planner statistics). Rebuilds, existing-database
+full scans and updates, a fresh-claim race, and recoverable MCP indexing keep both
+indexes throughout. Their drop and restore DDL remains in the caller-owned outer
+transaction, so cancellation or failure rolls the schema back atomically. Identity
+and resolution finalization otherwise continues without query indexes. The
 guard forces any active dirty graph scope onto its full-refresh plan before the
 indexes disappear. While that force-full plan is known, do not populate the
 dirty-file/name/reference TEMP scope: fresh indexes and rebuilds never consume
@@ -4331,8 +4339,15 @@ fresh な CLI scan と明示的 rebuild は、raw reference の永続化が完�
 reverse lookup は raw persistence 中は維持し、実際の graph refresh が candidate row を削除・
 構築する直前だけ外すため、marker-only / 高 cardinality no-op update はこの index 全体を
 再構築しません。reference scope の materialization / resolution に使う candidate primary key は
-維持します。load 中も file と reference-line の保守用 index は残し、identity / resolution
-finalization 中は query index を遅延したままにします。guard は index を外す前に active な dirty graph scope を full refresh へ
+維持します。load 中も通常は file と reference-line の保守用 index を残します。唯一の例外は、
+transaction-local な再確認後も fresh-resolution claim を所有する authoritative な空DB初回CLI
+full scan です。この経路だけは raw reference の永続化中に
+`idx_symbol_refs_reference_line` と `idx_reference_lines_file_line` も遅延し、candidate、
+deferred graph、mutual recursion、または完了の最初の境界（したがって fresh planner statistics
+より前）で2本とも復元します。rebuild、既存DBのfull scan / update、fresh claimのrace、
+recoverableなMCP indexingでは2本を常時維持します。drop / restore DDLはcaller-owned outer
+transaction内に置くため、cancellationや失敗時はschemaも原子的にrollbackされます。
+identity / resolution finalization 中は query index を遅延したままにします。guard は index を外す前に active な dirty graph scope を full refresh へ
 昇格します。この force-full plan が確定している間は dirty file / name / reference の TEMP scope を
 投入しないでください。fresh index と rebuild はその scope を参照せず、追跡すると全言語の batch ごとに
 不要な set materialization が発生します。mutual-recursion 評価の直前に、その graph transaction 内で unresolved-folded、

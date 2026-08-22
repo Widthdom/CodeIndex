@@ -167,8 +167,9 @@ public partial class IndexCommandRunnerTests
                     : ["dropped", "deferred_graph_prepared", "candidate_deferred", "post_load_statistics_started", "post_load_statistics_completed", "identity_started", "graph_required_restored", "mutual_started", "readiness_completed", "restored", "full_scan_committed"],
                 lifecycle);
 
-            var requiredNames = GetRequiredReferenceIndexNames();
-            var initialBulkNames = GetInitialBulkPersistenceReferenceIndexNames();
+            var initialBulkNames = rebuild
+                ? GetInitialBulkPersistenceReferenceIndexNames()
+                : GetAuthoritativeFreshInitialBulkPersistenceReferenceIndexNames();
             var deferredGraphNames = GetDeferredGraphPreparationReferenceIndexNames();
             var allNames = GetAllReferenceIndexNames();
             Assert.Equal(initialBulkNames, captured.First(snapshot => snapshot.Stage == "dropped").Names);
@@ -323,7 +324,7 @@ public partial class IndexCommandRunnerTests
             Assert.NotNull(failureSnapshot);
             Assert.Equal(
                 failurePhase == "dropped"
-                    ? GetInitialBulkPersistenceReferenceIndexNames()
+                    ? GetAuthoritativeFreshInitialBulkPersistenceReferenceIndexNames()
                     : GetDeferredGraphPreparationReferenceIndexNames(),
                 failureSnapshot!.Names);
             Assert.True(File.Exists(dbPath));
@@ -898,7 +899,10 @@ public partial class IndexCommandRunnerTests
             SELECT name
             FROM sqlite_schema
             WHERE type = 'index'
-              AND tbl_name IN ('symbol_references', 'symbol_reference_candidates')
+              AND tbl_name IN (
+                  'reference_lines',
+                  'symbol_references',
+                  'symbol_reference_candidates')
               AND name NOT LIKE 'sqlite_autoindex_%'
             ORDER BY name
             """;
@@ -916,26 +920,41 @@ public partial class IndexCommandRunnerTests
             .ToArray();
 
     private static string[] GetAllReferenceIndexNames()
-        => GetRequiredReferenceIndexNames()
-            .Concat(ReferenceSecondaryIndexBulkLoadGuard.IndexNames)
+        => ReferenceSecondaryIndexSql.All
+            .Select(static definition => definition.Name)
+            .Distinct(StringComparer.Ordinal)
             .Order(StringComparer.Ordinal)
             .ToArray();
 
     private static string[] GetInitialBulkPersistenceReferenceIndexNames()
         => GetRequiredReferenceIndexNames()
+            .Concat(ReferenceSecondaryIndexBulkLoadGuard.AuthoritativeFreshPersistenceIndexNames)
             .Concat(ReferenceSecondaryIndexBulkLoadGuard.CandidatePopulationIndexNames)
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+    private static string[] GetAuthoritativeFreshInitialBulkPersistenceReferenceIndexNames()
+        => GetInitialBulkPersistenceReferenceIndexNames()
+            .Except(
+                ReferenceSecondaryIndexBulkLoadGuard.AuthoritativeFreshPersistenceIndexNames,
+                StringComparer.Ordinal)
             .Order(StringComparer.Ordinal)
             .ToArray();
 
     private static string[] GetGraphFinalizationReferenceIndexNames()
         => GetRequiredReferenceIndexNames()
+            .Concat(ReferenceSecondaryIndexBulkLoadGuard.AuthoritativeFreshPersistenceIndexNames)
             .Concat(ReferenceSecondaryIndexBulkLoadGuard.GraphFinalizationIndexNames)
+            .Distinct(StringComparer.Ordinal)
             .Order(StringComparer.Ordinal)
             .ToArray();
 
     private static string[] GetDeferredGraphPreparationReferenceIndexNames()
         => GetRequiredReferenceIndexNames()
+            .Concat(ReferenceSecondaryIndexBulkLoadGuard.AuthoritativeFreshPersistenceIndexNames)
             .Concat(ReferenceSecondaryIndexBulkLoadGuard.DeferredGraphPreparationIndexNames)
+            .Distinct(StringComparer.Ordinal)
             .Order(StringComparer.Ordinal)
             .ToArray();
 

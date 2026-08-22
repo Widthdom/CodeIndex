@@ -5,7 +5,8 @@ namespace CodeIndex.Database;
 /// <summary>
 /// Temporarily removes reference-query and graph indexes while raw rows are populated, then
 /// removes the candidate reverse lookup only when graph candidate materialization begins.
-/// File and reference-line maintenance indexes remain available throughout the load.
+/// File and reference-line maintenance indexes normally remain available; an authoritative
+/// empty-database CLI transaction may defer its two persistence-only probes until graph work.
 /// </summary>
 internal sealed class ReferenceSecondaryIndexBulkLoadGuard : IDisposable
 {
@@ -13,11 +14,13 @@ internal sealed class ReferenceSecondaryIndexBulkLoadGuard : IDisposable
     private readonly bool _refreshPlannerStatisticsBeforeCandidatePopulation;
     private DbWriter? _writer;
     private bool _plannerStatisticsRefreshAttempted;
+    private bool _authoritativeFreshPersistenceIndexesDeferred;
 
     private ReferenceSecondaryIndexBulkLoadGuard(
         DbWriter writer,
         bool restoreOnDispose,
         bool refreshPlannerStatisticsBeforeCandidatePopulation,
+        bool deferAuthoritativeFreshPersistenceIndexes,
         CancellationToken cancellationToken)
     {
         _restoreOnDispose = restoreOnDispose;
@@ -28,8 +31,12 @@ internal sealed class ReferenceSecondaryIndexBulkLoadGuard : IDisposable
             // Scoped graph planning names deferred indexes explicitly. Force the active
             // scope onto its full-refresh plan before any of those indexes disappear.
             writer.RequireFullReferenceGraphRefreshForSecondaryIndexDeferral();
-            writer.DropDeferredReferenceSecondaryIndexes(cancellationToken);
+            writer.DropDeferredReferenceSecondaryIndexes(
+                deferAuthoritativeFreshPersistenceIndexes,
+                cancellationToken);
             _writer = writer;
+            _authoritativeFreshPersistenceIndexesDeferred =
+                deferAuthoritativeFreshPersistenceIndexes;
         }
         catch (Exception dropFailure) when (restoreOnDispose)
         {
@@ -79,11 +86,18 @@ internal sealed class ReferenceSecondaryIndexBulkLoadGuard : IDisposable
                 .Select(static definition => definition.Name)
                 .ToArray());
 
+    internal static IReadOnlyList<string> AuthoritativeFreshPersistenceIndexNames { get; }
+        = Array.AsReadOnly(
+            ReferenceSecondaryIndexSql.AuthoritativeFreshPersistenceDeferred
+                .Select(static definition => definition.Name)
+                .ToArray());
+
     internal static ReferenceSecondaryIndexBulkLoadGuard? StartTransactional(
         DbWriter writer,
         bool enabled,
         CancellationToken cancellationToken = default,
-        bool refreshPlannerStatisticsBeforeCandidatePopulation = false)
+        bool refreshPlannerStatisticsBeforeCandidatePopulation = false,
+        bool deferAuthoritativeFreshPersistenceIndexes = false)
     {
         if (!enabled)
             return null;
@@ -93,6 +107,7 @@ internal sealed class ReferenceSecondaryIndexBulkLoadGuard : IDisposable
             writer,
             restoreOnDispose: false,
             refreshPlannerStatisticsBeforeCandidatePopulation,
+            deferAuthoritativeFreshPersistenceIndexes,
             cancellationToken);
     }
 
@@ -106,6 +121,7 @@ internal sealed class ReferenceSecondaryIndexBulkLoadGuard : IDisposable
                 writer,
                 restoreOnDispose: true,
                 refreshPlannerStatisticsBeforeCandidatePopulation,
+                deferAuthoritativeFreshPersistenceIndexes: false,
                 cancellationToken)
             : null;
 
@@ -115,6 +131,7 @@ internal sealed class ReferenceSecondaryIndexBulkLoadGuard : IDisposable
         if (writer == null)
             return;
 
+        RestoreAuthoritativeFreshPersistenceIndexes(writer, cancellationToken);
         writer.RestoreDeferredReferenceSecondaryIndexes(cancellationToken);
         _writer = null;
     }
@@ -134,6 +151,7 @@ internal sealed class ReferenceSecondaryIndexBulkLoadGuard : IDisposable
         if (writer == null)
             return;
 
+        RestoreAuthoritativeFreshPersistenceIndexes(writer, cancellationToken);
         writer.DropCandidatePopulationReferenceSecondaryIndexes(cancellationToken);
         if (!_refreshPlannerStatisticsBeforeCandidatePopulation
             || _plannerStatisticsRefreshAttempted)
@@ -144,7 +162,14 @@ internal sealed class ReferenceSecondaryIndexBulkLoadGuard : IDisposable
     }
 
     internal void PrepareForMutualRecursion(CancellationToken cancellationToken = default)
-        => _writer?.RestoreGraphFinalizationRequiredReferenceSecondaryIndexes(cancellationToken);
+    {
+        var writer = _writer;
+        if (writer == null)
+            return;
+
+        RestoreAuthoritativeFreshPersistenceIndexes(writer, cancellationToken);
+        writer.RestoreGraphFinalizationRequiredReferenceSecondaryIndexes(cancellationToken);
+    }
 
     /// <summary>
     /// Restore every deferred index except the candidate reverse lookup. A later graph
@@ -153,10 +178,28 @@ internal sealed class ReferenceSecondaryIndexBulkLoadGuard : IDisposable
     /// candidate逆引き以外を復元し、readiness queryを保ったまま後段graph構築を遅延する。
     /// </summary>
     internal void PrepareForDeferredGraphRefresh(CancellationToken cancellationToken = default)
-        => _writer?.RestoreReferenceSecondaryIndexesForDeferredGraph(cancellationToken);
+    {
+        var writer = _writer;
+        if (writer == null)
+            return;
+
+        RestoreAuthoritativeFreshPersistenceIndexes(writer, cancellationToken);
+        writer.RestoreReferenceSecondaryIndexesForDeferredGraph(cancellationToken);
+    }
 
     internal void ReportMutualRecursionStarted()
         => _writer?.ReportReferenceSecondaryIndexBulkLoadState("mutual_started");
+
+    private void RestoreAuthoritativeFreshPersistenceIndexes(
+        DbWriter writer,
+        CancellationToken cancellationToken)
+    {
+        if (!_authoritativeFreshPersistenceIndexesDeferred)
+            return;
+
+        writer.RestoreAuthoritativeFreshPersistenceReferenceSecondaryIndexes(cancellationToken);
+        _authoritativeFreshPersistenceIndexesDeferred = false;
+    }
 
     public void Dispose()
     {
@@ -189,7 +232,9 @@ public partial class DbWriter
         ANALYZE main.symbol_references;
         """;
 
-    internal void DropDeferredReferenceSecondaryIndexes(CancellationToken cancellationToken)
+    internal void DropDeferredReferenceSecondaryIndexes(
+        bool deferAuthoritativeFreshPersistenceIndexes,
+        CancellationToken cancellationToken)
     {
         // Old binaries may have recreated retired indexes after a database was pruned by a
         // newer version. Drop them as part of setup, but never restore them after the load.
@@ -208,7 +253,24 @@ public partial class DbWriter
             Execute($"DROP INDEX IF EXISTS {definition.Name}", cancellationToken);
         }
 
+        if (deferAuthoritativeFreshPersistenceIndexes)
+        {
+            foreach (var definition in ReferenceSecondaryIndexSql.AuthoritativeFreshPersistenceDeferred)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                Execute($"DROP INDEX IF EXISTS {definition.Name}", cancellationToken);
+            }
+        }
+
         ReferenceSecondaryIndexBulkLoadStateForTesting?.Invoke(_conn, "dropped");
+    }
+
+    internal void RestoreAuthoritativeFreshPersistenceReferenceSecondaryIndexes(
+        CancellationToken cancellationToken = default)
+    {
+        RestoreReferenceSecondaryIndexes(
+            ReferenceSecondaryIndexSql.AuthoritativeFreshPersistenceDeferred,
+            cancellationToken);
     }
 
     internal void DropCandidatePopulationReferenceSecondaryIndexes(

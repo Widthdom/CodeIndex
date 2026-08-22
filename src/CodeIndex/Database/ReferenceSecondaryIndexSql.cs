@@ -7,13 +7,22 @@ internal readonly record struct ReferenceSecondaryIndexDefinition(
 
 /// <summary>
 /// Canonical DDL for secondary indexes used by reference persistence and graph queries.
-/// The raw-persistence set stays available while bulk extraction is writing rows; the
-/// candidate reverse lookup is dropped only when candidate materialization begins; the
-/// graph-finalization set is restored immediately before mutual-recursion evaluation, and
-/// the remaining query set is restored after graph finalization completes.
+/// The raw-persistence set normally stays available while bulk extraction is writing rows;
+/// an authoritative empty-database CLI transaction may defer its two persistence-only
+/// probes. The candidate reverse lookup is dropped only when candidate materialization
+/// begins; the graph-finalization set is restored immediately before mutual-recursion
+/// evaluation, and the remaining query set is restored after graph finalization completes.
 /// </summary>
 internal static class ReferenceSecondaryIndexSql
 {
+    private static readonly ReferenceSecondaryIndexDefinition SymbolReferencesReferenceLineDefinition = new(
+        "idx_symbol_refs_reference_line",
+        "CREATE INDEX IF NOT EXISTS idx_symbol_refs_reference_line ON symbol_references(reference_line_id)");
+
+    private static readonly ReferenceSecondaryIndexDefinition ReferenceLinesFileLineDefinition = new(
+        "idx_reference_lines_file_line",
+        "CREATE INDEX IF NOT EXISTS idx_reference_lines_file_line ON reference_lines(file_id, line)");
+
     private static readonly string[] RetiredDefinitions =
     [
         // These single-column indexes are strict left prefixes of retained composite
@@ -36,9 +45,15 @@ internal static class ReferenceSecondaryIndexSql
             "CREATE INDEX IF NOT EXISTS idx_symbol_refs_file ON symbol_references(file_id)"),
         // Deleting a reference-line row applies ON DELETE SET NULL to matching references.
         // Keep this probe indexed during file replacement and stale-file cleanup.
-        new(
-            "idx_symbol_refs_reference_line",
-            "CREATE INDEX IF NOT EXISTS idx_symbol_refs_reference_line ON symbol_references(reference_line_id)"),
+        SymbolReferencesReferenceLineDefinition,
+    ];
+
+    private static readonly ReferenceSecondaryIndexDefinition[] AuthoritativeFreshPersistenceDeferredDefinitions =
+    [
+        // An authoritative empty-database CLI scan cannot delete old reference lines, so it
+        // may defer both persistence-only probes until the first graph-read boundary.
+        SymbolReferencesReferenceLineDefinition,
+        ReferenceLinesFileLineDefinition,
     ];
 
     private static readonly ReferenceSecondaryIndexDefinition[] GraphFinalizationRequiredDefinitions =
@@ -134,6 +149,9 @@ internal static class ReferenceSecondaryIndexSql
     internal static IReadOnlyList<ReferenceSecondaryIndexDefinition> RawPersistenceRequired { get; }
         = Array.AsReadOnly(RawPersistenceRequiredDefinitions);
 
+    internal static IReadOnlyList<ReferenceSecondaryIndexDefinition> AuthoritativeFreshPersistenceDeferred { get; }
+        = Array.AsReadOnly(AuthoritativeFreshPersistenceDeferredDefinitions);
+
     internal static IReadOnlyList<string> Retired { get; }
         = Array.AsReadOnly(RetiredDefinitions);
 
@@ -158,6 +176,7 @@ internal static class ReferenceSecondaryIndexSql
         {
             foreach (var definition in RawPersistenceRequiredDefinitions)
                 yield return definition;
+            yield return ReferenceLinesFileLineDefinition;
             foreach (var definition in DeferredDuringBulkLoadDefinitions)
                 yield return definition;
         }
