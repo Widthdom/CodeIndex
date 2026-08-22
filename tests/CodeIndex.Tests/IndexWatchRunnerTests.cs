@@ -2319,9 +2319,8 @@ public class IndexWatchRunnerTests
             }
 
             var rootDirectories = Directory.EnumerateDirectories(projectRoot).ToArray();
-            Assert.True(
-                Array.IndexOf(rootDirectories, parentDirectory) < Array.IndexOf(rootDirectories, directAlias),
-                "The fixture requires the parent directory to precede the direct alias in enumeration order.");
+            var parentPrecedesDirectAlias =
+                Array.IndexOf(rootDirectories, parentDirectory) < Array.IndexOf(rootDirectories, directAlias);
 
             var nestedPath = Path.Combine(nestedAlias, "tracked.cs");
             var directPath = Path.Combine(directAlias, "tracked.cs");
@@ -2333,8 +2332,8 @@ public class IndexWatchRunnerTests
                 dbPathExplicit: true,
                 symlinkPolicy);
 
-            Assert.Contains(nestedPath, snapshotPaths);
-            Assert.DoesNotContain(directPath, snapshotPaths);
+            Assert.Contains(parentPrecedesDirectAlias ? nestedPath : directPath, snapshotPaths);
+            Assert.DoesNotContain(parentPrecedesDirectAlias ? directPath : nestedPath, snapshotPaths);
         }
         finally
         {
