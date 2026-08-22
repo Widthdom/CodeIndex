@@ -432,6 +432,7 @@ internal static partial class IndexWatchRunner
         string fullPath,
         bool ignoreCase,
         bool dbPathExplicit,
+        FileIndexer.SymlinkPolicy symlinkPolicy,
         FileIndexer fileIndexer)
     {
         var invalidation = FileIndexer.ClassifyIndexInputInvalidation(projectRoot, fullPath);
@@ -448,13 +449,29 @@ internal static partial class IndexWatchRunner
                 : WatchPathDisposition.Reconcile;
         }
 
-        if (ShouldIgnoreWatchInternalPath(projectRoot, resolvedDbPath, fullPath, ignoreCase, dbPathExplicit)
-            || fileIndexer.ShouldSkipPath(fullPath))
-        {
+        if (ShouldIgnoreWatchInternalPath(projectRoot, resolvedDbPath, fullPath, ignoreCase, dbPathExplicit))
             return WatchPathDisposition.Ignore;
+
+        var pathFilter = fileIndexer.EvaluatePathFilter(fullPath);
+        if (!pathFilter.ShouldSkip)
+            return WatchPathDisposition.Index;
+
+        // An in-workspace link can become OutsideProjectRoot only because its resolved
+        // target escaped the active internal policy. Keep the lexical link path as a
+        // reconciliation input so the scoped update can delete any stale row without
+        // opening the disallowed target.
+        // workspace 内の link が OutsideProjectRoot になるのは、解決済み target が active な
+        // internal policy の外へ出た場合である。禁止 target を open せず stale row を削除できるよう、
+        // lexical link path は reconciliation input として保持する。
+        if (symlinkPolicy == FileIndexer.SymlinkPolicy.Internal
+            && pathFilter.FilterKind == FileIndexer.PathFilterKind.OutsideProjectRoot
+            && IsSameOrUnderDirectory(projectRoot, normalizedPath, comparison)
+            && FileIndexer.IsSymlinkOrReparsePointPath(normalizedPath))
+        {
+            return WatchPathDisposition.Reconcile;
         }
 
-        return WatchPathDisposition.Index;
+        return WatchPathDisposition.Ignore;
     }
 
     private static bool IsSameOrUnderDirectory(string directory, string fullPath, StringComparison comparison)

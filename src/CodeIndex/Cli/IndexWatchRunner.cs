@@ -62,7 +62,8 @@ internal static partial class IndexWatchRunner
         string resolvedDbPath,
         string fullPath,
         bool ignoreCase,
-        bool dbPathExplicit)
+        bool dbPathExplicit,
+        FileIndexer.SymlinkPolicy symlinkPolicy = FileIndexer.SymlinkPolicy.None)
     {
         var fileIndexer = new FileIndexer(
             projectRoot,
@@ -70,8 +71,16 @@ internal static partial class IndexWatchRunner
             projectRoot,
             maxFileSizeBytes: null,
             directoryIgnoreCaseProbe: null,
+            symlinkPolicy: symlinkPolicy,
             internalIndexDatabasePath: resolvedDbPath);
-        return ClassifyWatchPath(projectRoot, resolvedDbPath, fullPath, ignoreCase, dbPathExplicit, fileIndexer);
+        return ClassifyWatchPath(
+            projectRoot,
+            resolvedDbPath,
+            fullPath,
+            ignoreCase,
+            dbPathExplicit,
+            symlinkPolicy,
+            fileIndexer);
     }
 
     public static int Run(
@@ -168,6 +177,7 @@ internal static partial class IndexWatchRunner
                         fullPath,
                         ignoreCase,
                         dbPathExplicit,
+                        baseOptions.SymlinkPolicy,
                         fileIndexer);
                     if (disposition == WatchPathDisposition.Ignore)
                         return;
