@@ -98,8 +98,8 @@ public static partial class SymbolExtractor
         for (var patternIndex = 0; patternIndex < patterns.Count; patternIndex++)
         {
             var pattern = patterns[patternIndex];
-            if (pattern.RequiredLiteral is { } requiredLiteral
-                && !content.Contains(requiredLiteral, StringComparison.Ordinal))
+            if ((pattern.RequiredLiteral is not null || pattern.RequiredAnyLiterals is not null)
+                && !ContainsRequiredGateLiteral(pattern, content.AsSpan()))
             {
                 if (applicablePatterns == null)
                 {
@@ -130,8 +130,8 @@ public static partial class SymbolExtractor
         // 第2段の proof は1回の regex call に渡す変換済み input そのものを調べる。
         // false は match failure と同様に扱い、言語固有 recovery は引き続き実行する。
         if (applyRequiredLiteralMatchInputGate
-            && pattern.RequiredLiteral is { } requiredLiteral
-            && matchInput.IndexOf(requiredLiteral.AsSpan(), StringComparison.Ordinal) < 0)
+            && (pattern.RequiredLiteral is not null || pattern.RequiredAnyLiterals is not null)
+            && !ContainsRequiredGateLiteral(pattern, matchInput))
         {
             if (requiredLiteralGateCounts != null)
                 requiredLiteralGateCounts.MatchInputLiteralSkipCount++;
@@ -161,6 +161,31 @@ public static partial class SymbolExtractor
         if (requiredLiteralGateCounts != null)
             requiredLiteralGateCounts.RegexAttemptCount++;
         return true;
+    }
+
+    private static bool ContainsRequiredGateLiteral(
+        SymbolPattern pattern,
+        ReadOnlySpan<char> input)
+    {
+        if (pattern.RequiredLiteral is { } requiredLiteral)
+        {
+            return input.IndexOf(requiredLiteral.AsSpan(), StringComparison.Ordinal) >= 0;
+        }
+
+        if (pattern.RequiredAnyLiterals is not { } requiredAnyLiterals)
+            return true;
+
+        for (var literalIndex = 0; literalIndex < requiredAnyLiterals.Count; literalIndex++)
+        {
+            if (input.IndexOf(
+                    requiredAnyLiterals[literalIndex].AsSpan(),
+                    StringComparison.Ordinal) >= 0)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static readonly Regex PrologOpenClauseRegex = new(

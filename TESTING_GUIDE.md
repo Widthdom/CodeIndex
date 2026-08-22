@@ -459,14 +459,23 @@ Candidate-ordered parallel-index recovery tests must prove that the fatal result
 - `Run_FullScan_FatalParallelResultKeepsWorkerResourcesAliveUntilPeersStop` blocks one C# symbols worker while a peer reports a fatal extraction stall. Keep the command return prompt, assert that neither worker completion nor artifact-cache clearing occurs before the blocked peer is released, and wait for both cleanup signals before restoring process-wide hooks or deleting the fixture.
 - `CSharpPrepassSymbolArtifactCacheTests`, `FileIndexerTests`, and the CLI/MCP fresh-index fixtures protect bounded prepass artifact reuse. Keep deep-clone independence for generic admission; production owned-list admission must retain list/symbol identity only after successful atomic publication, leave rejected or cancelled input caller-owned, and release workspace fallback symbols only after both lookup snapshots are materialized. Preserve lookup parity and mutation isolation, take-once checksum matching, mismatch consumption, atomic file/symbol/estimated-byte caps, cancellation without partial admission, and non-admission of partial symbols after any bounded-regex timeout. Encoding theories must compare UTF-8, UTF-16 LE/BE, and invalid-UTF-8 prepass checksums with the authoritative loader. Integration coverage must prove reuse only for an empty non-rebuild full index, ordinary extraction for rebuild/symbols-only/existing/incomplete-or-stall paths, authoritative main-read mutation fallback, unchanged post hooks and family/kind processing, and cache clearing before graph work.
 - `SymbolExtractorRequiredLiteralGateTests` keeps built-in required-literal gating deterministic and
-  output-preserving. It pins 400 audited Tier A patterns across 51 case-sensitive languages, compares
-  all 29 readable `SymbolRecord` fields in emitted order, exercises representative positive fixtures
-  across Python, JavaScript, TypeScript, Go, Rust, Java, C/C++, Swift, F#, Scala, Terraform, Protobuf,
-  and Zig, and verifies literal absence for every annotated language. Keep the IgnoreCase and short-
-  literal fail-fast checks in the same bounded suite. Its seam holds the file-level gate on while
-  switching only the exact-input gate off/on, counts actual pattern-regex calls and exact-input literal
-  skips, and compares complete ordered output. A bounded mixed-input fixture must prove at least a 30%
-  attempt reduction without a wall-clock assertion. Pin C# merged properties
+  output-preserving. It pins 400 audited single-literal Tier A patterns across 51 case-sensitive
+  languages plus six mutually exclusive any-of gates for JavaScript/TypeScript HOCs, both TypeScript
+  `namespace` / `module` shapes, and Kotlin declaration/property alternatives. It compares all 29
+  readable `SymbolRecord` fields in emitted order, exercises representative positive fixtures across
+  Python, JavaScript, TypeScript, Go, Rust, Java, C/C++, Swift, F#, Scala, Terraform, Protobuf, and Zig,
+  and verifies literal absence for every annotated language. Keep null/empty sets, null members,
+  one-character members, Ordinal duplicates, `RequiredLiteral` coexistence, and IgnoreCase fail-fast
+  checks in the same bounded suite; case-distinct members and absent metadata remain valid. Metadata
+  inspection must return snapshots rather than mutable pattern-owned collections.
+
+  Its seams hold the file-level gate on while switching only the exact-input gate off/on, count actual
+  pattern-regex calls plus file-level and exact-input literal skips, and compare complete ordered
+  output. A bounded mixed-input fixture must prove at least a 30% attempt reduction without a wall-clock
+  assertion. The any-of structural fixture must likewise show fewer JS/TS/Kotlin regex attempts and
+  exact skips while gate-on/off output stays identical. Retain all HOC alternatives, JavaScript versus
+  TypeScript generic asymmetry, case-sensitive near misses, quoted/identifier namespaces, Kotlin
+  `class` / `object` and `val` / `var`, and nonzero transformed-input recovery. Pin C# merged properties
   and wrapped static constructors, Fortran continuations, Java/Kotlin annotation stripping, C#
   incomplete-attribute recovery, C++ same-line members, and CSS reconstructed selector segments; an
   initial bare static-constructor input gate miss must still reach wrapped-modifier recovery. Do not add
@@ -1567,14 +1576,23 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - `CSharpPrepassSymbolArtifactCacheTests`、`FileIndexerTests`、CLI/MCP の fresh-index fixture は bounded prepass artifact reuse を固定します。汎用 admission の deep-clone 独立性を維持し、production の owned-list admission は原子的な publish 成功後だけ list / symbol identity を保持し、reject または cancel された input は caller-owned のままにしてください。2種類の lookup snapshot を materialize した後だけ workspace fallback symbol を解放し、lookup parity と mutation isolation を保ちます。checksum 一致時の take-once、不一致時の消費、file / symbol / estimated-byte cap の原子性、partial admission を残さない cancellation、bounded-regex timeout 後の partial symbol をadmitしない契約も維持してください。encoding theory は UTF-8、UTF-16 LE/BE、不正 UTF-8 の prepass checksum を authoritative loader と比較します。integration coverage では空 database の非 rebuild full index だけが再利用し、rebuild / symbols-only / existing / incomplete-or-stall 経路は通常 extraction、main read 中の mutation は checksum fallback、post hook と family/kind 処理は従来どおり、graph 開始前に cache が clear されることを証明してください。
 - `CSharpPrepassSymbolArtifactCacheTests.CSharpWorkspaceAssembly_PreservesOrderIdentityAndEvidence` と `PerformanceTests.CSharpPrepassWorkspaceSegments_AvoidFlattenedReferenceBuffers` は、existing row / candidate / file内symbol順を保ったまま一時flatten bufferなしでprepass workspaceを組み立てる契約を固定します。allocation guardはcache上限131,072 symbolを16 KiB未満で全列挙します。2種類のimmutable lookupが完成するまでnon-owning viewを維持し、その後だけowned listを移譲してください。
 - `SymbolExtractorRequiredLiteralGateTests` は built-in required-literal gate の決定性と output
-  不変性を固定します。51 の case-sensitive 言語にまたがる監査済み Tier A pattern 400件、出力順を
-  含む `SymbolRecord` の readable field 29個すべて、Python、JavaScript、TypeScript、Go、Rust、
-  Java、C/C++、Swift、F#、Scala、Terraform、Protobuf、Zig の代表的な positive fixture、注釈済み
-  全言語での literal 不在を検証します。同じ bounded suite に IgnoreCase / 短い literal の
-  fail-fast を維持してください。seam は file-level gate を有効なまま exact-input gate だけを off / on
-  し、実際の pattern-regex call 数と exact-input literal skip 数を記録して、順序を含む完全な output を
-  比較します。bounded mixed-input fixture では wall-clock assertion を使わず、attempt が30%以上減る
-  ことを検証してください。C# の merged property / wrapped static
+  不変性を固定します。51 の case-sensitive 言語にまたがる監査済み single-literal Tier A pattern
+  400件に加え、JavaScript / TypeScript HOC、TypeScript の `namespace` / `module` 2形態、Kotlin の
+  declaration / property alternative に対する相互排他的な any-of gate 6件を固定します。出力順を含む
+  `SymbolRecord` の readable field 29個すべて、Python、JavaScript、TypeScript、Go、Rust、Java、
+  C/C++、Swift、F#、Scala、Terraform、Protobuf、Zig の代表的な positive fixture、注釈済み全言語での
+  literal 不在を検証します。null / empty set、null member、1文字 member、Ordinal duplicate、
+  `RequiredLiteral` との併用、IgnoreCase の fail-fast を同じ bounded suite に維持し、case が異なる
+  member と metadata なしは有効なままにしてください。metadata inspection は pattern-owned collection
+  そのものではなく snapshot を返さなければなりません。
+
+  seam は file-level gate を有効なまま exact-input gate だけを off / on し、実際の pattern-regex call 数、
+  file-level / exact-input literal skip 数を記録して、順序を含む完全な output を比較します。bounded
+  mixed-input fixture では wall-clock assertion を使わず、attempt が30%以上減ることを検証してください。
+  any-of の structural fixture でも、gate on / off の output を同一に保ちながら JS / TS / Kotlin の regex
+  attempt 減少と exact skip を示します。全 HOC alternative、JavaScript と TypeScript の generic
+  asymmetry、case-sensitive near miss、quoted / identifier namespace、Kotlin の `class` / `object` と
+  `val` / `var`、変換後 input の非ゼロ位置 recovery を維持してください。C# の merged property / wrapped static
   constructor、Fortran continuation、Java / Kotlin annotation 除去、C# の不完全 attribute recovery、
   C++ same-line member、CSS の再構成済み selector segment を固定し、bare static-constructor input の
   初回 gate miss 後も wrapped-modifier recovery へ進むことを検証してください。

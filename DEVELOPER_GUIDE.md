@@ -2034,22 +2034,29 @@ Extractor strategy by language surface:
 | Windows application manifests | Manifest element paths, assembly identities, execution levels, and supported-OS values remain structural symbols. Dependent assembly identities emit `dependency` references, while local `file`, `codeBase`, and probing paths emit `project_reference` edges. |
 | XML / NuGet.config | Generic XML emits bounded element and attribute paths. NuGet.config additionally promotes package sources, source mappings, signature validation mode, trusted signer names, certificate fingerprints, and `allowUntrustedRoot` values to semantic `property` symbols with `nuget.*` subkinds. |
 
-Before the line-oriented regex loop, built-in case-sensitive patterns may opt into an explicit
-`RequiredLiteral` Tier A gate. The literal must contain at least two characters and be an Ordinal
-substring of every successful regex path. If it is absent from the normalized file content, that
-pattern is skipped without changing the order of the remaining patterns. `IgnoreCase` patterns,
-one-character literals, optional or alternative paths without a shared literal, project custom
-patterns, and plugins are deliberately excluded. Supplemental scans that consult the pattern list,
-including C# incomplete-attribute recovery and C++ same-line member recovery, must consume the same
-ordered applicable set. Immediately before each regex call, the same Ordinal proof is applied to the
-exact input presented to that call, after transformations such as C# property-header merging, Fortran
-continuation joining, Java/Kotlin annotation stripping, C# wrapped-modifier synthesis, C++ same-line
-segmentation, or CSS selector-brace reconstruction. A miss behaves like a failed regex attempt rather
-than terminating language-specific recovery: notably, a C# static-constructor pattern rejected on the
-bare identifier line must still try each synthesized `static ...` wrapper. The content-wide check may
-retain a pattern because its literal appears in a comment, string, annotation, or another declaration;
-the exact-input check then recovers that lost optimization without changing matches. Patterns without
-`RequiredLiteral`, including custom and plugin patterns, still run unchanged.
+Before the line-oriented regex loop, built-in case-sensitive patterns may opt into one of two mutually
+exclusive Tier A gates: a single `RequiredLiteral`, or `RequiredAnyLiterals` for audited alternatives.
+Every literal must contain at least two characters and use Ordinal matching. A single literal must be a
+substring of every successful regex path; for an any-of set, every successful path must contain at least
+one distinct member. A pattern is skipped only when its literal, or every member of its any-of set, is
+absent from normalized file content, without changing the order of the remaining patterns. The any-of
+form is currently limited to the proved JavaScript/TypeScript HOC family, both quoted and identifier
+TypeScript `namespace` / `module` patterns, Kotlin `class` / `object`, and Kotlin `val` / `var`.
+`IgnoreCase` patterns, one-character literals, optional or alternative paths without either proof,
+project custom patterns, and plugins are deliberately excluded.
+
+Supplemental scans that consult the pattern list, including C# incomplete-attribute recovery and C++
+same-line member recovery, must consume the same ordered applicable set. Immediately before each regex
+call, the same single-or-any Ordinal proof is applied to the exact input presented to that call, after
+transformations such as C# property-header merging, Fortran continuation joining, Java/Kotlin annotation
+stripping, C# wrapped-modifier synthesis, C++ same-line segmentation, or CSS selector-brace
+reconstruction. An any-of input is skipped only when none of its members is present. A miss behaves like
+a failed regex attempt rather than terminating language-specific recovery: notably, a C#
+static-constructor pattern rejected on the bare identifier line must still try each synthesized
+`static ...` wrapper. The content-wide check may retain a pattern because a required literal appears in
+a comment, string, annotation, or another declaration; the exact-input check then recovers that lost
+optimization without changing matches. Patterns without either gate, including custom and plugin
+patterns, still run unchanged.
 
 C# adds three narrower, proof-preserving gates on top of that general contract. Property-header
 lookahead returns before its prefix regexes for empty inputs and completed `;` / `}` lines; a trailing
@@ -5949,21 +5956,27 @@ LIMIT 20;
 | Windows application manifest | manifest element path、assembly identity、execution level、supported OS value を structural symbol として維持します。依存 assembly identity は `dependency` reference、local な `file` / `codeBase` / probing path は `project_reference` edge を出力します。 |
 | XML / NuGet.config | 汎用 XML は上限付きの element / attribute path を出力します。NuGet.config ではさらに package source、source mapping、署名検証モード、trusted signer 名、証明書 fingerprint、`allowUntrustedRoot` の値を `nuget.*` subkind 付きの semantic `property` symbol にします。 |
 
-行指向の正規表現 loop に入る前に、built-in の case-sensitive pattern は明示的な
-`RequiredLiteral` Tier A gate を opt-in できます。literal は2文字以上で、正規表現の全成功経路に
-Ordinal の substring として必ず現れなければなりません。正規化済み file content に存在しない
-場合だけその pattern を skip し、残る pattern の順序は変えません。`IgnoreCase` pattern、1文字の
-literal、共通 literal を持たない optional / alternative path、project の custom pattern、plugin は
-意図的に対象外です。C# の不完全 attribute recovery や C++ の same-line member recovery を含め、
-pattern list を参照する補助 scan は同じ順序の applicable set を使わなければなりません。comment や
-string 内に literal があるため pattern を残すことはあります。各 regex call の直前には、C# property
+行指向の正規表現 loop に入る前に、built-in の case-sensitive pattern は、単一の
+`RequiredLiteral` または監査済み alternative 用の `RequiredAnyLiterals` という、相互排他的な2種類の
+Tier A gate のどちらかへ opt-in できます。すべての literal は2文字以上で Ordinal matching を使います。
+単一 literal は正規表現の全成功経路に substring として必ず現れ、any-of set では全成功経路に distinct な
+member の少なくとも1つが必ず現れなければなりません。正規化済み file content に単一 literal がない場合、
+または any-of set の全 member がない場合だけその pattern を skip し、残る pattern の順序は変えません。
+any-of 形式は、証明済みの JavaScript / TypeScript HOC family、TypeScript の quoted / identifier 両方の
+`namespace` / `module` pattern、Kotlin の `class` / `object` と `val` / `var` に限定しています。
+`IgnoreCase` pattern、1文字の literal、いずれの証明もない optional / alternative path、project の custom
+pattern、plugin は意図的に対象外です。
+
+C# の不完全 attribute recovery や C++ の same-line member recovery を含め、pattern list を参照する補助
+scan は同じ順序の applicable set を使わなければなりません。各 regex call の直前には、C# property
 header の結合、Fortran continuation の連結、Java / Kotlin annotation の除去、C# wrapped modifier の
 合成、C++ same-line segment、CSS selector の brace 再構成などを反映した、実際に regex へ渡す input
-そのものに同じ Ordinal 判定を適用します。miss は言語固有 recovery を終了せず、regex failure と同様に
-扱います。特に C# static constructor の bare identifier 行が gate miss しても、合成した各 `static ...`
-wrapper は引き続き試さなければなりません。comment、string、annotation、別 declaration にだけ literal
-がある場合は exact-input 判定が失われた最適化を回収し、match は変えません。custom / plugin pattern を
-含む `RequiredLiteral` のない pattern は従来どおり実行します。
+そのものに同じ single-or-any の Ordinal 判定を適用します。any-of input は member が1つもない場合だけ
+skip します。miss は言語固有 recovery を終了せず、regex failure と同様に扱います。特に C# static
+constructor の bare identifier 行が gate miss しても、合成した各 `static ...` wrapper は引き続き試さなければ
+なりません。comment、string、annotation、別 declaration にだけ required literal がある場合は
+exact-input 判定が失われた最適化を回収し、match は変えません。custom / plugin pattern を含む、どちらの
+gate も持たない pattern は従来どおり実行します。
 
 C# では、この一般契約に加えて、成功可能性を変えない3つの狭い gate を使います。property-header
 lookahead は、空 input と `;` / `}` で完結した行で prefix regex より前に戻ります。末尾 `=` は
