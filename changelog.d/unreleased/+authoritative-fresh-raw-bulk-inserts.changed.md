@@ -11,6 +11,7 @@ affected:
   - src/CodeIndex/Database/DbWriter.References.cs
   - tests/CodeIndex.Tests/AuthoritativeFreshRawBulkInsertTests.cs
   - tests/CodeIndex.Tests/IndexCommandRunnerFullScanTests.cs
+  - tests/CodeIndex.Tests/IndexCommandRunnerInitialFullIndexPerformanceTests.cs
   - tests/CodeIndex.Tests/PerformanceTests.cs
   - DEVELOPER_GUIDE.md
   - TESTING_GUIDE.md

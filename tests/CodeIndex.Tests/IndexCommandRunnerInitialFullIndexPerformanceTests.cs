@@ -86,12 +86,28 @@ public partial class IndexCommandRunnerTests
             Assert.True(json.GetProperty("reference_graph_complete").GetBoolean());
             Assert.True(json.GetProperty("graph_data_current").GetBoolean());
             var rawOperations = rawWork.Select(work => work.Operation).ToArray();
+            Assert.Contains("insert_files", rawOperations);
             Assert.Contains("insert_chunks", rawOperations);
             Assert.Contains("insert_symbols", rawOperations);
+            Assert.Contains("insert_reference_lines", rawOperations);
             Assert.Contains("insert_references", rawOperations);
-            Assert.DoesNotContain("insert_reference_lines", rawOperations);
+            var rawFileWork = rawWork
+                .Where(work => work.Operation == "insert_files")
+                .ToArray();
+            Assert.Equal(fixture.FileCount, rawFileWork.Length);
+            Assert.All(rawFileWork, work =>
+            {
+                Assert.Equal(1, work.StatementRows);
+                Assert.Equal(7, work.BoundParameterCount);
+            });
+            Assert.All(
+                rawWork.Where(work => work.Operation == "insert_reference_lines"),
+                work => Assert.Equal(work.StatementRows * 3, work.BoundParameterCount));
             var rawScope = Assert.Single(rawScopeSnapshots);
             Assert.True(rawScope.Completed);
+            Assert.Equal(32, rawScope.Capacity);
+            Assert.Equal(rawWork.Count, rawScope.StatementExecutionCount);
+            Assert.Equal(0, rawScope.EvictionCount);
             Assert.Equal(rawScope.PrepareCount, rawScope.FinalizeCount);
 
             var samples = json
