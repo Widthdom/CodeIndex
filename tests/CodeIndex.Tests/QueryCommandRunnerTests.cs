@@ -1135,6 +1135,30 @@ public partial class QueryCommandRunnerTests
                 canonicalFtsOptimization.GetProperty("state").GetString(),
                 uriFtsOptimization.GetProperty("state").GetString());
         }
+
+        using (var invalidWalDb = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+        {
+            invalidWalDb.SuppressPlannerStatisticsMaintenanceOnClose();
+            invalidWalDb.CheckpointWalTruncate();
+            using var command = invalidWalDb.Connection.CreateCommand();
+            command.CommandText = "PRAGMA application_id=0";
+            command.ExecuteNonQuery();
+        }
+
+        foreach (var immutableUri in new[]
+        {
+            canonicalDbUri + "?immutable=1",
+            singleSlashDbUri + "?immutable=1",
+        })
+        {
+            var (immutableExitCode, immutableStdout, immutableStderr) = CaptureVacuum(
+                ["--db", immutableUri, "--dry-run", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, immutableExitCode);
+            Assert.Equal(string.Empty, immutableStderr);
+            using var immutableDocument = ParseJsonOutput(immutableStdout);
+            Assert.Equal("dry_run", immutableDocument.RootElement.GetProperty("status").GetString());
+        }
     }
 
     [Fact]

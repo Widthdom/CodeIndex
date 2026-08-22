@@ -54,23 +54,20 @@ public static partial class QueryCommandRunner
                         MaintenanceDatabaseFailureKind.NotWritable));
             }
 
-            var validationDbPath = options.DbPath;
             var queryOnlyDbPath = options.DbPath;
             if (options.DryRun
-                && SqliteFileUri.StartsWithFileScheme(options.DbPath)
+                && options.DbPath.StartsWith("file:/", StringComparison.OrdinalIgnoreCase)
+                && !options.DbPath.StartsWith("file://", StringComparison.OrdinalIgnoreCase)
                 && DbPathResolver.TryNormalizeDbPath(options.DbPath, out var normalizedDbPath, out _)
                 && !SqliteFileUri.StartsWithFileScheme(normalizedDbPath))
             {
-                validationDbPath = Path.GetFullPath(normalizedDbPath);
-                if (options.DbPath.StartsWith("file:/", StringComparison.OrdinalIgnoreCase)
-                    && !options.DbPath.StartsWith("file://", StringComparison.OrdinalIgnoreCase))
-                {
-                    queryOnlyDbPath = CanonicalizeSingleSlashFileUri(options.DbPath, validationDbPath);
-                }
+                queryOnlyDbPath = CanonicalizeSingleSlashFileUri(
+                    options.DbPath,
+                    Path.GetFullPath(normalizedDbPath));
             }
 
             if (!DbContext.TryValidateExistingCodeIndexDb(
-                    validationDbPath,
+                    options.DryRun ? queryOnlyDbPath : options.DbPath,
                     requireWritable: !options.DryRun,
                     requireSupportedUserVersion: false,
                     out _,
