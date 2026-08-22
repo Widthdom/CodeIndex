@@ -163,6 +163,7 @@ public partial class DbWriter
     private const int TypeScriptModuleSyntaxFallbackMaxLines = 16384;
     private static readonly ConcurrentDictionary<int, string> ChunkInsertSqlCache = new();
     private static readonly ConcurrentDictionary<int, string> SymbolInsertSqlCache = new();
+    private static readonly ConcurrentDictionary<int, string> IssueInsertSqlCache = new();
     private static readonly ConcurrentDictionary<(int Rows, bool FreshResolutionDefaults), string>
         ReferenceInsertSqlCache = new();
     private static readonly ConcurrentDictionary<int, string> ReferenceLineUpsertSqlCache = new();

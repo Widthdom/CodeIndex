@@ -659,7 +659,12 @@ public static partial class IndexCommandRunner
                     RequireTypeScriptAugmentationRefresh,
                     WriteProjectRootOnce),
         };
+        using var authoritativeFreshBulkInsert =
+            writer.BeginAuthoritativeFreshBulkInsertScope(
+                enabled: referenceGraphRefresh.FreshReferenceResolutionDefaultsPending,
+                cancellationToken);
         var postExtractionHooks = RunFullScanExtractionPipeline(extractionSession);
+        authoritativeFreshBulkInsert?.Complete();
         preWriteState.CSharp.PrepassSymbolArtifacts = null;
         deferCSharpMutationsForIncompleteScan =
             preWriteState.Scan.DeferCSharpMutationsForIncompleteScan;

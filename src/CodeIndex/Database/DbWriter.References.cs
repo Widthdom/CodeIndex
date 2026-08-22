@@ -1904,6 +1904,9 @@ public partial class DbWriter
             ? new Dictionary<(long FileId, int Line, string Context), long>()
             : null;
         int referenceBatchCount = GetReferenceBatchCount(references.Count, rowsPerStatement);
+        var useAuthoritativeFreshRawInsert = batchesAreAtomicInCaller
+            && referenceLinesAreNew
+            && _authoritativeFreshBulkInsertScope != null;
         if (batchesAreAtomicInCaller)
         {
             InsertAtomicReferenceBatches(
@@ -1914,6 +1917,7 @@ public partial class DbWriter
                 foldedNameCache,
                 rowsPerStatement,
                 referenceBatchCount,
+                useAuthoritativeFreshRawInsert,
                 cancellationToken);
         }
         else
@@ -1942,7 +1946,13 @@ public partial class DbWriter
                     newReferenceLineIds,
                     useCallerTransactionParameterBudget: false,
                     cancellationToken);
-                InsertReferenceBatch(references, start, end, referenceLineIds, foldedNameCache);
+                InsertReferenceBatch(
+                    references,
+                    start,
+                    end,
+                    referenceLineIds,
+                    foldedNameCache,
+                    useAuthoritativeFreshRawInsert: false);
                 transaction.Commit();
             }
         }
@@ -1972,6 +1982,7 @@ public partial class DbWriter
         Dictionary<string, string?> foldedNameCache,
         int rowsPerStatement,
         int referenceBatchCount,
+        bool useAuthoritativeFreshRawInsert,
         CancellationToken cancellationToken)
     {
         for (int windowStartBatch = 0; windowStartBatch < referenceBatchCount;)
@@ -2010,7 +2021,13 @@ public partial class DbWriter
                         cancellationToken);
                 }
                 int end = Math.Min(start + rowsPerStatement, references.Count);
-                InsertReferenceBatch(references, start, end, referenceLineIds, foldedNameCache);
+                InsertReferenceBatch(
+                    references,
+                    start,
+                    end,
+                    referenceLineIds,
+                    foldedNameCache,
+                    useAuthoritativeFreshRawInsert);
             }
 
             windowStartBatch = windowEndBatch;
@@ -2069,8 +2086,23 @@ public partial class DbWriter
         int start,
         int end,
         ReferenceLineBatchMap referenceLineIds,
-        Dictionary<string, string?> foldedNameCache)
+        Dictionary<string, string?> foldedNameCache,
+        bool useAuthoritativeFreshRawInsert)
     {
+        if (useAuthoritativeFreshRawInsert)
+        {
+            (_authoritativeFreshBulkInsertScope
+                ?? throw new InvalidOperationException(
+                    "The authoritative fresh raw insert scope ended before a reference batch."))
+                .InsertReferences(
+                    references,
+                    start,
+                    end,
+                    referenceLineIds,
+                    foldedNameCache);
+            return;
+        }
+
         var rowsInBatch = end - start;
         var useFreshReferenceResolutionDefaults = _referenceGraphRefreshScope is
         {
@@ -2447,7 +2479,7 @@ public partial class DbWriter
         lineIds.CompleteMaterialization();
     }
 
-    private sealed class ReferenceLineBatchMap
+    internal sealed class ReferenceLineBatchMap
     {
         private readonly int _referenceStart;
         private readonly int[] _referenceLineOrdinals;

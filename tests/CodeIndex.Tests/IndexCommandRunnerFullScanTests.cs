@@ -3417,12 +3417,26 @@ public partial class IndexCommandRunnerTests
         var previousBarrierHook = IndexCommandRunner.FullScanInputSnapshotBarrierForTesting;
         var previousReferenceIndexHook = DbWriter.ReferenceSecondaryIndexBulkLoadStateForTesting;
         var previousStatisticsHook = DbWriter.FreshBulkLoadPlannerStatisticsStateForTesting;
+        var previousRawHook = DbWriter.AuthoritativeFreshRawInsertExecutingForTesting;
+        var previousRawScopeHook = DbWriter.AuthoritativeFreshRawInsertScopeDisposedForTesting;
         var injected = 0;
         ReferenceIndexStageSnapshot? droppedSnapshot = null;
         var statisticsPhases = new List<string>();
+        var rawWork = new List<DbWriter.AuthoritativeFreshRawInsertWork>();
+        var rawScopeSnapshots = new List<DbWriter.AuthoritativeFreshRawInsertScopeStats>();
         try
         {
             File.WriteAllText(Path.Combine(projectRoot, "app.py"), "def run():\n    return 1\n");
+            DbWriter.AuthoritativeFreshRawInsertExecutingForTesting = work =>
+            {
+                rawWork.Add(work);
+                previousRawHook?.Invoke(work);
+            };
+            DbWriter.AuthoritativeFreshRawInsertScopeDisposedForTesting = stats =>
+            {
+                rawScopeSnapshots.Add(stats);
+                previousRawScopeHook?.Invoke(stats);
+            };
             IndexCommandRunner.FullScanInputSnapshotBarrierForTesting = phase =>
             {
                 previousBarrierHook?.Invoke(phase);
@@ -3483,6 +3497,8 @@ public partial class IndexCommandRunnerTests
                 GetInitialBulkPersistenceReferenceIndexNames(),
                 Assert.IsType<ReferenceIndexStageSnapshot>(droppedSnapshot).Names);
             Assert.Empty(statisticsPhases);
+            Assert.Empty(rawWork);
+            Assert.Empty(rawScopeSnapshots);
             using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var command = db.Connection.CreateCommand();
             command.CommandText =
@@ -3513,6 +3529,8 @@ public partial class IndexCommandRunnerTests
             IndexCommandRunner.FullScanInputSnapshotBarrierForTesting = previousBarrierHook;
             DbWriter.ReferenceSecondaryIndexBulkLoadStateForTesting = previousReferenceIndexHook;
             DbWriter.FreshBulkLoadPlannerStatisticsStateForTesting = previousStatisticsHook;
+            DbWriter.AuthoritativeFreshRawInsertExecutingForTesting = previousRawHook;
+            DbWriter.AuthoritativeFreshRawInsertScopeDisposedForTesting = previousRawScopeHook;
             DeleteDirectory(projectRoot);
             SqliteConnection.ClearAllPools();
         }

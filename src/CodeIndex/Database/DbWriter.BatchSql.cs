@@ -12,10 +12,10 @@ public partial class DbWriter
     private const int MaxCallerTransactionBatchParameters = 32;
     private const int MaxFoldedNameCacheEntries = 4096;
 
-    private static object FoldedNameDbValue(string? name, Dictionary<string, string?> cache)
+    private static string? FoldedNameValue(string? name, Dictionary<string, string?> cache)
     {
         if (name == null)
-            return DBNull.Value;
+            return null;
 
         if (!cache.TryGetValue(name, out var folded))
         {
@@ -31,16 +31,25 @@ public partial class DbWriter
                 cache[name] = folded;
         }
 
-        return (object?)folded ?? DBNull.Value;
+        return folded;
     }
 
-    private static object FoldedNameDbValue(
+    private static string? FoldedNameValue(
         string? name,
         string? identityNameFolded,
         Dictionary<string, string?> cache) =>
         identityNameFolded != null
             ? identityNameFolded
-            : FoldedNameDbValue(name, cache);
+            : FoldedNameValue(name, cache);
+
+    private static object FoldedNameDbValue(string? name, Dictionary<string, string?> cache)
+        => (object?)FoldedNameValue(name, cache) ?? DBNull.Value;
+
+    private static object FoldedNameDbValue(
+        string? name,
+        string? identityNameFolded,
+        Dictionary<string, string?> cache) =>
+        (object?)FoldedNameValue(name, identityNameFolded, cache) ?? DBNull.Value;
 
     private static object DisplayFoldedNameDbValue(
         string? displayNameFolded) =>

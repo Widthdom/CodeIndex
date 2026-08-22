@@ -9313,8 +9313,22 @@ public partial class McpServerTests
         var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_fixture_{Guid.NewGuid():N}");
         Directory.CreateDirectory(fixtureDir);
         var filePath = Path.Combine(fixtureDir, "bom_sample.cs");
+        var previousRawHook = DbWriter.AuthoritativeFreshRawInsertExecutingForTesting;
+        var previousRawScopeHook = DbWriter.AuthoritativeFreshRawInsertScopeDisposedForTesting;
+        var rawWork = new List<DbWriter.AuthoritativeFreshRawInsertWork>();
+        var rawScopeSnapshots = new List<DbWriter.AuthoritativeFreshRawInsertScopeStats>();
         try
         {
+            DbWriter.AuthoritativeFreshRawInsertExecutingForTesting = work =>
+            {
+                rawWork.Add(work);
+                previousRawHook?.Invoke(work);
+            };
+            DbWriter.AuthoritativeFreshRawInsertScopeDisposedForTesting = stats =>
+            {
+                rawScopeSnapshots.Add(stats);
+                previousRawScopeHook?.Invoke(stats);
+            };
             File.WriteAllBytes(filePath, [0xEF, 0xBB, 0xBF, (byte)'c', (byte)'l', (byte)'a', (byte)'s', (byte)'s', (byte)' ', (byte)'A', (byte)' ', (byte)'{', (byte)'}', (byte)'\n']);
 
             var indexRequest = new JsonObject
@@ -9339,9 +9353,13 @@ public partial class McpServerTests
             var issues = validateResponse["result"]!["structuredContent"]!["issues"]!.AsArray();
 
             Assert.Contains(issues, issue => issue!["kind"]!.GetValue<string>() == "bom");
+            Assert.Empty(rawWork);
+            Assert.Empty(rawScopeSnapshots);
         }
         finally
         {
+            DbWriter.AuthoritativeFreshRawInsertExecutingForTesting = previousRawHook;
+            DbWriter.AuthoritativeFreshRawInsertScopeDisposedForTesting = previousRawScopeHook;
             TestProjectHelper.DeleteDirectory(fixtureDir);
         }
     }

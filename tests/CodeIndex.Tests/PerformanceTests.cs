@@ -87,6 +87,208 @@ public class PerformanceTests : IDisposable
     }
 
     [ManualPerformanceFact]
+    public void AuthoritativeFreshRawBulkInsert_ReportsProviderParityElapsedAndAllocations()
+    {
+        const int RowCount = 10_000;
+        var chunks = Enumerable.Range(0, RowCount)
+            .Select(index => new ChunkRecord
+            {
+                FileId = 1,
+                ChunkIndex = index,
+                StartLine = index + 1,
+                EndLine = index + 1,
+                Content = index == 0 ? "雪😀a\0β" : $"chunk_{index}",
+            })
+            .ToArray();
+        var symbols = Enumerable.Range(0, RowCount)
+            .Select(index => new SymbolRecord
+            {
+                FileId = 1,
+                Kind = "function",
+                Name = $"target_{index}",
+                Line = index + 1,
+                StartLine = index + 1,
+                EndLine = index + 1,
+                Signature = index % 2 == 0 ? null : $"void target_{index}()",
+            })
+            .ToArray();
+        var issues = Enumerable.Range(0, RowCount)
+            .Select(index => new FileIssue
+            {
+                Path = "src/benchmark.cs",
+                Kind = "benchmark",
+                Line = index + 1,
+                Message = $"issue {index}",
+                Origin = index % 2 == 0 ? null : "benchmark",
+                Severity = index % 2 == 0 ? null : "warning",
+            })
+            .ToArray();
+        var references = Enumerable.Range(0, RowCount)
+            .Select(index => new ReferenceRecord
+            {
+                FileId = 1,
+                SymbolName = $"target_{index}",
+                ReferenceKind = "call",
+                Line = index + 1,
+                Column = 1,
+                SpanLength = index % 2 == 0 ? 0 : 8,
+                Context = $"target_{index}();",
+                ContainerKind = index % 2 == 0 ? null : "function",
+                ContainerName = index % 2 == 0 ? null : "caller",
+            })
+            .ToArray();
+        var providerSamples = new List<RawBulkInsertBenchmarkSample>();
+        var rawSamples = new List<RawBulkInsertBenchmarkSample>();
+
+        for (var iteration = 0; iteration < 4; iteration++)
+        {
+            var rawFirst = iteration % 2 != 0;
+            var first = RunRawBulkInsertBenchmark(
+                useRawBindings: rawFirst,
+                chunks,
+                symbols,
+                issues,
+                references);
+            var second = RunRawBulkInsertBenchmark(
+                useRawBindings: !rawFirst,
+                chunks,
+                symbols,
+                issues,
+                references);
+            Assert.Equal(first.Snapshot, second.Snapshot);
+            if (iteration == 0)
+                continue;
+
+            (rawFirst ? rawSamples : providerSamples).Add(first);
+            (rawFirst ? providerSamples : rawSamples).Add(second);
+        }
+
+        Assert.Equal(3, providerSamples.Count);
+        Assert.Equal(3, rawSamples.Count);
+        Assert.All(
+            providerSamples.Concat(rawSamples),
+            sample => Assert.Equal(providerSamples[0].Snapshot, sample.Snapshot));
+        foreach (var stage in new[] { "chunks", "symbols", "issues", "references", "finalize", "total" })
+        {
+            var providerElapsed = Median(providerSamples.Select(sample => sample.Stages[stage].ElapsedTicks));
+            var rawElapsed = Median(rawSamples.Select(sample => sample.Stages[stage].ElapsedTicks));
+            var providerAllocated = Median(providerSamples.Select(sample => sample.Stages[stage].AllocatedBytes));
+            var rawAllocated = Median(rawSamples.Select(sample => sample.Stages[stage].AllocatedBytes));
+            Console.WriteLine(
+                $"authoritative-fresh bulk stage={stage} "
+                + $"provider_ms={TicksToMilliseconds(providerElapsed):F3} raw_ms={TicksToMilliseconds(rawElapsed):F3} "
+                + $"provider_allocated={providerAllocated:N0} raw_allocated={rawAllocated:N0}");
+        }
+    }
+
+    private static RawBulkInsertBenchmarkSample RunRawBulkInsertBenchmark(
+        bool useRawBindings,
+        IReadOnlyList<ChunkRecord> chunks,
+        IReadOnlyList<SymbolRecord> symbols,
+        IReadOnlyList<FileIssue> issues,
+        IReadOnlyList<ReferenceRecord> references)
+    {
+        var root = TestProjectHelper.CreateTempProject(
+            useRawBindings ? "cdidx_raw_binding_benchmark" : "cdidx_provider_binding_benchmark");
+        try
+        {
+            using var db = new DbContext(
+                DbOpenIntent.WriteIndex,
+                Path.Combine(root, "codeindex.db"));
+            db.InitializeSchema();
+            var writer = new DbWriter(db.Connection);
+            using var graph = writer.BeginReferenceGraphRefreshScope(
+                forceFullRefresh: true,
+                useFreshReferenceResolutionDefaults: true);
+            using var transaction = writer.BeginTransaction();
+            var fileId = writer.InsertNewFile(new FileRecord
+            {
+                Path = "src/benchmark.cs",
+                Lang = "csharp",
+                Size = 1_000_000,
+                Lines = chunks.Count,
+                Checksum = "benchmark",
+                Modified = new DateTime(2026, 8, 23, 0, 0, 0, DateTimeKind.Utc),
+            });
+            Assert.Equal(1L, fileId);
+            using var rawScope = useRawBindings
+                ? writer.BeginAuthoritativeFreshBulkInsertScope(
+                    enabled: true,
+                    CancellationToken.None)
+                : null;
+            var stages = new Dictionary<string, RawBulkInsertBenchmarkStage>(StringComparer.Ordinal);
+            var totalStart = Stopwatch.GetTimestamp();
+            var totalAllocatedStart = GC.GetAllocatedBytesForCurrentThread();
+            stages["chunks"] = Measure(() => writer.InsertChunks(chunks));
+            stages["symbols"] = Measure(() => writer.InsertSymbols(symbols));
+            stages["issues"] = Measure(() => writer.InsertIssuesForNewFile(fileId, issues));
+            stages["references"] = Measure(() =>
+                writer.InsertReferencesForNewFilesInAtomicFileScope(
+                    references,
+                    refreshMutualRecursionFlags: false,
+                    CancellationToken.None));
+            stages["finalize"] = Measure(() => rawScope?.Complete());
+            stages["total"] = new RawBulkInsertBenchmarkStage(
+                Stopwatch.GetTimestamp() - totalStart,
+                GC.GetAllocatedBytesForCurrentThread() - totalAllocatedStart);
+            transaction.Commit();
+
+            using var snapshotCommand = db.Connection.CreateCommand();
+            snapshotCommand.CommandText = """
+                SELECT
+                    (SELECT COUNT(*) FROM chunks),
+                    (SELECT COUNT(*) FROM symbols),
+                    (SELECT COUNT(*) FROM file_issues),
+                    (SELECT COUNT(*) FROM reference_lines),
+                    (SELECT COUNT(*) FROM symbol_references),
+                    (SELECT hex(CAST(content AS BLOB)) FROM chunks WHERE chunk_index = 0),
+                    (SELECT COUNT(*) FROM symbols WHERE signature IS NULL),
+                    (SELECT COUNT(*) FROM symbol_references WHERE context IS NULL)
+                """;
+            using var reader = snapshotCommand.ExecuteReader();
+            Assert.True(reader.Read());
+            var snapshot = string.Join(
+                '|',
+                Enumerable.Range(0, reader.FieldCount)
+                    .Select(index => Convert.ToString(reader.GetValue(index), System.Globalization.CultureInfo.InvariantCulture)));
+            return new RawBulkInsertBenchmarkSample(stages, snapshot);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            TestProjectHelper.DeleteDirectory(root);
+        }
+
+        static RawBulkInsertBenchmarkStage Measure(Action action)
+        {
+            var allocatedStart = GC.GetAllocatedBytesForCurrentThread();
+            var elapsedStart = Stopwatch.GetTimestamp();
+            action();
+            return new RawBulkInsertBenchmarkStage(
+                Stopwatch.GetTimestamp() - elapsedStart,
+                GC.GetAllocatedBytesForCurrentThread() - allocatedStart);
+        }
+    }
+
+    private static long Median(IEnumerable<long> values)
+    {
+        var ordered = values.Order().ToArray();
+        Assert.NotEmpty(ordered);
+        return ordered[ordered.Length / 2];
+    }
+
+    private static double TicksToMilliseconds(long ticks)
+        => ticks * 1_000d / Stopwatch.Frequency;
+
+    private sealed record RawBulkInsertBenchmarkSample(
+        IReadOnlyDictionary<string, RawBulkInsertBenchmarkStage> Stages,
+        string Snapshot);
+
+    private readonly record struct RawBulkInsertBenchmarkStage(
+        long ElapsedTicks,
+        long AllocatedBytes);
+
+    [ManualPerformanceFact]
     public void Search1KFileIndex_ReturnsInReasonableTime()
     {
         var writer = new DbWriter(_db.Connection);

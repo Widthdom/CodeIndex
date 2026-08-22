@@ -37,10 +37,25 @@ public partial class IndexCommandRunnerTests
         var projectRoot = CreateTempProject();
         var dbRoot = TestProjectHelper.CreateTempProject("cdidx_initial_full_db");
         var dbPath = Path.Combine(dbRoot, "codeindex.db");
+        var previousRawHook = DbWriter.AuthoritativeFreshRawInsertExecutingForTesting;
+        var previousRawScopeHook = DbWriter.AuthoritativeFreshRawInsertScopeDisposedForTesting;
+        var rawWork = new List<DbWriter.AuthoritativeFreshRawInsertWork>();
+        var rawScopeSnapshots = new List<DbWriter.AuthoritativeFreshRawInsertScopeStats>();
         try
         {
             var fixture = WriteInitialFullIndexFixture(projectRoot, copiesPerLanguage);
             Assert.False(File.Exists(dbPath));
+
+            DbWriter.AuthoritativeFreshRawInsertExecutingForTesting = work =>
+            {
+                rawWork.Add(work);
+                previousRawHook?.Invoke(work);
+            };
+            DbWriter.AuthoritativeFreshRawInsertScopeDisposedForTesting = stats =>
+            {
+                rawScopeSnapshots.Add(stats);
+                previousRawScopeHook?.Invoke(stats);
+            };
 
             var stopwatch = Stopwatch.StartNew();
             var (exitCode, json) = RunAndCaptureJson([
@@ -70,6 +85,14 @@ public partial class IndexCommandRunnerTests
             Assert.True(json.GetProperty("index_complete").GetBoolean());
             Assert.True(json.GetProperty("reference_graph_complete").GetBoolean());
             Assert.True(json.GetProperty("graph_data_current").GetBoolean());
+            var rawOperations = rawWork.Select(work => work.Operation).ToArray();
+            Assert.Contains("insert_chunks", rawOperations);
+            Assert.Contains("insert_symbols", rawOperations);
+            Assert.Contains("insert_references", rawOperations);
+            Assert.DoesNotContain("insert_reference_lines", rawOperations);
+            var rawScope = Assert.Single(rawScopeSnapshots);
+            Assert.True(rawScope.Completed);
+            Assert.Equal(rawScope.PrepareCount, rawScope.FinalizeCount);
 
             var samples = json
                 .GetProperty("memory_timeline")
@@ -167,6 +190,8 @@ public partial class IndexCommandRunnerTests
         }
         finally
         {
+            DbWriter.AuthoritativeFreshRawInsertExecutingForTesting = previousRawHook;
+            DbWriter.AuthoritativeFreshRawInsertScopeDisposedForTesting = previousRawScopeHook;
             SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
             DeleteDirectory(dbRoot);

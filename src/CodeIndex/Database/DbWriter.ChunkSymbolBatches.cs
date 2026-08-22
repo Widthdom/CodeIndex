@@ -264,6 +264,12 @@ public partial class DbWriter
 
     private void InsertChunkBatch(IReadOnlyList<ChunkRecord> chunks, int start, int end)
     {
+        if (_authoritativeFreshBulkInsertScope is { } rawInsert)
+        {
+            rawInsert.InsertChunks(chunks, start, end);
+            return;
+        }
+
         var batchCount = end - start;
         var sql = ChunkInsertSqlCache.GetOrAdd(batchCount, static count => BuildChunkInsertSql(count));
         var cmd = RentCommand(sql, c => AddChunkInsertParameters(c, batchCount));
@@ -291,6 +297,12 @@ public partial class DbWriter
 
     private void InsertSymbolBatch(IReadOnlyList<SymbolRecord> symbols, int start, int end, Dictionary<string, string?> foldedNameCache)
     {
+        if (_authoritativeFreshBulkInsertScope is { } rawInsert)
+        {
+            rawInsert.InsertSymbols(symbols, start, end, foldedNameCache);
+            return;
+        }
+
         var batchCount = end - start;
         var sql = SymbolInsertSqlCache.GetOrAdd(batchCount, static count => BuildSymbolInsertSql(count));
         var cmd = RentCommand(sql, c => AddSymbolInsertParameters(c, batchCount));

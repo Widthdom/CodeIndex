@@ -63,8 +63,12 @@ public partial class IndexCommandRunnerTests
         var previousGraphHook = DbWriter.MutualRecursionRefreshForTesting;
         var previousScopeHook = DbWriter.ReferenceGraphRefreshScopeForTesting;
         var previousHotspotHook = DbWriter.HotspotAggregateRefreshStatementExecutingForTesting;
+        var previousRawHook = DbWriter.AuthoritativeFreshRawInsertExecutingForTesting;
+        var previousRawScopeHook = DbWriter.AuthoritativeFreshRawInsertScopeDisposedForTesting;
         var snapshots = new ConcurrentQueue<ReferenceIndexStageSnapshot>();
         var scopeSnapshots = new ConcurrentQueue<DbWriter.ReferenceGraphRefreshScopeStats>();
+        var rawWork = new ConcurrentQueue<DbWriter.AuthoritativeFreshRawInsertWork>();
+        var rawScopeSnapshots = new ConcurrentQueue<DbWriter.AuthoritativeFreshRawInsertScopeStats>();
         var lifecycle = new ConcurrentQueue<string>();
         var statisticsPhases = new ConcurrentQueue<string>();
         SqliteConnection? activeConnection = null;
@@ -81,8 +85,21 @@ public partial class IndexCommandRunnerTests
                 Assert.Equal(CommandExitCodes.Success, seedExitCode);
             }
 
+            DbWriter.AuthoritativeFreshRawInsertExecutingForTesting = work =>
+            {
+                rawWork.Enqueue(work);
+                previousRawHook?.Invoke(work);
+            };
+            DbWriter.AuthoritativeFreshRawInsertScopeDisposedForTesting = stats =>
+            {
+                rawScopeSnapshots.Enqueue(stats);
+                previousRawScopeHook?.Invoke(stats);
+            };
+
             DbWriter.ReferenceSecondaryIndexBulkLoadStateForTesting = (connection, phase) =>
             {
+                if (!rebuild && phase is "deferred_graph_prepared" or "identity_started")
+                    Assert.Single(rawScopeSnapshots);
                 Volatile.Write(ref activeConnection, connection);
                 snapshots.Enqueue(CaptureReferenceIndexSnapshot(phase, connection));
                 lifecycle.Enqueue(phase);
@@ -92,6 +109,8 @@ public partial class IndexCommandRunnerTests
             };
             DbWriter.FreshBulkLoadPlannerStatisticsStateForTesting = (connection, phase) =>
             {
+                if (!rebuild && string.Equals(phase, "post_load_statistics_started", StringComparison.Ordinal))
+                    Assert.Single(rawScopeSnapshots);
                 statisticsPhases.Enqueue(phase);
                 lifecycle.Enqueue(phase);
                 previousStatisticsHook?.Invoke(connection, phase);
@@ -219,6 +238,22 @@ public partial class IndexCommandRunnerTests
                 Assert.Equal(provisionalRows.Total, provisionalRows.UnresolvedResolutionStateCount);
             }
             Assert.Equal(2, CountMutualRecursionReferences(dbPath));
+            if (rebuild)
+            {
+                Assert.Empty(rawWork);
+                Assert.Empty(rawScopeSnapshots);
+            }
+            else
+            {
+                var rawOperations = rawWork.Select(work => work.Operation).ToArray();
+                Assert.Contains("insert_chunks", rawOperations);
+                Assert.Contains("insert_symbols", rawOperations);
+                Assert.Contains("insert_references", rawOperations);
+                Assert.DoesNotContain("insert_reference_lines", rawOperations);
+                var rawScope = Assert.Single(rawScopeSnapshots);
+                Assert.True(rawScope.Completed);
+                Assert.Equal(rawScope.PrepareCount, rawScope.FinalizeCount);
+            }
         }
         finally
         {
@@ -228,6 +263,8 @@ public partial class IndexCommandRunnerTests
             DbWriter.MutualRecursionRefreshForTesting = previousGraphHook;
             DbWriter.ReferenceGraphRefreshScopeForTesting = previousScopeHook;
             DbWriter.HotspotAggregateRefreshStatementExecutingForTesting = previousHotspotHook;
+            DbWriter.AuthoritativeFreshRawInsertExecutingForTesting = previousRawHook;
+            DbWriter.AuthoritativeFreshRawInsertScopeDisposedForTesting = previousRawScopeHook;
             DeleteDirectory(projectRoot);
         }
     }
@@ -358,8 +395,12 @@ public partial class IndexCommandRunnerTests
         var previousGraphHook = DbWriter.MutualRecursionRefreshForTesting;
         var previousScopeHook = DbWriter.ReferenceGraphRefreshScopeForTesting;
         var previousHotspotHook = DbWriter.HotspotAggregateRefreshStatementExecutingForTesting;
+        var previousRawHook = DbWriter.AuthoritativeFreshRawInsertExecutingForTesting;
+        var previousRawScopeHook = DbWriter.AuthoritativeFreshRawInsertScopeDisposedForTesting;
         var snapshots = new ConcurrentQueue<ReferenceIndexStageSnapshot>();
         var scopeSnapshots = new ConcurrentQueue<DbWriter.ReferenceGraphRefreshScopeStats>();
+        var rawWork = new ConcurrentQueue<DbWriter.AuthoritativeFreshRawInsertWork>();
+        var rawScopeSnapshots = new ConcurrentQueue<DbWriter.AuthoritativeFreshRawInsertScopeStats>();
         SqliteConnection? activeConnection = null;
         string[]? hotspotIndexNamesDuringRefresh = null;
         try
@@ -370,6 +411,17 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, seedExitCode);
             foreach (var relativePath in relativePaths)
                 File.AppendAllText(Path.Combine(projectRoot, relativePath), "\n// changed\n");
+
+            DbWriter.AuthoritativeFreshRawInsertExecutingForTesting = work =>
+            {
+                rawWork.Enqueue(work);
+                previousRawHook?.Invoke(work);
+            };
+            DbWriter.AuthoritativeFreshRawInsertScopeDisposedForTesting = stats =>
+            {
+                rawScopeSnapshots.Enqueue(stats);
+                previousRawScopeHook?.Invoke(stats);
+            };
 
             DbWriter.ReferenceSecondaryIndexBulkLoadStateForTesting = (connection, phase) =>
             {
@@ -460,6 +512,8 @@ public partial class IndexCommandRunnerTests
             }
             var scope = Assert.Single(scopeSnapshots);
             Assert.True(scope.UsedFullRefresh);
+            Assert.Empty(rawWork);
+            Assert.Empty(rawScopeSnapshots);
         }
         finally
         {
@@ -468,6 +522,8 @@ public partial class IndexCommandRunnerTests
             DbWriter.MutualRecursionRefreshForTesting = previousGraphHook;
             DbWriter.ReferenceGraphRefreshScopeForTesting = previousScopeHook;
             DbWriter.HotspotAggregateRefreshStatementExecutingForTesting = previousHotspotHook;
+            DbWriter.AuthoritativeFreshRawInsertExecutingForTesting = previousRawHook;
+            DbWriter.AuthoritativeFreshRawInsertScopeDisposedForTesting = previousRawScopeHook;
             DeleteDirectory(projectRoot);
         }
     }
