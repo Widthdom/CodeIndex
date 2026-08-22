@@ -883,6 +883,10 @@ internal static partial class IndexWatchRunner
         {
             var snapshot = new Dictionary<string, FileStamp>(_pathComparer);
             var pendingDirectories = new Stack<string>();
+            var visitedDirectories = new HashSet<string>(StringComparer.Ordinal)
+            {
+                FileIndexer.NormalizePathForIdentityComparison(_projectRoot),
+            };
             pendingDirectories.Push(_projectRoot);
 
             while (pendingDirectories.Count > 0)
@@ -901,11 +905,16 @@ internal static partial class IndexWatchRunner
                     cancellationToken.ThrowIfCancellationRequested();
                     try
                     {
-                        if ((File.GetAttributes(childDirectory) & FileAttributes.ReparsePoint) == 0
-                            && !_fileIndexer.ShouldSkipPath(childDirectory, isDirectory: true))
-                        {
+                        var attributes = File.GetAttributes(childDirectory);
+                        if ((attributes & FileAttributes.ReparsePoint) != 0
+                            && _fileIndexer.ShouldSkipDirectoryTraversal(childDirectory))
+                            continue;
+                        if (_fileIndexer.ShouldSkipPath(childDirectory, isDirectory: true))
+                            continue;
+
+                        var traversalIdentity = FileIndexer.NormalizePathForIdentityComparison(childDirectory);
+                        if (visitedDirectories.Add(traversalIdentity))
                             pendingDirectories.Push(childDirectory);
-                        }
                     }
                     catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
                     {
