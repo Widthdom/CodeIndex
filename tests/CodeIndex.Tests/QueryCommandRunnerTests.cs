@@ -1087,10 +1087,12 @@ public partial class QueryCommandRunnerTests
         var canonicalDbUri = new Uri(dbPath).AbsoluteUri;
         Assert.StartsWith("file:///", canonicalDbUri, StringComparison.OrdinalIgnoreCase);
         var singleSlashDbUri = "file:/" + canonicalDbUri["file:///".Length..];
-        foreach (var (canonicalUri, singleSlashUri) in new[]
+        foreach (var (canonicalUri, singleSlashUri, expectedFtsState) in new[]
         {
-            (canonicalDbUri + "?immutable=1", singleSlashDbUri + "?immutable=1"),
-            (canonicalDbUri, singleSlashDbUri),
+            (canonicalDbUri + "?immutable=1", singleSlashDbUri + "?immutable=1", "stale"),
+            (canonicalDbUri + "?immutable=1#ignored", singleSlashDbUri + "?immutable=1#ignored", "stale"),
+            (canonicalDbUri + "#ignored", singleSlashDbUri + "#ignored", "current"),
+            (canonicalDbUri, singleSlashDbUri, "current"),
         })
         {
             var (canonicalExitCode, canonicalStdout, canonicalStderr) = CaptureVacuum(
@@ -1111,7 +1113,7 @@ public partial class QueryCommandRunnerTests
                 .GetProperty("maintenance_guidance")
                 .GetProperty("fts_optimization");
             Assert.Equal(
-                canonicalUri.EndsWith("?immutable=1", StringComparison.Ordinal) ? "stale" : "current",
+                expectedFtsState,
                 canonicalFtsOptimization.GetProperty("state").GetString());
             var uriFtsOptimization = uriRoot
                 .GetProperty("maintenance_guidance")

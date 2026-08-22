@@ -1348,7 +1348,7 @@ Current stable codes and triggers:
 | Memory tracing | `index --json --memory-trace` adds a `memory_timeline` block to the CLI index result and persists peak working-set MB into `last_index_run`; dry-run results also emit live `start`, `snapshot`, `scan`, and `finalize` samples but never persist run metadata. `index --dry-run --rebuild` bypasses destructive confirmation because it does not delete or rewrite the index. `CDIDX_MEM_WARN_MB=<mb>` prints a warning when the sampled working set crosses that threshold. |
 | Newer schema protection | Writable opens reject databases whose `PRAGMA user_version` contains readiness bits outside the current binary's `CurrentSchemaVersion` mask. Read-only status/query paths may still surface `index_newer_than_reader=true` as a degraded audit signal, but write-capable paths must fail with `E003_SCHEMA_TOO_NEW` so an older cdidx cannot silently rewrite a DB stamped by a newer one. |
 
-`vacuum --dry-run` accepts supported local SQLite URI spellings such as `file:/absolute/path/codeindex.db`, Windows `file:/C:/absolute/path/codeindex.db`, and canonical `file:///...` forms. Single-slash paths are canonicalized while retaining their original query string, and validation plus metric collection use that same query-only URI so an explicit `immutable=1` keeps its stale-snapshot semantics.
+`vacuum --dry-run` accepts supported local SQLite URI spellings such as `file:/absolute/path/codeindex.db`, Windows `file:/C:/absolute/path/codeindex.db`, and canonical `file:///...` forms. Single-slash paths are canonicalized while retaining their original query string and ignoring URI fragments, and validation plus metric collection use that same query-only URI so an explicit `immutable=1` keeps its stale-snapshot semantics.
 
 ### Data directory resolution
 
@@ -5230,7 +5230,7 @@ apply 時は `PRAGMA optimize` を実行します。
 | memory tracing | `index --json --memory-trace` は CLI index 結果に `memory_timeline` block を追加し、peak working-set MB を `last_index_run` に保存します。dry-run 結果も live な `start`、`snapshot`、`scan`、`finalize` sample を返しますが、run metadata は保存しません。`index --dry-run --rebuild` は index を削除も rewrite もしないため destructive confirmation を bypass します。`CDIDX_MEM_WARN_MB=<mb>` は sampled working set がしきい値を超えたときに warning を出します。 |
 | newer schema protection | writable open は、`PRAGMA user_version` に current binary の `CurrentSchemaVersion` mask 外の readiness bit が含まれる database も拒否します。read-only status/query path は degraded audit signal として `index_newer_than_reader=true` を表示できますが、write-capable path は古い cdidx が新しい binary で stamp された DB を黙って rewrite しないよう `E003_SCHEMA_TOO_NEW` で失敗しなければなりません。 |
 
-`vacuum --dry-run` は、`file:/absolute/path/codeindex.db`、Windows の `file:/C:/absolute/path/codeindex.db`、canonical な `file:///...` 形式を受け付けます。single-slash の path を canonicalize しつつ元の query string を維持し、validation と metric 収集に同じ query-only URI を使うため、明示的な `immutable=1` の stale-snapshot semantics も維持されます。
+`vacuum --dry-run` は、`file:/absolute/path/codeindex.db`、Windows の `file:/C:/absolute/path/codeindex.db`、canonical な `file:///...` 形式を受け付けます。single-slash の path を canonicalize しつつ元の query string を維持して URI fragment を無視し、validation と metric 収集に同じ query-only URI を使うため、明示的な `immutable=1` の stale-snapshot semantics も維持されます。
 
 ### データディレクトリ解決
 
