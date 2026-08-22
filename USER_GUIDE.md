@@ -2726,9 +2726,10 @@ TypeScript path-alias configuration reads use the active `none`, `internal`, or
 `all` symlink policy and securely open only regular resolved targets. Polling
 watch similarly resolves symlink/reparse aliases before classification: aliases
 of database artifacts and ancestor ignore files that resolve to those artifacts
-are excluded, while ordinary file symlinks allowed by the selected policy remain
-watchable. Polling does not yet traverse directory-symlink subtrees; that
-follow-up is tracked in #5124.
+are excluded, while ordinary file and directory symlinks allowed by the selected
+policy remain watchable. Polling traverses directory links in full-scanner
+depth-first order and deduplicates resolved directory identities to bound cycles
+and duplicate targets.
 
 cdidx scans your project directory, applies the built-in skip lists plus user `.gitignore` / `.cdidxignore` rules, skips Windows Hidden/System paths before language detection, splits each remaining source file into overlapping chunks, and stores everything in a SQLite database with FTS5 full-text search. In each directory, `.gitignore` is loaded before `.cdidxignore`; later rules are additive, so a `!` pattern in `.cdidxignore` can re-include a path ignored earlier by `.gitignore` in the same directory scope. Incremental mode (default) first purges database entries for files that no longer exist on disk, then checks each file's last-modified timestamp against the database — only files whose timestamp exactly matches are skipped, and any difference (newer or older) triggers re-indexing. Newly appeared files are indexed as new entries. The same path filter is reused for scoped `--files` / `--commits` refreshes, commit-based refreshes automatically switch to a full scan when ignore files changed, and Git-managed workspaces follow the repository's `core.ignorecase` setting when evaluating ignore rules. This means re-indexing after a branch switch only processes the files that actually differ unless ignore rules themselves changed.
 
@@ -6285,8 +6286,9 @@ TypeScript path alias の configuration read は active な `none` / `internal` 
 symlink policy を使用し、解決後の regular target だけを secure-open します。polling
 watch も分類前に symlink / reparse alias を解決し、DB artifact の alias と、その
 artifact に解決される ancestor ignore file の alias を除外する一方、選択した policy
-で許可される通常の file symlink は watch 対象として保持します。polling は現時点で
-directory symlink の subtree を traverse せず、その follow-up は #5124 で追跡します。
+で許可される通常の file / directory symlink は watch 対象として保持します。polling は
+directory link を full scanner と同じ depth-first 順で辿り、解決済み directory identity
+を重複排除して cycle と重複 target を bounded に保ちます。
 
 cdidxはプロジェクトディレクトリを走査し、組み込みのスキップ対象とユーザーの `.gitignore` / `.cdidxignore` を適用し、Windows の Hidden/System パスを言語検出前にスキップしたうえで、各ソースファイルを重複を持つチャンクに分割し、FTS5全文検索付きのSQLiteデータベースに格納します。同じディレクトリでは `.gitignore` を先に読み、`.cdidxignore` を後から読むため、後の `.cdidxignore` ルールは加算的に適用され、`!` パターンで同じディレクトリスコープの `.gitignore` 除外を再包含できます。インクリメンタルモード（デフォルト）では各ファイルの最終更新タイムスタンプをDB内の値と比較し、完全一致するファイルのみスキップします。タイムスタンプが異なれば（新しくても古くても）再インデックスされるため、ブランチ切り替え後も正確にインデックスが更新されます。`--files` / `--commits` の部分更新も同じパスフィルタを再利用し、commit 側で ignore ファイルが変わったときは自動でフルスキャンへ切り替わります。Git 管理下の ignore 判定は OS 固定ではなく `core.ignorecase` を参照し、`**` も Git の path-form globstar だけを特別扱いするため、差分更新でも Git と同じ範囲で ignore されます。つまり ignore ルール自体が変わらない限り、差分再インデックスは実際に変わったファイルだけに比例します。
 
