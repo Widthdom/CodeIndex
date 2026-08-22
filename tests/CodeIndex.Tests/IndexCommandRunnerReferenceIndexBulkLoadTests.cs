@@ -88,6 +88,25 @@ public partial class IndexCommandRunnerTests
             DbWriter.AuthoritativeFreshRawInsertExecutingForTesting = work =>
             {
                 rawWork.Enqueue(work);
+                if (!rebuild
+                    && string.Equals(
+                        work.Operation,
+                        "insert_reference_lines",
+                        StringComparison.Ordinal))
+                {
+                    var connection = Volatile.Read(ref activeConnection);
+                    if (connection == null)
+                    {
+                        Interlocked.Increment(ref missingConnectionObservations);
+                    }
+                    else
+                    {
+                        snapshots.Enqueue(
+                            CaptureReferenceIndexSnapshot(
+                                "insert_reference_lines",
+                                connection));
+                    }
+                }
                 previousRawHook?.Invoke(work);
             };
             DbWriter.AuthoritativeFreshRawInsertScopeDisposedForTesting = stats =>
@@ -160,6 +179,10 @@ public partial class IndexCommandRunnerTests
             var captured = snapshots.ToArray();
             Assert.Equal(1, captured.Count(snapshot => snapshot.Stage == "dropped"));
             Assert.Contains(captured, snapshot => snapshot.Stage == "insert_references");
+            if (rebuild)
+                Assert.DoesNotContain(captured, snapshot => snapshot.Stage == "insert_reference_lines");
+            else
+                Assert.Contains(captured, snapshot => snapshot.Stage == "insert_reference_lines");
             Assert.Equal(1, captured.Count(snapshot => snapshot.Stage == "deferred_graph_prepared"));
             Assert.Equal(1, captured.Count(snapshot => snapshot.Stage == "candidate_deferred"));
             Assert.Equal(1, captured.Count(snapshot => snapshot.Stage == "identity_started"));
@@ -173,7 +196,7 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(
                 ["dropped", "deferred_graph_prepared", "candidate_deferred", "identity_started", "graph_required_restored", "mutual_started", "readiness_completed", "restored", "full_scan_committed"],
                 captured
-                    .Where(snapshot => snapshot.Stage != "insert_references")
+                    .Where(snapshot => snapshot.Stage is not "insert_reference_lines" and not "insert_references")
                     .Select(snapshot => snapshot.Stage));
             Assert.Equal(
                 rebuild
@@ -193,7 +216,7 @@ public partial class IndexCommandRunnerTests
             var allNames = GetAllReferenceIndexNames();
             Assert.Equal(initialBulkNames, captured.First(snapshot => snapshot.Stage == "dropped").Names);
             Assert.All(
-                captured.Where(snapshot => snapshot.Stage == "insert_references"),
+                captured.Where(snapshot => snapshot.Stage is "insert_reference_lines" or "insert_references"),
                 snapshot => Assert.Equal(initialBulkNames, snapshot.Names));
             Assert.Equal(
                 allNames,
@@ -248,8 +271,8 @@ public partial class IndexCommandRunnerTests
                 var rawOperations = rawWork.Select(work => work.Operation).ToArray();
                 Assert.Contains("insert_chunks", rawOperations);
                 Assert.Contains("insert_symbols", rawOperations);
+                Assert.Contains("insert_reference_lines", rawOperations);
                 Assert.Contains("insert_references", rawOperations);
-                Assert.DoesNotContain("insert_reference_lines", rawOperations);
                 var rawScope = Assert.Single(rawScopeSnapshots);
                 Assert.True(rawScope.Completed);
                 Assert.Equal(rawScope.PrepareCount, rawScope.FinalizeCount);

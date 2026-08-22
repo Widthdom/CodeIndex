@@ -8010,7 +8010,10 @@ public partial class McpServerTests
                 SELECT name
                 FROM sqlite_schema
                 WHERE type = 'index'
-                  AND tbl_name IN ('symbol_references', 'symbol_reference_candidates')
+                  AND tbl_name IN (
+                      'reference_lines',
+                      'symbol_references',
+                      'symbol_reference_candidates')
                   AND name NOT LIKE 'sqlite_autoindex_%'
                 ORDER BY name
                 """;

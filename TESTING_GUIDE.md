@@ -1089,6 +1089,7 @@ For background log or metrics sinks, use explicit writer-entry/release signals a
 
 - Prefer isolated temporary databases per test.
 - Initialize schema explicitly when the test needs real DB behavior.
+- When a reference-index fixture compares against `ReferenceSecondaryIndexSql.All`, query `reference_lines` together with `symbol_references` and `symbol_reference_candidates`. Authoritative-fresh raw-operation assertions must include `insert_reference_lines` after the raw RETURNING path is active.
 - If the scenario touches read compatibility, verify both the normal path and any fallback or migration path that matters.
 
 ## Cross-Platform Rules
@@ -2191,6 +2192,7 @@ background の log / metrics sink は、sleep や狭い stopwatch 閾値では�
 
 - テストごとに分離された一時 DB を優先する。
 - 実DB挙動を検証する場合はスキーマ初期化を明示する。
+- reference index fixtureを`ReferenceSecondaryIndexSql.All`と比較するときは、`symbol_references`と`symbol_reference_candidates`に加えて`reference_lines`もqueryする。authoritative freshのraw-operation assertionには、raw RETURNING経路が有効な場合の`insert_reference_lines`も含める。
 - query plan、page、row count などの境界をまたぐ DB fixture は、その境界を最小限に超えるサイズに留める。実際の大規模 DB が契約そのものではない限り、余裕値で膨らませない。
 - 読み取り互換性に触れる変更なら、通常経路に加えて必要な fallback / migration 経路も検証する。
 
