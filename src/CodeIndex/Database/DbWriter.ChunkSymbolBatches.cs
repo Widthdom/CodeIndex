@@ -401,6 +401,9 @@ public partial class DbWriter
         return sql.ToString();
     }
 
+    internal static string BuildSymbolInsertSqlForTesting(int rowCount)
+        => BuildSymbolInsertSql(rowCount);
+
     private static void AddSymbolInsertParameters(SqliteCommand cmd, int rowCount)
     {
         var parameterIndex = 0;

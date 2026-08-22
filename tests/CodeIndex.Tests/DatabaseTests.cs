@@ -8664,12 +8664,13 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
-    public void CallerOwnedTransactionBatchStatements_BoundNamedParametersAcrossPersistenceTables()
+    public void CallerOwnedTransactionBatchStatements_BindNumericParametersWithTailsAndNullsAcrossPersistenceTables()
     {
         const int ParameterBudget = 32;
         var fileId = UpsertTestFile(
             "src/caller-transaction-batches.cs",
             checksum: "caller-transaction-batches");
+        var writer = new DbWriter(_db);
         var chunks = Enumerable.Range(0, 7)
             .Select(index => new ChunkRecord
             {
@@ -8723,11 +8724,11 @@ public class DatabaseTests : IDisposable
                 previousStatementHook?.Invoke(statement);
             };
 
-            using var transaction = _writer.BeginTransaction();
-            _writer.InsertChunks(chunks);
-            _writer.InsertSymbols(symbols);
-            _writer.InsertIssuesForNewFile(fileId, issues);
-            _writer.InsertReferencesForNewFilesInAtomicFileScope(
+            using var transaction = writer.BeginTransaction();
+            writer.InsertChunks(chunks);
+            writer.InsertSymbols(symbols);
+            writer.InsertIssuesForNewFile(fileId, issues);
+            writer.InsertReferencesForNewFilesInAtomicFileScope(
                 references,
                 refreshMutualRecursionFlags: false,
                 CancellationToken.None);
@@ -8767,6 +8768,45 @@ public class DatabaseTests : IDisposable
             statement => Assert.True(
                 statement.StatementRows * columnsByOperation[statement.Operation] <= ParameterBudget,
                 $"{statement.Operation} used {statement.StatementRows * columnsByOperation[statement.Operation]} parameters."));
+
+        Assert.True(_db.PreparedCommands.MissCount > 0);
+        Assert.True(_db.PreparedCommands.HitCount > 0);
+
+        using var persistedRows = _db.Connection.CreateCommand();
+        persistedRows.Parameters.AddWithValue("@fileId", fileId);
+        persistedRows.CommandText = """
+            SELECT
+                (SELECT COUNT(*) FROM chunks WHERE file_id = @fileId),
+                (SELECT COUNT(*)
+                   FROM symbols
+                  WHERE file_id = @fileId
+                    AND sub_kind IS NULL
+                    AND start_column IS NULL
+                    AND signature IS NULL
+                    AND container_name IS NULL
+                    AND return_type IS NULL),
+                (SELECT COUNT(*)
+                   FROM file_issues
+                  WHERE file_id = @fileId
+                    AND origin IS NULL
+                    AND severity IS NULL),
+                (SELECT COUNT(*) FROM reference_lines WHERE file_id = @fileId),
+                (SELECT COUNT(*)
+                   FROM symbol_references
+                  WHERE file_id = @fileId
+                    AND span_length IS NULL
+                    AND context IS NULL
+                    AND target_qualifier IS NULL)
+            """;
+        using (var reader = persistedRows.ExecuteReader())
+        {
+            Assert.True(reader.Read());
+            Assert.Equal(chunks.Length, reader.GetInt32(0));
+            Assert.Equal(symbols.Length, reader.GetInt32(1));
+            Assert.Equal(issues.Length, reader.GetInt32(2));
+            Assert.Equal(references.Length, reader.GetInt32(3));
+            Assert.Equal(references.Length, reader.GetInt32(4));
+        }
 
         (int ActiveRows, int StatementRows)[] BatchRows(string operation)
             => statements
@@ -8963,10 +9003,16 @@ public class DatabaseTests : IDisposable
         const int StatementRowCount = 5;
         var sql = DbWriter.BuildReferenceLineLookupSqlForTesting(StatementRowCount);
 
+        Assert.DoesNotContain("@p", sql, StringComparison.Ordinal);
+        Assert.DoesNotContain("?0", sql, StringComparison.Ordinal);
+        Assert.Contains("?1", sql, StringComparison.Ordinal);
+        Assert.Contains("?15", sql, StringComparison.Ordinal);
+
         using var command = _db.Connection.CreateCommand();
         command.CommandText = "EXPLAIN QUERY PLAN " + sql;
-        for (var parameterIndex = 0; parameterIndex < StatementRowCount * 3; parameterIndex++)
-            command.Parameters.AddWithValue($"@p{parameterIndex}", DBNull.Value);
+        for (var parameterIndex = 1; parameterIndex <= StatementRowCount * 3; parameterIndex++)
+            command.Parameters.AddWithValue($"?{parameterIndex}", DBNull.Value);
+        command.Prepare();
 
         var plan = new List<string>();
         using var reader = command.ExecuteReader();
@@ -8978,6 +9024,36 @@ public class DatabaseTests : IDisposable
             detail => detail.Contains(
                 "sqlite_autoindex_reference_lines_1",
                 StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void BatchNumericParameterSql_IsOneOriginForTwentyFiveColumnSymbolsAndReferences()
+    {
+        AssertNumericParameterOrdinals(
+            DbWriter.BuildSymbolInsertSqlForTesting(rowCount: 1),
+            expectedParameterCount: 25);
+        AssertNumericParameterOrdinals(
+            DbWriter.BuildReferenceInsertSqlForTesting(
+                rowCount: 2,
+                useFreshReferenceResolutionDefaults: false),
+            expectedParameterCount: 28);
+        AssertNumericParameterOrdinals(
+            DbWriter.BuildReferenceInsertSqlForTesting(
+                rowCount: 2,
+                useFreshReferenceResolutionDefaults: true),
+            expectedParameterCount: 28);
+
+        static void AssertNumericParameterOrdinals(string sql, int expectedParameterCount)
+        {
+            var ordinals = System.Text.RegularExpressions.Regex.Matches(sql, @"\?(\d+)")
+                .Cast<System.Text.RegularExpressions.Match>()
+                .Select(match => int.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture))
+                .ToArray();
+
+            Assert.Equal(Enumerable.Range(1, expectedParameterCount), ordinals);
+            Assert.DoesNotContain("@p", sql, StringComparison.Ordinal);
+            Assert.DoesNotContain("?0", sql, StringComparison.Ordinal);
+        }
     }
 
     [Fact]

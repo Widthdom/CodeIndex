@@ -96,20 +96,24 @@ public partial class DbWriter
         using var cmd = _conn.CreateCommand();
         var sql = CreateBatchSqlBuilder(end - start, estimatedCharsPerRow: 96);
         sql.Append("INSERT INTO file_issues (file_id, kind, line, message, origin, severity) VALUES ");
+        var sqlParameterIndex = 0;
         for (int j = start; j < end; j++)
         {
             if (j > start)
                 sql.Append(", ");
+            AppendBatchParameterTuple(sql, ref sqlParameterIndex, columnCount: 6);
+        }
 
+        var parameterIndex = 0;
+        for (int j = start; j < end; j++)
+        {
             var issue = issues[j];
-            var suffix = j - start;
-            sql.Append($"(@fid{suffix}, @kind{suffix}, @line{suffix}, @message{suffix}, @origin{suffix}, @severity{suffix})");
-            cmd.Parameters.Add($"@fid{suffix}", SqliteType.Integer).Value = fileId;
-            cmd.Parameters.Add($"@kind{suffix}", SqliteType.Text).Value = issue.Kind;
-            cmd.Parameters.Add($"@line{suffix}", SqliteType.Integer).Value = issue.Line;
-            cmd.Parameters.Add($"@message{suffix}", SqliteType.Text).Value = issue.Message;
-            cmd.Parameters.Add($"@origin{suffix}", SqliteType.Text).Value = issue.Origin ?? (object)DBNull.Value;
-            cmd.Parameters.Add($"@severity{suffix}", SqliteType.Text).Value = issue.Severity ?? (object)DBNull.Value;
+            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Integer).Value = fileId;
+            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Text).Value = issue.Kind;
+            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Integer).Value = issue.Line;
+            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Text).Value = issue.Message;
+            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Text).Value = issue.Origin ?? (object)DBNull.Value;
+            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Text).Value = issue.Severity ?? (object)DBNull.Value;
         }
 
         cmd.CommandText = sql.ToString();

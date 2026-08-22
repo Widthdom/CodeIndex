@@ -119,7 +119,7 @@ public partial class DbWriter
             if (column == 6)
                 sql.Append("NULL");
             else
-                sql.Append("@p").Append(parameterIndex++);
+                AppendBatchParameter(sql, ref parameterIndex);
         }
         sql.Append(')');
     }

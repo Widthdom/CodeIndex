@@ -158,10 +158,12 @@ public sealed class FreshReferenceResolutionTests : IDisposable
         Assert.Contains("FROM fresh_reference AS r", freshSql, StringComparison.Ordinal);
         Assert.Contains("ORDER BY r.input_ordinal", freshSql, StringComparison.Ordinal);
         Assert.Contains("ORDER BY (COALESCE(s.end_line", freshSql, StringComparison.Ordinal);
-        Assert.Equal(28, CountOccurrences(freshSql, "@p"));
+        Assert.Equal(28, CountOccurrences(freshSql, "?"));
+        Assert.DoesNotContain("?0", freshSql, StringComparison.Ordinal);
         Assert.DoesNotContain("WITH fresh_reference(", standardSql, StringComparison.Ordinal);
         Assert.DoesNotContain("source_symbol_id", standardSql, StringComparison.Ordinal);
-        Assert.Equal(28, CountOccurrences(standardSql, "@p"));
+        Assert.Equal(28, CountOccurrences(standardSql, "?"));
+        Assert.DoesNotContain("?0", standardSql, StringComparison.Ordinal);
 
         var freshRefresh = DbWriter.SelectReferenceSourceRefreshSqlForTesting(
             useFreshReferenceResolutionDefaults: true,
