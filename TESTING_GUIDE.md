@@ -19,6 +19,7 @@ Use the full suite by default. Use targeted filters only while iterating locally
 
 ## Test Stack
 
+- Issue #5130 keeps the commit-diff timeout regression focused on `diff-tree`: its fake git must echo the commit being verified by `rev-parse --verify <ref>^{commit}`, then the test must confirm the timed-out child process is reaped. Keep production single-commit validation strict.
 - Issue #5128 compact graph zero-result coverage belongs in `JsonEnvelopeWrapperIssue4585Tests.cs`. Keep `callees` aligned with `references` and `callers` by asserting an empty compact location envelope and zero returned/total cardinality both with and without explicit `--fields`, while reusing the graph-ready bounded-response fixture.
 - Issue #5098 inspect projection coverage belongs in `QueryCommandRunnerInspectTests.cs`. Keep one graph-ready partial-type fixture covering canonical and alias selectors, multiple leaves across collections, parent-over-child precedence, stable row order, empty arrays, compact truncation, byte bounds, body paging/recovery, partial-family metadata, queryless catalog discovery, and typed unknown parent/leaf errors. `ConsoleUiTests.cs` separately pins the `<csv|list>` usage, nested-field help text, and examples.
 - Path-containment coverage for #5091 pairs platform-independent `PathCasingTests` seams for mixed parent-namespace case policies and directory identities with `FileIndexerTests` integration through an internal file symlink. Keep both checks when changing internal-symlink policy: a case-insensitive project mount must not make a distinct case-only sibling in its case-sensitive parent namespace appear internal, while genuine same-namespace aliases remain accepted.
@@ -1114,6 +1115,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 
 ## テストスタック
 
+- Issue #5130 の commit-diff timeout regression は `diff-tree` に焦点を維持します。fake git は `rev-parse --verify <ref>^{commit}` で検証対象の commit を返し、テストでは timeout した子プロセスが reap されることを確認してください。本番の single-commit validation は厳格なままにします。
 - Issue #5128 の compact graph 0件 coverage は `JsonEnvelopeWrapperIssue4585Tests.cs` が担当します。graph-ready な bounded-response fixture を再利用し、明示的な `--fields` の有無の両方で、`callees` が `references` / `callers` と同様に空の compact location envelope と返却件数・総件数0を維持することを検証してください。
 - Issue #5098 の inspect projection coverage は `QueryCommandRunnerInspectTests.cs` が担当します。graph-ready な partial type fixture 1つで canonical / alias selector、collection をまたぐ複数 leaf、parent の child に対する優先、安定した row 順、空配列、compact truncation、byte 上限、body paging / recovery、partial-family metadata、query 不要の catalog discovery、未知 parent / leaf の型付き error を維持してください。`ConsoleUiTests.cs` では `<csv|list>` usage、nested-field help text、例を別途固定します。
 - #5091 の path containment coverage は、親 directory namespace の case policy と directory identity が混在する状況を OS 非依存で再現する `PathCasingTests` の seam と、内部 file symlink を通す `FileIndexerTests` の integration を対にします。internal-symlink policy を変更するときは両方を維持し、case-insensitive な project mount の policy で、case-sensitive な親 namespace にある別 identity の case-only sibling を内部 path と誤認しないこと、および同一 namespace の正当な alias は引き続き受理されることを検証してください。
