@@ -7,6 +7,7 @@ public static partial class SymbolExtractor
     private static PatternScanResult TryCapturePatternMatch(
         PatternLineScanContext lineContext,
         SymbolPattern pattern,
+        int patternIndex,
         int patternStartOffset,
         int lineOffset,
         ref string patternMatchLine,
@@ -26,8 +27,25 @@ public static partial class SymbolExtractor
         var csharpRegexProbeCounts = extraction.CSharpRegexProbeCounts;
         var csharpMatchLines = extraction.ScanInputs.CSharpMatchLines;
         var javaLeadingAnnotationOffset = 0;
+        var patternMatchTimedOut = false;
+        // BuildCSharpPropertyMatchLine may replace the physical line with a merged multiline
+        // input. A miss on one representation proves nothing about the other, so recovery
+        // sharing is restricted to the exact PreparedLine.MatchLine at this candidate start.
+        // multiline 結合 input と物理行の miss は相互に証明にならないため、同じ candidate
+        // start の PreparedLine.MatchLine そのものだけを recovery cache の対象にする。
+        var canUseCSharpPhysicalInputNegativePrefix = lang == "csharp"
+            && applyCSharpRegexProbeOptimizations
+            && lineOffset == patternStartOffset
+            && ReferenceEquals(patternMatchLine, matchLine);
         Match match;
-        if (lang is "java" or "kotlin")
+        if (canUseCSharpPhysicalInputNegativePrefix
+            && patternStartState.CSharpPhysicalInputNegativePrefix.IsKnownNegative(patternIndex))
+        {
+            if (csharpRegexProbeCounts != null)
+                csharpRegexProbeCounts.PhysicalInputNegativePrefixCacheHitCount++;
+            match = Match.Empty;
+        }
+        else if (lang is "java" or "kotlin")
         {
             var javaPatternMatched = TryMatchJavaDeclarationPatternSegment(
                 pattern,
@@ -62,11 +80,24 @@ public static partial class SymbolExtractor
                      applyCSharpRegexProbeOptimizations,
                      csharpRegexProbeCounts))
         {
-            match = pattern.Regex.Match(patternMatchLine[lineOffset..]);
+            if (csharpRegexProbeCounts != null)
+                csharpRegexProbeCounts.DeclarationPatternRegexAttemptCount++;
+            match = canUseCSharpPhysicalInputNegativePrefix
+                ? pattern.Regex.MatchWithTimeoutStatus(
+                    patternMatchLine[lineOffset..],
+                    out patternMatchTimedOut)
+                : pattern.Regex.Match(patternMatchLine[lineOffset..]);
         }
         else
         {
             match = Match.Empty;
+        }
+
+        if (canUseCSharpPhysicalInputNegativePrefix && !match.Success)
+        {
+            patternStartState.CSharpPhysicalInputNegativePrefix.RecordFailedProbe(
+                patternIndex,
+                patternMatchTimedOut);
         }
 
         if (!match.Success
@@ -116,6 +147,8 @@ public static partial class SymbolExtractor
                         continue;
                     }
 
+                    if (csharpRegexProbeCounts != null)
+                        csharpRegexProbeCounts.DeclarationPatternRegexAttemptCount++;
                     var wrappedMatch = pattern.Regex.Match(wrappedMatchLine);
                     if (wrappedMatch.Success)
                     {
@@ -193,7 +226,7 @@ public static partial class SymbolExtractor
                             applyCSharpRegexProbeOptimizations,
                             csharpRegexProbeCounts)
                         : patternStartState.RecoverableCSharpPattern ??=
-                            TryMatchAnyRecoverableCSharpPattern(
+                            TryMatchAnyRecoverableCSharpPatternAtPatternStart(
                                 matchLine,
                                 lineOffset,
                                 insideEnumBody: false,
@@ -202,7 +235,8 @@ public static partial class SymbolExtractor
                                 applyRequiredLiteralMatchInputGate,
                                 requiredLiteralGateCounts,
                                 applyCSharpRegexProbeOptimizations,
-                                csharpRegexProbeCounts))))
+                                csharpRegexProbeCounts,
+                                ref patternStartState.CSharpPhysicalInputNegativePrefix))))
             {
                 lineOffset = FindNextSameLineBraceStatementStart(matchLine, lineOffset + 1, lang);
                 return PatternScanResult.ContinueAt(lineOffset);

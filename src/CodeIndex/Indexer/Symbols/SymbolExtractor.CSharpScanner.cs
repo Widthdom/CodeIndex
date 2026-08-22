@@ -575,12 +575,85 @@ public static partial class SymbolExtractor
         bool applyCSharpRegexProbeOptimizations,
         CSharpRegexProbeCounts? csharpRegexProbeCounts)
     {
+        // Attribute preprocessing runs before PatternStartScanState exists. Keep that
+        // cross-phase recovery independent rather than retaining per-line cache state.
+        // attribute prepass は PatternStartScanState より前に実行されるため、per-line state を
+        // 保持せず従来どおり独立した recovery とする。
+        var unusedNegativePrefix = new CSharpPhysicalInputNegativePrefixCache();
+        return TryMatchAnyRecoverableCSharpPatternCore(
+            line,
+            lineOffset,
+            insideEnumBody,
+            attributeParenDepth,
+            applicablePatterns,
+            applyRequiredLiteralMatchInputGate,
+            requiredLiteralGateCounts,
+            applyCSharpRegexProbeOptimizations,
+            csharpRegexProbeCounts,
+            usePhysicalInputNegativePrefix: false,
+            ref unusedNegativePrefix);
+    }
+
+    private static bool TryMatchAnyRecoverableCSharpPatternAtPatternStart(
+        string line,
+        int lineOffset,
+        bool insideEnumBody,
+        int attributeParenDepth,
+        IReadOnlyList<SymbolPattern> applicablePatterns,
+        bool applyRequiredLiteralMatchInputGate,
+        RequiredLiteralGateCounts? requiredLiteralGateCounts,
+        bool applyCSharpRegexProbeOptimizations,
+        CSharpRegexProbeCounts? csharpRegexProbeCounts,
+        ref CSharpPhysicalInputNegativePrefixCache physicalInputNegativePrefix) =>
+        TryMatchAnyRecoverableCSharpPatternCore(
+            line,
+            lineOffset,
+            insideEnumBody,
+            attributeParenDepth,
+            applicablePatterns,
+            applyRequiredLiteralMatchInputGate,
+            requiredLiteralGateCounts,
+            applyCSharpRegexProbeOptimizations,
+            csharpRegexProbeCounts,
+            usePhysicalInputNegativePrefix: applyCSharpRegexProbeOptimizations,
+            ref physicalInputNegativePrefix);
+
+    private static bool TryMatchAnyRecoverableCSharpPatternCore(
+        string line,
+        int lineOffset,
+        bool insideEnumBody,
+        int attributeParenDepth,
+        IReadOnlyList<SymbolPattern> applicablePatterns,
+        bool applyRequiredLiteralMatchInputGate,
+        RequiredLiteralGateCounts? requiredLiteralGateCounts,
+        bool applyCSharpRegexProbeOptimizations,
+        CSharpRegexProbeCounts? csharpRegexProbeCounts,
+        bool usePhysicalInputNegativePrefix,
+        ref CSharpPhysicalInputNegativePrefixCache physicalInputNegativePrefix)
+    {
         var matchInputSpan = line.AsSpan(lineOffset);
         string? matchInput = null;
-        foreach (var pattern in applicablePatterns)
+        for (var patternIndex = 0; patternIndex < applicablePatterns.Count; patternIndex++)
         {
+            var pattern = applicablePatterns[patternIndex];
             if (ReferenceEquals(pattern.Regex, CSharpEnumMemberRegex))
+            {
+                if (usePhysicalInputNegativePrefix)
+                {
+                    physicalInputNegativePrefix.RecordFailedProbe(
+                        patternIndex,
+                        timedOut: false);
+                }
                 continue;
+            }
+
+            if (usePhysicalInputNegativePrefix
+                && physicalInputNegativePrefix.IsKnownNegative(patternIndex))
+            {
+                if (csharpRegexProbeCounts != null)
+                    csharpRegexProbeCounts.PhysicalInputNegativePrefixCacheHitCount++;
+                continue;
+            }
 
             if (!ShouldAttemptPatternRegex(
                     pattern,
@@ -597,12 +670,26 @@ public static partial class SymbolExtractor
                 {
                     csharpRegexProbeCounts.RecoverablePlainFieldTerminatorSkipCount++;
                 }
+                if (usePhysicalInputNegativePrefix)
+                {
+                    physicalInputNegativePrefix.RecordFailedProbe(
+                        patternIndex,
+                        timedOut: false);
+                }
                 continue;
             }
 
             matchInput ??= lineOffset == 0 ? line : line[lineOffset..];
-            if (pattern.Regex.IsMatch(matchInput))
+            if (csharpRegexProbeCounts != null)
+                csharpRegexProbeCounts.DeclarationPatternRegexAttemptCount++;
+            var timedOut = false;
+            var patternMatched = usePhysicalInputNegativePrefix
+                ? pattern.Regex.IsMatchWithTimeoutStatus(matchInput, out timedOut)
+                : pattern.Regex.IsMatch(matchInput);
+            if (patternMatched)
                 return true;
+            if (usePhysicalInputNegativePrefix)
+                physicalInputNegativePrefix.RecordFailedProbe(patternIndex, timedOut);
         }
 
         if (!insideEnumBody || attributeParenDepth != 0)

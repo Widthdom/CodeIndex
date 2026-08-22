@@ -321,6 +321,29 @@ public sealed class BoundedRegexTests
     }
 
     [Fact]
+    public void MatchWithTimeoutStatus_DistinguishesOrdinaryMissFromRecordedTimeout()
+    {
+        var ordinaryRegex = new BoundedRegex("^token$");
+
+        var ordinaryMatch = ordinaryRegex.MatchWithTimeoutStatus("other", out var ordinaryTimedOut);
+
+        Assert.False(ordinaryMatch.Success);
+        Assert.False(ordinaryTimedOut);
+
+        var timeoutRegex = new BoundedRegex("(a+)+$", default, TimeSpan.FromMilliseconds(1));
+        var pathologicalInput = new string('a', 10_000) + "!";
+        using var capture = BoundedRegex.CaptureTimeouts("csharp", "pattern_probe_test");
+
+        var timeoutMatch = timeoutRegex.MatchWithTimeoutStatus(pathologicalInput, out var timedOut);
+
+        Assert.False(timeoutMatch.Success);
+        Assert.True(timedOut);
+        var diagnostic = Assert.Single(capture.Diagnostics);
+        Assert.Equal(1, capture.TimeoutCount);
+        Assert.Equal("match", diagnostic.Operation);
+    }
+
+    [Fact]
     public void CaptureTimeouts_RecordsHashedDiagnosticsForFileIssue()
     {
         const string pattern = "(a+)+$";
@@ -333,11 +356,14 @@ public sealed class BoundedRegexTests
 
         Assert.False(match.Success);
         Assert.True(capture.HasTimeouts);
+        var diagnostic = Assert.Single(capture.Diagnostics);
+        Assert.Equal(1, capture.TimeoutCount);
+        Assert.Equal("match", diagnostic.Operation);
         Assert.NotNull(issue);
         Assert.Equal("regex_timeout", issue.Kind);
         Assert.Equal("src/Pathological.cs", issue.Path);
         Assert.Contains("reference_extraction", issue.Message);
-        Assert.Contains(capture.Diagnostics[0].PatternHash, issue.Message);
+        Assert.Contains(diagnostic.PatternHash, issue.Message);
         Assert.Contains("len=6", issue.Message);
         Assert.DoesNotContain(pattern, issue.Message);
         Assert.DoesNotContain(input, issue.Message);
@@ -359,10 +385,37 @@ public sealed class BoundedRegexTests
     {
         var regex = new BoundedRegex("(a+)+$", default, TimeSpan.FromMilliseconds(1));
         var input = new string('a', 10_000) + "!";
+        using var capture = BoundedRegex.CaptureTimeouts("csharp", "pattern_probe_test");
 
         var isMatch = regex.IsMatch(input);
 
         Assert.False(isMatch);
+        var diagnostic = Assert.Single(capture.Diagnostics);
+        Assert.Equal(1, capture.TimeoutCount);
+        Assert.Equal("is_match", diagnostic.Operation);
+    }
+
+    [Fact]
+    public void IsMatchWithTimeoutStatus_DistinguishesOrdinaryMissFromRecordedTimeout()
+    {
+        var ordinaryRegex = new BoundedRegex("^token$");
+
+        var ordinaryMatch = ordinaryRegex.IsMatchWithTimeoutStatus("other", out var ordinaryTimedOut);
+
+        Assert.False(ordinaryMatch);
+        Assert.False(ordinaryTimedOut);
+
+        var timeoutRegex = new BoundedRegex("(a+)+$", default, TimeSpan.FromMilliseconds(1));
+        var pathologicalInput = new string('a', 10_000) + "!";
+        using var capture = BoundedRegex.CaptureTimeouts("csharp", "pattern_probe_test");
+
+        var timeoutMatch = timeoutRegex.IsMatchWithTimeoutStatus(pathologicalInput, out var timedOut);
+
+        Assert.False(timeoutMatch);
+        Assert.True(timedOut);
+        var diagnostic = Assert.Single(capture.Diagnostics);
+        Assert.Equal(1, capture.TimeoutCount);
+        Assert.Equal("is_match", diagnostic.Operation);
     }
 
     private static List<Match> EnumerateConcreteMatches(

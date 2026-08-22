@@ -37,8 +37,8 @@ public sealed class SymbolExtractorCSharpRegexProbeTests
             internal class Inline { public int SameLine; public void Run() { } }
             """;
 
-        var baseline = Extract(content, applyOptimizations: false, out _);
-        var optimized = Extract(content, applyOptimizations: true, out _);
+        var baseline = Extract(content, applyOptimizations: false, out var baselineMetrics);
+        var optimized = Extract(content, applyOptimizations: true, out var optimizedMetrics);
 
         Assert.Equal(29, SymbolProperties.Length);
         AssertSymbolsEqual(baseline, optimized);
@@ -48,6 +48,72 @@ public sealed class SymbolExtractorCSharpRegexProbeTests
             optimized.Where(symbol => symbol.Kind == "field" && symbol.Name == "SameLine"));
         Assert.Equal("Inline", sameLine.ContainerName);
         Assert.True(sameLine.StartColumn > 0);
+        Assert.Equal(0, baselineMetrics.PhysicalInputNegativePrefixCacheHitCount);
+        Assert.True(optimizedMetrics.PhysicalInputNegativePrefixCacheHitCount > 0);
+        Assert.True(
+            optimizedMetrics.DeclarationPatternRegexAttemptCount
+            < baselineMetrics.DeclarationPatternRegexAttemptCount);
+    }
+
+    [Fact]
+    public void Extract_CSharpRecoverablePatternNegativePrefix_IsolatesMergedInputs()
+    {
+        const string content = """
+            using System.Collections.Generic;
+
+            internal class Merged
+            {
+                public Dictionary<string,
+                    List<int>> Values
+                {
+                    get;
+                    set;
+                }
+
+                public void WithDefault(int value =
+                    42)
+                {
+                }
+            }
+            """;
+
+        var baseline = Extract(content, applyOptimizations: false, out _);
+        var optimized = Extract(content, applyOptimizations: true, out _);
+
+        AssertSymbolsEqual(baseline, optimized);
+        Assert.Contains(
+            optimized,
+            symbol => symbol.Kind == "property" && symbol.Name == "Values");
+        Assert.Contains(
+            optimized,
+            symbol => symbol.Kind == "function" && symbol.Name == "WithDefault");
+    }
+
+    [Fact]
+    public void CSharpPhysicalInputNegativePrefix_RequiresContiguousNonTimeoutFailures()
+    {
+        var cache = new SymbolExtractor.CSharpPhysicalInputNegativePrefixCache();
+        var timeoutRegex = new BoundedRegex("(a+)+$", default, TimeSpan.FromMilliseconds(1));
+        var pathologicalInput = new string('a', 10_000) + "!";
+
+        var timeoutResult = timeoutRegex.IsMatchWithTimeoutStatus(pathologicalInput, out var timedOut);
+        cache.RecordFailedProbe(patternIndex: 0, timedOut);
+        cache.RecordFailedProbe(patternIndex: 1, timedOut: false);
+
+        Assert.False(timeoutResult);
+        Assert.True(timedOut);
+        Assert.False(cache.IsKnownNegative(0));
+        Assert.False(cache.IsKnownNegative(1));
+
+        cache.RecordFailedProbe(patternIndex: 0, timedOut: false);
+        cache.RecordFailedProbe(patternIndex: 1, timedOut: true);
+
+        Assert.True(cache.IsKnownNegative(0));
+        Assert.False(cache.IsKnownNegative(1));
+
+        cache.RecordFailedProbe(patternIndex: 1, timedOut: false);
+
+        Assert.True(cache.IsKnownNegative(1));
     }
 
     [Fact]

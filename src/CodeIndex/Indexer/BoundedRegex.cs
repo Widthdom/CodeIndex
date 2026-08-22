@@ -354,14 +354,19 @@ internal sealed class BoundedRegex : BclRegex
         }
     }
 
-    public new Match Match(string input)
+    public new Match Match(string input) =>
+        MatchWithTimeoutStatus(input, out _);
+
+    internal Match MatchWithTimeoutStatus(string input, out bool timedOut)
     {
+        timedOut = false;
         try
         {
             return base.Match(input);
         }
         catch (RegexMatchTimeoutException ex)
         {
+            timedOut = true;
             RecordTimeout("match", ToString(), ex);
             return BclMatch.Empty;
         }
@@ -423,14 +428,19 @@ internal sealed class BoundedRegex : BclRegex
         }
     }
 
-    public new bool IsMatch(string input)
+    public new bool IsMatch(string input) =>
+        IsMatchWithTimeoutStatus(input, out _);
+
+    internal bool IsMatchWithTimeoutStatus(string input, out bool timedOut)
     {
+        timedOut = false;
         try
         {
             return base.IsMatch(input);
         }
         catch (RegexMatchTimeoutException ex)
         {
+            timedOut = true;
             RecordTimeout("is_match", ToString(), ex);
             return false;
         }

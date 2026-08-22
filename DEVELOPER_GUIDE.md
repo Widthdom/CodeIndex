@@ -956,6 +956,15 @@ per candidate. If scope or delimiter information is needed for many candidates,
 precompute the ranges once per file, function, or block and reuse that structure
 for the per-candidate lookup.
 
+C# declaration recovery also treats repeated pattern probes as candidate-local
+work. The outer pattern loop and the recoverable-pattern helper may share only a
+contiguous prefix of deterministic negative results for the exact
+`PreparedLine.MatchLine` at the same candidate start. Do not carry that prefix
+into merged multiline property/function inputs, another offset, or another
+line. A regex timeout is not a deterministic miss and must never enter the
+prefix; pattern order, successful probes, timeout diagnostics, and cancellation
+boundaries remain unchanged.
+
 The same rule applies to extracted-symbol membership. When a later per-line or
 per-match decision repeatedly asks whether a class, property, import alias, or
 other symbol exists, build a dictionary or set once and reuse it. A helper that
@@ -4853,6 +4862,13 @@ symbol / reference extractor は `cdidx index` 中に実行されるため、言
 前提にする。候補ごとに同じ本文、行範囲、蓄積済み結果リストを再走査する helper 形状は避ける。
 多数の候補に対して scope や delimiter 情報が必要な場合は、file / function / block 単位で
 範囲情報を一度だけ事前計算し、候補ごとの lookup でその構造を再利用する。
+
+C# declaration recovery でも、重複する pattern probe は candidate-local な work として扱う。
+outer pattern loop と recoverable-pattern helper が共有してよいのは、同じ candidate start の
+厳密に同一な `PreparedLine.MatchLine` に対する deterministic negative result の連続 prefix
+だけである。この prefix を multiline property / function の結合 input、別 offset、別 line へ
+持ち越してはならない。regex timeout は deterministic miss ではないため prefix に入れず、
+pattern order、成功 probe、timeout diagnostic、cancellation boundary を変えない。
 
 同じ規則を extracted symbol の membership にも適用する。後続の per-line / per-match 判定が
 class、property、import alias などの存在を繰り返し確認する場合は、dictionary / set を一度だけ
