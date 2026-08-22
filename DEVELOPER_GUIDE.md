@@ -2162,10 +2162,11 @@ batch from being stranded by a transient path-shape race.
 Polling snapshots resolve immediate and final symlink/reparse targets before
 adding a path. Aliases of the configured database, SQLite sidecars, lock/info,
 checkpoint, restore/backup, and atomic-temporary artifacts are excluded, as are
-ancestor-ignore aliases that resolve to those artifacts. Ordinary file symlinks
-allowed by `internal` or `all` remain tracked, with target-directory casing used
-for internal-artifact identity. Polling does not yet traverse allowed
-directory-symlink subtrees; #5124 tracks policy-aware, cycle-safe traversal.
+ancestor-ignore aliases that resolve to those artifacts. Ordinary file and
+directory symlinks allowed by `internal` or `all` remain tracked. Directory
+subtrees use full-scanner depth-first lexical alias selection, resolve descendant
+paths only while beneath an alias, and deduplicate resolved directory identities
+to bound cycles and duplicate targets.
 
 `--commits` uses `git diff-tree --no-commit-id -r --name-only` to resolve changed file paths.
 `--changed-between` uses `git diff --name-status -M <old-ref> <new-ref>` and includes both old and new rename paths so stale indexed paths can be purged.
@@ -6043,10 +6044,10 @@ phase で `--files` を付けない workspace 全体 rescan をちょうど 1 �
 polling snapshot は path を追加する前に symlink / reparse の immediate target と final
 target を解決する。configured DB、SQLite sidecar、lock/info、checkpoint、restore/backup、
 atomic temporary artifact の alias と、それら artifact に解決される ancestor ignore
-alias は除外する。`internal` / `all` で許可される通常の file symlink は追跡を維持し、
-internal artifact identity には target directory の casing を使う。polling は現時点で
-許可済み directory symlink の subtree を traverse せず、policy-aware かつ cycle-safe
-な traversal は #5124 で追跡する。
+alias は除外する。`internal` / `all` で許可される通常の file / directory symlink は
+追跡を維持する。directory subtree は full scanner と同じ depth-first の lexical alias
+選択を使い、alias 配下だけ descendant path を解決し、解決済み directory identity を
+重複排除して cycle と重複 target を bounded に保つ。
 
 `--commits` は `git diff-tree --no-commit-id -r --name-only` で変更ファイルパスを解決します。
 `--changed-between` は `git diff --name-status -M <old-ref> <new-ref>` を使い、rename の旧パスと新パスを両方含めるため、古い indexed path も purge できます。

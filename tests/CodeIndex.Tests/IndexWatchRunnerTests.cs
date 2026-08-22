@@ -2233,14 +2233,18 @@ public class IndexWatchRunnerTests
         FileIndexer.SymlinkPolicy symlinkPolicy)
     {
         var projectRoot = CreateTempProject();
-        var dataDirectory = Path.Combine(projectRoot, ".cdidx");
+        var dataDirectory = Path.Combine(projectRoot, "ignored-state");
         var dbPath = Path.Combine(dataDirectory, "codeindex.db");
         var aliasDirectory = Path.Combine(projectRoot, "state-alias");
+        var ordinaryTargetPath = Path.Combine(dataDirectory, "ordinary.cs");
+        var ordinaryAliasPath = Path.Combine(aliasDirectory, "ordinary.cs");
         try
         {
             Directory.CreateDirectory(dataDirectory);
+            File.WriteAllText(Path.Combine(projectRoot, ".gitignore"), "ignored-state/\n");
             File.WriteAllText(dbPath, "initial-db");
             File.WriteAllText(dbPath + "-wal", "initial-wal");
+            File.WriteAllText(ordinaryTargetPath, "public class BeforeInternalDirectoryAlias5124 { }\n");
             try
             {
                 Directory.CreateSymbolicLink(aliasDirectory, dataDirectory);
@@ -2257,9 +2261,9 @@ public class IndexWatchRunnerTests
                 ignoreCase: false,
                 dbPathExplicit: true,
                 symlinkPolicy);
-            Assert.DoesNotContain(
-                snapshotPaths,
-                path => path.StartsWith(aliasDirectory + Path.DirectorySeparatorChar, StringComparison.Ordinal));
+            Assert.DoesNotContain(Path.Combine(aliasDirectory, "codeindex.db"), snapshotPaths);
+            Assert.DoesNotContain(Path.Combine(aliasDirectory, "codeindex.db-wal"), snapshotPaths);
+            Assert.Contains(ordinaryAliasPath, snapshotPaths);
 
             var updatedPaths = IndexWatchRunner.CapturePollingUpdatePathsForTesting(
                 projectRoot,
@@ -2268,10 +2272,15 @@ public class IndexWatchRunnerTests
                 ignoreCase: false,
                 dbPathExplicit: true,
                 symlinkPolicy,
-                () => File.WriteAllText(dbPath + "-wal", $"updated-wal-{Guid.NewGuid():N}"));
-            Assert.DoesNotContain(
-                updatedPaths,
-                path => path.StartsWith(aliasDirectory + Path.DirectorySeparatorChar, StringComparison.Ordinal));
+                () =>
+                {
+                    File.WriteAllText(dbPath + "-wal", $"updated-wal-{Guid.NewGuid():N}");
+                    File.WriteAllText(
+                        ordinaryTargetPath,
+                        "public class AfterInternalDirectoryAlias5124 { public void Changed() { } }\n");
+                });
+            Assert.DoesNotContain(Path.Combine(aliasDirectory, "codeindex.db-wal"), updatedPaths);
+            Assert.Contains(ordinaryAliasPath, updatedPaths);
         }
         finally
         {

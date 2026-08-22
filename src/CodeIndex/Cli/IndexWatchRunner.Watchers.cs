@@ -882,14 +882,14 @@ internal static partial class IndexWatchRunner
         private Dictionary<string, FileStamp> CaptureSnapshot(CancellationToken cancellationToken)
         {
             var snapshot = new Dictionary<string, FileStamp>(_pathComparer);
-            var pendingDirectories = new Stack<string>();
+            var pendingDirectories = new Stack<(string Directory, bool ResolveAncestorAliases)>();
             var visitedDirectories = new HashSet<string>(StringComparer.Ordinal);
-            pendingDirectories.Push(_projectRoot);
+            pendingDirectories.Push((_projectRoot, false));
 
             while (pendingDirectories.Count > 0)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var directory = pendingDirectories.Pop();
+                var (directory, resolveAncestorAliases) = pendingDirectories.Pop();
                 var traversalIdentity = FileIndexer.NormalizePathForIdentityComparison(directory);
                 if (!visitedDirectories.Add(traversalIdentity))
                     continue;
@@ -897,25 +897,26 @@ internal static partial class IndexWatchRunner
                 foreach (var file in CodeIndex.FileSystemTraversalPolicy.EnumerateFiles(directory))
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    if (ShouldTrackFile(file))
+                    if (ShouldTrackFile(file, resolveAncestorAliases))
                         AddFileStamp(snapshot, file);
                 }
 
-                var childDirectories = new List<string>();
+                var childDirectories = new List<(string Directory, bool ResolveAncestorAliases)>();
                 foreach (var childDirectory in CodeIndex.FileSystemTraversalPolicy.EnumerateDirectories(directory))
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     try
                     {
                         var attributes = File.GetAttributes(childDirectory);
-                        if ((attributes & FileAttributes.ReparsePoint) != 0
+                        var isReparsePoint = (attributes & FileAttributes.ReparsePoint) != 0;
+                        if (isReparsePoint
                             && (_fileIndexer.ShouldSkipDirectoryTraversal(childDirectory)
                                 || ResolvesToWatchInternalPath(childDirectory)))
                             continue;
                         if (_fileIndexer.ShouldSkipPath(childDirectory, isDirectory: true))
                             continue;
 
-                        childDirectories.Add(childDirectory);
+                        childDirectories.Add((childDirectory, resolveAncestorAliases || isReparsePoint));
                     }
                     catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
                     {
@@ -941,9 +942,9 @@ internal static partial class IndexWatchRunner
             return snapshot;
         }
 
-        private bool ShouldTrackFile(string path)
+        private bool ShouldTrackFile(string path, bool resolveAncestorAliases = false)
         {
-            if (ResolvesToWatchInternalPath(path))
+            if (ResolvesToWatchInternalPath(path, resolveAncestorAliases))
                 return false;
 
             if (FileIndexer.ClassifyIndexInputInvalidation(_projectRoot, path)
@@ -961,7 +962,7 @@ internal static partial class IndexWatchRunner
                 && !_fileIndexer.ShouldSkipPath(path);
         }
 
-        private bool ResolvesToWatchInternalPath(string path)
+        private bool ResolvesToWatchInternalPath(string path, bool resolveAncestorAliases = false)
         {
             if (TryResolveReparsePointPaths(path, out var immediatePath, out var finalPath)
                 && (IsResolvedWatchInternalPath(immediatePath)
@@ -969,6 +970,9 @@ internal static partial class IndexWatchRunner
             {
                 return true;
             }
+
+            if (!resolveAncestorAliases)
+                return false;
 
             try
             {
