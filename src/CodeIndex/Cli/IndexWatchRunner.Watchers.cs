@@ -883,16 +883,17 @@ internal static partial class IndexWatchRunner
         {
             var snapshot = new Dictionary<string, FileStamp>(_pathComparer);
             var pendingDirectories = new Stack<string>();
-            var visitedDirectories = new HashSet<string>(StringComparer.Ordinal)
-            {
-                FileIndexer.NormalizePathForIdentityComparison(_projectRoot),
-            };
+            var visitedDirectories = new HashSet<string>(StringComparer.Ordinal);
             pendingDirectories.Push(_projectRoot);
 
             while (pendingDirectories.Count > 0)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var directory = pendingDirectories.Pop();
+                var traversalIdentity = FileIndexer.NormalizePathForIdentityComparison(directory);
+                if (!visitedDirectories.Add(traversalIdentity))
+                    continue;
+
                 foreach (var file in CodeIndex.FileSystemTraversalPolicy.EnumerateFiles(directory))
                 {
                     cancellationToken.ThrowIfCancellationRequested();
@@ -900,6 +901,7 @@ internal static partial class IndexWatchRunner
                         AddFileStamp(snapshot, file);
                 }
 
+                var childDirectories = new List<string>();
                 foreach (var childDirectory in CodeIndex.FileSystemTraversalPolicy.EnumerateDirectories(directory))
                 {
                     cancellationToken.ThrowIfCancellationRequested();
@@ -907,19 +909,24 @@ internal static partial class IndexWatchRunner
                     {
                         var attributes = File.GetAttributes(childDirectory);
                         if ((attributes & FileAttributes.ReparsePoint) != 0
-                            && _fileIndexer.ShouldSkipDirectoryTraversal(childDirectory))
+                            && (_fileIndexer.ShouldSkipDirectoryTraversal(childDirectory)
+                                || ResolvesToWatchInternalPath(childDirectory)))
                             continue;
                         if (_fileIndexer.ShouldSkipPath(childDirectory, isDirectory: true))
                             continue;
 
-                        var traversalIdentity = FileIndexer.NormalizePathForIdentityComparison(childDirectory);
-                        if (visitedDirectories.Add(traversalIdentity))
-                            pendingDirectories.Push(childDirectory);
+                        childDirectories.Add(childDirectory);
                     }
                     catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
                     {
                     }
                 }
+
+                // The full scanner visits child directories depth-first in enumeration order.
+                // Push in reverse and claim resolved identities only when a directory is popped,
+                // so polling retains the same lexical alias when several links share a target.
+                for (var index = childDirectories.Count - 1; index >= 0; index--)
+                    pendingDirectories.Push(childDirectories[index]);
             }
 
             foreach (var ignorePath in EnumerateAncestorIgnorePaths(
@@ -956,11 +963,25 @@ internal static partial class IndexWatchRunner
 
         private bool ResolvesToWatchInternalPath(string path)
         {
-            if (!TryResolveReparsePointPaths(path, out var immediatePath, out var finalPath))
-                return false;
+            if (TryResolveReparsePointPaths(path, out var immediatePath, out var finalPath)
+                && (IsResolvedWatchInternalPath(immediatePath)
+                    || IsResolvedWatchInternalPath(finalPath)))
+            {
+                return true;
+            }
 
-            return IsResolvedWatchInternalPath(immediatePath)
-                || IsResolvedWatchInternalPath(finalPath);
+            try
+            {
+                // The leaf may be ordinary while an ancestor directory is a link. Resolve
+                // the complete path so database descendants reached through such aliases do
+                // not feed the polling watcher with its own writes.
+                return IsResolvedWatchInternalPath(
+                    FileIndexer.NormalizePathForIdentityComparison(path));
+            }
+            catch (Exception ex) when (CodeIndex.FileSystemTraversalPolicy.IsExpectedTraversalException(ex))
+            {
+                return false;
+            }
         }
 
         private bool IsResolvedWatchInternalPath(string resolvedPath)

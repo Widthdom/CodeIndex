@@ -2229,6 +2229,113 @@ public class IndexWatchRunnerTests
     [Theory]
     [InlineData(FileIndexer.SymlinkPolicy.Internal)]
     [InlineData(FileIndexer.SymlinkPolicy.All)]
+    public void PollingSnapshot_DirectoryAliasToInternalArtifactsIsExcluded_Issue5124(
+        FileIndexer.SymlinkPolicy symlinkPolicy)
+    {
+        var projectRoot = CreateTempProject();
+        var dataDirectory = Path.Combine(projectRoot, ".cdidx");
+        var dbPath = Path.Combine(dataDirectory, "codeindex.db");
+        var aliasDirectory = Path.Combine(projectRoot, "state-alias");
+        try
+        {
+            Directory.CreateDirectory(dataDirectory);
+            File.WriteAllText(dbPath, "initial-db");
+            File.WriteAllText(dbPath + "-wal", "initial-wal");
+            try
+            {
+                Directory.CreateSymbolicLink(aliasDirectory, dataDirectory);
+            }
+            catch (Exception ex) when (ShouldSkipWatchSymlinkFixtureFailure(ex))
+            {
+                return;
+            }
+
+            var snapshotPaths = IndexWatchRunner.CapturePollingSnapshotPathsForTesting(
+                projectRoot,
+                projectRoot,
+                dbPath,
+                ignoreCase: false,
+                dbPathExplicit: true,
+                symlinkPolicy);
+            Assert.DoesNotContain(
+                snapshotPaths,
+                path => path.StartsWith(aliasDirectory + Path.DirectorySeparatorChar, StringComparison.Ordinal));
+
+            var updatedPaths = IndexWatchRunner.CapturePollingUpdatePathsForTesting(
+                projectRoot,
+                projectRoot,
+                dbPath,
+                ignoreCase: false,
+                dbPathExplicit: true,
+                symlinkPolicy,
+                () => File.WriteAllText(dbPath + "-wal", $"updated-wal-{Guid.NewGuid():N}"));
+            Assert.DoesNotContain(
+                updatedPaths,
+                path => path.StartsWith(aliasDirectory + Path.DirectorySeparatorChar, StringComparison.Ordinal));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData(FileIndexer.SymlinkPolicy.Internal)]
+    [InlineData(FileIndexer.SymlinkPolicy.All)]
+    public void PollingSnapshot_DirectoryAliasSelectionMatchesDepthFirstScannerOrder_Issue5124(
+        FileIndexer.SymlinkPolicy symlinkPolicy)
+    {
+        var projectRoot = CreateTempProject();
+        var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+        try
+        {
+            var parentDirectory = Path.Combine(projectRoot, "a-parent");
+            var targetDirectory = Path.Combine(projectRoot, "ignored-target");
+            var nestedAlias = Path.Combine(parentDirectory, "nested-link");
+            var directAlias = Path.Combine(projectRoot, "z-direct-link");
+            Directory.CreateDirectory(parentDirectory);
+            Directory.CreateDirectory(targetDirectory);
+            File.WriteAllText(Path.Combine(projectRoot, ".gitignore"), "ignored-target/\n");
+            File.WriteAllText(
+                Path.Combine(targetDirectory, "tracked.cs"),
+                "public class DepthFirstDirectorySymlink5124 { }\n");
+            try
+            {
+                Directory.CreateSymbolicLink(nestedAlias, targetDirectory);
+                Directory.CreateSymbolicLink(directAlias, targetDirectory);
+            }
+            catch (Exception ex) when (ShouldSkipWatchSymlinkFixtureFailure(ex))
+            {
+                return;
+            }
+
+            var rootDirectories = Directory.EnumerateDirectories(projectRoot).ToArray();
+            Assert.True(
+                Array.IndexOf(rootDirectories, parentDirectory) < Array.IndexOf(rootDirectories, directAlias),
+                "The fixture requires the parent directory to precede the direct alias in enumeration order.");
+
+            var nestedPath = Path.Combine(nestedAlias, "tracked.cs");
+            var directPath = Path.Combine(directAlias, "tracked.cs");
+            var snapshotPaths = IndexWatchRunner.CapturePollingSnapshotPathsForTesting(
+                projectRoot,
+                projectRoot,
+                dbPath,
+                ignoreCase: false,
+                dbPathExplicit: true,
+                symlinkPolicy);
+
+            Assert.Contains(nestedPath, snapshotPaths);
+            Assert.DoesNotContain(directPath, snapshotPaths);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData(FileIndexer.SymlinkPolicy.Internal)]
+    [InlineData(FileIndexer.SymlinkPolicy.All)]
     public void PollingSnapshot_ResolvedInternalArtifactSymlinksAreExcludedFromSnapshotAndUpdates_Issue5091(
         FileIndexer.SymlinkPolicy symlinkPolicy)
     {
