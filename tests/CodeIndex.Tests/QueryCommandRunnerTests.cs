@@ -1076,6 +1076,91 @@ public partial class QueryCommandRunnerTests
             DbWriter.DefaultFtsOptimizeIncrementalWriteThreshold,
             ftsOptimization.GetProperty("observed_writes").GetInt64());
         Assert.Equal("current", ftsOptimization.GetProperty("state").GetString());
+
+        using (var walDb = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+        {
+            walDb.SuppressPlannerStatisticsMaintenanceOnClose();
+            walDb.CheckpointWalTruncate();
+            new DbWriter(walDb).SetMeta(DbWriter.FtsIncrementalWritesSinceOptimizeMetaKey, "0");
+        }
+
+        var canonicalDbUri = new Uri(dbPath).AbsoluteUri;
+        Assert.StartsWith("file:///", canonicalDbUri, StringComparison.OrdinalIgnoreCase);
+        var singleSlashDbUri = "file:/" + canonicalDbUri["file:///".Length..];
+        foreach (var (canonicalUri, singleSlashUri, expectedFtsState) in new[]
+        {
+            (canonicalDbUri + "?immutable=1", singleSlashDbUri + "?immutable=1", "stale"),
+            (canonicalDbUri + "?immutable=1#ignored", singleSlashDbUri + "?immutable=1#ignored", "stale"),
+            (canonicalDbUri + "#ignored", singleSlashDbUri + "#ignored", "current"),
+            (canonicalDbUri, singleSlashDbUri, "current"),
+        })
+        {
+            var (canonicalExitCode, canonicalStdout, canonicalStderr) = CaptureVacuum(
+                ["--db", canonicalUri, "--dry-run", "--json"]);
+            var (uriExitCode, uriStdout, uriStderr) = CaptureVacuum(
+                ["--db", singleSlashUri, "--dry-run", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, canonicalExitCode);
+            Assert.Equal(string.Empty, canonicalStderr);
+            Assert.Equal(CommandExitCodes.Success, uriExitCode);
+            Assert.Equal(string.Empty, uriStderr);
+            using var canonicalDocument = ParseJsonOutput(canonicalStdout);
+            using var uriDocument = ParseJsonOutput(uriStdout);
+            var uriRoot = uriDocument.RootElement;
+            Assert.Equal("dry_run", uriRoot.GetProperty("status").GetString());
+            Assert.True(uriRoot.GetProperty("dry_run").GetBoolean());
+            var canonicalFtsOptimization = canonicalDocument.RootElement
+                .GetProperty("maintenance_guidance")
+                .GetProperty("fts_optimization");
+            Assert.Equal(
+                expectedFtsState,
+                canonicalFtsOptimization.GetProperty("state").GetString());
+            var uriFtsOptimization = uriRoot
+                .GetProperty("maintenance_guidance")
+                .GetProperty("fts_optimization");
+            Assert.Equal(
+                canonicalFtsOptimization.GetProperty("recommended").GetBoolean(),
+                uriFtsOptimization.GetProperty("recommended").GetBoolean());
+            Assert.Equal(
+                canonicalFtsOptimization.GetProperty("action").GetString(),
+                uriFtsOptimization.GetProperty("action").GetString());
+            Assert.Equal(
+                canonicalFtsOptimization.GetProperty("reason").GetString(),
+                uriFtsOptimization.GetProperty("reason").GetString());
+            Assert.Equal(
+                canonicalFtsOptimization.GetProperty("threshold_writes").GetInt32(),
+                uriFtsOptimization.GetProperty("threshold_writes").GetInt32());
+            Assert.Equal(
+                canonicalFtsOptimization.GetProperty("observed_writes").GetInt64(),
+                uriFtsOptimization.GetProperty("observed_writes").GetInt64());
+            Assert.Equal(
+                canonicalFtsOptimization.GetProperty("state").GetString(),
+                uriFtsOptimization.GetProperty("state").GetString());
+        }
+
+        using (var invalidWalDb = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+        {
+            invalidWalDb.SuppressPlannerStatisticsMaintenanceOnClose();
+            invalidWalDb.CheckpointWalTruncate();
+            using var command = invalidWalDb.Connection.CreateCommand();
+            command.CommandText = "PRAGMA application_id=0";
+            command.ExecuteNonQuery();
+        }
+
+        foreach (var immutableUri in new[]
+        {
+            canonicalDbUri + "?immutable=1",
+            singleSlashDbUri + "?immutable=1",
+        })
+        {
+            var (immutableExitCode, immutableStdout, immutableStderr) = CaptureVacuum(
+                ["--db", immutableUri, "--dry-run", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, immutableExitCode);
+            Assert.Equal(string.Empty, immutableStderr);
+            using var immutableDocument = ParseJsonOutput(immutableStdout);
+            Assert.Equal("dry_run", immutableDocument.RootElement.GetProperty("status").GetString());
+        }
     }
 
     [Fact]
