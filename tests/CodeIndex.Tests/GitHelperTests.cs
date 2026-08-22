@@ -596,29 +596,29 @@ public class GitHelperTests : IDisposable
     }
 
     [ExternalProcessFact]
-    public void GetChangedFilesFromCommit_UsesTrustedGitExecutableInsteadOfPath_Issue3433()
+    public void GetChangedFilesFromCommit_UsesValidatedGitExecutableInsteadOfPath_Issue3433()
     {
         if (OperatingSystem.IsWindows())
             return;
 
-        var repoDir = Path.Combine(_tempDir, "repo-trusted-git");
+        var repoDir = Path.Combine(_tempDir, "repo-validated-git");
         Directory.CreateDirectory(repoDir);
-        var trustedGitDir = Path.Combine(_tempDir, "trusted-git");
+        var validatedGitDir = Path.Combine(_tempDir, "validated-git");
         var pathGitDir = Path.Combine(_tempDir, "path-git");
-        Directory.CreateDirectory(trustedGitDir);
+        Directory.CreateDirectory(validatedGitDir);
         Directory.CreateDirectory(pathGitDir);
-        WriteFakeGitThatReturnsChangedFile(trustedGitDir, "trusted.txt");
+        WriteFakeGitThatReturnsChangedFile(validatedGitDir, "validated.txt");
         WriteFakeGitThatReturnsChangedFile(pathGitDir, "path.txt");
 
         var oldPath = Environment.GetEnvironmentVariable("PATH");
         var oldGitExecutablePath = GitHelper.GitExecutablePathOverride;
         Environment.SetEnvironmentVariable("PATH", pathGitDir + Path.PathSeparator + oldPath);
-        GitHelper.GitExecutablePathOverride = Path.Combine(trustedGitDir, "git");
+        GitHelper.GitExecutablePathOverride = Path.Combine(validatedGitDir, "git");
         try
         {
             var changedFiles = GitHelper.GetChangedFilesFromCommit(repoDir, "0123456789abcdef");
 
-            Assert.Equal(["trusted.txt"], changedFiles);
+            Assert.Equal(["validated.txt"], changedFiles);
         }
         finally
         {
@@ -1070,12 +1070,12 @@ public class GitHelperTests : IDisposable
     }
 
     [Fact]
-    public void TrustedGitExecutableCandidates_OnMacOS_ExcludeDeveloperToolsShim_Issue3433()
+    public void ValidatedGitExecutableCandidates_OnMacOS_ExcludeDeveloperToolsShim_Issue3433()
     {
         if (!OperatingSystem.IsMacOS())
             return;
 
-        var candidates = GitHelper.TrustedGitExecutableCandidatePathsForTests();
+        var candidates = GitHelper.ValidatedGitExecutableCandidatePathsForTests();
 
         Assert.DoesNotContain("/usr/bin/git", candidates);
         Assert.Contains("/Library/Developer/CommandLineTools/usr/bin/git", candidates);
@@ -1260,13 +1260,13 @@ public class GitHelperTests : IDisposable
         if (!OperatingSystem.IsWindows())
             return;
 
-        var trustedGit = Assert.Single(
-            GitHelper.TrustedGitExecutableCandidatePathsForTests()
+        var validatedGit = Assert.Single(
+            GitHelper.ValidatedGitExecutableCandidatePathsForTests()
                 .Where(File.Exists)
                 .Take(1));
         var portableGitDir = TestProjectHelper.CreateTrustedWindowsGitDirectory("cdidx_windows_portable_git");
         var portableGitPath = Path.Combine(portableGitDir, "git.exe");
-        File.Copy(trustedGit, portableGitPath);
+        File.Copy(validatedGit, portableGitPath);
 
         using var env = EnvironmentVariableScope.Capture(GitHelper.GitExecutableEnvironmentVariable);
         var oldGitExecutablePath = GitHelper.GitExecutablePathOverride;

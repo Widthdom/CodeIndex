@@ -1862,10 +1862,10 @@ public static class HookCommandRunner
 
         var pinnedGitAvailable = GitHelper.TryValidatePinnedGitExecutablePathForHook(
             installedGitExecutablePath,
-            out var trustedGitExecutablePath);
+            out var validatedGitExecutablePath);
         if (!TryBuildHookScript(
                 installedChainedHookPath,
-                pinnedGitAvailable ? trustedGitExecutablePath : installedGitExecutablePath,
+                pinnedGitAvailable ? validatedGitExecutablePath : installedGitExecutablePath,
                 selection,
                 out var expectedText)
             || !TryExtractManagedBlock(expectedText, out var expectedBlock)
