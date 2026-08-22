@@ -3537,6 +3537,108 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_FreshFullScan_RawReturningFailureRollsBackFileAndSerialConsumerContinues()
+    {
+        var projectRoot = CreateTempProject();
+        var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+        var previousRowHook = DbWriter.AuthoritativeFreshRawReturningRowForTesting;
+        var previousRawHook = DbWriter.AuthoritativeFreshRawInsertExecutingForTesting;
+        var previousRawScopeHook = DbWriter.AuthoritativeFreshRawInsertScopeDisposedForTesting;
+        var rawWork = new List<DbWriter.AuthoritativeFreshRawInsertWork>();
+        DbWriter.AuthoritativeFreshRawInsertScopeStats? rawScopeStats = null;
+        var injected = 0;
+        var rawHookActive = 0;
+        var overlappingRawHookCalls = 0;
+        try
+        {
+            for (var index = 0; index < 3; index++)
+            {
+                File.WriteAllText(
+                    Path.Combine(projectRoot, $"caller_{index}.py"),
+                    $"def caller_{index}():\n    target_{index}()\n");
+            }
+
+            DbWriter.AuthoritativeFreshRawReturningRowForTesting = row =>
+            {
+                var transformed = previousRowHook?.Invoke(row) ?? row;
+                if (transformed.Operation == "insert_reference_lines"
+                    && Interlocked.Exchange(ref injected, 1) == 0)
+                {
+                    throw new InvalidOperationException(
+                        "injected raw RETURNING failure after the first row");
+                }
+                return transformed;
+            };
+            DbWriter.AuthoritativeFreshRawInsertExecutingForTesting = work =>
+            {
+                if (Interlocked.Exchange(ref rawHookActive, 1) != 0)
+                    Interlocked.Increment(ref overlappingRawHookCalls);
+                try
+                {
+                    rawWork.Add(work);
+                    previousRawHook?.Invoke(work);
+                }
+                finally
+                {
+                    Volatile.Write(ref rawHookActive, 0);
+                }
+            };
+            DbWriter.AuthoritativeFreshRawInsertScopeDisposedForTesting = stats =>
+            {
+                rawScopeStats = stats;
+                previousRawScopeHook?.Invoke(stats);
+            };
+
+            var (exitCode, json) = RunAndCaptureJson(
+                [projectRoot, "--parallelism", "4", "--json", "--quiet"]);
+
+            Assert.Equal(CommandExitCodes.PartialResult, exitCode);
+            Assert.Equal("partial", json.GetProperty("status").GetString());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("errors").GetInt32());
+            var error = Assert.Single(json.GetProperty("errors").EnumerateArray());
+            Assert.Equal(
+                nameof(InvalidOperationException),
+                error.GetProperty("message").GetString());
+            Assert.Equal(1, injected);
+            Assert.Equal(0, overlappingRawHookCalls);
+
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            using var command = db.Connection.CreateCommand();
+            command.CommandText =
+                """
+                SELECT (SELECT COUNT(*) FROM files),
+                       (SELECT COUNT(*) FROM reference_lines),
+                       (SELECT COUNT(*) FROM symbol_references)
+                """;
+            using var reader = command.ExecuteReader();
+            Assert.True(reader.Read());
+            Assert.Equal(2L, reader.GetInt64(0));
+            Assert.Equal(2L, reader.GetInt64(1));
+            Assert.Equal(2L, reader.GetInt64(2));
+            Assert.False(reader.Read());
+
+            var referenceLineWork = rawWork
+                .Where(work => work.Operation == "insert_reference_lines")
+                .ToArray();
+            Assert.Equal(3, referenceLineWork.Length);
+            Assert.False(referenceLineWork[0].CacheHit);
+            Assert.False(referenceLineWork[1].CacheHit);
+            Assert.True(referenceLineWork[2].CacheHit);
+            Assert.NotNull(rawScopeStats);
+            Assert.True(rawScopeStats.Completed);
+            Assert.Equal(1, rawScopeStats.DiscardCount);
+        }
+        finally
+        {
+            DbWriter.AuthoritativeFreshRawReturningRowForTesting = previousRowHook;
+            DbWriter.AuthoritativeFreshRawInsertExecutingForTesting = previousRawHook;
+            DbWriter.AuthoritativeFreshRawInsertScopeDisposedForTesting = previousRawScopeHook;
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Fact]
     public void Run_FreshFullScan_PersistsNestedReferenceSourcesAcrossLanguages()
     {
         var projectRoot = CreateTempProject();

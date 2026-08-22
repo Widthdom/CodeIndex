@@ -107,15 +107,15 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
 
         Assert.NotNull(observedStats);
         Assert.True(observedStats.Completed);
-        Assert.Equal(0, observedStats.PrepareCount);
-        Assert.Equal(0, observedStats.FinalizeCount);
+        Assert.Equal(1, observedStats.PrepareCount);
+        Assert.Equal(1, observedStats.FinalizeCount);
         Assert.Equal(1L, ScalarLong("SELECT COUNT(*) FROM file_issues"));
     }
 
     [Fact]
     public void BatchStatements_PreserveShapesUnicodeNullsInt64AndProviderExclusions()
     {
-        PrimeFileSequenceForInt64Binding();
+        PrimeSequencesForInt64Returning();
         var rawWork = new List<DbWriter.AuthoritativeFreshRawInsertWork>();
         var batchWork = new List<DbWriter.DbWriterBatchStatement>();
         DbWriter.AuthoritativeFreshRawInsertScopeStats? observedStats = null;
@@ -148,7 +148,16 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
             using var raw = _writer.BeginAuthoritativeFreshBulkInsertScope(
                 enabled: true,
                 CancellationToken.None)!;
-            var fileId = InsertNewFile("src/raw-shapes.cs");
+            var fileId = _writer.InsertNewFile(new FileRecord
+            {
+                Path = "src/raw-shapes.cs",
+                Lang = null,
+                Size = 5_000_000_123L,
+                Lines = 100,
+                Checksum = "雪😀a\0β",
+                Modified = new DateTime(2026, 8, 23, 12, 34, 56, 789, DateTimeKind.Utc)
+                    .AddTicks(1234),
+            });
             Assert.Equal(ExpectedLargeFileId, fileId);
 
             var chunks = Enumerable.Range(0, 13)
@@ -188,7 +197,9 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
                     Line = index + 1,
                     Column = index + 1,
                     SpanLength = index == 0 ? 0 : index + 1,
-                    Context = $"target_{index % symbols.Length}();",
+                    Context = index == 0
+                        ? "雪😀a\0β"
+                        : $"target_{index % symbols.Length}();",
                     ContainerKind = index == 0 ? null : "function",
                     ContainerName = index == 0 ? null : "caller",
                     IsSelfReference = true,
@@ -205,7 +216,15 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
                 CancellationToken.None);
 
             var rawCountBeforeProviderExclusions = rawWork.Count;
-            var providerFileId = InsertNewFile("src/provider-exclusions.cs");
+            var providerFileId = _writer.UpsertFile(new FileRecord
+            {
+                Path = "src/provider-exclusions.cs",
+                Lang = "csharp",
+                Size = 100,
+                Lines = 100,
+                Checksum = "provider-exclusions",
+                Modified = new DateTime(2026, 8, 23, 0, 0, 0, DateTimeKind.Utc),
+            });
             _writer.InsertIssues(providerFileId, [CreateIssue(1)]);
             _writer.InsertReferencesInAtomicFileScope(
                 [new ReferenceRecord
@@ -231,31 +250,41 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
             DbWriter.AuthoritativeFreshRawInsertScopeDisposedForTesting = previousStatsHook;
         }
 
+        Assert.Equal([(1, 7)], RowsAndParameters("insert_files"));
         Assert.Equal([(6, 30), (6, 30), (1, 5)], RowsAndParameters("insert_chunks"));
         Assert.Equal([(1, 25), (1, 25), (1, 25)], RowsAndParameters("insert_symbols"));
         Assert.Equal([(5, 30), (5, 30), (1, 6)], RowsAndParameters("insert_issues"));
+        Assert.Equal([(5, 15)], RowsAndParameters("insert_reference_lines"));
         Assert.Equal([(2, 28), (2, 28), (1, 14)], RowsAndParameters("insert_references"));
-        Assert.DoesNotContain(rawWork, work => work.Operation == "insert_reference_lines");
         Assert.Contains(
             batchWork,
             work => work.Operation == "insert_reference_lines" && work.StatementRows == 5);
+        Assert.DoesNotContain(
+            batchWork,
+            work => work.Operation == "insert_files");
 
         Assert.NotNull(observedStats);
         Assert.True(observedStats.Completed);
-        Assert.Equal(16, observedStats.Capacity);
-        Assert.Equal(7, observedStats.PeakCachedStatementCount);
-        Assert.Equal(12, observedStats.StatementExecutionCount);
-        Assert.Equal(7, observedStats.PrepareCount);
+        Assert.Equal(32, observedStats.Capacity);
+        Assert.Equal(9, observedStats.PeakCachedStatementCount);
+        Assert.Equal(14, observedStats.StatementExecutionCount);
+        Assert.Equal(9, observedStats.PrepareCount);
         Assert.Equal(5, observedStats.CacheHitCount);
         Assert.Equal(0, observedStats.EvictionCount);
         Assert.Equal(0, observedStats.DiscardCount);
-        Assert.Equal(7, observedStats.FinalizeCount);
+        Assert.Equal(9, observedStats.FinalizeCount);
 
+        Assert.Equal(1L, ScalarLong("SELECT COUNT(*) FROM files WHERE lang IS NULL"));
+        Assert.Equal(5_000_000_123L, ScalarLong("SELECT size FROM files WHERE path = 'src/raw-shapes.cs'"));
+        Assert.Equal("323032362D30382D32332031323A33343A35362E37383931323334", ScalarString("SELECT hex(CAST(modified AS BLOB)) FROM files WHERE path = 'src/raw-shapes.cs'"));
+        Assert.Equal("E99BAAF09F98806100CEB2", ScalarString("SELECT hex(CAST(checksum AS BLOB)) FROM files WHERE path = 'src/raw-shapes.cs'"));
         Assert.Equal("E99BAAF09F98806100CEB2", ScalarString("SELECT hex(CAST(content AS BLOB)) FROM chunks WHERE chunk_index = 0"));
         Assert.Equal(11L, ScalarLong("SELECT length(CAST(content AS BLOB)) FROM chunks WHERE chunk_index = 0"));
         Assert.Equal(3L, ScalarLong($"SELECT COUNT(*) FROM symbols WHERE file_id = {ExpectedLargeFileId.ToString(CultureInfo.InvariantCulture)}"));
         Assert.Equal(1L, ScalarLong("SELECT COUNT(*) FROM symbols WHERE sub_kind IS NULL AND signature IS NULL AND start_column IS NULL"));
         Assert.Equal(11L, ScalarLong($"SELECT COUNT(*) FROM file_issues WHERE file_id = {ExpectedLargeFileId.ToString(CultureInfo.InvariantCulture)}"));
+        Assert.Equal(ExpectedLargeFileId, ScalarLong("SELECT MIN(id) FROM reference_lines"));
+        Assert.Equal("E99BAAF09F98806100CEB2", ScalarString("SELECT hex(CAST(context AS BLOB)) FROM reference_lines WHERE line = 1"));
         Assert.Equal(5L, ScalarLong($"SELECT COUNT(*) FROM symbol_references WHERE file_id = {ExpectedLargeFileId.ToString(CultureInfo.InvariantCulture)}"));
         Assert.Equal(5L, ScalarLong($"SELECT COUNT(*) FROM symbol_references WHERE file_id = {ExpectedLargeFileId.ToString(CultureInfo.InvariantCulture)} AND context IS NULL AND is_self_reference = 0 AND is_mutual_recursion = 0"));
 
@@ -309,10 +338,10 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
         Assert.True(observedStats.Completed);
         Assert.Equal(2, observedStats.Capacity);
         Assert.Equal(2, observedStats.PeakCachedStatementCount);
-        Assert.Equal(4, observedStats.PrepareCount);
+        Assert.Equal(5, observedStats.PrepareCount);
         Assert.Equal(0, observedStats.CacheHitCount);
-        Assert.Equal(2, observedStats.EvictionCount);
-        Assert.Equal(4, observedStats.FinalizeCount);
+        Assert.Equal(3, observedStats.EvictionCount);
+        Assert.Equal(5, observedStats.FinalizeCount);
     }
 
     [Fact]
@@ -415,7 +444,7 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
         Assert.Equal(0L, ScalarLong("SELECT COUNT(*) FROM chunks"));
         Assert.NotNull(observedStats);
         Assert.False(observedStats.Completed);
-        Assert.Equal(1, observedStats.FinalizeCount);
+        Assert.Equal(2, observedStats.FinalizeCount);
 
         Execute("DROP TRIGGER cancel_authoritative_fresh_raw_insert");
         using (var transaction = _writer.BeginTransaction())
@@ -507,6 +536,338 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
         Assert.Equal(0L, ScalarLong("SELECT COUNT(*) FROM chunks"));
     }
 
+    [Theory]
+    [InlineData("callback")]
+    [InlineData("null_ordinal")]
+    [InlineData("duplicate_ordinal")]
+    [InlineData("out_of_range_ordinal")]
+    [InlineData("duplicate_id")]
+    public void ReferenceLineReturningFailure_DiscardsStatementAndFileSavepointAllowsNextFile(
+        string failureMode)
+    {
+        var rawWork = new List<DbWriter.AuthoritativeFreshRawInsertWork>();
+        long? firstReturnedId = null;
+        DbWriter.AuthoritativeFreshRawInsertScopeStats? observedStats = null;
+        var previousRowHook = DbWriter.AuthoritativeFreshRawReturningRowForTesting;
+        var previousRawHook = DbWriter.AuthoritativeFreshRawInsertExecutingForTesting;
+        var previousStatsHook = DbWriter.AuthoritativeFreshRawInsertScopeDisposedForTesting;
+        try
+        {
+            DbWriter.AuthoritativeFreshRawReturningRowForTesting = row =>
+            {
+                var transformed = previousRowHook?.Invoke(row) ?? row;
+                if (transformed.Operation != "insert_reference_lines")
+                    return transformed;
+                if (failureMode == "duplicate_id")
+                {
+                    if (transformed.ResultIndex == 0)
+                        firstReturnedId = transformed.Id;
+                    else if (transformed.ResultIndex == 1)
+                        return transformed with { Id = firstReturnedId!.Value };
+                }
+                return failureMode switch
+                {
+                    "callback" => throw new InvalidOperationException("returning row callback failed"),
+                    "null_ordinal" => transformed with { InputOrdinal = null },
+                    "duplicate_ordinal" when transformed.ResultIndex == 1
+                        => transformed with { InputOrdinal = 0 },
+                    "out_of_range_ordinal" => transformed with { InputOrdinal = transformed.StatementRows },
+                    _ => transformed,
+                };
+            };
+            DbWriter.AuthoritativeFreshRawInsertExecutingForTesting = work =>
+            {
+                rawWork.Add(work);
+                previousRawHook?.Invoke(work);
+            };
+            DbWriter.AuthoritativeFreshRawInsertScopeDisposedForTesting = stats =>
+            {
+                observedStats = stats;
+                previousStatsHook?.Invoke(stats);
+            };
+
+            using var graph = _writer.BeginReferenceGraphRefreshScope(
+                forceFullRefresh: true,
+                useFreshReferenceResolutionDefaults: true);
+            using var outerTransaction = _writer.BeginTransaction();
+            using var raw = _writer.BeginAuthoritativeFreshBulkInsertScope(
+                enabled: true,
+                CancellationToken.None)!;
+
+            using (var failedFile = _writer.BeginTransaction())
+            {
+                var failedFileId = InsertNewFile("src/failed-returning.cs");
+                var exception = Record.Exception(() =>
+                    _writer.InsertReferencesForNewFilesInAtomicFileScope(
+                        CreateReferences(failedFileId, 2, "failed"),
+                        refreshMutualRecursionFlags: false,
+                        CancellationToken.None));
+                if (failureMode == "callback")
+                {
+                    var callbackException = Assert.IsType<InvalidOperationException>(exception);
+                    Assert.Equal("returning row callback failed", callbackException.Message);
+                }
+                else
+                {
+                    var protocolException = Assert.IsType<InvalidDataException>(exception);
+                    var expectedMessagePart = failureMode switch
+                    {
+                        "duplicate_ordinal" => "duplicate input ordinal",
+                        "duplicate_id" => "duplicate ID",
+                        _ => "invalid input ordinal",
+                    };
+                    Assert.Contains(expectedMessagePart, protocolException.Message, StringComparison.Ordinal);
+                }
+            }
+
+            DbWriter.AuthoritativeFreshRawReturningRowForTesting = previousRowHook;
+            using (var succeedingFile = _writer.BeginTransaction())
+            {
+                var succeedingFileId = InsertNewFile("src/succeeding-returning.cs");
+                _writer.InsertReferencesForNewFilesInAtomicFileScope(
+                    CreateReferences(succeedingFileId, 2, "succeeding"),
+                    refreshMutualRecursionFlags: false,
+                    CancellationToken.None);
+                succeedingFile.Commit();
+            }
+
+            raw.Complete();
+            outerTransaction.Commit();
+        }
+        finally
+        {
+            DbWriter.AuthoritativeFreshRawReturningRowForTesting = previousRowHook;
+            DbWriter.AuthoritativeFreshRawInsertExecutingForTesting = previousRawHook;
+            DbWriter.AuthoritativeFreshRawInsertScopeDisposedForTesting = previousStatsHook;
+        }
+
+        Assert.Equal(0L, ScalarLong("SELECT COUNT(*) FROM files WHERE path = 'src/failed-returning.cs'"));
+        Assert.Equal(1L, ScalarLong("SELECT COUNT(*) FROM files WHERE path = 'src/succeeding-returning.cs'"));
+        Assert.Equal(2L, ScalarLong("SELECT COUNT(*) FROM reference_lines"));
+        Assert.Equal(2L, ScalarLong("SELECT COUNT(*) FROM symbol_references"));
+        var referenceLineWork = rawWork
+            .Where(work => work.Operation == "insert_reference_lines")
+            .ToArray();
+        Assert.Equal(2, referenceLineWork.Length);
+        Assert.All(referenceLineWork, work => Assert.False(work.CacheHit));
+        Assert.NotNull(observedStats);
+        Assert.True(observedStats.Completed);
+        Assert.Equal(1, observedStats.DiscardCount);
+        Assert.Equal(observedStats.PrepareCount, observedStats.FinalizeCount);
+    }
+
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("extra")]
+    public void FileReturningRowCountFailure_DiscardsStatementAndRollsBackEveryReturnedFile(
+        string failureMode)
+    {
+        var rawWork = new List<DbWriter.AuthoritativeFreshRawInsertWork>();
+        DbWriter.AuthoritativeFreshRawInsertScopeStats? observedStats = null;
+        var previousSqlHook = DbWriter.AuthoritativeFreshRawReturningSqlForTesting;
+        var previousRawHook = DbWriter.AuthoritativeFreshRawInsertExecutingForTesting;
+        var previousStatsHook = DbWriter.AuthoritativeFreshRawInsertScopeDisposedForTesting;
+        try
+        {
+            DbWriter.AuthoritativeFreshRawReturningSqlForTesting = statement =>
+            {
+                if (statement.Operation != "insert_files")
+                    return previousSqlHook?.Invoke(statement) ?? statement.Sql;
+                return failureMode == "missing"
+                    ? """
+                        INSERT INTO files (path, lang, size, lines, checksum, modified, generated, indexed_at)
+                        SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, CURRENT_TIMESTAMP
+                        WHERE 0
+                        RETURNING id
+                        """
+                    : """
+                        INSERT INTO files (path, lang, size, lines, checksum, modified, generated, indexed_at)
+                        SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, CURRENT_TIMESTAMP
+                        UNION ALL
+                        SELECT ?1 || '.extra', ?2, ?3, ?4, ?5, ?6, ?7, CURRENT_TIMESTAMP
+                        RETURNING id
+                        """;
+            };
+            DbWriter.AuthoritativeFreshRawInsertExecutingForTesting = work =>
+            {
+                rawWork.Add(work);
+                previousRawHook?.Invoke(work);
+            };
+            DbWriter.AuthoritativeFreshRawInsertScopeDisposedForTesting = stats =>
+            {
+                observedStats = stats;
+                previousStatsHook?.Invoke(stats);
+            };
+
+            using var graph = _writer.BeginReferenceGraphRefreshScope(
+                forceFullRefresh: true,
+                useFreshReferenceResolutionDefaults: true);
+            using var outerTransaction = _writer.BeginTransaction();
+            using var raw = _writer.BeginAuthoritativeFreshBulkInsertScope(
+                enabled: true,
+                CancellationToken.None)!;
+            using (var failedFile = _writer.BeginTransaction())
+            {
+                Assert.Throws<InvalidDataException>(() =>
+                    InsertNewFile("src/file-row-count-failed.cs"));
+            }
+
+            DbWriter.AuthoritativeFreshRawReturningSqlForTesting = previousSqlHook;
+            using (var succeedingFile = _writer.BeginTransaction())
+            {
+                _ = InsertNewFile("src/file-row-count-succeeded.cs");
+                succeedingFile.Commit();
+            }
+            raw.Complete();
+            outerTransaction.Commit();
+        }
+        finally
+        {
+            DbWriter.AuthoritativeFreshRawReturningSqlForTesting = previousSqlHook;
+            DbWriter.AuthoritativeFreshRawInsertExecutingForTesting = previousRawHook;
+            DbWriter.AuthoritativeFreshRawInsertScopeDisposedForTesting = previousStatsHook;
+        }
+
+        Assert.Equal(0L, ScalarLong("SELECT COUNT(*) FROM files WHERE path LIKE 'src/file-row-count-failed.cs%'"));
+        Assert.Equal(1L, ScalarLong("SELECT COUNT(*) FROM files WHERE path = 'src/file-row-count-succeeded.cs'"));
+        var fileWork = rawWork.Where(work => work.Operation == "insert_files").ToArray();
+        Assert.Equal(2, fileWork.Length);
+        Assert.All(fileWork, work => Assert.False(work.CacheHit));
+        Assert.NotNull(observedStats);
+        Assert.Equal(1, observedStats.DiscardCount);
+        Assert.Equal(observedStats.PrepareCount, observedStats.FinalizeCount);
+    }
+
+    [Fact]
+    public void ReferenceLineReturningConstraint_DiscardsStatementBeforeRowAndCanReprepare()
+    {
+        long fileId;
+        using (var seedTransaction = _writer.BeginTransaction())
+        {
+            fileId = InsertNewFile("src/reference-line-constraint.cs");
+            _writer.InsertReferencesForNewFilesInAtomicFileScope(
+                CreateReferences(fileId, 1, "duplicate"),
+                refreshMutualRecursionFlags: false,
+                CancellationToken.None);
+            seedTransaction.Commit();
+        }
+
+        DbWriter.AuthoritativeFreshRawInsertScopeStats? observedStats = null;
+        var previousStatsHook = DbWriter.AuthoritativeFreshRawInsertScopeDisposedForTesting;
+        try
+        {
+            DbWriter.AuthoritativeFreshRawInsertScopeDisposedForTesting = stats =>
+            {
+                observedStats = stats;
+                previousStatsHook?.Invoke(stats);
+            };
+            using var graph = _writer.BeginReferenceGraphRefreshScope(
+                forceFullRefresh: true,
+                useFreshReferenceResolutionDefaults: true);
+            using var outerTransaction = _writer.BeginTransaction();
+            using var raw = _writer.BeginAuthoritativeFreshBulkInsertScope(
+                enabled: true,
+                CancellationToken.None)!;
+            using (var failedFile = _writer.BeginTransaction())
+            {
+                var exception = Assert.Throws<SqliteException>(() =>
+                    _writer.InsertReferencesForNewFilesInAtomicFileScope(
+                        CreateReferences(fileId, 1, "duplicate"),
+                        refreshMutualRecursionFlags: false,
+                        CancellationToken.None));
+                Assert.Equal(19, exception.SqliteErrorCode);
+                Assert.Equal(2067, exception.SqliteExtendedErrorCode);
+            }
+
+            using (var succeedingFile = _writer.BeginTransaction())
+            {
+                _writer.InsertReferencesForNewFilesInAtomicFileScope(
+                    CreateReferences(fileId, 1, "unique"),
+                    refreshMutualRecursionFlags: false,
+                    CancellationToken.None);
+                succeedingFile.Commit();
+            }
+            raw.Complete();
+            outerTransaction.Commit();
+        }
+        finally
+        {
+            DbWriter.AuthoritativeFreshRawInsertScopeDisposedForTesting = previousStatsHook;
+        }
+
+        Assert.Equal(2L, ScalarLong("SELECT COUNT(*) FROM reference_lines"));
+        Assert.NotNull(observedStats);
+        Assert.Equal(1, observedStats.DiscardCount);
+    }
+
+    [Fact]
+    public void ReferenceLineReturningInterruptAfterFirstRow_PreservesCancellationAndRollsBackOuterTransaction()
+    {
+        using var cancellation = new CancellationTokenSource();
+        DbWriter.AuthoritativeFreshRawInsertScopeStats? observedStats = null;
+        var previousRowHook = DbWriter.AuthoritativeFreshRawReturningRowForTesting;
+        var previousStatsHook = DbWriter.AuthoritativeFreshRawInsertScopeDisposedForTesting;
+        OperationCanceledException exception;
+        try
+        {
+            DbWriter.AuthoritativeFreshRawReturningRowForTesting = row =>
+            {
+                var transformed = previousRowHook?.Invoke(row) ?? row;
+                if (transformed.Operation == "insert_reference_lines"
+                    && transformed.ResultIndex == 0)
+                {
+                    cancellation.Cancel();
+                }
+                return transformed;
+            };
+            DbWriter.AuthoritativeFreshRawInsertScopeDisposedForTesting = stats =>
+            {
+                observedStats = stats;
+                previousStatsHook?.Invoke(stats);
+            };
+
+            exception = Assert.Throws<OperationCanceledException>(() =>
+            {
+                using var graph = _writer.BeginReferenceGraphRefreshScope(
+                    forceFullRefresh: true,
+                    useFreshReferenceResolutionDefaults: true);
+                using var outerTransaction = _writer.BeginTransaction();
+                using var raw = _writer.BeginAuthoritativeFreshBulkInsertScope(
+                    enabled: true,
+                    cancellation.Token)!;
+                using var fileTransaction = _writer.BeginTransaction();
+                var fileId = InsertNewFile("src/reference-line-cancel.cs");
+                _writer.InsertReferencesForNewFilesInAtomicFileScope(
+                    CreateReferences(fileId, 2, "cancel"),
+                    refreshMutualRecursionFlags: false,
+                    cancellation.Token);
+            });
+        }
+        finally
+        {
+            DbWriter.AuthoritativeFreshRawReturningRowForTesting = previousRowHook;
+            DbWriter.AuthoritativeFreshRawInsertScopeDisposedForTesting = previousStatsHook;
+        }
+
+        Assert.Equal(cancellation.Token, exception.CancellationToken);
+        var sqliteException = Assert.IsType<SqliteException>(exception.InnerException);
+        Assert.Equal(9, sqliteException.SqliteErrorCode);
+        Assert.Equal(0L, ScalarLong("SELECT COUNT(*) FROM files"));
+        Assert.Equal(0L, ScalarLong("SELECT COUNT(*) FROM reference_lines"));
+        Assert.NotNull(observedStats);
+        Assert.False(observedStats.Completed);
+        Assert.Equal(1, observedStats.DiscardCount);
+
+        using var retry = _writer.BeginTransaction();
+        var retryFileId = InsertNewFile("src/reference-line-cancel-retry.cs");
+        _writer.InsertReferencesForNewFilesInAtomicFileScope(
+            CreateReferences(retryFileId, 1, "retry"),
+            refreshMutualRecursionFlags: false,
+            CancellationToken.None);
+        retry.Commit();
+        Assert.Equal(1L, ScalarLong("SELECT COUNT(*) FROM reference_lines"));
+    }
+
     public void Dispose()
     {
         _db.Dispose();
@@ -547,7 +908,23 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
             })
             .ToArray();
 
-    private void PrimeFileSequenceForInt64Binding()
+    private static ReferenceRecord[] CreateReferences(
+        long fileId,
+        int count,
+        string contextPrefix)
+        => Enumerable.Range(0, count)
+            .Select(index => new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = $"target_{contextPrefix}_{index}",
+                ReferenceKind = "call",
+                Line = index + 1,
+                Column = 1,
+                Context = $"{contextPrefix}_{index}();",
+            })
+            .ToArray();
+
+    private void PrimeSequencesForInt64Returning()
     {
         Execute("""
             INSERT INTO files (
@@ -555,6 +932,9 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
             VALUES (
                 5000000000, 'src/sequence-primer.cs', 'csharp', 0, 0,
                 'sequence-primer', '2026-08-23T00:00:00Z', 0, CURRENT_TIMESTAMP);
+            INSERT INTO reference_lines (id, file_id, line, context)
+            VALUES (5000000000, 5000000000, 1, 'sequence-primer');
+            DELETE FROM reference_lines WHERE id = 5000000000;
             DELETE FROM files WHERE id = 5000000000;
             """);
         Assert.False(_writer.HasAnyIndexedFiles());

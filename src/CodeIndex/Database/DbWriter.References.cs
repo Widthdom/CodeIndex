@@ -1945,6 +1945,7 @@ public partial class DbWriter
                     referenceLinesAreNew,
                     newReferenceLineIds,
                     useCallerTransactionParameterBudget: false,
+                    useAuthoritativeFreshRawInsert: false,
                     cancellationToken);
                 InsertReferenceBatch(
                     references,
@@ -2006,6 +2007,7 @@ public partial class DbWriter
                 referenceLinesAreNew,
                 newReferenceLineIds,
                 useCallerTransactionParameterBudget,
+                useAuthoritativeFreshRawInsert,
                 cancellationToken);
 
             for (int batchIndex = windowStartBatch; batchIndex < windowEndBatch; batchIndex++)
@@ -2065,6 +2067,7 @@ public partial class DbWriter
         bool referenceLinesAreNew,
         Dictionary<(long FileId, int Line, string Context), long>? newReferenceLineIds,
         bool useCallerTransactionParameterBudget,
+        bool useAuthoritativeFreshRawInsert,
         CancellationToken cancellationToken)
         => referenceLinesAreNew
             ? InsertNewReferenceLines(
@@ -2073,6 +2076,7 @@ public partial class DbWriter
                 end,
                 newReferenceLineIds!,
                 useCallerTransactionParameterBudget,
+                useAuthoritativeFreshRawInsert,
                 cancellationToken)
             : UpsertReferenceLines(
                 references,
@@ -2373,6 +2377,7 @@ public partial class DbWriter
         int end,
         Dictionary<(long FileId, int Line, string Context), long> knownLineIds,
         bool useCallerTransactionParameterBudget,
+        bool useAuthoritativeFreshRawInsert,
         CancellationToken cancellationToken)
     {
         var lineIds = ReferenceLineBatchMap.Create(
@@ -2407,29 +2412,45 @@ public partial class DbWriter
                 cancellationToken);
             int batchEnd = Math.Min(i + rowsPerStatement, rows.Count);
             var statementRowCount = batchEnd - i;
-            var sql = ReferenceLineInsertSqlCache.GetOrAdd(statementRowCount, static count => BuildReferenceLineInsertSql(count));
-            var cmd = RentCommand(sql, c => AddReferenceLineParameters(c, statementRowCount));
-            try
+            if (useAuthoritativeFreshRawInsert)
             {
-                AssignReferenceLineParameterValues(cmd, rows, i, batchEnd);
-                ReportBatchStatementForTesting("insert_reference_lines", statementRowCount, statementRowCount);
-                using var reader = cmd.ExecuteReader();
-                while (reader.Read())
-                {
-                    var id = reader.GetInt64(0);
-                    var rowIndex = ResolveReferenceLineInputRowIndex(
+                (_authoritativeFreshBulkInsertScope
+                    ?? throw new InvalidOperationException(
+                        "The authoritative fresh raw insert scope ended before a reference-line batch."))
+                    .InsertReferenceLines(
+                        rows,
                         i,
-                        statementRowCount,
-                        reader.IsDBNull(1) ? null : reader.GetInt32(1));
-                    var lineOrdinal = rowOrdinals[rowIndex];
-                    var key = rows[rowIndex];
-                    lineIds.SetReferenceLineId(lineOrdinal, id);
-                    knownLineIds[key] = id;
-                }
+                        batchEnd,
+                        rowOrdinals,
+                        lineIds,
+                        knownLineIds);
             }
-            finally
+            else
             {
-                ReleaseCommand(cmd);
+                var sql = ReferenceLineInsertSqlCache.GetOrAdd(statementRowCount, static count => BuildReferenceLineInsertSql(count));
+                var cmd = RentCommand(sql, c => AddReferenceLineParameters(c, statementRowCount));
+                try
+                {
+                    AssignReferenceLineParameterValues(cmd, rows, i, batchEnd);
+                    ReportBatchStatementForTesting("insert_reference_lines", statementRowCount, statementRowCount);
+                    using var reader = cmd.ExecuteReader();
+                    while (reader.Read())
+                    {
+                        var id = reader.GetInt64(0);
+                        var rowIndex = ResolveReferenceLineInputRowIndex(
+                            i,
+                            statementRowCount,
+                            reader.IsDBNull(1) ? null : reader.GetInt32(1));
+                        var lineOrdinal = rowOrdinals[rowIndex];
+                        var key = rows[rowIndex];
+                        lineIds.SetReferenceLineId(lineOrdinal, id);
+                        knownLineIds[key] = id;
+                    }
+                }
+                finally
+                {
+                    ReleaseCommand(cmd);
+                }
             }
         }
 

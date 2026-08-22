@@ -1,4 +1,6 @@
 using System.Data;
+using System.Globalization;
+using System.Text;
 using Microsoft.Data.Sqlite;
 using SQLitePCL;
 
@@ -6,13 +8,17 @@ namespace CodeIndex.Database;
 
 public partial class DbWriter
 {
-    private const int AuthoritativeFreshRawStatementCacheCapacity = 16;
+    private const int AuthoritativeFreshRawStatementCacheCapacity = 32;
     private static readonly AsyncLocal<Action<AuthoritativeFreshRawInsertWork>?>
         ScopedAuthoritativeFreshRawInsertExecutingForTesting = new();
     private static readonly AsyncLocal<Action<AuthoritativeFreshRawInsertScopeStats>?>
         ScopedAuthoritativeFreshRawInsertScopeDisposedForTesting = new();
     private static readonly AsyncLocal<int?>
         ScopedAuthoritativeFreshRawStatementCacheCapacityForTesting = new();
+    private static readonly AsyncLocal<Func<AuthoritativeFreshRawReturningRow, AuthoritativeFreshRawReturningRow>?>
+        ScopedAuthoritativeFreshRawReturningRowForTesting = new();
+    private static readonly AsyncLocal<Func<AuthoritativeFreshRawReturningSql, string>?>
+        ScopedAuthoritativeFreshRawReturningSqlForTesting = new();
     private AuthoritativeFreshBulkInsertScope? _authoritativeFreshBulkInsertScope;
 
     internal sealed record AuthoritativeFreshRawInsertWork(
@@ -33,6 +39,18 @@ public partial class DbWriter
         long FinalizeCount,
         bool Completed);
 
+    internal readonly record struct AuthoritativeFreshRawReturningRow(
+        string Operation,
+        int StatementRows,
+        int ResultIndex,
+        long Id,
+        int? InputOrdinal);
+
+    internal sealed record AuthoritativeFreshRawReturningSql(
+        string Operation,
+        int StatementRows,
+        string Sql);
+
     internal static Action<AuthoritativeFreshRawInsertWork>?
         AuthoritativeFreshRawInsertExecutingForTesting
     {
@@ -51,6 +69,20 @@ public partial class DbWriter
     {
         get => ScopedAuthoritativeFreshRawStatementCacheCapacityForTesting.Value;
         set => ScopedAuthoritativeFreshRawStatementCacheCapacityForTesting.Value = value;
+    }
+
+    internal static Func<AuthoritativeFreshRawReturningRow, AuthoritativeFreshRawReturningRow>?
+        AuthoritativeFreshRawReturningRowForTesting
+    {
+        get => ScopedAuthoritativeFreshRawReturningRowForTesting.Value;
+        set => ScopedAuthoritativeFreshRawReturningRowForTesting.Value = value;
+    }
+
+    internal static Func<AuthoritativeFreshRawReturningSql, string>?
+        AuthoritativeFreshRawReturningSqlForTesting
+    {
+        get => ScopedAuthoritativeFreshRawReturningSqlForTesting.Value;
+        set => ScopedAuthoritativeFreshRawReturningSqlForTesting.Value = value;
     }
 
     internal AuthoritativeFreshBulkInsertScope? BeginAuthoritativeFreshBulkInsertScope(
@@ -101,9 +133,11 @@ public partial class DbWriter
 
     private enum AuthoritativeFreshRawInsertKind
     {
+        Files,
         Chunks,
         Symbols,
         Issues,
+        ReferenceLines,
         References,
     }
 
@@ -111,7 +145,7 @@ public partial class DbWriter
         AuthoritativeFreshRawInsertKind Kind,
         int Rows);
 
-    internal sealed class AuthoritativeFreshBulkInsertScope : IDisposable
+    internal sealed partial class AuthoritativeFreshBulkInsertScope : IDisposable
     {
         private readonly DbWriter _writer;
         // Microsoft.Data.Sqlite owns this SafeHandle. The scope is nested inside the
@@ -422,6 +456,7 @@ public partial class DbWriter
             int rows,
             string sql,
             int expectedParameterCount,
+            int expectedColumnCount,
             out bool cacheHit)
         {
             EnsureCanExecute();
@@ -453,14 +488,17 @@ public partial class DbWriter
             if (statement == null)
                 throw new InvalidOperationException("SQLite prepared no statement for a non-empty INSERT.");
             var actualParameterCount = raw.sqlite3_bind_parameter_count(statement);
+            var actualColumnCount = raw.sqlite3_column_count(statement);
             if (!string.IsNullOrWhiteSpace(tail)
-                || actualParameterCount != expectedParameterCount)
+                || actualParameterCount != expectedParameterCount
+                || actualColumnCount != expectedColumnCount)
             {
                 DisposeUncachedStatement(statement);
                 throw new InvalidOperationException(
-                    "Raw SQLite statement preparation changed the statement tail or parameter shape "
+                    "Raw SQLite statement preparation changed the statement tail, parameter shape, or result shape "
                     + $"(tail_length={tail?.Length ?? 0}, expected_parameters={expectedParameterCount}, "
-                    + $"actual_parameters={actualParameterCount}).");
+                    + $"actual_parameters={actualParameterCount}, expected_columns={expectedColumnCount}, "
+                    + $"actual_columns={actualColumnCount}).");
             }
 
             var node = _leastRecentlyUsed.AddFirst(key);
@@ -475,13 +513,15 @@ public partial class DbWriter
             AuthoritativeFreshRawInsertKind kind,
             int rows,
             string sql,
-            int expectedParameterCount)
+            int expectedParameterCount,
+            int expectedColumnCount = 0)
         {
             var statement = RentStatement(
                 kind,
                 rows,
                 sql,
                 expectedParameterCount,
+                expectedColumnCount,
                 out var cacheHit);
             return new StatementLease(this, statement, cacheHit);
         }
@@ -691,6 +731,26 @@ public partial class DbWriter
                     : raw.sqlite3_bind_text(_cached.Statement, ordinal, value));
             }
 
+            internal void BindDateTimeText(DateTime value)
+            {
+                Span<char> chars = stackalloc char[27];
+                if (!value.TryFormat(
+                        chars,
+                        out var charCount,
+                        "yyyy-MM-dd HH:mm:ss.FFFFFFF",
+                        CultureInfo.InvariantCulture))
+                {
+                    throw new InvalidOperationException("The file modification timestamp could not be formatted for SQLite.");
+                }
+
+                Span<byte> bytes = stackalloc byte[27];
+                var byteCount = Encoding.UTF8.GetBytes(chars[..charCount], bytes);
+                CheckBind(raw.sqlite3_bind_text(
+                    _cached.Statement,
+                    NextParameterOrdinal(),
+                    bytes[..byteCount]));
+            }
+
             internal void ExecuteDone()
             {
                 if (_boundParameterCount != _cached.ParameterCount)
@@ -730,6 +790,177 @@ public partial class DbWriter
                 if (cleanupFailure != null)
                     throw cleanupFailure;
                 _scope._cancellationToken.ThrowIfCancellationRequested();
+            }
+
+            internal void ExecuteReturningRows(
+                string operation,
+                int expectedRowCount,
+                Span<long> idsByInputOrdinal,
+                bool returnsInputOrdinal)
+            {
+                if (_boundParameterCount != _cached.ParameterCount)
+                {
+                    throw new InvalidOperationException(
+                        "Raw SQLite binding did not fill the prepared statement "
+                        + $"(expected={_cached.ParameterCount}, actual={_boundParameterCount}).");
+                }
+                if (expectedRowCount <= 0)
+                    throw new ArgumentOutOfRangeException(nameof(expectedRowCount));
+                if (idsByInputOrdinal.Length != expectedRowCount)
+                    throw new ArgumentException("The raw RETURNING ID buffer must match the expected row count.", nameof(idsByInputOrdinal));
+
+                _scope._cancellationToken.ThrowIfCancellationRequested();
+                Exception? executionFailure = null;
+                var returnedRowCount = 0;
+                var terminalResult = raw.SQLITE_OK;
+                var returningRowTransform = AuthoritativeFreshRawReturningRowForTesting;
+                try
+                {
+                    while (true)
+                    {
+                        terminalResult = raw.sqlite3_step(_cached.Statement);
+                        if (terminalResult == raw.SQLITE_ROW)
+                        {
+                            if (returnedRowCount >= expectedRowCount)
+                            {
+                                throw new InvalidDataException(
+                                    $"Raw SQLite RETURNING produced more than {expectedRowCount} rows.");
+                            }
+
+                            if (raw.sqlite3_column_type(_cached.Statement, 0) != raw.SQLITE_INTEGER)
+                            {
+                                throw new InvalidDataException(
+                                    $"Raw SQLite {operation} RETURNING produced a non-integer ID.");
+                            }
+                            var id = raw.sqlite3_column_int64(_cached.Statement, 0);
+                            int? inputOrdinal = null;
+                            if (returnsInputOrdinal)
+                            {
+                                var ordinalType = raw.sqlite3_column_type(_cached.Statement, 1);
+                                if (ordinalType == raw.SQLITE_INTEGER)
+                                {
+                                    var ordinalValue = raw.sqlite3_column_int64(_cached.Statement, 1);
+                                    if (ordinalValue is >= int.MinValue and <= int.MaxValue)
+                                        inputOrdinal = (int)ordinalValue;
+                                }
+                                else if (ordinalType != raw.SQLITE_NULL)
+                                {
+                                    throw new InvalidDataException(
+                                        $"Raw SQLite {operation} RETURNING produced a non-integer input ordinal.");
+                                }
+                            }
+
+                            if (returningRowTransform is { } transform)
+                            {
+                                var returnedRow = transform(new AuthoritativeFreshRawReturningRow(
+                                    operation,
+                                    expectedRowCount,
+                                    returnedRowCount,
+                                    id,
+                                    inputOrdinal));
+                                id = returnedRow.Id;
+                                inputOrdinal = returnedRow.InputOrdinal;
+                            }
+
+                            var resolvedOrdinal = returnsInputOrdinal
+                                ? inputOrdinal
+                                : returnedRowCount;
+                            if (id <= 0)
+                            {
+                                throw new InvalidDataException(
+                                    $"Raw SQLite {operation} RETURNING produced a non-positive ID.");
+                            }
+                            if (resolvedOrdinal is not { } ordinal
+                                || (uint)ordinal >= (uint)expectedRowCount)
+                            {
+                                throw new InvalidDataException(
+                                    $"Raw SQLite {operation} RETURNING produced invalid input ordinal "
+                                    + $"{resolvedOrdinal?.ToString(CultureInfo.InvariantCulture) ?? "NULL"} "
+                                    + $"for {expectedRowCount} rows.");
+                            }
+                            if (idsByInputOrdinal[ordinal] != 0)
+                            {
+                                throw new InvalidDataException(
+                                    $"Raw SQLite {operation} RETURNING produced duplicate input ordinal {ordinal}.");
+                            }
+                            for (var priorOrdinal = 0; priorOrdinal < idsByInputOrdinal.Length; priorOrdinal++)
+                            {
+                                if (idsByInputOrdinal[priorOrdinal] == id)
+                                {
+                                    throw new InvalidDataException(
+                                        $"Raw SQLite {operation} RETURNING produced duplicate ID {id}.");
+                                }
+                            }
+                            idsByInputOrdinal[ordinal] = id;
+                            returnedRowCount++;
+                            // Do not throw only from the managed token between ROWs. A pending
+                            // sqlite3_interrupt must reach the next step so SQLite preserves its
+                            // transaction rollback semantics before the cancellation escapes.
+                            // ROW間ではmanaged tokenだけでthrowせず、pending interruptを次stepへ渡す。
+                            continue;
+                        }
+
+                        if (terminalResult != raw.SQLITE_DONE)
+                            throw _scope.CreateExecutionException(terminalResult);
+                        if (returnedRowCount != expectedRowCount)
+                        {
+                            throw new InvalidDataException(
+                                "Raw SQLite RETURNING produced an incomplete result "
+                                + $"(expected={expectedRowCount}, actual={returnedRowCount}).");
+                        }
+                        break;
+                    }
+
+                    for (var ordinal = 0; ordinal < idsByInputOrdinal.Length; ordinal++)
+                    {
+                        if (idsByInputOrdinal[ordinal] == 0)
+                        {
+                            throw new InvalidDataException(
+                                $"Raw SQLite {operation} RETURNING did not materialize input ordinal {ordinal}.");
+                        }
+                    }
+                }
+                catch (Exception exception)
+                {
+                    executionFailure = exception;
+                }
+
+                var resetResult = raw.sqlite3_reset(_cached.Statement);
+                Exception? cleanupFailure = null;
+                var resetIsReusable = resetResult == raw.SQLITE_OK
+                    || (terminalResult is not (raw.SQLITE_OK or raw.SQLITE_DONE)
+                        && resetResult == terminalResult);
+                if (!resetIsReusable)
+                    cleanupFailure = _scope.CreateExecutionException(resetResult);
+
+                var clearResult = raw.sqlite3_clear_bindings(_cached.Statement);
+                if (clearResult != raw.SQLITE_OK && cleanupFailure == null)
+                    cleanupFailure = _scope.CreateExecutionException(clearResult);
+
+                var cancellationPending = _scope._cancellationToken.IsCancellationRequested;
+                if (executionFailure != null
+                    || cleanupFailure != null
+                    || cancellationPending)
+                {
+                    // SQLite applies a DML RETURNING statement before yielding its first ROW.
+                    // Reset is cleanup, not rollback. Never reuse a statement after any ROW
+                    // protocol failure; the caller's per-file SAVEPOINT owns data rollback.
+                    // DML RETURNINGは最初のROW前に適用済み。resetはrollbackではない。
+                    _scope.DiscardStatement(_cached);
+                }
+                _cleaned = true;
+
+                if (executionFailure != null)
+                    throw executionFailure;
+                if (cleanupFailure != null)
+                    throw cleanupFailure;
+                _scope._cancellationToken.ThrowIfCancellationRequested();
+            }
+
+            internal void Discard()
+            {
+                _scope.DiscardStatement(_cached);
+                _cleaned = true;
             }
 
             public void Dispose()

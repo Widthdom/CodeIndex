@@ -168,7 +168,7 @@ public class PerformanceTests : IDisposable
         Assert.All(
             providerSamples.Concat(rawSamples),
             sample => Assert.Equal(providerSamples[0].Snapshot, sample.Snapshot));
-        foreach (var stage in new[] { "chunks", "symbols", "issues", "references", "finalize", "total" })
+        foreach (var stage in new[] { "files", "chunks", "symbols", "issues", "references", "finalize", "total" })
         {
             var providerElapsed = Median(providerSamples.Select(sample => sample.Stages[stage].ElapsedTicks));
             var rawElapsed = Median(rawSamples.Select(sample => sample.Stages[stage].ElapsedTicks));
@@ -201,16 +201,6 @@ public class PerformanceTests : IDisposable
                 forceFullRefresh: true,
                 useFreshReferenceResolutionDefaults: true);
             using var transaction = writer.BeginTransaction();
-            var fileId = writer.InsertNewFile(new FileRecord
-            {
-                Path = "src/benchmark.cs",
-                Lang = "csharp",
-                Size = 1_000_000,
-                Lines = chunks.Count,
-                Checksum = "benchmark",
-                Modified = new DateTime(2026, 8, 23, 0, 0, 0, DateTimeKind.Utc),
-            });
-            Assert.Equal(1L, fileId);
             using var rawScope = useRawBindings
                 ? writer.BeginAuthoritativeFreshBulkInsertScope(
                     enabled: true,
@@ -219,6 +209,18 @@ public class PerformanceTests : IDisposable
             var stages = new Dictionary<string, RawBulkInsertBenchmarkStage>(StringComparer.Ordinal);
             var totalStart = Stopwatch.GetTimestamp();
             var totalAllocatedStart = GC.GetAllocatedBytesForCurrentThread();
+            long fileId = 0;
+            stages["files"] = Measure(() => fileId = writer.InsertNewFile(new FileRecord
+            {
+                Path = "src/benchmark.cs",
+                Lang = "csharp",
+                Size = 1_000_000,
+                Lines = chunks.Count,
+                Checksum = "benchmark",
+                Modified = new DateTime(2026, 8, 23, 0, 0, 0, DateTimeKind.Utc)
+                    .AddTicks(1_234_567),
+            }));
+            Assert.Equal(1L, fileId);
             stages["chunks"] = Measure(() => writer.InsertChunks(chunks));
             stages["symbols"] = Measure(() => writer.InsertSymbols(symbols));
             stages["issues"] = Measure(() => writer.InsertIssuesForNewFile(fileId, issues));
@@ -236,11 +238,15 @@ public class PerformanceTests : IDisposable
             using var snapshotCommand = db.Connection.CreateCommand();
             snapshotCommand.CommandText = """
                 SELECT
+                    (SELECT COUNT(*) FROM files),
                     (SELECT COUNT(*) FROM chunks),
                     (SELECT COUNT(*) FROM symbols),
                     (SELECT COUNT(*) FROM file_issues),
                     (SELECT COUNT(*) FROM reference_lines),
                     (SELECT COUNT(*) FROM symbol_references),
+                    (SELECT hex(CAST(path AS BLOB)) FROM files WHERE id = 1),
+                    (SELECT hex(CAST(modified AS BLOB)) FROM files WHERE id = 1),
+                    (SELECT generated FROM files WHERE id = 1),
                     (SELECT hex(CAST(content AS BLOB)) FROM chunks WHERE chunk_index = 0),
                     (SELECT COUNT(*) FROM symbols WHERE signature IS NULL),
                     (SELECT COUNT(*) FROM symbol_references WHERE context IS NULL)

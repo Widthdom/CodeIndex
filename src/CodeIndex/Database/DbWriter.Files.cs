@@ -206,39 +206,46 @@ public partial class DbWriter
     public long InsertNewFile(FileRecord file)
     {
         TrackCSharpFamilyFileBeforeWrite(file);
-        var cmd = RentCommand(
-            @"
-            INSERT INTO files (path, lang, size, lines, checksum, modified, generated, indexed_at)
-            VALUES (@path, @lang, @size, @lines, @checksum, @modified, @generated, CURRENT_TIMESTAMP)
-            RETURNING id",
-            static c =>
-            {
-                c.Parameters.Add("@path", SqliteType.Text);
-                c.Parameters.Add("@lang", SqliteType.Text);
-                c.Parameters.Add("@size", SqliteType.Integer);
-                c.Parameters.Add("@lines", SqliteType.Integer);
-                c.Parameters.Add("@checksum", SqliteType.Text);
-                c.Parameters.Add("@modified", SqliteType.Text);
-                c.Parameters.Add("@generated", SqliteType.Integer);
-            });
         long fileId;
-        try
+        if (_authoritativeFreshBulkInsertScope is { } rawInsert)
         {
-            cmd.Parameters["@path"].Value = file.Path;
-            cmd.Parameters["@lang"].Value = (object?)file.Lang ?? DBNull.Value;
-            cmd.Parameters["@size"].Value = file.Size;
-            cmd.Parameters["@lines"].Value = file.Lines;
-            cmd.Parameters["@checksum"].Value = (object?)file.Checksum ?? DBNull.Value;
-            cmd.Parameters["@modified"].Value = file.Modified;
-            cmd.Parameters["@generated"].Value = file.Generated ? 1 : 0;
-            using var reader = cmd.ExecuteReader();
-            if (!reader.Read())
-                throw new InvalidOperationException("SQLite RETURNING id produced no row for file insert.");
-            fileId = reader.GetInt64(0);
+            fileId = rawInsert.InsertFile(file);
         }
-        finally
+        else
         {
-            ReleaseCommand(cmd);
+            var cmd = RentCommand(
+                @"
+                INSERT INTO files (path, lang, size, lines, checksum, modified, generated, indexed_at)
+                VALUES (@path, @lang, @size, @lines, @checksum, @modified, @generated, CURRENT_TIMESTAMP)
+                RETURNING id",
+                static c =>
+                {
+                    c.Parameters.Add("@path", SqliteType.Text);
+                    c.Parameters.Add("@lang", SqliteType.Text);
+                    c.Parameters.Add("@size", SqliteType.Integer);
+                    c.Parameters.Add("@lines", SqliteType.Integer);
+                    c.Parameters.Add("@checksum", SqliteType.Text);
+                    c.Parameters.Add("@modified", SqliteType.Text);
+                    c.Parameters.Add("@generated", SqliteType.Integer);
+                });
+            try
+            {
+                cmd.Parameters["@path"].Value = file.Path;
+                cmd.Parameters["@lang"].Value = (object?)file.Lang ?? DBNull.Value;
+                cmd.Parameters["@size"].Value = file.Size;
+                cmd.Parameters["@lines"].Value = file.Lines;
+                cmd.Parameters["@checksum"].Value = (object?)file.Checksum ?? DBNull.Value;
+                cmd.Parameters["@modified"].Value = file.Modified;
+                cmd.Parameters["@generated"].Value = file.Generated ? 1 : 0;
+                using var reader = cmd.ExecuteReader();
+                if (!reader.Read())
+                    throw new InvalidOperationException("SQLite RETURNING id produced no row for file insert.");
+                fileId = reader.GetInt64(0);
+            }
+            finally
+            {
+                ReleaseCommand(cmd);
+            }
         }
         _typeScriptAugmentationDirtyNameScope?.TrackCurrentFile(fileId, file.Lang);
         TrackCurrentWriterCSharpFile(fileId, file.Lang);
