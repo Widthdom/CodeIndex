@@ -29,7 +29,7 @@ jobs:
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ~/.nuget/packages
-          key: ${{ runner.os }}-mutation-nuget-${{ hashFiles('src/CodeIndex/packages.lock.json', 'tests/CodeIndex.HookIsolationFixture/packages.lock.json', 'tests/CodeIndex.PluginIsolationFixture/packages.lock.json', 'tests/CodeIndex.Tests/packages.lock.json', 'tools/CodeIndex.Changelog/packages.lock.json', 'tools/CodeIndex.PackageNormalize/packages.lock.json', 'tools/CodeIndex.TestTelemetry/packages.lock.json') }}
+          key: ${{ runner.os }}-mutation-nuget-${{ hashFiles('src/CodeIndex/packages.lock.json', 'tests/CodeIndex.HookIsolationFixture/packages.lock.json', 'tests/CodeIndex.PostExtractionHookFixture/packages.lock.json', 'tests/CodeIndex.PluginIsolationFixture/packages.lock.json', 'tests/CodeIndex.Tests/packages.lock.json', 'tools/CodeIndex.Changelog/packages.lock.json', 'tools/CodeIndex.PackageNormalize/packages.lock.json', 'tools/CodeIndex.TestTelemetry/packages.lock.json') }}
 
       - name: Cache Stryker tool
         id: stryker-cache

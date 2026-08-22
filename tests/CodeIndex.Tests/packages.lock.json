@@ -1224,6 +1224,12 @@
           "cdidx": "[1.42.0, )"
         }
       },
+      "codeindex.postextractionhookfixture": {
+        "type": "Project",
+        "dependencies": {
+          "cdidx": "[1.42.0, )"
+        }
+      },
       "codeindex.testtelemetry": {
         "type": "Project"
       }
@@ -2446,6 +2452,12 @@
         "type": "Project"
       },
       "codeindex.pluginisolationfixture": {
+        "type": "Project",
+        "dependencies": {
+          "cdidx": "[1.42.0, )"
+        }
+      },
+      "codeindex.postextractionhookfixture": {
         "type": "Project",
         "dependencies": {
           "cdidx": "[1.42.0, )"

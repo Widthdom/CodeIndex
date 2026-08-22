@@ -1,26 +1,25 @@
 using System.Diagnostics;
-using System.Reflection;
-using System.Runtime.Loader;
 using System.Text.Json;
 using CodeIndex.HookIsolationFixture;
 using CodeIndex.Indexer;
 using CodeIndex.Indexer.Hooks;
 using CodeIndex.Models;
+using CodeIndex.PostExtractionHookFixture;
 
 namespace CodeIndex.Tests;
 
 [Collection("SQLite pool sensitive")]
 public class PostExtractionHookTests
 {
-    internal const string SlowHookDelayEnvironmentVariable = "CDIDX_TEST_SLOW_POST_EXTRACTION_HOOK_MS";
-    internal const string SlowHookCompletionPathEnvironmentVariable = "CDIDX_TEST_SLOW_POST_EXTRACTION_HOOK_DONE_PATH";
-    internal const string CancellableHookDelayEnvironmentVariable = "CDIDX_TEST_CANCELLABLE_POST_EXTRACTION_HOOK_MS";
-    internal const string CancellableHookCompletionPathEnvironmentVariable = "CDIDX_TEST_CANCELLABLE_POST_EXTRACTION_HOOK_DONE_PATH";
-    internal const string SlowConstructorHookDelayEnvironmentVariable = "CDIDX_TEST_SLOW_CTOR_POST_EXTRACTION_HOOK_MS";
-    internal const string StatefulHookEnvironmentVariable = "CDIDX_TEST_STATEFUL_POST_EXTRACTION_HOOK";
-    internal const string ThrowingConstructorHookEnvironmentVariable = "CDIDX_TEST_THROWING_CTOR_POST_EXTRACTION_HOOK";
-    internal const string ExpandingHookEnvironmentVariable = "CDIDX_TEST_EXPANDING_POST_EXTRACTION_HOOK";
-    internal const string CSharpDeclarationMutationEnvironmentVariable = "CDIDX_TEST_CSHARP_DECLARATION_MUTATION_HOOK";
+    internal const string SlowHookDelayEnvironmentVariable = PostExtractionHookFixtureEnvironment.SlowHookDelayMilliseconds;
+    internal const string SlowHookCompletionPathEnvironmentVariable = PostExtractionHookFixtureEnvironment.SlowHookCompletionPath;
+    internal const string CancellableHookDelayEnvironmentVariable = PostExtractionHookFixtureEnvironment.CancellableHookDelayMilliseconds;
+    internal const string CancellableHookCompletionPathEnvironmentVariable = PostExtractionHookFixtureEnvironment.CancellableHookCompletionPath;
+    internal const string SlowConstructorHookDelayEnvironmentVariable = PostExtractionHookFixtureEnvironment.SlowConstructorHookDelayMilliseconds;
+    internal const string StatefulHookEnvironmentVariable = PostExtractionHookFixtureEnvironment.StatefulHook;
+    internal const string ThrowingConstructorHookEnvironmentVariable = PostExtractionHookFixtureEnvironment.ThrowingConstructorHook;
+    internal const string ExpandingHookEnvironmentVariable = PostExtractionHookFixtureEnvironment.ExpandingHook;
+    internal const string CSharpDeclarationMutationEnvironmentVariable = PostExtractionHookFixtureEnvironment.CSharpDeclarationMutation;
     internal const string ModuleInitializerDelayEnvironmentVariable = HookIsolationFixtureEnvironment.ModuleInitializerDelayMilliseconds;
     internal const string PersistentDiscoveryWorkerPidPathEnvironmentVariable = HookIsolationFixtureEnvironment.PersistentDiscoveryWorkerPidPath;
     internal const string PersistentDiscoveryDescendantPidPathEnvironmentVariable = HookIsolationFixtureEnvironment.PersistentDiscoveryDescendantPidPath;
@@ -66,6 +65,17 @@ public class PostExtractionHookTests
         Assert.Equal(0, nonCSharpSymbols.EnumerationCount);
     }
 
+    [Fact]
+    public void HookFixture_RemainsBelowProductionTypeInspectionLimit_Issue5135()
+    {
+        var loadableTypeCount = typeof(PostExtractionHookFixtureEnvironment).Assembly.GetTypes().Length;
+
+        Assert.True(
+            loadableTypeCount <= PostExtractionHookRunner.DefaultTypeInspectionLimit,
+            $"The post-extraction hook fixture contains {loadableTypeCount} loadable types; "
+            + $"the production limit is {PostExtractionHookRunner.DefaultTypeInspectionLimit}.");
+    }
+
     [ProductionRuntimeFact]
     public void Discover_LoadsHooksAndAllowsSymbolAndReferenceMutation()
     {
@@ -74,7 +84,7 @@ public class PostExtractionHookTests
         {
             var hooksDir = Path.Combine(projectRoot, "hooks");
             Directory.CreateDirectory(hooksDir);
-            File.Copy(Assembly.GetExecutingAssembly().Location, Path.Combine(hooksDir, "CodeIndex.Tests.dll"));
+            CopyHookFixtureAssembly(hooksDir);
 
             {
                 using var runner = PostExtractionHookRunner.Discover(hooksDir);
@@ -88,7 +98,9 @@ public class PostExtractionHookTests
                 runner.OnSymbolsExtracted(context, symbols);
                 runner.OnReferencesExtracted(context, references);
 
-                Assert.Contains(runner.Hooks, hook => hook.TypeName == typeof(SamplePostExtractionHook).FullName);
+                Assert.Contains(
+                    runner.Hooks,
+                    hook => hook.TypeName == typeof(CodeIndex.PostExtractionHookFixture.SamplePostExtractionHook).FullName);
                 var synthetic = Assert.Single(symbols, symbol => symbol.Name == "AppDomainTag");
                 Assert.Equal(10, synthetic.FileId);
                 var reference = Assert.Single(references, item => item.SymbolName == "AppDomainTag");
@@ -113,7 +125,7 @@ public class PostExtractionHookTests
             {
                 var hooksDir = Path.Combine(projectRoot, "hooks");
                 Directory.CreateDirectory(hooksDir);
-                File.Copy(Assembly.GetExecutingAssembly().Location, Path.Combine(hooksDir, "CodeIndex.Tests.dll"));
+                CopyHookFixtureAssembly(hooksDir);
                 mutation.Set(CSharpDeclarationMutationEnvironmentVariable, "1");
 
                 using var runner = PostExtractionHookRunner.Discover(hooksDir);
@@ -209,7 +221,7 @@ public class PostExtractionHookTests
             {
                 var hooksDir = Path.Combine(projectRoot, "hooks");
                 Directory.CreateDirectory(hooksDir);
-                File.Copy(Assembly.GetExecutingAssembly().Location, Path.Combine(hooksDir, "CodeIndex.Tests.dll"));
+                CopyHookFixtureAssembly(hooksDir);
                 mutation.Set(CSharpDeclarationMutationEnvironmentVariable, "split-and-move");
 
                 using var runner = PostExtractionHookRunner.Discover(hooksDir);
@@ -663,8 +675,9 @@ public class PostExtractionHookTests
         var handled = PostExtractionHookCallbackWorker.TryRunCommand(
             [
                 PostExtractionHookCallbackWorker.CommandName,
-                Assembly.GetExecutingAssembly().Location,
-                typeof(LoadContextReportingPostExtractionHook).FullName!,
+                typeof(CodeIndex.PostExtractionHookFixture.LoadContextReportingPostExtractionHook)
+                    .Assembly.Location,
+                typeof(CodeIndex.PostExtractionHookFixture.LoadContextReportingPostExtractionHook).FullName!,
             ],
             input,
             output,
@@ -691,7 +704,7 @@ public class PostExtractionHookTests
         {
             var hooksDir = Path.Combine(projectRoot, "hooks");
             Directory.CreateDirectory(hooksDir);
-            File.Copy(Assembly.GetExecutingAssembly().Location, Path.Combine(hooksDir, "CodeIndex.Tests.dll"));
+            CopyHookFixtureAssembly(hooksDir);
 
             {
                 using var runner = PostExtractionHookRunner.Discover(hooksDir);
@@ -703,7 +716,8 @@ public class PostExtractionHookTests
                 Assert.Contains(symbols, symbol => symbol.Name == "AppDomainTag");
                 var diagnostic = Assert.Single(
                     runner.Diagnostics,
-                    diagnostic => diagnostic.TypeName == typeof(ThrowingPostExtractionHook).FullName);
+                    diagnostic => diagnostic.TypeName
+                                  == typeof(CodeIndex.PostExtractionHookFixture.ThrowingPostExtractionHook).FullName);
                 Assert.Equal("hook_callback_failed", diagnostic.Category);
                 Assert.DoesNotContain("boom", diagnostic.Message, StringComparison.Ordinal);
             }
@@ -727,7 +741,7 @@ public class PostExtractionHookTests
                 env.Set(ThrowingConstructorHookEnvironmentVariable, "1");
                 var hooksDir = Path.Combine(projectRoot, "hooks");
                 Directory.CreateDirectory(hooksDir);
-                File.Copy(Assembly.GetExecutingAssembly().Location, Path.Combine(hooksDir, "CodeIndex.Tests.dll"));
+                CopyHookFixtureAssembly(hooksDir);
 
                 {
                     using var runner = PostExtractionHookRunner.Discover(hooksDir);
@@ -740,7 +754,9 @@ public class PostExtractionHookTests
 
                     var diagnostic = Assert.Single(
                         runner.Diagnostics,
-                        diagnostic => diagnostic.TypeName == typeof(ThrowingConstructorPostExtractionHook).FullName);
+                        diagnostic => diagnostic.TypeName
+                                      == typeof(CodeIndex.PostExtractionHookFixture.ThrowingConstructorPostExtractionHook)
+                                          .FullName);
                     Assert.Equal("constructor_failed", diagnostic.Category);
                     Assert.Contains("isolated worker", diagnostic.Message, StringComparison.Ordinal);
                     Assert.DoesNotContain("ctor boom", diagnostic.Message, StringComparison.Ordinal);
@@ -766,7 +782,7 @@ public class PostExtractionHookTests
                 env.Set(StatefulHookEnvironmentVariable, "1");
                 var hooksDir = Path.Combine(projectRoot, "hooks");
                 Directory.CreateDirectory(hooksDir);
-                File.Copy(Assembly.GetExecutingAssembly().Location, Path.Combine(hooksDir, "CodeIndex.Tests.dll"));
+                CopyHookFixtureAssembly(hooksDir);
 
                 {
                     using var runner = PostExtractionHookRunner.Discover(hooksDir);
@@ -806,7 +822,7 @@ public class PostExtractionHookTests
                 var completionPath = Path.Combine(projectRoot, "slow-hook.done");
                 env.Set(SlowHookCompletionPathEnvironmentVariable, completionPath);
                 Directory.CreateDirectory(hooksDir);
-                File.Copy(Assembly.GetExecutingAssembly().Location, Path.Combine(hooksDir, "CodeIndex.Tests.dll"));
+                CopyHookFixtureAssembly(hooksDir);
 
                 {
                     using var runner = PostExtractionHookRunner.Discover(hooksDir);
@@ -819,7 +835,8 @@ public class PostExtractionHookTests
                     Assert.DoesNotContain(symbols, symbol => symbol.Name == "SlowHookTag");
                     var diagnostic = Assert.Single(
                         runner.Diagnostics,
-                        item => item.TypeName == typeof(SlowPostExtractionHook).FullName
+                        item => item.TypeName
+                                == typeof(CodeIndex.PostExtractionHookFixture.SlowPostExtractionHook).FullName
                                 && item.Callback == nameof(IPostExtractionHook.OnSymbolsExtracted));
                     Assert.Equal("callback_timeout", diagnostic.Category);
                     Assert.True(
@@ -855,7 +872,7 @@ public class PostExtractionHookTests
                 PostExtractionHookRunner.CallbackBudgetForTesting = () => TimeSpan.FromMilliseconds(50);
                 var hooksDir = Path.Combine(projectRoot, "hooks");
                 Directory.CreateDirectory(hooksDir);
-                File.Copy(Assembly.GetExecutingAssembly().Location, Path.Combine(hooksDir, "CodeIndex.Tests.dll"));
+                CopyHookFixtureAssembly(hooksDir);
 
                 {
                     using var runner = PostExtractionHookRunner.Discover(hooksDir);
@@ -878,7 +895,8 @@ public class PostExtractionHookTests
 
                     var diagnostic = Assert.Single(
                         runner.Diagnostics,
-                        item => item.TypeName == typeof(SlowConstructorPostExtractionHook).FullName
+                        item => item.TypeName
+                                == typeof(CodeIndex.PostExtractionHookFixture.SlowConstructorPostExtractionHook).FullName
                                 && item.Callback == nameof(IPostExtractionHook.OnSymbolsExtracted));
                     Assert.Equal("callback_timeout", diagnostic.Category);
                     Assert.Contains("exceeded", diagnostic.Message, StringComparison.Ordinal);
@@ -912,7 +930,7 @@ public class PostExtractionHookTests
                 var completionPath = Path.Combine(projectRoot, "cancellable-hook.done");
                 env.Set(CancellableHookCompletionPathEnvironmentVariable, completionPath);
                 Directory.CreateDirectory(hooksDir);
-                File.Copy(Assembly.GetExecutingAssembly().Location, Path.Combine(hooksDir, "CodeIndex.Tests.dll"));
+                CopyHookFixtureAssembly(hooksDir);
 
                 using (var runner = PostExtractionHookRunner.Discover(hooksDir))
                 using (var cancellation = new CancellationTokenSource())
@@ -1285,7 +1303,7 @@ public class PostExtractionHookTests
                 env.Set(ExpandingHookEnvironmentVariable, "1");
                 var hooksDir = Path.Combine(projectRoot, "hooks");
                 Directory.CreateDirectory(hooksDir);
-                File.Copy(Assembly.GetExecutingAssembly().Location, Path.Combine(hooksDir, "CodeIndex.Tests.dll"));
+                CopyHookFixtureAssembly(hooksDir);
 
                 {
                     using var runner = PostExtractionHookRunner.Discover(
@@ -1331,7 +1349,7 @@ public class PostExtractionHookTests
                 PostExtractionHookRunner.TypeInspectionLimitForTesting = () => 1;
                 var hooksDir = Path.Combine(projectRoot, "hooks");
                 Directory.CreateDirectory(hooksDir);
-                File.Copy(Assembly.GetExecutingAssembly().Location, Path.Combine(hooksDir, "CodeIndex.Tests.dll"));
+                CopyHookFixtureAssembly(hooksDir);
 
                 using var runner = PostExtractionHookRunner.Discover(hooksDir);
 
@@ -1381,6 +1399,14 @@ public class PostExtractionHookTests
         GC.Collect();
         GC.WaitForPendingFinalizers();
         GC.Collect();
+    }
+
+    private static void CopyHookFixtureAssembly(string hooksDirectory)
+    {
+        var fixtureAssemblyPath = typeof(PostExtractionHookFixtureEnvironment).Assembly.Location;
+        File.Copy(
+            fixtureAssemblyPath,
+            Path.Combine(hooksDirectory, Path.GetFileName(fixtureAssemblyPath)));
     }
 
     private static void AssertFileDoesNotAppear(string path, TimeSpan duration)
@@ -1450,316 +1476,5 @@ public class PostExtractionHookTests
 
         System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator()
             => GetEnumerator();
-    }
-}
-
-public sealed class AWaitingPostExtractionHook : IPostExtractionHook
-{
-    public void OnSymbolsExtracted(FileContext context, IList<SymbolRecord> symbols)
-    {
-        DelayAndSignalWhenRequested();
-    }
-
-    public void OnReferencesExtracted(FileContext context, IList<ReferenceRecord> references)
-    {
-        DelayAndSignalWhenRequested();
-    }
-
-    private static void DelayAndSignalWhenRequested()
-    {
-        var raw = Environment.GetEnvironmentVariable(PostExtractionHookTests.CancellableHookDelayEnvironmentVariable);
-        if (!int.TryParse(raw, out var milliseconds) || milliseconds <= 0)
-            return;
-
-        Thread.Sleep(milliseconds);
-        var completionPath = Environment.GetEnvironmentVariable(PostExtractionHookTests.CancellableHookCompletionPathEnvironmentVariable);
-        if (!string.IsNullOrWhiteSpace(completionPath))
-            File.WriteAllText(completionPath, "done");
-    }
-}
-
-public sealed class SamplePostExtractionHook : IPostExtractionHook
-{
-    public void OnSymbolsExtracted(FileContext context, IList<SymbolRecord> symbols)
-    {
-        var csharpMutation = Environment.GetEnvironmentVariable(
-            PostExtractionHookTests.CSharpDeclarationMutationEnvironmentVariable);
-        if (csharpMutation == "split-and-move")
-        {
-            var method = symbols.FirstOrDefault(symbol => symbol.Name == "M");
-            if (method != null)
-            {
-                method.Name = "N";
-                method.Kind = "test.method";
-                method.SubKind = "hook-reclassified";
-                method.Signature = "void N();";
-            }
-
-            var movedContainer = symbols.FirstOrDefault(symbol => symbol.Name == "Inner");
-            if (movedContainer != null)
-            {
-                movedContainer.ContainerKind = "class";
-                movedContainer.ContainerName = "New";
-                movedContainer.ContainerQualifiedName = "New";
-            }
-
-            var fileType = symbols.FirstOrDefault(symbol => symbol.Name == "SplitType");
-            if (fileType != null)
-            {
-                fileType.Name = "SplitTypeRenamed";
-                fileType.Signature = "class SplitTypeRenamed { }";
-            }
-            return;
-        }
-
-        if (csharpMutation == "1")
-        {
-            var container = symbols.FirstOrDefault(symbol => symbol.Name == "HookContainer");
-            if (container != null)
-            {
-                container.Name = "HookContainerRenamed";
-                container.Signature = "file partial class HookContainerRenamed<T>";
-            }
-            var existing = symbols.FirstOrDefault(symbol => symbol.Name == "HookPartial");
-            if (existing != null)
-            {
-                existing.Name = "HookOrdinary";
-                existing.Signature = "void HookOrdinary();";
-                existing.ContainerName = "HookContainerRenamed";
-                existing.ContainerQualifiedName = "HookContainerRenamed";
-            }
-            symbols.Add(new SymbolRecord
-            {
-                FileId = existing?.FileId ?? 0,
-                Kind = "function",
-                Name = "HookAddedPartial",
-                Signature = "[Obsolete] partial void HookAddedPartial();",
-                ContainerKind = "class",
-                ContainerName = "HookContainerRenamed",
-                ContainerQualifiedName = "HookContainerRenamed",
-                Line = 3,
-                StartLine = 3,
-                EndLine = 3,
-            });
-            symbols.Add(new SymbolRecord
-            {
-                FileId = existing?.FileId ?? 0,
-                Kind = "class",
-                Name = "HookFileType",
-                Signature = "file partial class HookFileType { }",
-                Line = 4,
-                StartLine = 4,
-                EndLine = 4,
-            });
-            return;
-        }
-
-        symbols.Add(new SymbolRecord
-        {
-            FileId = symbols.FirstOrDefault()?.FileId ?? 0,
-            Kind = "domain_tag",
-            Name = "AppDomainTag",
-            Line = 1,
-            StartLine = 1,
-            EndLine = 1,
-            Signature = $"domain tag for {context.Path}",
-        });
-    }
-
-    public void OnReferencesExtracted(FileContext context, IList<ReferenceRecord> references)
-    {
-        references.Add(new ReferenceRecord
-        {
-            FileId = 10,
-            SymbolName = "AppDomainTag",
-            ReferenceKind = "domain_reference",
-            Line = 1,
-            Column = 1,
-            Context = context.Path,
-        });
-    }
-}
-
-public sealed class ThrowingPostExtractionHook : IPostExtractionHook
-{
-    public void OnSymbolsExtracted(FileContext context, IList<SymbolRecord> symbols)
-        => throw new InvalidOperationException("boom");
-
-    public void OnReferencesExtracted(FileContext context, IList<ReferenceRecord> references)
-        => throw new InvalidOperationException("boom");
-}
-
-public sealed class ThrowingConstructorPostExtractionHook : IPostExtractionHook
-{
-    public ThrowingConstructorPostExtractionHook()
-    {
-        if (Environment.GetEnvironmentVariable(PostExtractionHookTests.ThrowingConstructorHookEnvironmentVariable) == "1")
-            throw new InvalidOperationException("ctor boom");
-    }
-
-    public void OnSymbolsExtracted(FileContext context, IList<SymbolRecord> symbols)
-    {
-    }
-
-    public void OnReferencesExtracted(FileContext context, IList<ReferenceRecord> references)
-    {
-    }
-}
-
-public sealed class SlowConstructorPostExtractionHook : IPostExtractionHook
-{
-    public SlowConstructorPostExtractionHook()
-    {
-        var raw = Environment.GetEnvironmentVariable(PostExtractionHookTests.SlowConstructorHookDelayEnvironmentVariable);
-        if (int.TryParse(raw, out var milliseconds) && milliseconds > 0)
-            Thread.Sleep(milliseconds);
-    }
-
-    public void OnSymbolsExtracted(FileContext context, IList<SymbolRecord> symbols)
-    {
-    }
-
-    public void OnReferencesExtracted(FileContext context, IList<ReferenceRecord> references)
-    {
-    }
-}
-
-public sealed class StatefulPostExtractionHook : IPostExtractionHook
-{
-    private bool sawSymbols;
-
-    public void OnSymbolsExtracted(FileContext context, IList<SymbolRecord> symbols)
-    {
-        if (Environment.GetEnvironmentVariable(PostExtractionHookTests.StatefulHookEnvironmentVariable) == "1")
-            sawSymbols = true;
-    }
-
-    public void OnReferencesExtracted(FileContext context, IList<ReferenceRecord> references)
-    {
-        if (!sawSymbols || Environment.GetEnvironmentVariable(PostExtractionHookTests.StatefulHookEnvironmentVariable) != "1")
-            return;
-
-        references.Add(new ReferenceRecord
-        {
-            SymbolName = "StatefulHookSawSymbols",
-            ReferenceKind = "domain_reference",
-            Line = 1,
-            Column = 1,
-            Context = context.Path,
-        });
-    }
-}
-
-public sealed class SlowPostExtractionHook : IPostExtractionHook
-{
-    public void OnSymbolsExtracted(FileContext context, IList<SymbolRecord> symbols)
-    {
-        if (!DelayWhenRequested())
-            return;
-
-        symbols.Add(new SymbolRecord
-        {
-            Kind = "domain_tag",
-            Name = "SlowHookTag",
-            Line = 1,
-            StartLine = 1,
-            EndLine = 1,
-        });
-        SignalCompletionWhenRequested();
-    }
-
-    public void OnReferencesExtracted(FileContext context, IList<ReferenceRecord> references)
-    {
-        if (!DelayWhenRequested())
-            return;
-
-        references.Add(new ReferenceRecord
-        {
-            SymbolName = "SlowHookTag",
-            ReferenceKind = "domain_reference",
-            Line = 1,
-            Column = 1,
-            Context = context.Path,
-        });
-        SignalCompletionWhenRequested();
-    }
-
-    private static bool DelayWhenRequested()
-    {
-        var raw = Environment.GetEnvironmentVariable(PostExtractionHookTests.SlowHookDelayEnvironmentVariable);
-        if (!int.TryParse(raw, out var milliseconds) || milliseconds <= 0)
-            return false;
-
-        Thread.Sleep(milliseconds);
-        return true;
-    }
-
-    private static void SignalCompletionWhenRequested()
-    {
-        var completionPath = Environment.GetEnvironmentVariable(PostExtractionHookTests.SlowHookCompletionPathEnvironmentVariable);
-        if (!string.IsNullOrWhiteSpace(completionPath))
-            File.WriteAllText(completionPath, "done");
-    }
-}
-
-public sealed class LoadContextReportingPostExtractionHook : IPostExtractionHook
-{
-    public void OnSymbolsExtracted(FileContext context, IList<SymbolRecord> symbols)
-    {
-        var loadContext = AssemblyLoadContext.GetLoadContext(GetType().Assembly);
-        if (loadContext is { IsCollectible: true } && !ReferenceEquals(loadContext, AssemblyLoadContext.Default))
-        {
-            symbols.Add(new SymbolRecord
-            {
-                Kind = "domain_tag",
-                Name = "CollectibleHookLoadContext",
-                Line = 1,
-                StartLine = 1,
-                EndLine = 1,
-            });
-        }
-    }
-
-    public void OnReferencesExtracted(FileContext context, IList<ReferenceRecord> references)
-    {
-    }
-}
-
-public sealed class ExpandingPostExtractionHook : IPostExtractionHook
-{
-    public void OnSymbolsExtracted(FileContext context, IList<SymbolRecord> symbols)
-    {
-        if (Environment.GetEnvironmentVariable(PostExtractionHookTests.ExpandingHookEnvironmentVariable) != "1")
-            return;
-
-        for (var index = 0; index < 5; index++)
-        {
-            symbols.Add(new SymbolRecord
-            {
-                Kind = "domain_tag",
-                Name = $"ExpandedHookSymbol{index}",
-                Line = index + 1,
-                StartLine = index + 1,
-                EndLine = index + 1,
-            });
-        }
-    }
-
-    public void OnReferencesExtracted(FileContext context, IList<ReferenceRecord> references)
-    {
-        if (Environment.GetEnvironmentVariable(PostExtractionHookTests.ExpandingHookEnvironmentVariable) != "1")
-            return;
-
-        for (var index = 0; index < 5; index++)
-        {
-            references.Add(new ReferenceRecord
-            {
-                SymbolName = $"ExpandedHookSymbol{index}",
-                ReferenceKind = "domain_reference",
-                Line = index + 1,
-                Column = 1,
-                Context = context.Path,
-            });
-        }
     }
 }
