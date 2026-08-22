@@ -1440,106 +1440,206 @@ public partial class DbWriter
           );
 
         INSERT INTO symbol_reference_candidates(reference_id, symbol_id, scope_rank)
-        SELECT r.id, unique_target.symbol_id, 5
+        WITH csharp_instantiation_type_members(
+            symbol_id,
+            name_folded,
+            name,
+            type_arity,
+            type_identity,
+            candidate_kind,
+            constructor_parameter_count,
+            is_value_type,
+            representative_rank) AS MATERIALIZED (
+            SELECT s.id,
+                   s.name_folded,
+                   s.name COLLATE BINARY,
+                   symbol_fact.definition_type_arity,
+                   type_identity_fact.type_identity COLLATE BINARY,
+                   s.kind,
+                   symbol_fact.constructor_parameter_count,
+                   symbol_fact.is_value_type,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY s.name_folded,
+                                    s.name COLLATE BINARY,
+                                    symbol_fact.definition_type_arity,
+                                    type_identity_fact.type_identity COLLATE BINARY
+                       ORDER BY target_file.path COLLATE BINARY,
+                                COALESCE(s.start_line, s.line),
+                                s.id)
+            FROM symbols AS s
+            JOIN files AS target_file ON target_file.id = s.file_id
+            JOIN temp.csharp_symbol_facts AS symbol_fact
+              ON symbol_fact.symbol_id = s.id
+            JOIN temp.csharp_type_identity_facts AS type_identity_fact
+              ON type_identity_fact.symbol_id = s.id
+            WHERE target_file.lang = 'csharp'
+              AND s.name_folded IS NOT NULL
+              AND s.kind IN ('class', 'struct', 'record', 'enum', 'delegate')
+        ),
+        csharp_unique_instantiation_families(
+            name_folded,
+            name,
+            type_arity,
+            type_identity) AS MATERIALIZED (
+            SELECT type_member.name_folded,
+                   type_member.name COLLATE BINARY,
+                   type_member.type_arity,
+                   MIN(type_member.type_identity COLLATE BINARY)
+            FROM csharp_instantiation_type_members AS type_member
+            GROUP BY type_member.name_folded,
+                     type_member.name COLLATE BINARY,
+                     type_member.type_arity
+            HAVING COUNT(DISTINCT type_member.type_identity COLLATE BINARY) = 1
+        ),
+        csharp_instantiation_constructor_members(
+            symbol_id,
+            name_folded,
+            name,
+            type_arity,
+            type_identity,
+            constructor_parameter_count) AS MATERIALIZED (
+            SELECT constructor.id,
+                   unique_family.name_folded,
+                   unique_family.name COLLATE BINARY,
+                   unique_family.type_arity,
+                   unique_family.type_identity COLLATE BINARY,
+                   constructor_fact.constructor_parameter_count
+            FROM csharp_unique_instantiation_families AS unique_family
+            CROSS JOIN symbols AS constructor INDEXED BY idx_symbols_name_folded
+              ON constructor.name_folded = unique_family.name_folded
+             AND constructor.name = unique_family.name COLLATE BINARY
+            JOIN files AS constructor_file
+              ON constructor_file.id = constructor.file_id
+             AND constructor_file.lang = 'csharp'
+            JOIN temp.csharp_symbol_facts AS constructor_fact
+              ON constructor_fact.symbol_id = constructor.id
+             AND constructor_fact.constructor_parameter_count IS NOT NULL
+            JOIN temp.csharp_constructor_identity_facts AS constructor_identity
+              ON constructor_identity.symbol_id = constructor.id
+             AND constructor_identity.type_identity =
+                 unique_family.type_identity COLLATE BINARY
+             AND constructor_identity.type_arity IS unique_family.type_arity
+            WHERE constructor.kind = 'function'
+              AND constructor.container_name = constructor.name COLLATE BINARY
+        ),
+        csharp_instantiation_constructor_summary(
+            name_folded,
+            name,
+            type_arity,
+            type_identity,
+            has_explicit_constructor,
+            has_explicit_zero_constructor) AS MATERIALIZED (
+            SELECT unique_family.name_folded,
+                   unique_family.name COLLATE BINARY,
+                   unique_family.type_arity,
+                   unique_family.type_identity COLLATE BINARY,
+                   MAX(constructor_member.symbol_id IS NOT NULL),
+                   MAX(COALESCE(
+                       constructor_member.constructor_parameter_count = 0,
+                       0))
+            FROM csharp_unique_instantiation_families AS unique_family
+            LEFT JOIN csharp_instantiation_constructor_members AS constructor_member
+              ON constructor_member.name_folded = unique_family.name_folded
+             AND constructor_member.name = unique_family.name COLLATE BINARY
+             AND constructor_member.type_arity IS unique_family.type_arity
+             AND constructor_member.type_identity =
+                 unique_family.type_identity COLLATE BINARY
+            GROUP BY unique_family.name_folded,
+                     unique_family.name COLLATE BINARY,
+                     unique_family.type_arity,
+                     unique_family.type_identity COLLATE BINARY
+        ),
+        csharp_instantiation_targets(
+            symbol_id,
+            name_folded,
+            name,
+            type_arity,
+            type_identity,
+            candidate_kind,
+            constructor_parameter_count,
+            is_value_type,
+            has_explicit_constructor,
+            has_explicit_zero_constructor) AS (
+            SELECT constructor_member.symbol_id,
+                   constructor_member.name_folded,
+                   constructor_member.name COLLATE BINARY,
+                   constructor_member.type_arity,
+                   constructor_member.type_identity COLLATE BINARY,
+                   'function',
+                   constructor_member.constructor_parameter_count,
+                   0,
+                   1,
+                   constructor_member.constructor_parameter_count = 0
+            FROM csharp_instantiation_constructor_members AS constructor_member
+
+            UNION ALL
+
+            SELECT type_member.symbol_id,
+                   unique_family.name_folded,
+                   unique_family.name COLLATE BINARY,
+                   unique_family.type_arity,
+                   unique_family.type_identity COLLATE BINARY,
+                   type_member.candidate_kind,
+                   type_member.constructor_parameter_count,
+                   type_member.is_value_type,
+                   constructor_summary.has_explicit_constructor,
+                   constructor_summary.has_explicit_zero_constructor
+            FROM csharp_unique_instantiation_families AS unique_family
+            JOIN csharp_instantiation_type_members AS type_member
+              ON type_member.name_folded = unique_family.name_folded
+             AND type_member.name = unique_family.name COLLATE BINARY
+             AND type_member.type_arity IS unique_family.type_arity
+             AND type_member.type_identity =
+                 unique_family.type_identity COLLATE BINARY
+             AND type_member.representative_rank = 1
+            JOIN csharp_instantiation_constructor_summary AS constructor_summary
+              ON constructor_summary.name_folded = unique_family.name_folded
+             AND constructor_summary.name = unique_family.name COLLATE BINARY
+             AND constructor_summary.type_arity IS unique_family.type_arity
+             AND constructor_summary.type_identity =
+                 unique_family.type_identity COLLATE BINARY
+        )
+        SELECT r.id,
+               unique_target.symbol_id,
+               5
         FROM symbol_references AS r
         JOIN files AS source_file ON source_file.id = r.file_id
-        JOIN (
-            SELECT candidate.id AS symbol_id,
-                   unique_type.name_folded,
-                   unique_type.name,
-                   unique_type.type_arity,
-                   unique_type.type_identity,
-                   candidate.kind AS candidate_kind,
-                   {BuildCSharpConstructorParameterCountSql("candidate")}
-                       AS constructor_parameter_count,
-                   {BuildCSharpIsValueTypeSql("candidate")} AS is_value_type
-            FROM (
-                SELECT s.name_folded,
-                       s.name,
-                       {BuildCSharpDefinitionTypeAritySql("s")} AS type_arity,
-                       MIN({BuildCSharpTypeIdentitySql("s")}) AS type_identity
-                FROM symbols AS s
-                JOIN files AS target_file ON target_file.id = s.file_id
-                WHERE target_file.lang = 'csharp'
-                  AND s.name_folded IS NOT NULL
-                  AND s.kind IN ('class', 'struct', 'record', 'enum', 'delegate')
-                GROUP BY s.name_folded,
-                         s.name,
-                         {BuildCSharpDefinitionTypeAritySql("s")}
-                HAVING COUNT(DISTINCT {BuildCSharpTypeIdentitySql("s")}) = 1
-            ) AS unique_type
-            JOIN symbols AS candidate
-              ON candidate.name_folded = unique_type.name_folded
-             AND candidate.name = unique_type.name COLLATE BINARY
-            JOIN files AS candidate_file
-              ON candidate_file.id = candidate.file_id
-             AND candidate_file.lang = 'csharp'
-            WHERE (
-                candidate.kind = 'function'
-                    AND candidate.container_name = candidate.name COLLATE BINARY
-                    AND {BuildCSharpConstructorParameterCountSql("candidate")} IS NOT NULL
-                    AND {BuildCSharpConstructorIdentitySql("candidate")}
-                        = unique_type.type_identity COLLATE BINARY
-                )
-               OR (
-                    candidate.kind IN ('class', 'struct', 'record', 'enum', 'delegate')
-                    AND {BuildCSharpTypeIdentitySql("candidate")}
-                        = unique_type.type_identity COLLATE BINARY
-                    AND candidate.id = (
-                        SELECT representative.id
-                        FROM symbols AS representative
-                        JOIN files AS representative_file
-                          ON representative_file.id = representative.file_id
-                         AND representative_file.lang = 'csharp'
-                        WHERE representative.name_folded = unique_type.name_folded
-                          AND representative.name = unique_type.name COLLATE BINARY
-                          AND representative.kind IN (
-                              'class',
-                              'struct',
-                              'record',
-                              'enum',
-                              'delegate')
-                          AND {BuildCSharpTypeIdentitySql("representative")}
-                              = unique_type.type_identity COLLATE BINARY
-                        ORDER BY representative_file.path,
-                                 COALESCE(representative.start_line, representative.line),
-                                 representative.id
-                        LIMIT 1
-                    )
-                )
-        ) AS unique_target ON unique_target.name_folded = r.symbol_name_folded
-                           AND unique_target.name = r.symbol_name COLLATE BINARY
+        JOIN csharp_instantiation_targets AS unique_target
+          ON unique_target.name_folded = r.symbol_name_folded
+         AND unique_target.name = r.symbol_name COLLATE BINARY
+        LEFT JOIN temp.csharp_reference_facts AS reference_fact
+          ON reference_fact.reference_id = r.id
         WHERE source_file.lang = 'csharp'
           AND r.target_qualifier IS NULL
           AND r.reference_kind = 'instantiate'
           AND (
-              {CSharpReferenceTypeAritySql} IS NULL
-              OR unique_target.type_arity = {CSharpReferenceTypeAritySql}
+              reference_fact.type_arity IS NULL
+              OR unique_target.type_arity = reference_fact.type_arity
           )
           AND (
               (
                   unique_target.candidate_kind = 'function'
                   AND (
-                      {CSharpReferenceArgumentCountSql} IS NULL
+                      reference_fact.argument_count IS NULL
                       OR unique_target.constructor_parameter_count
-                         = {CSharpReferenceArgumentCountSql}
+                         = reference_fact.argument_count
                   )
               )
               OR (
                   unique_target.candidate_kind IN ('class', 'struct', 'record')
                   AND unique_target.constructor_parameter_count IS NOT NULL
                   AND (
-                      {CSharpReferenceArgumentCountSql} IS NULL
+                      reference_fact.argument_count IS NULL
                       OR unique_target.constructor_parameter_count
-                         = {CSharpReferenceArgumentCountSql}
+                         = reference_fact.argument_count
                   )
               )
               OR unique_target.candidate_kind = 'delegate'
               OR (
                   unique_target.candidate_kind = 'enum'
                   AND (
-                      {CSharpReferenceArgumentCountSql} IS NULL
-                      OR {CSharpReferenceArgumentCountSql} = 0
+                      reference_fact.argument_count IS NULL
+                      OR reference_fact.argument_count = 0
                   )
               )
               OR (
@@ -1547,48 +1647,18 @@ public partial class DbWriter
                   AND unique_target.is_value_type = 0
                   AND unique_target.constructor_parameter_count IS NULL
                   AND (
-                      {CSharpReferenceArgumentCountSql} IS NULL
-                      OR {CSharpReferenceArgumentCountSql} = 0
+                      reference_fact.argument_count IS NULL
+                      OR reference_fact.argument_count = 0
                   )
-                  AND NOT EXISTS (
-                      SELECT 1
-                      FROM symbols AS explicit_constructor
-                      JOIN files AS constructor_file
-                        ON constructor_file.id = explicit_constructor.file_id
-                       AND constructor_file.lang = 'csharp'
-                      WHERE explicit_constructor.name_folded = unique_target.name_folded
-                        AND explicit_constructor.name = unique_target.name COLLATE BINARY
-                        AND explicit_constructor.kind = 'function'
-                        AND explicit_constructor.container_name =
-                            explicit_constructor.name COLLATE BINARY
-                        AND {BuildCSharpConstructorParameterCountSql("explicit_constructor")}
-                            IS NOT NULL
-                        AND {BuildCSharpConstructorIdentitySql("explicit_constructor")}
-                            = unique_target.type_identity COLLATE BINARY
-                  )
+                  AND unique_target.has_explicit_constructor = 0
               )
               OR (
                   unique_target.is_value_type = 1
                   AND (
-                      {CSharpReferenceArgumentCountSql} IS NULL
-                      OR {CSharpReferenceArgumentCountSql} = 0
+                      reference_fact.argument_count IS NULL
+                      OR reference_fact.argument_count = 0
                   )
-                  AND NOT EXISTS (
-                      SELECT 1
-                      FROM symbols AS explicit_zero_constructor
-                      JOIN files AS zero_constructor_file
-                        ON zero_constructor_file.id = explicit_zero_constructor.file_id
-                       AND zero_constructor_file.lang = 'csharp'
-                      WHERE explicit_zero_constructor.name_folded = unique_target.name_folded
-                        AND explicit_zero_constructor.name = unique_target.name COLLATE BINARY
-                        AND explicit_zero_constructor.kind = 'function'
-                        AND explicit_zero_constructor.container_name =
-                            explicit_zero_constructor.name COLLATE BINARY
-                        AND {BuildCSharpConstructorParameterCountSql("explicit_zero_constructor")}
-                            = 0
-                        AND {BuildCSharpConstructorIdentitySql("explicit_zero_constructor")}
-                            = unique_target.type_identity COLLATE BINARY
-                  )
+                  AND unique_target.has_explicit_zero_constructor = 0
               )
           )
           AND NOT EXISTS (

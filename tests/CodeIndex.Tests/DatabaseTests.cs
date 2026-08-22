@@ -355,6 +355,8 @@ public class DatabaseTests : IDisposable
             }
         }
 
+        _writer.RefreshMutualRecursionFlags();
+        using var candidateScope = _writer.BeginReferenceGraphRefreshScope();
         var candidateStages = DbWriter.CSharpGraphCandidateSqlForTesting;
         Assert.Equal(["full", "scoped", "retained"], candidateStages.Select(static stage => stage.Scope));
         foreach (var (scope, sql) in candidateStages)
@@ -388,6 +390,71 @@ public class DatabaseTests : IDisposable
                 "REPLACE(COALESCE(",
                 sql,
                 StringComparison.Ordinal);
+
+            var instantiationStatement = Assert.Single(
+                sql.Split(
+                        ';',
+                        StringSplitOptions.RemoveEmptyEntries
+                        | StringSplitOptions.TrimEntries)
+                    .Where(static statement => statement.Contains(
+                        "csharp_instantiation_type_members(",
+                        StringComparison.Ordinal)));
+            Assert.Contains(
+                "csharp_unique_instantiation_families(",
+                instantiationStatement,
+                StringComparison.Ordinal);
+            Assert.Contains(
+                "csharp_instantiation_constructor_members(",
+                instantiationStatement,
+                StringComparison.Ordinal);
+            Assert.Contains(
+                "csharp_instantiation_constructor_summary(",
+                instantiationStatement,
+                StringComparison.Ordinal);
+            Assert.Contains(
+                "csharp_instantiation_targets(",
+                instantiationStatement,
+                StringComparison.Ordinal);
+            Assert.Equal(4, CountOccurrences(instantiationStatement, "AS MATERIALIZED"));
+            Assert.Equal(
+                1,
+                CountOccurrences(
+                    instantiationStatement,
+                    "JOIN symbols AS constructor"));
+            Assert.Contains(
+                "constructor_identity.type_arity IS unique_family.type_arity",
+                instantiationStatement,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain(
+                "symbols AS explicit_constructor",
+                instantiationStatement,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain(
+                "symbols AS explicit_zero_constructor",
+                instantiationStatement,
+                StringComparison.Ordinal);
+
+            var instantiationPlan = ReadQueryPlanDetails(
+                _db.Connection,
+                instantiationStatement);
+            Assert.Equal(
+                1,
+                instantiationPlan.Count(static detail => detail.Contains(
+                    "CORRELATED SCALAR SUBQUERY",
+                    StringComparison.OrdinalIgnoreCase)));
+            Assert.Contains(
+                instantiationPlan,
+                static detail => detail.Contains(
+                    "SEARCH constructor USING INDEX idx_symbols_name_folded",
+                    StringComparison.OrdinalIgnoreCase));
+            Assert.DoesNotContain(
+                instantiationPlan,
+                static detail => detail.Equals(
+                    "SCAN constructor",
+                    StringComparison.OrdinalIgnoreCase)
+                    || detail.StartsWith(
+                        "SCAN constructor ",
+                        StringComparison.OrdinalIgnoreCase));
         }
 
         static int CountOccurrences(string text, string value)
@@ -401,6 +468,246 @@ public class DatabaseTests : IDisposable
             }
 
             return count;
+        }
+    }
+
+    [Fact]
+    public void CSharpInstantiationFallback_SetBasedFamiliesPreserveSemanticBoundaries()
+    {
+        var callerFileId = UpsertTestFile("calls/Caller.cs", "instantiation-caller");
+        var symbols = new List<SymbolRecord>();
+
+        AddTypeFile(
+            "types/CaseType.cs",
+            "class",
+            "CaseType",
+            "public class CaseType");
+        AddTypeFile(
+            "types/casetype.cs",
+            "class",
+            "casetype",
+            "public class casetype");
+        AddTypeFile(
+            "types/Generic1.cs",
+            "class",
+            "Generic",
+            "public class Generic<T>");
+        AddTypeFile(
+            "types/Generic2.cs",
+            "class",
+            "Generic",
+            "public class Generic<TLeft, TRight>");
+        AddTypeFile(
+            "types/Partial.A.cs",
+            "class",
+            "Partial",
+            "public partial class Partial");
+        AddTypeFile(
+            "types/Partial.B.cs",
+            "class",
+            "Partial",
+            "public partial class Partial");
+        AddTypeFile(
+            "types/Overload.cs",
+            "class",
+            "Overload",
+            "public class Overload",
+            constructors:
+            [
+                (4, "public Overload()"),
+                (5, "public Overload(int value)"),
+            ]);
+        AddTypeFile(
+            "types/Plain.cs",
+            "class",
+            "Plain",
+            "public class Plain");
+        AddTypeFile(
+            "types/Value.cs",
+            "struct",
+            "Value",
+            "public struct Value",
+            constructors: [(4, "public Value(int value)")]);
+        AddTypeFile(
+            "types/ZeroValue.cs",
+            "struct",
+            "ZeroValue",
+            "public struct ZeroValue",
+            constructors: [(4, "public ZeroValue()")]);
+        AddTypeFile(
+            "types/Primary.cs",
+            "record",
+            "Primary",
+            "public record Primary(int value)");
+        AddTypeFile(
+            "types/Ambiguous.One.cs",
+            "class",
+            "Ambiguous",
+            "public class Ambiguous",
+            container: "One");
+        AddTypeFile(
+            "types/Ambiguous.Two.cs",
+            "class",
+            "Ambiguous",
+            "public class Ambiguous",
+            container: "Two");
+        AddTypeFile(
+            "types/Choice.cs",
+            "enum",
+            "Choice",
+            "public enum Choice");
+        AddTypeFile(
+            "types/Factory.cs",
+            "delegate",
+            "Factory",
+            "public delegate void Factory(int value)");
+        AddType(
+            callerFileId,
+            "class",
+            "LocalOnly",
+            "public class LocalOnly",
+            "Calls");
+
+        _writer.InsertSymbols(symbols);
+        _writer.InsertReferences(
+        [
+            Instantiation("CaseType", 1, "new CaseType();"),
+            Instantiation("casetype", 2, "new casetype();"),
+            Instantiation("Generic", 3, "new Generic<int>();"),
+            Instantiation("Generic", 4, "new Generic<int, string>();"),
+            Instantiation("Generic", 5, "unparseable"),
+            Instantiation("Partial", 6, "new Partial();"),
+            Instantiation("Overload", 7, "new Overload(1);"),
+            Instantiation("Overload", 8, "unparseable"),
+            Instantiation("Plain", 9, "new Plain();"),
+            Instantiation("Value", 10, "new Value();"),
+            Instantiation("Value", 11, "new Value(1);"),
+            Instantiation("ZeroValue", 12, "new ZeroValue();"),
+            Instantiation("Primary", 13, "new Primary(1);"),
+            Instantiation("Ambiguous", 14, "new Ambiguous();"),
+            Instantiation("LocalOnly", 15, "new LocalOnly();"),
+            Instantiation("Choice", 16, "new Choice();"),
+            Instantiation("Choice", 17, "new Choice(1);"),
+            Instantiation("Factory", 18, "new Factory(Handler);"),
+        ],
+        refreshMutualRecursionFlags: false);
+
+        _writer.RefreshMutualRecursionFlags();
+
+        Assert.Equal("types/CaseType.cs:class:1", ReadCandidates(line: 1));
+        Assert.Equal("types/casetype.cs:class:1", ReadCandidates(line: 2));
+        Assert.Equal("types/Generic1.cs:class:1", ReadCandidates(line: 3));
+        Assert.Equal("types/Generic2.cs:class:1", ReadCandidates(line: 4));
+        Assert.Equal(
+            "types/Generic1.cs:class:1|types/Generic2.cs:class:1",
+            ReadCandidates(line: 5));
+        Assert.Equal("types/Partial.A.cs:class:1", ReadCandidates(line: 6));
+        Assert.Equal("types/Overload.cs:function:5", ReadCandidates(line: 7));
+        Assert.Equal(
+            "types/Overload.cs:function:4|types/Overload.cs:function:5",
+            ReadCandidates(line: 8));
+        Assert.Equal("types/Plain.cs:class:1", ReadCandidates(line: 9));
+        Assert.Equal("types/Value.cs:struct:1", ReadCandidates(line: 10));
+        Assert.Equal("types/Value.cs:function:4", ReadCandidates(line: 11));
+        Assert.Equal("types/ZeroValue.cs:function:4", ReadCandidates(line: 12));
+        Assert.Equal("types/Primary.cs:record:1", ReadCandidates(line: 13));
+        Assert.Empty(ReadCandidates(line: 14));
+        Assert.Empty(ReadCandidates(line: 15));
+        Assert.Equal(
+            "calls/Caller.cs:class:1",
+            ReadCandidates(line: 15, scopeRank: 3));
+        Assert.Equal("types/Choice.cs:enum:1", ReadCandidates(line: 16));
+        Assert.Empty(ReadCandidates(line: 17));
+        Assert.Equal("types/Factory.cs:delegate:1", ReadCandidates(line: 18));
+
+        long AddTypeFile(
+            string path,
+            string kind,
+            string name,
+            string signature,
+            string container = "Demo",
+            params (int Line, string Signature)[] constructors)
+        {
+            var fileId = UpsertTestFile(path, $"set-based-{path}");
+            AddType(fileId, kind, name, signature, container, constructors);
+            return fileId;
+        }
+
+        void AddType(
+            long fileId,
+            string kind,
+            string name,
+            string signature,
+            string container,
+            params (int Line, string Signature)[] constructors)
+        {
+            symbols.Add(new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = kind,
+                Name = name,
+                Line = 1,
+                StartLine = 1,
+                EndLine = 20,
+                Signature = signature,
+                ContainerQualifiedName = container,
+            });
+            foreach (var constructor in constructors)
+            {
+                symbols.Add(new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "function",
+                    Name = name,
+                    Line = constructor.Line,
+                    StartLine = constructor.Line,
+                    EndLine = constructor.Line,
+                    Signature = constructor.Signature,
+                    ContainerKind = kind,
+                    ContainerName = name,
+                    ContainerQualifiedName = $"{container}.{name}",
+                });
+            }
+        }
+
+        ReferenceRecord Instantiation(string name, int line, string context)
+            => new()
+            {
+                FileId = callerFileId,
+                SymbolName = name,
+                ReferenceKind = "instantiate",
+                Line = line,
+                Column = 5,
+                Context = context,
+            };
+
+        string ReadCandidates(int line, int scopeRank = 5)
+        {
+            using var command = _db.Connection.CreateCommand();
+            command.CommandText = """
+                SELECT group_concat(candidate.entry, '|')
+                FROM (
+                    SELECT target_file.path || ':' || target.kind || ':' || target.line
+                               AS entry
+                    FROM symbol_reference_candidates AS candidate
+                    JOIN symbol_references AS reference
+                      ON reference.id = candidate.reference_id
+                    JOIN symbols AS target ON target.id = candidate.symbol_id
+                    JOIN files AS target_file ON target_file.id = target.file_id
+                    WHERE reference.file_id = @caller_file_id
+                      AND reference.line = @line
+                      AND candidate.scope_rank = @scope_rank
+                    ORDER BY target_file.path COLLATE BINARY,
+                             target.line,
+                             target.id
+                ) AS candidate
+                """;
+            command.Parameters.AddWithValue("@caller_file_id", callerFileId);
+            command.Parameters.AddWithValue("@line", line);
+            command.Parameters.AddWithValue("@scope_rank", scopeRank);
+            return Convert.ToString(
+                command.ExecuteScalar(),
+                CultureInfo.InvariantCulture) ?? string.Empty;
         }
     }
 
