@@ -156,7 +156,11 @@ public class LocalJsonlJsonWriterOptionsTests
             Directory.EnumerateFiles(directory, "*.cs", SearchOption.TopDirectoryOnly);
         enumerateDirectories ??= Directory.EnumerateDirectories;
 
-        foreach (var root in new[] { "src/CodeIndex", "tests/CodeIndex.Tests" })
+        foreach (var root in new[]
+                 {
+                     Path.Combine("src", "CodeIndex"),
+                     Path.Combine("tests", "CodeIndex.Tests"),
+                 })
         {
             var fullRoot = Path.Combine(repositoryRoot, root);
             var pendingDirectories = new Stack<string>();
