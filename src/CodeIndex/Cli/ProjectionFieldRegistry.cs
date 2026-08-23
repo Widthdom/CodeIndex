@@ -492,11 +492,7 @@ internal static class ProjectionFieldRegistry
     private static ProjectionCommandFieldSchema CreateImpactSchema()
     {
         var callerFields = GetJsonFieldNames<ImpactResult>().ToArray();
-        var fileImpactFields = new[]
-        {
-            "result_kind", "path", "lang", "depth", "reference_count", "reference_kind",
-            "reference_kinds", "reference_kind_counts",
-        };
+        var fileImpactFields = GetJsonFieldNames<FileDependencyResult>().ToArray();
         var definitionFields = new[]
         {
             "api_version", "path", "symbol_id", "lang", "kind", "sub_kind", "name", "line",
@@ -507,12 +503,15 @@ internal static class ProjectionFieldRegistry
         };
         return Create(
             "impact",
-            ["path", "caller_name", "callee_name", "depth", "first_line", "reference_count", "result_kind"],
+            [
+                "path", "source_path", "target_path", "caller_name", "callee_name", "depth", "first_line",
+                "reference_count", "result_kind",
+            ],
             builder => builder
                 .Fields(callerFields.Concat(fileImpactFields).Concat(definitionFields).Distinct(StringComparer.Ordinal))
                 .Alias("file", "path")
                 .Collection("callers", callerFields, pathAlias: true)
-                .Collection("file_impacts", fileImpactFields, pathAlias: true)
+                .Collection("file_impacts", fileImpactFields)
                 .Collection("definitions", definitionFields, pathAlias: true));
     }
 

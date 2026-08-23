@@ -12,6 +12,7 @@ public sealed class ProjectionFieldRegistryIssue4836Tests
     [Theory]
     [InlineData("search", "path")]
     [InlineData("references", "resolution_state")]
+    [InlineData("impact", "file_impacts.source_path")]
     [InlineData("map", "languages.lang")]
     [InlineData("status", "workspace_check.unindexed_files_omitted_count")]
     public void FieldsList_DiscoversCommandSpecificSchemaWithoutRunningQuery_Issue4836(
@@ -40,6 +41,7 @@ public sealed class ProjectionFieldRegistryIssue4836Tests
     [Theory]
     [InlineData("search")]
     [InlineData("references")]
+    [InlineData("impact")]
     [InlineData("map")]
     public void UnknownFields_ReturnTypedJsonUsageErrorBeforeQueryExecution_Issue4836(string command)
     {
@@ -350,6 +352,36 @@ public sealed class ProjectionFieldRegistryIssue4836Tests
     }
 
     [Fact]
+    public void ImpactFileDependencyFields_MatchRuntimeModelAndRejectAmbiguousPathAlias_Issue5156()
+    {
+        string[] expectedFields =
+        [
+            "result_kind", "source_path", "target_path", "source_db", "target_db",
+            "reference_count", "ranking_score", "symbols", "evidence",
+        ];
+        var discovery = ProjectionFieldRegistry.CreateDiscoveryDocument("impact");
+        var validFields = discovery["valid_fields"]!.AsArray()
+            .Select(field => field!.GetValue<string>())
+            .ToHashSet(StringComparer.Ordinal);
+
+        foreach (var field in expectedFields)
+        {
+            var qualifiedField = $"file_impacts.{field}";
+            Assert.Contains(qualifiedField, validFields);
+            Assert.True(
+                ProjectionFieldRegistry.TryValidate("impact", [qualifiedField], out var error),
+                error?.Message);
+        }
+
+        Assert.Contains("source_path", ProjectionFieldRegistry.GetCompactFields("impact")!);
+        Assert.Contains("target_path", ProjectionFieldRegistry.GetCompactFields("impact")!);
+        Assert.False(ProjectionFieldRegistry.TryValidate("impact", ["file_impacts.path"], out var pathError));
+        Assert.NotNull(pathError);
+        Assert.DoesNotContain("file_impacts.path", validFields);
+        Assert.DoesNotContain("file_impacts.file", validFields);
+    }
+
+    [Fact]
     public void EveryDiscoveredProjectionField_ValidatesFromTheSameRegistry_Issue4836()
     {
         foreach (var command in ProjectionFieldRegistry.SupportedCommands)
@@ -532,6 +564,7 @@ public sealed class ProjectionFieldRegistryIssue4836Tests
     [Theory]
     [InlineData("search")]
     [InlineData("references")]
+    [InlineData("impact")]
     [InlineData("map")]
     public void CommandHelp_DirectsFieldsUsersToRegistryDiscovery_Issue4836(string command)
     {
