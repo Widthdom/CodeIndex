@@ -1,5 +1,6 @@
 using System.Globalization;
 using CodeIndex.Indexer;
+using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Database;
@@ -187,7 +188,8 @@ public partial class DbReader
                    {GetSymbolColumnSql("container_name")} AS container_name,
                    {GetSymbolColumnSql("visibility")} AS visibility,
                    {GetSymbolColumnSql("return_type")} AS return_type,
-                   s.id AS symbol_id
+                   s.id AS symbol_id,
+                   {GetSymbolColumnSql("container_qualified_name")} AS container_qualified_name
             FROM symbols s
             JOIN files f ON s.file_id = f.id
             WHERE f.path = @path
@@ -242,16 +244,54 @@ public partial class DbReader
             Visibility = GetNullableString(reader, 12),
             ReturnType = GetNullableString(reader, 13),
             SymbolId = reader.GetInt64(14),
+            ContainerQualifiedName = GetNullableString(reader, 15),
         };
+
+    private DefinitionResult? GetDefinitionBySymbolId(
+        long symbolId,
+        bool includeBody,
+        int? bodyStartLine,
+        int? bodyLineCount)
+    {
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = $@"
+            SELECT f.path, f.lang, s.kind, s.name, s.line,
+                   {GetSymbolColumnSql("start_line", "s.line")} AS start_line,
+                   {GetSymbolColumnSql("end_line", "s.line")} AS end_line,
+                   {GetSymbolColumnSql("body_start_line")} AS body_start_line,
+                   {GetSymbolColumnSql("body_end_line")} AS body_end_line,
+                   {GetSymbolColumnSql("signature")} AS signature,
+                   {GetSymbolColumnSql("container_kind")} AS container_kind,
+                   {GetSymbolColumnSql("container_name")} AS container_name,
+                   {GetSymbolColumnSql("visibility")} AS visibility,
+                   {GetSymbolColumnSql("return_type")} AS return_type,
+                   s.id AS symbol_id,
+                   {GetSymbolColumnSql("container_qualified_name")} AS container_qualified_name
+            FROM symbols s
+            JOIN files f ON s.file_id = f.id
+            WHERE s.id = @symbol_id
+            LIMIT 1";
+        SqliteCommandPolicy.Add(cmd, "@symbol_id", symbolId);
+        using var reader = cmd.ExecuteTrackedReader();
+        if (!reader.TrackedRead())
+            return null;
+
+        return BuildDefinitionResult(
+            ReadSymbolResult(reader),
+            includeBody,
+            bodyStartLine,
+            bodyLineCount);
+    }
 
     /// <summary>
     /// Bundle definition, graph, and local file context for one symbol query.
     /// 単一シンボルクエリ向けに、定義・グラフ・ローカル文脈をまとめて返す。
     /// </summary>
-    public SymbolAnalysisResult AnalyzeSymbol(string query, int limit = 10, string? lang = null, bool includeBody = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, int? bodyStartLine = null, int? bodyLineCount = null, string? kind = null, bool groupPartials = false, SymbolGraphPageRequest? graphPage = null)
+    public SymbolAnalysisResult AnalyzeSymbol(string query, int limit = 10, string? lang = null, bool includeBody = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, int? bodyStartLine = null, int? bodyLineCount = null, string? kind = null, bool groupPartials = false, SymbolGraphPageRequest? graphPage = null, long? selectedSymbolId = null, string? selectedSymbolGenerationFingerprint = null)
     {
         using var txn = _conn.BeginTransaction(deferred: true);
-        if (string.IsNullOrWhiteSpace(query) || IsBareVerbatimQueryToken(query))
+        if (selectedSymbolId == null
+            && (string.IsNullOrWhiteSpace(query) || IsBareVerbatimQueryToken(query)))
         {
             var workspaceFreshness = GetWorkspaceFreshness();
             var emptyResult = new SymbolAnalysisResult
@@ -267,9 +307,9 @@ public partial class DbReader
         }
 
         lang = DbReader.NormalizeQueryLanguage(lang);
-        var normalizedQuery =
-            NormalizeSymbolSearchQueryForSymbolSearch(query, lang, exact)
-            ?? query;
+        var normalizedQuery = selectedSymbolId != null
+            ? query
+            : NormalizeSymbolSearchQueryForSymbolSearch(query, lang, exact) ?? query;
         // Propagate `exact` to every bundled sub-query so the one-round-trip AI workflow
         // (`inspect` / MCP `analyze_symbol`) keeps the same precision contract as the leaf
         // commands. Without this, `inspect Run --exact` would still pull RunAsync/RunImpact
@@ -285,7 +325,18 @@ public partial class DbReader
         // definitions / file / freshness / references / callers / callees / nearby symbols
         // が同じ WAL snapshot を参照するようにする。
         var definitionLimit = Math.Min(limit, 5);
-        var definitions = PrioritizeSourceDefinitions(GetDefinitions(normalizedQuery, definitionLimit, kind: kind, lang, includeBody, pathPatterns, excludePathPatterns, excludeTests, since: null, exact, bodyStartLine: bodyStartLine, bodyLineCount: bodyLineCount, groupPartials: groupPartials));
+        var selectedGenerationMatches = selectedSymbolGenerationFingerprint == null
+            || string.Equals(
+                selectedSymbolGenerationFingerprint,
+                SymbolSelector.BuildGenerationFingerprint(GetSymbolSelectorGenerationIdentity()),
+                StringComparison.Ordinal);
+        var definitions = selectedSymbolId is long symbolId
+            ? selectedGenerationMatches
+                ? GetDefinitionBySymbolId(symbolId, includeBody, bodyStartLine, bodyLineCount) is { } selectedDefinition
+                    ? new List<DefinitionResult> { selectedDefinition }
+                    : []
+                : []
+            : PrioritizeSourceDefinitions(GetDefinitions(normalizedQuery, definitionLimit, kind: kind, lang, includeBody, pathPatterns, excludePathPatterns, excludeTests, since: null, exact, bodyStartLine: bodyStartLine, bodyLineCount: bodyLineCount, groupPartials: groupPartials));
         DefinitionResult? primaryDefinition = definitions
             .FirstOrDefault(definition => SupportsReferenceLanguage(definition.Lang) && !IsCSharpEnumMemberDefinition(definition))
             ?? definitions.FirstOrDefault(definition => SupportsReferenceLanguage(definition.Lang))
@@ -303,7 +354,9 @@ public partial class DbReader
         var graphLanguageCandidates = new List<string>();
         var graphLanguageConflict = false;
         const bool hasUnsupportedEnumMember = false;
-        var hasSupportedGraphDefinition = exact
+        var hasSupportedGraphDefinition = selectedSymbolId != null
+            ? definitions.Any(definition => SupportsSymbolGraph(definition.Lang, definition.Kind, definition.ContainerKind) == true)
+            : exact
             ? HasExactGraphSupportedDefinition(normalizedQuery, lang, pathPatterns, excludePathPatterns, excludeTests)
             : definitions.Any(definition => SupportsSymbolGraph(definition.Lang, definition.Kind, definition.ContainerKind) == true);
         var unsupportedSymbolKind = hasUnsupportedEnumMember ? "enum_member" : null;
@@ -311,7 +364,7 @@ public partial class DbReader
             .Select((definition, index) => BuildSymbolCandidateBundle(
                 definition,
                 limit,
-                includeNameFallback: index == 0,
+                includeNameFallback: selectedSymbolId == null && index == 0,
                 pathPatterns,
                 excludePathPatterns,
                 excludeTests,
@@ -398,10 +451,10 @@ public partial class DbReader
                 excludePathPatterns: excludePathPatterns,
                 excludeTests: excludeTests)
             : (ExactQuerySignal?)null;
-        var relaxedSymbols = exact && definitions.Count == 0 && references.Count == 0 && callers.Count == 0 && callees.Count == 0
+        var relaxedSymbols = selectedSymbolId == null && exact && definitions.Count == 0 && references.Count == 0 && callers.Count == 0 && callees.Count == 0
             ? SearchSymbols(normalizedQuery, Math.Max(limit, 5), kind: null, lang, pathPatterns, excludePathPatterns, excludeTests, since: null, exact: false)
             : null;
-        var exactZeroHint = exact && definitions.Count == 0 && references.Count == 0 && callers.Count == 0 && callees.Count == 0
+        var exactZeroHint = selectedSymbolId == null && exact && definitions.Count == 0 && references.Count == 0 && callers.Count == 0 && callees.Count == 0
             ? ExactZeroHintResult.FromRelaxedMatches(
                 relaxedSymbols!.Count,
                 relaxedSymbols.Select(result => result.Name))
@@ -516,37 +569,40 @@ public partial class DbReader
         int maxLineWidth,
         SymbolGraphPageRequest? graphPage = null)
     {
-        var identityScoped = CanScopeCandidateByIdentity(definition);
+        var identityAvailable = CanScopeCandidateByIdentity(definition);
+        var hasAmbiguousInboundEvidence = identityAvailable
+            && HasAmbiguousInboundEvidence(definition.SymbolId!.Value);
+        var identityScoped = identityAvailable && !hasAmbiguousInboundEvidence;
         var selector = BuildSymbolCandidateSelector(definition);
         var referenceOffset = GetGraphSectionOffset(graphPage, "references", selector.Selector);
         var callerOffset = GetGraphSectionOffset(graphPage, "callers", selector.Selector);
         var calleeOffset = GetGraphSectionOffset(graphPage, "callees", selector.Selector);
-        var references = identityScoped
+        var references = identityAvailable
             ? SearchReferencesForCandidate(definition, limit, pathPatterns, excludePathPatterns, excludeTests, maxLineWidth, referenceOffset)
             : includeNameFallback
                 ? SearchReferences(definition.Name, limit, definition.Lang, null, pathPatterns, excludePathPatterns, excludeTests, exact: true, maxLineWidth, offset: referenceOffset)
                 : [];
-        var callers = identityScoped
+        var callers = identityAvailable
             ? GetCallersForCandidate(definition, limit, pathPatterns, excludePathPatterns, excludeTests, callerOffset)
             : includeNameFallback
                 ? GetCallers(definition.Name, limit, definition.Lang, null, pathPatterns, excludePathPatterns, excludeTests, exact: true, offset: callerOffset)
                 : [];
-        var callees = identityScoped
+        var callees = identityAvailable
             ? GetCalleesForCandidate(definition, limit, pathPatterns, excludePathPatterns, excludeTests, calleeOffset)
             : includeNameFallback
                 ? GetCallees(definition.Name, limit, definition.Lang, null, pathPatterns, excludePathPatterns, excludeTests, exact: true, offset: calleeOffset)
                 : [];
-        var referenceTotal = identityScoped
+        var referenceTotal = identityAvailable
             ? CountSearchReferencesForCandidate(definition, pathPatterns, excludePathPatterns, excludeTests)
             : includeNameFallback
                 ? CountSearchReferencesTotal(definition.Name, definition.Lang, null, pathPatterns, excludePathPatterns, excludeTests, exact: true).Count
                 : 0;
-        var callerTotal = identityScoped
+        var callerTotal = identityAvailable
             ? CountCallersForCandidate(definition, pathPatterns, excludePathPatterns, excludeTests)
             : includeNameFallback
                 ? CountCallersTotal(definition.Name, definition.Lang, null, pathPatterns, excludePathPatterns, excludeTests, exact: true).Count
                 : 0;
-        var calleeTotal = identityScoped
+        var calleeTotal = identityAvailable
             ? CountCalleesForCandidate(definition, pathPatterns, excludePathPatterns, excludeTests)
             : includeNameFallback
                 ? CountCalleesTotal(definition.Name, definition.Lang, null, pathPatterns, excludePathPatterns, excludeTests, exact: true).Count
@@ -575,6 +631,11 @@ public partial class DbReader
             GraphSupported = graphSupported,
             GraphSupportReason = graphSupportReason,
             IdentityScoped = identityScoped,
+            IdentityScopeReason = identityScoped
+                ? "exact_identity"
+                : hasAmbiguousInboundEvidence
+                    ? "ambiguous_reference_candidates"
+                    : "identity_contract_unavailable",
             NearbySymbols = nearbySymbols,
             References = references,
             Callers = callers,
@@ -636,20 +697,41 @@ public partial class DbReader
         && _referenceColumns.Contains("source_symbol_id")
         && HasTable("symbol_reference_candidates");
 
-    private static SymbolCandidateSelector BuildSymbolCandidateSelector(DefinitionResult definition)
+    private bool HasAmbiguousInboundEvidence(long symbolId)
+    {
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT EXISTS (
+                SELECT 1
+                FROM symbol_reference_candidates AS candidate
+                JOIN symbol_references AS reference
+                  ON reference.id = candidate.reference_id
+                WHERE candidate.symbol_id = @symbol_id
+                  AND reference.resolution_candidate_count > 1
+                LIMIT 1
+            )
+            """;
+        SqliteCommandPolicy.Add(cmd, "@symbol_id", symbolId);
+        return Convert.ToInt32(cmd.ExecuteScalar()) != 0;
+    }
+
+    private SymbolCandidateSelector BuildSymbolCandidateSelector(DefinitionResult definition)
     {
         var container = definition.ContainerQualifiedName ?? definition.ContainerName;
         var qualifiedName = string.IsNullOrWhiteSpace(container)
             ? definition.Name
             : $"{container}.{definition.Name}";
+        var generationFingerprint = SymbolSelector.BuildGenerationFingerprint(
+            GetSymbolSelectorGenerationIdentity());
         var selector = definition.SymbolId is long symbolId
-            ? $"id:{symbolId.ToString(CultureInfo.InvariantCulture)}"
+            ? new SymbolSelector(symbolId, generationFingerprint).ToString()
             : $"{definition.Lang}:{definition.Path}:{definition.StartLine.ToString(CultureInfo.InvariantCulture)}:{qualifiedName}";
 
         return new SymbolCandidateSelector
         {
             Selector = selector,
             SymbolId = definition.SymbolId,
+            GenerationFingerprint = definition.SymbolId != null ? generationFingerprint : null,
             QualifiedName = qualifiedName,
             Container = container,
             Signature = definition.Signature,

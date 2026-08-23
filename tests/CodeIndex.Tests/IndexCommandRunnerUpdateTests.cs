@@ -283,7 +283,7 @@ public partial class IndexCommandRunnerTests
 
             var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
             Assert.Equal(CommandExitCodes.Success, initialExitCode);
-            Assert.Equal(8, DbContext.ReferenceIdentityContractVersion);
+            Assert.Equal(9, DbContext.ReferenceIdentityContractVersion);
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             using (var connection = new SqliteConnection($"Data Source={dbPath}"))
@@ -348,7 +348,9 @@ public partial class IndexCommandRunnerTests
             using var markerCommand = verification.CreateCommand();
             markerCommand.CommandText = "SELECT value FROM codeindex_meta WHERE key = @key";
             markerCommand.Parameters.AddWithValue("@key", DbContext.ReferenceIdentityContractVersionMetaKey);
-            Assert.Equal("8", Convert.ToString(markerCommand.ExecuteScalar(), CultureInfo.InvariantCulture));
+            Assert.Equal(
+                DbContext.ReferenceIdentityContractVersion.ToString(CultureInfo.InvariantCulture),
+                Convert.ToString(markerCommand.ExecuteScalar(), CultureInfo.InvariantCulture));
 
             using var resolutionCommand = verification.CreateCommand();
             resolutionCommand.CommandText = """

@@ -333,7 +333,17 @@ traverse a combined identity graph; narrow it with language or path filters.
 `inspect` and MCP `analyze_symbol` return `candidate_bundles` when a name resolves to
 indexed definitions. Each bundle is labeled with a stable selector containing the symbol ID,
 qualified/container name, signature, language, kind, path, and line, and its graph sections
-are scoped to that candidate identity. When multiple candidates are returned, the top-level
+are scoped to that candidate identity. Reuse an emitted generation-bound ID selector with
+`cdidx inspect --selector 'id:<n>@g:<fingerprint>'` against the same database to inspect exactly
+that physical symbol without repeating name resolution. The legacy `id:<n>` form is accepted for
+the active database, but only the emitted generation fingerprint can detect a rebuilt or different
+database. Symbol IDs are database-local; a missing, stale, or cross-database selector returns
+`E018_QUERY_NOT_FOUND`. `identity_scoped` is true only when every inbound edge belongs uniquely
+to the selected identity. `identity_scope_reason: ambiguous_reference_candidates` keeps
+optional, `params`, named-argument, generic-inference, and otherwise unresolved overload evidence
+explicit instead of presenting duplicated candidate evidence as exact. C# calls with ordinary
+required parameters are narrowed only when their positional argument count safely distinguishes
+an overload; extension receiver adjustment and dynamic receiver types are not inferred by this narrowing. When multiple candidates are returned, the top-level
 `references`, `callers`, and `callees` arrays are explicitly labeled
 `graph_scope: primary_candidate` and mirror only the first prioritized bundle instead of
 merging unrelated definitions; consume the corresponding bundle for every other candidate.
@@ -415,6 +425,10 @@ same section envelopes and accepts their cursors. In path/line mode, `--path`
 locates the definition but does not restrict inbound references or callers to
 that file. Inspect graph cursors are accepted only by `inspect`; passing one to
 another command is a usage error.
+Selector-mode pagination uses the same contract: replay `--selector`, the same
+filters and page size, and the returned `--cursor`. Do not combine `--selector`
+with a symbol query, source coordinate, or `--group-partials`; `--path` by itself
+remains an evidence filter.
 For narrower `inspect` evidence, `--fields <csv|list>` implies JSON and selects
 top-level groups such as `definitions`, `file`, `graph`, `references`,
 `callers`, and `callees`. Collection selectors accept one nested level, for
@@ -3987,7 +4001,18 @@ language または path filter で対象を絞り込んでください。
 `inspect` と MCP `analyze_symbol` は、名前が index 済み定義へ解決される場合に
 `candidate_bundles` を返します。各 bundle は symbol ID、qualified/container name、
 signature、language、kind、path、line を含む安定 selector で識別され、graph section は
-その candidate identity に限定されます。複数 candidate が返る場合、top-level の
+その candidate identity に限定されます。同じ database に対して、出力された generation-bound
+ID selector を `cdidx inspect --selector 'id:<n>@g:<fingerprint>'` で再利用すると、name resolution
+を繰り返さず対象の物理 symbol だけを inspect できます。legacy の `id:<n>` 形式も active database
+向けに受理しますが、再構築後または別 database であることを検出できるのは出力された generation
+fingerprint 付き形式だけです。symbol ID は database-local であり、存在しない、stale、または
+cross-database selector は `E018_QUERY_NOT_FOUND` を返します。`identity_scoped` は inbound edge がすべて選択 identity
+へ一意に属する場合だけ true になります。optional、`params`、named argument、generic inference
+などで overload を確定できない場合は `identity_scope_reason: ambiguous_reference_candidates` を
+返し、重複した candidate evidence を exact として扱いません。C# の通常の required parameter
+呼び出しは、位置引数の個数で overload を安全に区別できる場合だけ絞り込みます。extension の
+receiver 調整と dynamic receiver の型はこの絞り込みでは推論しません。
+複数 candidate が返る場合、top-level の
 `references`、`callers`、`callees` 配列は `graph_scope: primary_candidate` と
 明示され、無関係な定義を結合せず優先順位1位の bundle だけを反映します。それ以外は
 対応する bundle を利用してください。`--fields candidates` で bundle を明示的に
@@ -4067,6 +4092,10 @@ path/line mode の `--path` は定義の位置を特定しますが、inbound re
 そのファイルだけに制限しません。MCP `analyze_symbol` も同じ section envelope を公開し、
 その cursor を受け付けます。inspect graph cursor は `inspect` だけが受理し、別 command に
 渡すと usage error になります。
+selector mode の pagination も同じ contract を使います。`--selector`、同じ filter と page size、
+返された `--cursor` を再指定してください。`--selector` は symbol query、source coordinate、
+`--group-partials` と組み合わせられません。`--path` だけを指定した場合は evidence filter として
+引き続き利用できます。
 `inspect` の証跡をさらに絞りたい場合、`--fields <csv|list>` は JSON 出力を暗黙に有効化し、
 `definitions`、`file`、`graph`、`references`、`callers`、`callees` などの
 top-level group を選択します。collection selector は 1 階層の nested field に対応し、

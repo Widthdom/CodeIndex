@@ -11,6 +11,7 @@ public partial class DbReader
 {
     private bool CanUseCSharpIdentityHotspotCounts()
         => HasCurrentReferenceIdentityContractForRead()
+           && GetHotspotFamilySignal("csharp").Ready
            && _referenceColumns.Contains("target_symbol_id")
            && _referenceColumns.Contains("resolution_state")
            && HasTable("symbol_reference_candidates");

@@ -185,6 +185,7 @@ public partial class DbWriter
             symbol_id                   INTEGER NOT NULL PRIMARY KEY,
             definition_type_arity       INTEGER,
             constructor_parameter_count INTEGER,
+            callable_parameter_count    INTEGER,
             is_value_type               INTEGER NOT NULL
         ) WITHOUT ROWID;
 
@@ -252,6 +253,11 @@ public partial class DbWriter
                            COALESCE(r.context, reference_line.context),
                            r.symbol_name,
                            r.column_number)
+                       WHEN r.reference_kind = 'call'
+                       THEN csharp_unambiguous_invocation_argument_count(
+                           COALESCE(r.context, reference_line.context),
+                           r.symbol_name,
+                           r.column_number)
                    END,
                    CASE
                        WHEN (
@@ -283,7 +289,7 @@ public partial class DbWriter
               ON reference_line.id = r.reference_line_id
             WHERE {scopePredicate}
               AND (
-                  r.reference_kind IN ('instantiate', 'type_reference')
+                  r.reference_kind IN ('call', 'instantiate', 'type_reference')
                   OR (
                       r.reference_kind = 'reference'
                       AND r.target_qualifier LIKE
@@ -334,6 +340,7 @@ public partial class DbWriter
                 symbol_id,
                 definition_type_arity,
                 constructor_parameter_count,
+                callable_parameter_count,
                 is_value_type)
             SELECT symbol.id,
                    csharp_definition_type_arity(
@@ -341,6 +348,10 @@ public partial class DbWriter
                        symbol.name,
                        symbol.kind),
                    csharp_constructor_parameter_count(
+                       symbol.signature,
+                       symbol.name,
+                       symbol.kind),
+                   csharp_callable_parameter_count(
                        symbol.signature,
                        symbol.name,
                        symbol.kind),
@@ -378,6 +389,15 @@ public partial class DbWriter
         => $"""
             (
                 SELECT symbol_fact.constructor_parameter_count
+                FROM temp.csharp_symbol_facts AS symbol_fact
+                WHERE symbol_fact.symbol_id = {symbolAlias}.id
+            )
+            """;
+
+    private static string BuildCSharpCallableParameterCountSql(string symbolAlias)
+        => $"""
+            (
+                SELECT symbol_fact.callable_parameter_count
                 FROM temp.csharp_symbol_facts AS symbol_fact
                 WHERE symbol_fact.symbol_id = {symbolAlias}.id
             )
@@ -621,8 +641,19 @@ public partial class DbWriter
     private static string CSharpTypeReferenceCandidatePredicateSql => $"""
         (
             source_file.lang <> 'csharp'
-            OR r.reference_kind NOT IN ('instantiate', 'type_reference')
+            OR r.reference_kind NOT IN ('call', 'instantiate', 'type_reference')
             OR CASE
+                WHEN r.reference_kind = 'call'
+                     AND s.kind = 'function'
+                     AND {CSharpReferenceArgumentCountSql} IS NOT NULL
+                     AND {BuildCSharpCallableParameterCountSql("s")}
+                         = {CSharpReferenceArgumentCountSql} THEN 1
+                WHEN r.reference_kind = 'call'
+                     AND (
+                         {CSharpReferenceArgumentCountSql} IS NULL
+                         OR {BuildCSharpCallableParameterCountSql("s")} IS NULL
+                     ) THEN 1
+                WHEN r.reference_kind = 'call' THEN 0
                 WHEN r.reference_kind = 'instantiate'
                      AND s.name <> r.symbol_name COLLATE BINARY THEN 0
                 WHEN r.reference_kind = 'instantiate'

@@ -65,6 +65,88 @@ internal static class CSharpTypeReferenceArity
             : null;
     }
 
+    internal static int? GetUnambiguousInvocationArgumentCount(
+        string? context,
+        string? symbolName,
+        long? columnNumber)
+    {
+        if (string.IsNullOrWhiteSpace(context) || string.IsNullOrWhiteSpace(symbolName))
+            return null;
+
+        var occurrence = FindClosestIdentifierOccurrence(context, symbolName, columnNumber);
+        if (occurrence < 0)
+            return null;
+
+        var cursor = occurrence + symbolName.Length;
+        if (!SkipCSharpTrivia(context, ref cursor)
+            || cursor >= context.Length
+            || context[cursor] != '(')
+        {
+            // Generic method binding needs type inference and deliberately stays unresolved.
+            return null;
+        }
+
+        return TryAnalyzeTopLevelParameters(
+                   context,
+                   cursor,
+                   out var count,
+                   out var hasNamedArgument,
+                   out _,
+                   out _,
+                   out var hasAngleBrackets)
+               && !hasNamedArgument
+               && !hasAngleBrackets
+            ? count
+            : null;
+    }
+
+    internal static int? GetUnambiguousCallableParameterCount(
+        string? signature,
+        string? symbolName,
+        string? symbolKind)
+    {
+        if (!string.Equals(symbolKind, "function", StringComparison.Ordinal)
+            || string.IsNullOrWhiteSpace(signature)
+            || string.IsNullOrWhiteSpace(symbolName))
+        {
+            return null;
+        }
+
+        for (var searchAt = 0; searchAt <= signature.Length - symbolName.Length;)
+        {
+            var occurrence = signature.IndexOf(symbolName, searchAt, StringComparison.Ordinal);
+            if (occurrence < 0)
+                return null;
+            searchAt = occurrence + Math.Max(1, symbolName.Length);
+            if (!IsIdentifierOccurrence(signature, occurrence, symbolName.Length))
+                continue;
+
+            var cursor = occurrence + symbolName.Length;
+            if (!SkipCSharpTrivia(signature, ref cursor)
+                || cursor >= signature.Length
+                || signature[cursor] != '(')
+            {
+                // Generic callables and malformed/truncated signatures remain ambiguous.
+                continue;
+            }
+
+            return TryAnalyzeTopLevelParameters(
+                       signature,
+                       cursor,
+                       out var count,
+                       out _,
+                       out var hasOptionalDefault,
+                       out var hasBindingSensitiveModifier,
+                       out _)
+                   && !hasOptionalDefault
+                   && !hasBindingSensitiveModifier
+                ? count
+                : null;
+        }
+
+        return null;
+    }
+
     internal static int? GetDefinitionArity(string? signature, string? symbolName, string? symbolKind)
     {
         if (string.IsNullOrWhiteSpace(symbolName))
@@ -491,8 +573,29 @@ internal static class CSharpTypeReferenceArity
     }
 
     private static bool TryCountTopLevelParameters(string text, int openParenthesis, out int count)
+        => TryAnalyzeTopLevelParameters(
+            text,
+            openParenthesis,
+            out count,
+            out _,
+            out _,
+            out _,
+            out _);
+
+    private static bool TryAnalyzeTopLevelParameters(
+        string text,
+        int openParenthesis,
+        out int count,
+        out bool hasTopLevelColon,
+        out bool hasTopLevelEquals,
+        out bool hasBindingSensitiveModifier,
+        out bool hasAngleBrackets)
     {
         count = 0;
+        hasTopLevelColon = false;
+        hasTopLevelEquals = false;
+        hasBindingSensitiveModifier = false;
+        hasAngleBrackets = false;
         var parenthesisDepth = 0;
         var bracketDepth = 0;
         var braceDepth = 0;
@@ -552,6 +655,7 @@ internal static class CSharpTypeReferenceArity
                     hasItemContent = true;
                     break;
                 case '<':
+                    hasAngleBrackets = true;
                     angleDepth++;
                     hasItemContent = true;
                     break;
@@ -568,7 +672,35 @@ internal static class CSharpTypeReferenceArity
                     count++;
                     hasItemContent = false;
                     break;
+                case ':' when parenthesisDepth == 0
+                                  && bracketDepth == 0
+                                  && braceDepth == 0
+                                  && angleDepth == 0:
+                    hasTopLevelColon = true;
+                    hasItemContent = true;
+                    break;
+                case '=' when parenthesisDepth == 0
+                                  && bracketDepth == 0
+                                  && braceDepth == 0
+                                  && angleDepth == 0:
+                    hasTopLevelEquals = true;
+                    hasItemContent = true;
+                    break;
                 default:
+                    if (parenthesisDepth == 0
+                        && bracketDepth == 0
+                        && braceDepth == 0
+                        && angleDepth == 0
+                        && IsIdentifierStart(c))
+                    {
+                        var identifierEnd = i + 1;
+                        while (identifierEnd < text.Length && IsIdentifierPart(text[identifierEnd]))
+                            identifierEnd++;
+                        var identifier = text.AsSpan(i, identifierEnd - i);
+                        hasBindingSensitiveModifier |= identifier.SequenceEqual("params".AsSpan())
+                            || identifier.SequenceEqual("this".AsSpan());
+                        i = identifierEnd - 1;
+                    }
                     hasItemContent |= !char.IsWhiteSpace(c);
                     break;
             }
@@ -644,6 +776,9 @@ internal static class CSharpTypeReferenceArity
 
     private static bool IsIdentifierPart(char c)
         => char.IsLetterOrDigit(c) || c == '_';
+
+    private static bool IsIdentifierStart(char c)
+        => char.IsLetter(c) || c == '_';
 
     private static void SkipWhitespace(string text, ref int cursor)
     {

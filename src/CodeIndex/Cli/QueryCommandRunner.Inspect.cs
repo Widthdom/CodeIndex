@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using CodeIndex.Database;
+using CodeIndex.Models;
 
 namespace CodeIndex.Cli;
 
@@ -78,6 +79,44 @@ public static partial class QueryCommandRunner
             CommandErrorWriter.WriteStderr(exactError);
             return CommandExitCodes.UsageError;
         }
+        SymbolSelector? selectedSymbol = null;
+        if (options.Selector != null)
+        {
+            if (!SymbolSelector.TryParse(options.Selector, out var parsedSelector))
+            {
+                WriteUsageError(
+                    $"invalid symbol selector: {ConsoleUi.FormatBoundedValue(options.Selector)}",
+                    GetUsageLineOrThrow("inspect"),
+                    "Pass a selector emitted by inspect in the form `--selector 'id:<positive-integer>@g:<fingerprint>'`, or a legacy unversioned ID.");
+                return CommandExitCodes.UsageError;
+            }
+
+            selectedSymbol = parsedSelector;
+            if (!string.IsNullOrWhiteSpace(options.Query))
+            {
+                WriteUsageError(
+                    "--selector cannot be combined with a symbol query argument",
+                    GetUsageLineOrThrow("inspect"),
+                    "Remove the positional/--query value and pass only the selector emitted by inspect.");
+                return CommandExitCodes.UsageError;
+            }
+            if (options.StartLine.HasValue || options.EndLine.HasValue)
+            {
+                WriteUsageError(
+                    "--selector cannot be combined with a source coordinate",
+                    GetUsageLineOrThrow("inspect"),
+                    "Remove --line/--start-line/--end-line; --path remains available as a graph evidence filter.");
+                return CommandExitCodes.UsageError;
+            }
+            if (options.GroupPartials)
+            {
+                WriteUsageError(
+                    "--selector cannot be combined with --group-partials",
+                    GetUsageLineOrThrow("inspect"),
+                    "A selector already identifies one physical symbol; remove --group-partials.");
+                return CommandExitCodes.UsageError;
+            }
+        }
         var pathLineInspectMode = IsInspectPathLineMode(options);
         if (pathLineInspectMode && options.GroupPartials)
         {
@@ -87,9 +126,9 @@ public static partial class QueryCommandRunner
                 "Remove --path/--line and inspect a symbol name, or remove --group-partials to keep coordinate-based physical navigation.");
             return CommandExitCodes.UsageError;
         }
-        if (!pathLineInspectMode && TryWriteBlankQueryError(options, "inspect"))
+        if (selectedSymbol == null && !pathLineInspectMode && TryWriteBlankQueryError(options, "inspect"))
             return CommandExitCodes.UsageError;
-        if (!pathLineInspectMode && string.IsNullOrWhiteSpace(options.Query))
+        if (selectedSymbol == null && !pathLineInspectMode && string.IsNullOrWhiteSpace(options.Query))
         {
             WriteUsageError(
                 "inspect requires a symbol query argument",
@@ -97,7 +136,7 @@ public static partial class QueryCommandRunner
                 "Add the symbol you want to inspect, for example: `cdidx inspect QueryCommandRunner`, or pass `--path <file> --line <line>` for a source excerpt.");
             return CommandExitCodes.UsageError;
         }
-        if (options.Query != null && IsBareVerbatimQueryToken(options.Query))
+        if (selectedSymbol == null && options.Query != null && IsBareVerbatimQueryToken(options.Query))
         {
             WriteUsageError(
                 "inspect requires a symbol query argument",
@@ -143,7 +182,7 @@ public static partial class QueryCommandRunner
             {
                 indexedFile = reader.GetFileByPath(inspectPath);
             }
-            else if (options.Query != null)
+            else if (selectedSymbol == null && options.Query != null)
             {
                 var resolvedQueryPath = DbPathResolver.ResolveQueryFilePath(options.DbPath, options.Query, options.DbPathExplicit);
                 indexedFile = reader.GetFileByPath(resolvedQueryPath);
@@ -186,9 +225,9 @@ public static partial class QueryCommandRunner
                     category: "range");
             }
 
-            var inspectQuery = fileInspectMode
+            var inspectQuery = selectedSymbol?.ToString() ?? (fileInspectMode
                 ? $"{inspectPath}:{inspectLine}"
-                : options.Query!;
+                : options.Query!);
             var queryFingerprint = BuildInspectGraphQueryFingerprint(
                 inspectQuery,
                 options,
@@ -196,6 +235,20 @@ public static partial class QueryCommandRunner
                 fileInspectMode,
                 inspectLimit);
             var generation = InspectGraphCursorCodec.BuildGenerationFingerprint(reader);
+            var currentSelectorGeneration = SymbolSelector.BuildGenerationFingerprint(
+                reader.GetSymbolSelectorGenerationIdentity());
+            if (selectedSymbol is { GenerationFingerprint: { } selectorGeneration }
+                && !string.Equals(selectorGeneration, currentSelectorGeneration, StringComparison.Ordinal))
+            {
+                return CommandErrorWriter.WriteJsonOrHuman(
+                    options.Json,
+                    jsonOptions,
+                    $"symbol selector is stale or belongs to another index generation: {selectedSymbol}",
+                    CommandExitCodes.NotFound,
+                    "Rerun the originating inspect query against this database and use a selector from its current candidate_bundles.",
+                    errorCode: CommandErrorCodes.QueryNotFound,
+                    category: "not_found");
+            }
             if (graphCursor != null
                 && (!string.Equals(graphCursor.QueryFingerprint, queryFingerprint, StringComparison.Ordinal)
                     || !string.Equals(graphCursor.GenerationFingerprint, generation.Fingerprint, StringComparison.Ordinal)))
@@ -241,7 +294,20 @@ public static partial class QueryCommandRunner
                     options.BodyLines,
                     kind: options.Kind,
                     groupPartials: options.GroupPartials,
-                    graphPage: graphPage);
+                    graphPage: graphPage,
+                    selectedSymbolId: selectedSymbol?.SymbolId,
+                    selectedSymbolGenerationFingerprint: selectedSymbol?.GenerationFingerprint);
+            if (selectedSymbol != null && analysis.Definitions.Count == 0)
+            {
+                return CommandErrorWriter.WriteJsonOrHuman(
+                    options.Json,
+                    jsonOptions,
+                    $"symbol selector not found in the active index: {selectedSymbol}",
+                    CommandExitCodes.NotFound,
+                    "Rerun the originating inspect query against this database and use a selector from its current candidate_bundles.",
+                    errorCode: CommandErrorCodes.QueryNotFound,
+                    category: "not_found");
+            }
             if (graphCursor?.CandidateSelector != null
                 && !(analysis.CandidateBundles?.Any(bundle =>
                     string.Equals(bundle.Selector.Selector, graphCursor.CandidateSelector, StringComparison.Ordinal)) ?? false))
@@ -335,6 +401,8 @@ public static partial class QueryCommandRunner
                     Console.WriteLine($"Graph Note           : {analysis.GraphSupportReason}");
                 if (analysis.GraphScope != null)
                     Console.WriteLine($"Graph Scope          : {analysis.GraphScope}");
+                if (analysis.CandidateBundles?.FirstOrDefault() is { } selectedCandidate)
+                    Console.WriteLine($"Identity Scoped      : {selectedCandidate.IdentityScoped} ({selectedCandidate.IdentityScopeReason})");
                 if (analysis.SelectionRequired)
                     Console.WriteLine("Selection Required   : true — use a candidate selector/path before trusting graph sections.");
                 if (analysis.UnsupportedSymbolKind != null)
@@ -375,7 +443,7 @@ public static partial class QueryCommandRunner
                 {
                     foreach (var bundle in analysis.CandidateBundles)
                     {
-                        var title = $"Candidate {bundle.Selector.Selector} ({bundle.Selector.QualifiedName})";
+                        var title = $"Candidate {bundle.Selector.Selector} ({bundle.Selector.QualifiedName}; identity_scoped={bundle.IdentityScoped}; {bundle.IdentityScopeReason})";
                         WriteRepoMapSection(title, [$"{bundle.Definition.Kind,-10} {bundle.Definition.Path}:{bundle.Definition.StartLine}-{bundle.Definition.EndLine}"]);
                         WriteRepoMapSection($"{title} references", bundle.References.Select(item => $"{item.Path}:{item.Line}:{item.Column}  {item.Context}"));
                         WriteInspectGraphSectionStatus($"{title} references", bundle.GraphSections.References);

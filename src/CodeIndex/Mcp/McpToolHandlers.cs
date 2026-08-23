@@ -901,6 +901,7 @@ public partial class McpServer
                 ["selector"] = JsonSerializer.SerializeToNode(bundle.Selector, _jsonOptions),
                 ["definition"] = BuildCompactSymbolRow(bundle.Definition),
                 ["identity_scoped"] = bundle.IdentityScoped,
+                ["identity_scope_reason"] = bundle.IdentityScopeReason,
                 ["graph_supported"] = bundle.GraphSupported,
                 ["graph_support_reason"] = bundle.GraphSupportReason,
                 ["nearby_symbol_count"] = bundle.NearbySymbols.Count,
