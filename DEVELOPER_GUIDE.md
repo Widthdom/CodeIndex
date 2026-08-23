@@ -1623,6 +1623,17 @@ unqualified name receive a global candidate only when that name is unique in the
 symbol set. Otherwise they remain `ambiguous` or `unresolved`, and dependency queries do not
 fall back to a same-name edge.
 
+C# type-reference resolution uses `LogicalPartialSymbolGrouper` for declarations that have a
+valid logical partial-family identity. Full and scoped refreshes persist the same stable
+`family:` target key used by grouped symbol discovery, so multiple physical declarations in one
+language/kind/namespace-and-container/generic-arity family produce `resolved_group` rather than
+semantic ambiguity. `resolution_candidate_count` deliberately remains the physical declaration
+count, and `symbol_reference_candidates` retains every physical symbol row. Search ranking,
+grouped hotspots, inspect, dependencies, and impact consume the logical identity while APIs that
+list definitions remain deterministic and physical. The reference-identity contract version
+must be advanced when this key changes; version 9 forces full, scoped, no-op, and deletion-only
+index paths to replace older physical-path target keys before identity-aware reads become ready.
+
 C# common member names are never discarded during extraction. The writer persists their
 receiver/type evidence in `target_qualifier`, and reference finalization records
 `resolution_state`. Bare-name `references` and unqualified graph discovery remain broad and
@@ -5578,6 +5589,17 @@ identity-aware read は、`codeindex_meta` の `reference_identity_contract_vers
 resolution を再構築し、同じ transaction で marker を設定します。C# の無修飾名 reference は、
 対象となる symbol 集合で名前が一意の場合だけ global candidate を持ちます。それ以外は
 `ambiguous` または `unresolved` のままとし、dependency query は同名 edge へ fallback しません。
+
+C# の type-reference resolution は、有効な論理 partial-family identity を持つ declaration に
+`LogicalPartialSymbolGrouper` を使用します。full / scoped refresh は grouped symbol discovery と同じ
+安定した `family:` target key を永続化するため、language、kind、namespace / container、generic arity が
+同じ 1 family 内の複数物理 declaration は semantic ambiguity ではなく `resolved_group` になります。
+`resolution_candidate_count` は意図的に物理 declaration 数のままとし、
+`symbol_reference_candidates` はすべての物理 symbol row を保持します。search ranking、grouped hotspot、
+inspect、dependency、impact は論理 identity を使用し、definition 一覧 API は決定的な物理定義を維持します。
+この key を変更するときは reference-identity contract version を進める必要があります。version 9 は
+identity-aware read を ready にする前に、full、scoped、no-op、削除のみの index path で旧来の
+物理 path target key を置き換えます。
 
 C# の一般的な member 名は extraction 時に破棄しません。writer は receiver / 型の evidence を
 `target_qualifier` に永続化し、reference finalization は `resolution_state` を記録します。bare-name の

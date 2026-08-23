@@ -128,7 +128,7 @@ public partial class DbWriter
         )
         INSERT INTO temp.{ReferenceResolutionSymbolFactsTable}(symbol_id, target_key)
         SELECT target.id,
-               {ReferenceResolutionTargetKeySql}
+               {BuildReferenceResolutionTargetKeySql()}
         FROM dirty_target_symbols AS dirty_target
         JOIN symbols AS target ON target.id = dirty_target.symbol_id
         JOIN files AS target_file ON target_file.id = target.file_id;

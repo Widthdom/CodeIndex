@@ -244,17 +244,17 @@ public sealed class FreshReferenceResolutionTests : IDisposable
         foreach (var (scope, materializationSql, resolutionSql) in
                  DbWriter.ReferenceResolutionFactSqlForTesting)
         {
-            Assert.Equal(
-                1,
-                CountOccurrences(
-                    materializationSql,
-                    "target_file.lang || char(31) || target_file.path"));
+            Assert.True(
+                materializationSql.Contains("target_file.path", StringComparison.Ordinal),
+                $"{scope} target-key materialization omitted the physical fallback: {materializationSql}");
             Assert.Contains(
                 "INSERT INTO temp.reference_resolution_symbol_facts",
                 materializationSql,
                 StringComparison.Ordinal);
+            Assert.Contains("THEN 'family:'", materializationSql, StringComparison.Ordinal);
+            Assert.Contains("target.family_key", materializationSql, StringComparison.Ordinal);
             Assert.DoesNotContain(
-                "target_file.lang || char(31) || target_file.path",
+                "target_file.path",
                 resolutionSql,
                 StringComparison.Ordinal);
             Assert.Contains(
@@ -287,6 +287,111 @@ public sealed class FreshReferenceResolutionTests : IDisposable
             Assert.Contains("FROM symbols AS target", materialization, StringComparison.Ordinal);
             Assert.DoesNotContain("dirty_target_symbols", materialization, StringComparison.Ordinal);
         }
+    }
+
+    [Fact]
+    public void ReferenceResolutionFacts_CollapseOnlyOneLogicalCSharpPartialFamily_Issue5158()
+    {
+        var callerFileId = InsertFile("src/Caller.cs", "csharp");
+        var demoAFileId = InsertFile("src/Demo.Widget.A.cs", "csharp");
+        var demoBFileId = InsertFile("src/Demo.Widget.B.cs", "csharp");
+        var otherAFileId = InsertFile("src/Other.Widget.A.cs", "csharp");
+        var otherBFileId = InsertFile("src/Other.Widget.B.cs", "csharp");
+        var structAFileId = InsertFile("src/Demo.Packet.A.cs", "csharp");
+        var structBFileId = InsertFile("src/Demo.Packet.B.cs", "csharp");
+        var recordAFileId = InsertFile("src/Demo.Receipt.A.cs", "csharp");
+        var recordBFileId = InsertFile("src/Demo.Receipt.B.cs", "csharp");
+        var genericAFileId = InsertFile("src/Demo.Box.Generic.A.cs", "csharp");
+        var genericBFileId = InsertFile("src/Demo.Box.Generic.B.cs", "csharp");
+        var plainAFileId = InsertFile("src/Demo.Box.Plain.A.cs", "csharp");
+        var plainBFileId = InsertFile("src/Demo.Box.Plain.B.cs", "csharp");
+        var classShapeFileId = InsertFile("src/Demo.Shape.Class.cs", "csharp");
+        var structShapeFileId = InsertFile("src/Demo.Shape.Struct.cs", "csharp");
+        var csharpCrossLangAFileId = InsertFile("src/CrossLang.A.cs", "csharp");
+        var csharpCrossLangBFileId = InsertFile("src/CrossLang.B.cs", "csharp");
+        var javaCrossLangFileId = InsertFile("src/CrossLang.java", "java");
+        _writer.InsertSymbols([
+            CreatePartialTypeSymbol(demoAFileId, "Widget", "class", "Demo", "fixture|Demo.Widget", "public partial class Widget"),
+            CreatePartialTypeSymbol(demoBFileId, "Widget", "class", "Demo", "fixture|Demo.Widget", "public partial class Widget"),
+            CreatePartialTypeSymbol(otherAFileId, "Widget", "class", "Other", "fixture|Other.Widget", "public partial class Widget"),
+            CreatePartialTypeSymbol(otherBFileId, "Widget", "class", "Other", "fixture|Other.Widget", "public partial class Widget"),
+            CreatePartialTypeSymbol(structAFileId, "Packet", "struct", "Demo", "fixture|Demo.Packet", "public partial struct Packet"),
+            CreatePartialTypeSymbol(structBFileId, "Packet", "struct", "Demo", "fixture|Demo.Packet", "public partial struct Packet"),
+            CreatePartialTypeSymbol(recordAFileId, "Receipt", "record", "Demo", "fixture|Demo.Receipt", "public partial record Receipt"),
+            CreatePartialTypeSymbol(recordBFileId, "Receipt", "record", "Demo", "fixture|Demo.Receipt", "public partial record Receipt"),
+            CreatePartialTypeSymbol(genericAFileId, "Box", "class", "Demo", "fixture|Demo.Box`1", "public partial class Box<T>"),
+            CreatePartialTypeSymbol(genericBFileId, "Box", "class", "Demo", "fixture|Demo.Box`1", "public partial class Box<T>"),
+            CreatePartialTypeSymbol(plainAFileId, "Box", "class", "Demo", "fixture|Demo.Box", "public partial class Box"),
+            CreatePartialTypeSymbol(plainBFileId, "Box", "class", "Demo", "fixture|Demo.Box", "public partial class Box"),
+            CreatePartialTypeSymbol(classShapeFileId, "Shape", "class", "Demo", "fixture|Demo.Shape", "public partial class Shape"),
+            CreatePartialTypeSymbol(structShapeFileId, "Shape", "struct", "Demo", "fixture|Demo.Shape", "public partial struct Shape"),
+            CreatePartialTypeSymbol(csharpCrossLangAFileId, "CrossLang", "class", "Demo", "fixture|Demo.CrossLang", "public partial class CrossLang"),
+            CreatePartialTypeSymbol(csharpCrossLangBFileId, "CrossLang", "class", "Demo", "fixture|Demo.CrossLang", "public partial class CrossLang"),
+            CreatePartialTypeSymbol(javaCrossLangFileId, "CrossLang", "class", "Demo", "fixture|Demo.CrossLang", "public class CrossLang"),
+        ]);
+        _writer.InsertReferences([
+            CreateTypeReference(callerFileId, "Widget", line: 10),
+            CreateTypeReference(callerFileId, "Packet", line: 11),
+            CreateTypeReference(callerFileId, "Receipt", line: 12),
+            CreateTypeReference(callerFileId, "Box", line: 13),
+            CreateTypeReference(callerFileId, "Widget", line: 20),
+            CreateTypeReference(callerFileId, "Box", line: 21),
+            CreateTypeReference(callerFileId, "Shape", line: 22),
+            CreateTypeReference(callerFileId, "CrossLang", line: 23),
+        ], refreshMutualRecursionFlags: false);
+
+        Execute("""
+            DELETE FROM symbol_reference_candidates;
+
+            INSERT INTO symbol_reference_candidates(reference_id, symbol_id, scope_rank)
+            SELECT reference.id, target.id, 0
+            FROM symbol_references AS reference
+            JOIN symbols AS target ON target.name = reference.symbol_name
+            WHERE (reference.line = 10 AND target.container_qualified_name = 'Demo')
+               OR reference.line IN (11, 12)
+               OR (reference.line = 13 AND target.family_key = 'fixture|Demo.Box`1')
+               OR reference.line IN (20, 21, 22, 23);
+            """);
+
+        Execute(DbWriter.RefreshReferenceResolutionFullSqlForTesting);
+
+        foreach (var line in new[] { 10, 11, 12, 13 })
+        {
+            var row = ReadResolutionRow("src/Caller.cs", line);
+            Assert.Equal("resolved_group", row.ResolutionState);
+            Assert.Equal(2, row.CandidateCount);
+            Assert.False(row.HasTargetId);
+            Assert.True(row.HasTargetKey);
+        }
+        Assert.Equal(
+            "family:csharp\u001fclass\u001ffixture|Demo.Widget",
+            ScalarString("SELECT target_symbol_key FROM symbol_references WHERE line = 10"));
+        Assert.Equal(
+            "family:csharp\u001fstruct\u001ffixture|Demo.Packet",
+            ScalarString("SELECT target_symbol_key FROM symbol_references WHERE line = 11"));
+        Assert.Equal(
+            "family:csharp\u001frecord\u001ffixture|Demo.Receipt",
+            ScalarString("SELECT target_symbol_key FROM symbol_references WHERE line = 12"));
+        Assert.Equal(
+            "family:csharp\u001fclass\u001ffixture|Demo.Box`1",
+            ScalarString("SELECT target_symbol_key FROM symbol_references WHERE line = 13"));
+
+        var namespaceAmbiguity = ReadResolutionRow("src/Caller.cs", 20);
+        Assert.Equal("ambiguous", namespaceAmbiguity.ResolutionState);
+        Assert.Equal(4, namespaceAmbiguity.CandidateCount);
+        Assert.False(namespaceAmbiguity.HasTargetKey);
+        var arityAmbiguity = ReadResolutionRow("src/Caller.cs", 21);
+        Assert.Equal("ambiguous", arityAmbiguity.ResolutionState);
+        Assert.Equal(4, arityAmbiguity.CandidateCount);
+        Assert.False(arityAmbiguity.HasTargetKey);
+        var kindAmbiguity = ReadResolutionRow("src/Caller.cs", 22);
+        Assert.Equal("ambiguous", kindAmbiguity.ResolutionState);
+        Assert.Equal(2, kindAmbiguity.CandidateCount);
+        Assert.False(kindAmbiguity.HasTargetKey);
+        var languageAmbiguity = ReadResolutionRow("src/Caller.cs", 23);
+        Assert.Equal("ambiguous", languageAmbiguity.ResolutionState);
+        Assert.Equal(3, languageAmbiguity.CandidateCount);
+        Assert.False(languageAmbiguity.HasTargetKey);
     }
 
     [Fact]
@@ -548,6 +653,45 @@ public sealed class FreshReferenceResolutionTests : IDisposable
             StartLine = startLine,
             EndLine = endLine,
             Signature = $"function {name}()",
+        };
+
+    private static SymbolRecord CreatePartialTypeSymbol(
+        long fileId,
+        string name,
+        string kind,
+        string container,
+        string familyKey,
+        string signature)
+        => new()
+        {
+            FileId = fileId,
+            Kind = kind,
+            Name = name,
+            Line = 1,
+            StartLine = 1,
+            EndLine = 3,
+            Signature = signature,
+            ContainerKind = "namespace",
+            ContainerName = container,
+            ContainerQualifiedName = container,
+            FamilyKey = familyKey,
+            IsPartialDeclaration = true,
+        };
+
+    private static ReferenceRecord CreateTypeReference(
+        long fileId,
+        string symbolName,
+        int line)
+        => new()
+        {
+            FileId = fileId,
+            SymbolName = symbolName,
+            ReferenceKind = "type_reference",
+            Line = line,
+            Column = 1,
+            Context = $"{symbolName} value;",
+            ContainerKind = "function",
+            ContainerName = "Caller",
         };
 
     private static ReferenceRecord CreateReference(
