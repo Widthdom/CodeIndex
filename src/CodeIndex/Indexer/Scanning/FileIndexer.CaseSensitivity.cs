@@ -52,12 +52,22 @@ public partial class FileIndexer
         }
     }
 
-    private static bool? ProbeExistingDirectoryIgnoreCase(string directory, IReadOnlyList<string> entries)
+    private static bool? ProbeExistingDirectoryIgnoreCase(
+        string directory,
+        IReadOnlyList<string> entries,
+        CancellationToken cancellationToken)
     {
         try
         {
             var normalizedDirectory = NormalizeDirectoryCaseProbePath(directory);
-            return CaseSensitivityProbeDirectory.ProbeExistingChildIgnoreCase(normalizedDirectory, entries);
+            return CaseSensitivityProbeDirectory.ProbeExistingChildIgnoreCase(
+                normalizedDirectory,
+                entries,
+                cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
         }
         catch
         {
@@ -69,17 +79,22 @@ public partial class FileIndexer
         => Path.IsPathFullyQualified(directory) ? directory : Path.GetFullPath(directory);
 
     private bool DirectoryUsesIgnoreCase(string directory)
-        => DirectoryUsesIgnoreCase(directory, entries: null);
+        => DirectoryUsesIgnoreCase(directory, entries: null, CancellationToken.None);
 
-    private bool DirectoryUsesIgnoreCase(string directory, IReadOnlyList<string>? entries)
+    private bool DirectoryUsesIgnoreCase(
+        string directory,
+        IReadOnlyList<string>? entries,
+        CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var fullPath = NormalizeDirectoryCaseProbePath(directory);
         if (_directoryIgnoreCaseCache.TryGetValue(fullPath, out var ignoreCase))
             return ignoreCase;
 
         var probeResult = _usesDefaultDirectoryIgnoreCaseProbe && entries is not null
-            ? ProbeExistingDirectoryIgnoreCase(fullPath, entries)
+            ? ProbeExistingDirectoryIgnoreCase(fullPath, entries, cancellationToken)
             : _directoryIgnoreCaseProbe(fullPath);
+        cancellationToken.ThrowIfCancellationRequested();
         ignoreCase = probeResult ?? _ignoreCase;
         _directoryIgnoreCaseCache[fullPath] = ignoreCase;
         return ignoreCase;
