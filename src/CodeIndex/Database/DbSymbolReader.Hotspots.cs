@@ -78,7 +78,8 @@ public partial class DbReader
                 JOIN csharp_identity_reference_targets identity_target
                   ON identity_target.reference_id = identity_reference.id
                 WHERE identity_source_file.lang = 'csharp'
-                  AND identity_reference.reference_kind IN {CallGraphReferenceKindsSql}
+                  AND (identity_reference.reference_kind IN {CallGraphReferenceKindsSql}
+                       OR identity_reference.reference_kind = 'type_reference')
                 GROUP BY identity_target.logical_target_key,
                          identity_target.target_name,
                          identity_target.target_kind,
@@ -110,10 +111,10 @@ public partial class DbReader
             visibilityFilters,
             excludeVisibilityFilters);
         var csharpIdentityCountSql = CanUseCSharpIdentityHotspotCounts()
-            ? "WHEN fc.lang = 'csharp' AND fc.kind IN ('function', 'test.method', 'property') THEN COALESCE(circ.ref_count, 0)"
+            ? "WHEN fc.lang = 'csharp' AND (fc.kind IN ('function', 'test.method', 'property') OR (fc.kind IN ('class', 'struct', 'interface', 'record') AND fc.logical_target_key LIKE 'family|csharp|%')) THEN COALESCE(circ.ref_count, 0)"
             : string.Empty;
         var csharpIdentityScoreSql = CanUseCSharpIdentityHotspotCounts()
-            ? "WHEN fc.lang = 'csharp' AND fc.kind IN ('function', 'test.method', 'property') THEN COALESCE(circ.ref_score, 0.0)"
+            ? "WHEN fc.lang = 'csharp' AND (fc.kind IN ('function', 'test.method', 'property') OR (fc.kind IN ('class', 'struct', 'interface', 'record') AND fc.logical_target_key LIKE 'family|csharp|%')) THEN COALESCE(circ.ref_score, 0.0)"
             : string.Empty;
         var sql = candidatePlan.Sql + @"
             logical_references AS MATERIALIZED (
@@ -549,7 +550,13 @@ public partial class DbReader
                   AND (
                       (
                           f.lang = 'csharp'
-                          AND s.kind IN ('function', 'test.method', 'property')
+                          AND (
+                              s.kind IN ('function', 'test.method', 'property')
+                              OR (
+                                  s.kind IN ('class', 'struct', 'interface', 'record')
+                                  AND {logicalTargetKeySql} LIKE 'family|csharp|%'
+                              )
+                          )
                           AND EXISTS (
                               SELECT 1
                               FROM bounded_csharp_identity_targets identity_frontier
@@ -559,7 +566,16 @@ public partial class DbReader
                           )
                       )
                       OR (
-                          (f.lang != 'csharp' OR s.kind NOT IN ('function', 'test.method', 'property'))
+                          (
+                              f.lang != 'csharp'
+                              OR (
+                                  s.kind NOT IN ('function', 'test.method', 'property')
+                                  AND (
+                                      s.kind NOT IN ('class', 'struct', 'interface', 'record')
+                                      OR {logicalTargetKeySql} NOT LIKE 'family|csharp|%'
+                                  )
+                              )
+                          )
                           AND EXISTS (
                               SELECT 1
                               FROM bounded_reference_names brn
@@ -950,10 +966,10 @@ public partial class DbReader
             visibilityFilters,
             excludeVisibilityFilters);
         var csharpIdentityCountSql = CanUseCSharpIdentityHotspotCounts()
-            ? "WHEN gr.lang = 'csharp' AND gr.kind IN ('function', 'test.method', 'property') THEN COALESCE(circ.ref_count, 0)"
+            ? "WHEN gr.lang = 'csharp' AND (gr.kind IN ('function', 'test.method', 'property') OR (gr.kind IN ('class', 'struct', 'interface', 'record') AND gr.logical_target_key LIKE 'family|csharp|%')) THEN COALESCE(circ.ref_count, 0)"
             : string.Empty;
         var csharpIdentityScoreSql = CanUseCSharpIdentityHotspotCounts()
-            ? "WHEN gr.lang = 'csharp' AND gr.kind IN ('function', 'test.method', 'property') THEN COALESCE(circ.ref_score, 0.0)"
+            ? "WHEN gr.lang = 'csharp' AND (gr.kind IN ('function', 'test.method', 'property') OR (gr.kind IN ('class', 'struct', 'interface', 'record') AND gr.logical_target_key LIKE 'family|csharp|%')) THEN COALESCE(circ.ref_score, 0.0)"
             : string.Empty;
         var sql = candidatePlan.Sql + @"
             grouped_candidates AS (

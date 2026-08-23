@@ -266,6 +266,298 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_UpdateMode_PartialFamilyIdentitySurvivesMemberLifecycleAndFeedsReaders_Issue5158()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var partAPath = Path.Combine(projectRoot, "Runner5158.A.cs");
+            var partBPath = Path.Combine(projectRoot, "Runner5158.B.cs");
+            var movedPartPath = Path.Combine(projectRoot, "Runner5158.Moved.cs");
+            var partCPath = Path.Combine(projectRoot, "Runner5158.C.cs");
+            var callerPath = Path.Combine(projectRoot, "Consumer5158.cs");
+            File.WriteAllText(partAPath, """
+                namespace Demo;
+                public partial class Runner5158
+                {
+                    public void FromA() { }
+                }
+                """);
+            File.WriteAllText(partBPath, """
+                namespace Demo;
+                public partial class Runner5158
+                {
+                    public void FromB() { }
+                }
+                """);
+            File.WriteAllText(callerPath, """
+                namespace Demo;
+                public sealed class Consumer5158
+                {
+                    private Runner5158 _runner = new();
+                    public void Use()
+                    {
+                        _runner.FromA();
+                        _runner.FromB();
+                    }
+                }
+                """);
+
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var initial = ReadPartialReference();
+            Assert.Equal("resolved_group", initial.State);
+            Assert.Equal(2, initial.CandidateCount);
+            Assert.StartsWith("family:csharp\u001fclass\u001f", initial.TargetKey);
+            Assert.Equal(["Runner5158.A.cs", "Runner5158.B.cs"], initial.CandidatePaths);
+            AssertReaderConsumers(expectedDefinitionSites: 2, expectedReferenceCount: 1);
+
+            File.WriteAllText(partCPath, """
+                namespace Demo;
+                public partial class Runner5158
+                {
+                    public void FromC() { }
+                }
+                """);
+            var (addExitCode, _) = RunAndCaptureJson(
+                [projectRoot, "--files", "Runner5158.C.cs", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, addExitCode);
+            var afterAdd = ReadPartialReference();
+            Assert.Equal("resolved_group", afterAdd.State);
+            Assert.Equal(3, afterAdd.CandidateCount);
+            Assert.Equal(initial.TargetKey, afterAdd.TargetKey);
+
+            File.Delete(partCPath);
+            var (removeExitCode, _) = RunAndCaptureJson(
+                [projectRoot, "--files", "Runner5158.C.cs", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, removeExitCode);
+            var afterRemove = ReadPartialReference();
+            Assert.Equal("resolved_group", afterRemove.State);
+            Assert.Equal(2, afterRemove.CandidateCount);
+            Assert.Equal(initial.TargetKey, afterRemove.TargetKey);
+
+            File.Move(partBPath, movedPartPath);
+            var (moveExitCode, _) = RunAndCaptureJson(
+                [projectRoot, "--files", "Runner5158.B.cs", "Runner5158.Moved.cs", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, moveExitCode);
+            var afterMove = ReadPartialReference();
+            Assert.Equal("resolved_group", afterMove.State);
+            Assert.Equal(2, afterMove.CandidateCount);
+            Assert.Equal(initial.TargetKey, afterMove.TargetKey);
+            Assert.Equal(["Runner5158.A.cs", "Runner5158.Moved.cs"], afterMove.CandidatePaths);
+
+            File.WriteAllText(movedPartPath, """
+                namespace Demo;
+                public partial class RenamedRunner5158
+                {
+                    public void FromB() { }
+                }
+                """);
+            var (renameExitCode, _) = RunAndCaptureJson(
+                [projectRoot, "--files", "Runner5158.Moved.cs", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, renameExitCode);
+            var afterRename = ReadPartialReference();
+            Assert.Equal("resolved", afterRename.State);
+            Assert.Equal(1, afterRename.CandidateCount);
+            Assert.Equal(initial.TargetKey, afterRename.TargetKey);
+
+            File.WriteAllText(movedPartPath, """
+                namespace Demo;
+                public partial class Runner5158
+                {
+                    public void FromB() { }
+                }
+                """);
+            var (restoreExitCode, _) = RunAndCaptureJson(
+                [projectRoot, "--files", "Runner5158.Moved.cs", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, restoreExitCode);
+            var afterRestore = ReadPartialReference();
+            Assert.Equal("resolved_group", afterRestore.State);
+            Assert.Equal(2, afterRestore.CandidateCount);
+            Assert.Equal(initial.TargetKey, afterRestore.TargetKey);
+
+            using (var connection = new SqliteConnection($"Data Source={dbPath}"))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = """
+                    UPDATE codeindex_meta
+                    SET value = @prior_version
+                    WHERE key = @contract_key;
+
+                    UPDATE symbol_references
+                    SET target_symbol_id = NULL,
+                        target_symbol_key = NULL,
+                        resolution_state = 'ambiguous',
+                        resolution_candidate_count = 2
+                    WHERE id = (
+                        SELECT reference.id
+                        FROM symbol_references AS reference
+                        JOIN files AS source_file ON source_file.id = reference.file_id
+                        WHERE source_file.path = 'Consumer5158.cs'
+                          AND reference.symbol_name = 'Runner5158'
+                          AND reference.reference_kind = 'type_reference'
+                        LIMIT 1
+                    );
+                    """;
+                command.Parameters.AddWithValue(
+                    "@prior_version",
+                    (DbContext.ReferenceIdentityContractVersion - 1).ToString(CultureInfo.InvariantCulture));
+                command.Parameters.AddWithValue(
+                    "@contract_key",
+                    DbContext.ReferenceIdentityContractVersionMetaKey);
+                command.ExecuteNonQuery();
+            }
+
+            var (restampExitCode, restampJson) = RunAndCaptureJson(
+                [projectRoot, "--files", "Consumer5158.cs", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, restampExitCode);
+            Assert.Equal(0, restampJson.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.Equal(1, restampJson.GetProperty("summary").GetProperty("skipped").GetInt32());
+            var afterRestamp = ReadPartialReference();
+            Assert.Equal("resolved_group", afterRestamp.State);
+            Assert.Equal(2, afterRestamp.CandidateCount);
+            Assert.Equal(initial.TargetKey, afterRestamp.TargetKey);
+            AssertReaderConsumers(expectedDefinitionSites: 2, expectedReferenceCount: 1);
+
+            (string State, int CandidateCount, string? TargetKey, string[] CandidatePaths)
+                ReadPartialReference()
+            {
+                SqliteConnection.ClearAllPools();
+                using var connection = new SqliteConnection($"Data Source={dbPath};Pooling=False");
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = """
+                    SELECT reference.resolution_state,
+                           reference.resolution_candidate_count,
+                           reference.target_symbol_key
+                    FROM symbol_references AS reference
+                    JOIN files AS source_file ON source_file.id = reference.file_id
+                    WHERE source_file.path = 'Consumer5158.cs'
+                      AND reference.symbol_name = 'Runner5158'
+                      AND reference.reference_kind = 'type_reference'
+                    ORDER BY reference.line, reference.column_number
+                    LIMIT 1
+                    """;
+                using var reader = command.ExecuteReader();
+                Assert.True(reader.Read());
+                var state = reader.GetString(0);
+                var candidateCount = reader.GetInt32(1);
+                var targetKey = reader.IsDBNull(2) ? null : reader.GetString(2);
+                reader.Close();
+
+                command.CommandText = """
+                    SELECT target_file.path
+                    FROM symbol_reference_candidates AS candidate
+                    JOIN symbol_references AS reference ON reference.id = candidate.reference_id
+                    JOIN files AS source_file ON source_file.id = reference.file_id
+                    JOIN symbols AS target ON target.id = candidate.symbol_id
+                    JOIN files AS target_file ON target_file.id = target.file_id
+                    WHERE source_file.path = 'Consumer5158.cs'
+                      AND reference.symbol_name = 'Runner5158'
+                      AND reference.reference_kind = 'type_reference'
+                    ORDER BY target_file.path
+                    """;
+                using var candidateReader = command.ExecuteReader();
+                var candidatePaths = new List<string>();
+                while (candidateReader.Read())
+                    candidatePaths.Add(candidateReader.GetString(0));
+                return (state, candidateCount, targetKey, candidatePaths.ToArray());
+            }
+
+            void AssertReaderConsumers(int expectedDefinitionSites, int expectedReferenceCount)
+            {
+                SqliteConnection.ClearAllPools();
+                using var db = new DbContext(DbOpenIntent.QueryOnly, dbPath);
+                db.TryMigrateForRead();
+                using var reader = new DbReader(db.Connection, db.IsReadOnly);
+
+                var groupedSymbol = Assert.Single(reader.SearchSymbols(
+                    "Runner5158",
+                    limit: 10,
+                    kind: "class",
+                    lang: "csharp",
+                    exact: true,
+                    sortMode: SymbolSortMode.References,
+                    groupPartials: true));
+                Assert.Equal(expectedDefinitionSites, groupedSymbol.DefinitionSites);
+                Assert.Equal(expectedReferenceCount, groupedSymbol.ReferenceCount);
+                Assert.StartsWith("partial:", groupedSymbol.PartialFamilyId);
+
+                var physicalDefinitions = reader.SearchSymbols(
+                    "Runner5158",
+                    limit: 10,
+                    kind: "class",
+                    lang: "csharp",
+                    exact: true,
+                    sortMode: SymbolSortMode.Path,
+                    groupPartials: false);
+                Assert.Equal(expectedDefinitionSites, physicalDefinitions.Count);
+                Assert.Equal(
+                    physicalDefinitions.Select(definition => definition.Path).OrderBy(path => path, StringComparer.Ordinal),
+                    physicalDefinitions.Select(definition => definition.Path));
+
+                var hotspot = Assert.Single(
+                    reader.GetGroupedSymbolHotspots(
+                        limit: 20,
+                        kind: "class",
+                        lang: "csharp",
+                        pathPatterns: ["*.cs"],
+                        excludePathPatterns: null,
+                        excludeTests: false),
+                    result => result.Symbol.Name == "Runner5158");
+                Assert.Equal(expectedDefinitionSites, hotspot.DefinitionSites);
+                Assert.Equal(expectedReferenceCount, hotspot.ReferenceCount);
+
+                var defaultHotspot = Assert.Single(
+                    reader.GetSymbolHotspots(
+                        limit: 20,
+                        kind: "class",
+                        lang: "csharp",
+                        pathPatterns: ["*.cs"],
+                        excludePathPatterns: null,
+                        excludeTests: false),
+                    result => result.Symbol.Name == "Runner5158");
+                Assert.Equal(expectedReferenceCount, defaultHotspot.ReferenceCount);
+
+                var analysis = reader.AnalyzeSymbol(
+                    "Runner5158",
+                    limit: 20,
+                    lang: "csharp",
+                    exact: true);
+                Assert.Equal(expectedDefinitionSites, analysis.Definitions.Count);
+                Assert.Contains(
+                    analysis.CandidateBundles!.SelectMany(bundle => bundle.References),
+                    reference => reference.Path == "Consumer5158.cs"
+                                 && reference.ResolutionState == "resolved_group");
+
+                var dependencies = reader.GetFileDependencies(
+                    limit: 20,
+                    lang: "csharp",
+                    pathPatterns: ["Consumer5158.cs"]);
+                Assert.Contains(dependencies, edge => edge.TargetPath == "Runner5158.A.cs");
+                Assert.Contains(
+                    dependencies,
+                    edge => edge.TargetPath is "Runner5158.B.cs" or "Runner5158.Moved.cs");
+
+                var impact = reader.AnalyzeImpact(
+                    "Demo.Runner5158",
+                    maxDepth: 1,
+                    limit: 20,
+                    lang: "csharp");
+                Assert.Contains(
+                    impact.FileImpacts,
+                    result => result.SourcePath == "Consumer5158.cs");
+            }
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_UpdateMode_NoOpRepairsVersion4MarkdownCandidates_Issue4846()
     {
         var projectRoot = CreateTempProject();

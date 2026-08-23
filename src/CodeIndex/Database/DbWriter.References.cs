@@ -15,11 +15,26 @@ public partial class DbWriter
     private const string ReferenceResolutionSymbolFactsTable =
         "reference_resolution_symbol_facts";
 
-    private const string ReferenceResolutionTargetKeySql = """
+    private const string ReferenceResolutionPhysicalTargetKeySql = """
         target_file.lang || char(31) || target_file.path || char(31) ||
         COALESCE(target.container_qualified_name, target.container_name, '') || char(31) ||
         COALESCE(target.name, '')
         """;
+
+    private static string BuildReferenceResolutionTargetKeySql()
+        => LogicalPartialSymbolGrouper.BuildSqlKeyExpression(
+            languageSql: "target_file.lang",
+            kindSql: "target.kind",
+            nameSql: "target.name",
+            symbolIdSql: "target.id",
+            fileIdentitySql: "target_file.path",
+            signatureSql: "target.signature",
+            containerNameSql: "target.container_name",
+            containerQualifiedNameSql: "target.container_qualified_name",
+            familyKeySql: "target.family_key",
+            returnTypeSql: "target.return_type",
+            isPartialDeclarationSql: "target.is_partial_declaration",
+            fallbackKeySql: ReferenceResolutionPhysicalTargetKeySql);
 
     private static readonly string CreateReferenceResolutionSymbolFactsTableSql = $"""
         CREATE TEMP TABLE IF NOT EXISTS {ReferenceResolutionSymbolFactsTable} (
@@ -219,7 +234,7 @@ public partial class DbWriter
 
         INSERT INTO temp.{ReferenceResolutionSymbolFactsTable}(symbol_id, target_key)
         SELECT target.id,
-               {ReferenceResolutionTargetKeySql}
+               {BuildReferenceResolutionTargetKeySql()}
         FROM symbols AS target
         JOIN files AS target_file ON target_file.id = target.file_id;
         """;

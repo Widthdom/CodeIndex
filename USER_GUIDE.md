@@ -320,7 +320,12 @@ exit `1` with a bounded correction or nearest-command/subcommand suggestion.
 Fresh indexes resolve reference edges against symbol identity instead of joining folded
 names alone. `references --json` reports `target_symbol_id`, `target_symbol_key`,
 `resolution_state`, and `resolution_candidate_count` when available. `resolved` identifies
-one definition, `resolved_group` identifies one overload family, and `ambiguous` /
+one definition, while `resolved_group` identifies one overload or logical C# partial-type family.
+For a partial family, `target_symbol_key` is the stable logical-family identity and
+`resolution_candidate_count` remains the number of physical candidate declarations. Those
+physical definitions remain available through definition and inspection results. Candidates
+from different namespaces/containers, declaration kinds, generic arities, or languages do not
+collapse into one family and remain safely ambiguous. `ambiguous` /
 `unresolved` keep the edge explicit without letting C# `callers`, `callees`, or `deps`
 silently connect it to an unrelated same-named definition. Legacy databases keep the
 name-based read fallback until an indexing run refreshes this metadata and stamps its
@@ -3988,7 +3993,11 @@ release changelog を source of truth とします。全 command の完全な sy
 新しい index は、folded name だけを結合せず symbol identity に対して reference edge を
 解決します。`references --json` は利用可能な場合に `target_symbol_id`、
 `target_symbol_key`、`resolution_state`、`resolution_candidate_count` を返します。
-`resolved` は単一定義、`resolved_group` は単一 overload family を示し、`ambiguous` /
+`resolved` は単一定義、`resolved_group` は単一 overload family または C# の論理 partial 型 family を
+示します。partial family では `target_symbol_key` が安定した論理 family identity となり、
+`resolution_candidate_count` は物理 candidate declaration 数のままです。物理定義は definition と
+inspect の結果から引き続き参照できます。namespace / container、declaration kind、generic arity、
+language が異なる candidate は 1 family に統合せず、安全に曖昧なままにします。`ambiguous` /
 `unresolved` は edge を明示したまま、C# の `callers`、`callees`、`deps` が無関係な
 同名定義へ暗黙に接続することを防ぎます。legacy DB は、次回の index 実行でこの metadata
 を再構築して contract version を記録するまで name-based read fallback を維持します。

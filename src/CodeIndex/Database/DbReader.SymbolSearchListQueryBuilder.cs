@@ -34,7 +34,6 @@ public partial class DbReader
         var columns = BuildSymbolSearchColumnSql();
         var includeRankSignals =
             plan.SortMode != SymbolSortMode.Name && _hasReferencesTable;
-        var ranking = BuildSymbolSearchRankingSql(columns, includeRankSignals);
         var canonical = LogicalPartialQuerySql.Build(
             this,
             columns.Signature,
@@ -44,6 +43,10 @@ public partial class DbReader
             columns.ReturnType,
             columns.BodyStartLine,
             columns.BodyEndLine);
+        var ranking = BuildSymbolSearchRankingSql(
+            columns,
+            canonical.LogicalPartialKey,
+            includeRankSignals);
         var sql = BuildSymbolSearchSelectSql(columns, ranking, canonical);
         sql += SymbolSearchQueryPredicateBuilder.BuildFull(this, plan);
         SymbolSearchQueryPredicateBuilder.AppendFilters(
@@ -94,6 +97,7 @@ public partial class DbReader
 
     private SymbolSearchRankingSql BuildSymbolSearchRankingSql(
         SymbolSearchColumnSql columns,
+        string logicalPartialKeySql,
         bool includeRankSignals)
     {
         var genericPenalty = includeRankSignals
@@ -105,11 +109,14 @@ public partial class DbReader
         var conservativeSignal = includeRankSignals
             ? $"(f.lang = 'csharp' AND (s.kind = 'property' OR ({definitionSites}) > 1 OR lower(s.name) IN {GenericSymbolRankNamesSql}))"
             : "0";
+        var csharpPartialIdentitySignal = includeRankSignals && CanUseCSharpIdentityHotspotCounts()
+            ? $"(f.lang = 'csharp' AND ({logicalPartialKeySql}) LIKE 'family:%')"
+            : "0";
         var referenceCount = includeRankSignals
-            ? $"CASE WHEN {conservativeSignal} THEN COALESCE(symbol_file_rank.reference_count, 0) ELSE COALESCE(symbol_rank.reference_count, 0) END"
+            ? $"CASE WHEN {csharpPartialIdentitySignal} THEN COALESCE(symbol_identity_rank.reference_count, 0) WHEN {conservativeSignal} THEN COALESCE(symbol_file_rank.reference_count, 0) ELSE COALESCE(symbol_rank.reference_count, 0) END"
             : "CAST(0 AS INTEGER)";
         var hotspotScore = includeRankSignals
-            ? $"CASE WHEN {conservativeSignal} THEN COALESCE(symbol_file_rank.hotspot_score, 0.0) ELSE COALESCE(symbol_rank.hotspot_score, 0.0) END"
+            ? $"CASE WHEN {csharpPartialIdentitySignal} THEN COALESCE(symbol_identity_rank.hotspot_score, 0.0) WHEN {conservativeSignal} THEN COALESCE(symbol_file_rank.hotspot_score, 0.0) ELSE COALESCE(symbol_rank.hotspot_score, 0.0) END"
             : "CAST(0.0 AS REAL)";
         var dilution = $"CASE WHEN ({definitionSites}) > 1 THEN CAST(({definitionSites}) * ({definitionSites}) AS REAL) ELSE 1.0 END";
         var structuralPenalty = includeRankSignals
@@ -129,7 +136,7 @@ public partial class DbReader
                        ELSE 0.0
                    END)";
         return new SymbolSearchRankingSql(
-            BuildSymbolRankJoin(includeRankSignals),
+            BuildSymbolRankJoin(includeRankSignals, logicalPartialKeySql),
             genericPenalty,
             definitionSites,
             referenceCount,
@@ -141,10 +148,46 @@ public partial class DbReader
             BuildExactSymbolNameOrderSql());
     }
 
-    private static string BuildSymbolRankJoin(bool includeRankSignals)
+    private string BuildSymbolRankJoin(bool includeRankSignals, string logicalPartialKeySql)
     {
-        return includeRankSignals
+        if (!includeRankSignals)
+            return string.Empty;
+
+        var identityJoin = CanUseCSharpIdentityHotspotCounts()
             ? $@"
+            LEFT JOIN (
+                SELECT identity_site.lang,
+                       identity_site.target_symbol_key,
+                       COUNT(*) AS reference_count,
+                       SUM(identity_site.reference_score) AS hotspot_score
+                FROM (
+                    SELECT rf.lang,
+                           sr.target_symbol_key,
+                           sr.file_id,
+                           sr.line,
+                           sr.column_number,
+                           {GetLogicalReferenceKindSql("sr.reference_kind")} AS logical_reference_kind,
+                           MAX({GetHotspotReferenceWeightSql("sr.reference_kind")}) AS reference_score
+                    FROM symbol_references sr
+                    JOIN files rf ON rf.id = sr.file_id
+                    WHERE rf.lang = 'csharp'
+                      AND sr.target_symbol_key IS NOT NULL
+                      AND sr.resolution_state IN ('resolved', 'resolved_group')
+                      AND (sr.reference_kind IN {CallGraphReferenceKindsSql}
+                           OR sr.reference_kind = 'type_reference')
+                    GROUP BY rf.lang,
+                             sr.target_symbol_key,
+                             sr.file_id,
+                             sr.line,
+                             sr.column_number,
+                             logical_reference_kind
+                ) identity_site
+                GROUP BY identity_site.lang, identity_site.target_symbol_key
+            ) symbol_identity_rank
+              ON symbol_identity_rank.lang = f.lang
+             AND symbol_identity_rank.target_symbol_key = ({logicalPartialKeySql})"
+            : string.Empty;
+        return $@"
             LEFT JOIN (
                 SELECT rf.lang AS lang,
                        sr.symbol_name AS symbol_name,
@@ -183,8 +226,8 @@ public partial class DbReader
                 GROUP BY df.lang, ds.name COLLATE NOCASE
             ) symbol_defs
               ON symbol_defs.lang = f.lang
-             AND symbol_defs.symbol_name = s.name COLLATE NOCASE"
-            : string.Empty;
+             AND symbol_defs.symbol_name = s.name COLLATE NOCASE
+            {identityJoin}";
     }
 
     private string BuildSymbolSearchSelectSql(

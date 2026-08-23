@@ -257,7 +257,7 @@ Set `CDIDX_SLOW_QUERY_MS=<milliseconds>` to write slow SQLite command diagnostic
 | Worker protocol JSON | Isolated worker stdin frames are read through `BoundedLineReader`. The symbol-worker client serializes requests directly to UTF-8 and writes newline-framed bytes to the process stream; the worker serializes responses directly to its stdout stream, and the client reads each bounded response frame as UTF-8 bytes for direct deserialization. This avoids an additional UTF-16 JSON string and encoding pass in each direction for every source file. The default frame cap is 32 MiB for both characters and UTF-8 bytes. When a larger `--max-file-bytes` setting needs JSON-escaping headroom, the protocol frame cap may expand up to `WorkerProtocolLineLimits.MaxExtendedLineUtf8Bytes` (384 MiB), never to `int.MaxValue`. `WorkerProtocolJsonValidator` rejects payloads over the negotiated character/UTF-8 byte cap before `JsonDocument.Parse`, parses with `DefaultMaxJsonDepth` (32), rejects more than 1,000,000 object properties, and rejects strings longer than the frame cap. |
 | User regex find | `find --regex` keeps the classic .NET regex engine for lookaround/backreference compatibility, adds `RegexOptions.CultureInvariant`, adds `IgnoreCase` unless `--exact` is set, and uses `BoundedRegex.DefaultMatchTimeout` per match. Timeouts surface as `E014_REGEX_MATCH_TIMEOUT` / `regex_timeout` in CLI JSON, and human output includes the same recovery hint. `find --all` additionally applies candidate-file and line-scan caps before walking the whole index. |
 | Shared regex construction | Production regex construction is centralized through `BoundedRegex`, `RegexRegistry`, or `RegexTimeoutPolicy`. Use `BoundedRegex` for extractor patterns and bounded static regex APIs, `RegexRegistry` for raw BCL regex factories that must preserve timeout exceptions (`find --regex`, ignore glob regexes, generated-code path patterns), and `RegexTimeoutPolicy` for diagnostic/redaction surfaces. `RegexRegistry` owns the named ignore-glob timeout (100 ms), generated-code pattern timeout (50 ms), and find-regex factory using `BoundedRegex.DefaultMatchTimeout`. Search-audit recipes treat only `BoundedRegex` aliases and `RegexRegistry.cs` as centralized positive evidence, so new production raw constructors require a deliberate factory or generated-regex entry plus tests. |
-| Filesystem traversal helpers | `FileSystemTraversalPolicy` keeps top-directory-only enumeration explicit (`IgnoreInaccessible=false`, no implicit recursion) and exposes opt-in `CancellationToken` / entry-budget options. Expected traversal failures are classified centrally so command diagnostics share the same permission, I/O, invalid-path, unsupported-path, path-too-long, and budget-exceeded taxonomy. |
+| Filesystem traversal helpers | `FileSystemTraversalPolicy` keeps top-directory-only enumeration explicit (`IgnoreInaccessible=false`, no implicit recursion) and exposes opt-in `CancellationToken` / entry-budget options. Expected traversal failures are classified centrally so command diagnostics share the same permission, I/O, invalid-path, unsupported-path, path-too-long, and budget-exceeded taxonomy. Existing-child case probes retain one exact-name set capped by `CaseSensitivityProbeDirectory.MaxExistingChildProbeEntries` (4,096), return unknown on truncation so callers use the isolated-write or cached root-policy fallback, and propagate available cancellation tokens. |
 | `MaxValue` sentinels | `int.MaxValue` may be used only as an internal sentinel when the next operation clamps before SQL limits, allocation, traversal, payload sizing, or timeout conversion. User-influenced values must be reduced to named practical constants before multiplication, buffer sizing, protocol framing, or query expansion. |
 
 ### Indexing pipeline
@@ -1623,6 +1623,17 @@ unqualified name receive a global candidate only when that name is unique in the
 symbol set. Otherwise they remain `ambiguous` or `unresolved`, and dependency queries do not
 fall back to a same-name edge.
 
+C# type-reference resolution uses `LogicalPartialSymbolGrouper` for declarations that have a
+valid logical partial-family identity. Full and scoped refreshes persist the same stable
+`family:` target key used by grouped symbol discovery, so multiple physical declarations in one
+language/kind/namespace-and-container/generic-arity family produce `resolved_group` rather than
+semantic ambiguity. `resolution_candidate_count` deliberately remains the physical declaration
+count, and `symbol_reference_candidates` retains every physical symbol row. Search ranking,
+grouped hotspots, inspect, dependencies, and impact consume the logical identity while APIs that
+list definitions remain deterministic and physical. The reference-identity contract version
+must be advanced when this key changes; version 9 forces full, scoped, no-op, and deletion-only
+index paths to replace older physical-path target keys before identity-aware reads become ready.
+
 C# common member names are never discarded during extraction. The writer persists their
 receiver/type evidence in `target_qualifier`, and reference finalization records
 `resolution_state`. Bare-name `references` and unqualified graph discovery remain broad and
@@ -2003,7 +2014,10 @@ the index provides declaration coordinates. C# positional-record properties
 store the span from the component's first attribute or type token through its
 identifier, so record keywords, record type names, base arguments, and body
 members remain attributed to their actual enclosing symbols even when they
-share a physical line with a positional component. Legacy rows without column
+share a physical line with a positional component. Only `record`, `record class`,
+and `record struct` declarations synthesize these property symbols; ordinary C#
+class and struct primary-constructor parameters are not member definitions.
+Legacy rows without column
 metadata retain the line-based fallback. Primary-match selection mirrors the
 displayed focus line. Exact-source names are normalized with each result's
 language when the query does not specify one, and raw source-column maps are
@@ -4306,7 +4320,7 @@ query コマンドも JSON profile block 用の `--profile` と command-scoped p
 | worker protocol JSON | isolated worker の stdin frame は `BoundedLineReader` で読みます。symbol-worker client は request を直接 UTF-8 に serialize して改行区切りの byte を process stream へ書き、worker は response を stdout stream へ直接 serialize し、client は bounded response frame を UTF-8 byte のまま読み取って直接 deserialize します。これにより source file ごとに両方向で発生していた追加 UTF-16 JSON string と encoding pass を避けます。既定の frame 上限は文字数・UTF-8 byte 数ともに 32 MiB です。大きな `--max-file-bytes` によって JSON escape 分の余裕が必要な場合、protocol frame 上限は `WorkerProtocolLineLimits.MaxExtendedLineUtf8Bytes`（384 MiB）まで拡張できますが、`int.MaxValue` までは拡張しません。`WorkerProtocolJsonValidator` は `JsonDocument.Parse` の前に合意済みの文字数 / UTF-8 byte 上限を超える payload を拒否し、`DefaultMaxJsonDepth`（32）で parse し、object property 1,000,000 件超と frame 上限を超える string を拒否します。 |
 | user regex find | `find --regex` は lookaround / backreference 互換性のため classic .NET regex engine を維持し、`RegexOptions.CultureInvariant` を付け、`--exact` でない場合は `IgnoreCase` も付け、各 match に `BoundedRegex.DefaultMatchTimeout` を使います。timeout は CLI JSON で `E014_REGEX_MATCH_TIMEOUT` / `regex_timeout` として返り、人間向け出力にも同じ recovery hint が出ます。`find --all` は index 全体を走査する前に candidate file と line scan の上限も適用します。 |
 | shared regex construction | production の regex 構築は `BoundedRegex`、`RegexRegistry`、または `RegexTimeoutPolicy` に集約します。extractor pattern と bounded static regex API には `BoundedRegex`、timeout 例外を維持する必要がある raw BCL regex factory（`find --regex`、ignore glob regex、generated-code path pattern）には `RegexRegistry`、diagnostic / redaction surface には `RegexTimeoutPolicy` を使います。`RegexRegistry` は ignore glob timeout（100 ms）、generated-code pattern timeout（50 ms）、および `BoundedRegex.DefaultMatchTimeout` を使う find-regex factory の名前付き policy を所有します。search-audit recipe は `BoundedRegex` alias と `RegexRegistry.cs` だけを集約済みの positive evidence と見なすため、新しい production raw constructor は明示的な factory または generated-regex entry とテストを伴う必要があります。 |
-| filesystem traversal helper | `FileSystemTraversalPolicy` は top-directory-only enumeration を明示し（`IgnoreInaccessible=false`、暗黙の再帰なし）、任意指定の `CancellationToken` / entry budget option を公開します。想定内の traversal failure は中央で分類し、command diagnostic が permission、I/O、invalid-path、unsupported-path、path-too-long、budget-exceeded の taxonomy を共有します。 |
+| filesystem traversal helper | `FileSystemTraversalPolicy` は top-directory-only enumeration を明示し（`IgnoreInaccessible=false`、暗黙の再帰なし）、任意指定の `CancellationToken` / entry budget option を公開します。想定内の traversal failure は中央で分類し、command diagnostic が permission、I/O、invalid-path、unsupported-path、path-too-long、budget-exceeded の taxonomy を共有します。既存 child の case probe は `CaseSensitivityProbeDirectory.MaxExistingChildProbeEntries`（4,096）を上限とする1つの exact-name set だけを保持し、truncation 時は unknown を返して caller の isolated-write または cached root-policy fallback に委ね、利用可能な cancellation token を伝播します。 |
 | `MaxValue` sentinel | `int.MaxValue` は、次の操作が SQL limit、allocation、traversal、payload sizing、timeout conversion の前に clamp する場合だけ内部 sentinel として使えます。ユーザー影響値は multiplication、buffer sizing、protocol framing、query expansion の前に、名前付きの実用上限へ落としてください。 |
 
 ### インデックスパイプライン
@@ -5589,6 +5603,17 @@ resolution を再構築し、同じ transaction で marker を設定します。
 対象となる symbol 集合で名前が一意の場合だけ global candidate を持ちます。それ以外は
 `ambiguous` または `unresolved` のままとし、dependency query は同名 edge へ fallback しません。
 
+C# の type-reference resolution は、有効な論理 partial-family identity を持つ declaration に
+`LogicalPartialSymbolGrouper` を使用します。full / scoped refresh は grouped symbol discovery と同じ
+安定した `family:` target key を永続化するため、language、kind、namespace / container、generic arity が
+同じ 1 family 内の複数物理 declaration は semantic ambiguity ではなく `resolved_group` になります。
+`resolution_candidate_count` は意図的に物理 declaration 数のままとし、
+`symbol_reference_candidates` はすべての物理 symbol row を保持します。search ranking、grouped hotspot、
+inspect、dependency、impact は論理 identity を使用し、definition 一覧 API は決定的な物理定義を維持します。
+この key を変更するときは reference-identity contract version を進める必要があります。version 9 は
+identity-aware read を ready にする前に、full、scoped、no-op、削除のみの index path で旧来の
+物理 path target key を置き換えます。
+
 C# の一般的な member 名は extraction 時に破棄しません。writer は receiver / 型の evidence を
 `target_qualifier` に永続化し、reference finalization は `resolution_state` を記録します。bare-name の
 `references` と無修飾 graph discovery は広い検索結果と保存済み resolution label を維持します。一方、
@@ -5956,6 +5981,8 @@ CLI は exact-mode alias を正規化してから、raw `--fts` と `--exact`、
 判定します。C# の位置 record property は、component の最初の attribute または型 token から
 識別子までの範囲を保持します。これにより、同じ物理行に位置 component があっても、
 record keyword、record 型名、base 引数、body member は実際の囲みシンボルに帰属します。
+これらの property symbol を合成するのは `record`、`record class`、`record struct` 宣言だけであり、
+通常の C# class / struct の primary constructor parameter は member definition ではありません。
 列 metadata がない旧 row では行ベースの fallback を維持します。主要一致の選択は表示される
 focus 行と一致します。query が言語を指定しない場合、exact-source 名は各結果の言語で正規化し、
 raw source の列 map は escaped name が正規化で実際に変わる行にだけ作成します。
