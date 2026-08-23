@@ -369,8 +369,8 @@ public static partial class SymbolExtractor
         if (lang == "csharp")
         {
             return kind == "struct"
-                ? new Regex(@"^\s*(?:(?:public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?(?:(?:static|partial|readonly|file|new|ref|unsafe)\s+)*(?:record\s+)?struct\s+" + Regex.Escape(recordName) + @"\b", RegexOptions.CultureInvariant)
-                : new Regex(@"^\s*(?:(?:public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?(?:(?:static|partial|abstract|sealed|readonly|file|new|unsafe)\s+)*(?:record(?:\s+class)?\s+|class\s+)" + Regex.Escape(recordName) + @"\b", RegexOptions.CultureInvariant);
+                ? new Regex(@"^\s*(?:(?:public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?(?:(?:static|partial|readonly|file|new|ref|unsafe)\s+)*record\s+struct\s+" + Regex.Escape(recordName) + @"\b", RegexOptions.CultureInvariant)
+                : new Regex(@"^\s*(?:(?:public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?(?:(?:static|partial|abstract|sealed|readonly|file|new|unsafe)\s+)*record(?:\s+class)?\s+" + Regex.Escape(recordName) + @"\b", RegexOptions.CultureInvariant);
         }
 
         if (lang == "kotlin")

@@ -1895,7 +1895,7 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_CSharp_ClassPrimaryConstructorParameters_AreIndexedAsContainedProperties()
+    public void Extract_CSharp_ClassPrimaryConstructorParameters_AreNotIndexedAsProperties_Issue5157()
     {
         var content = """
             namespace App;
@@ -1907,18 +1907,13 @@ public partial class SymbolExtractorTests
             """;
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
-        var name = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "name" && s.ContainerName == "Worker"));
-        Assert.Equal("class", name.ContainerKind);
-        Assert.Equal("string", name.ReturnType);
-        Assert.Equal("string name", name.Signature);
-
-        var id = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "id" && s.ContainerName == "Worker"));
-        Assert.Equal("int", id.ReturnType);
-        Assert.Equal("int id", id.Signature);
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Worker");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Describe" && s.ContainerName == "Worker");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name is "name" or "id" && s.ContainerName == "Worker");
     }
 
     [Fact]
-    public void Extract_CSharp_StructPrimaryConstructorParameters_AreIndexedAsContainedProperties()
+    public void Extract_CSharp_StructPrimaryConstructorParameters_AreNotIndexedAsProperties_Issue5157()
     {
         var content = """
             namespace App;
@@ -1930,13 +1925,9 @@ public partial class SymbolExtractorTests
             """;
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
-        var start = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "start" && s.ContainerName == "Range"));
-        Assert.Equal("struct", start.ContainerKind);
-        Assert.Equal("int", start.ReturnType);
-
-        var length = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "length" && s.ContainerName == "Range"));
-        Assert.Equal("struct", length.ContainerKind);
-        Assert.Equal("int", length.ReturnType);
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Range");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "End" && s.ContainerName == "Range");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name is "start" or "length" && s.ContainerName == "Range");
     }
 
     [Fact]
@@ -2937,19 +2928,37 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_CSharp_DetectsRecordPrimaryComponentsAsProperties()
+    public void Extract_CSharp_OnlyRecordPrimaryComponentsBecomeProperties_Issue5157()
     {
         var content = """
             namespace App;
 
             public record Point(int X, int Y);
+            public sealed record class Settings(string? Endpoint);
             public readonly record struct Vec3(double X, double Y, double Z);
             public record Animal(string Name);
             public record Dog(string Name, string Breed) : Animal(Name);
             public record Options(
                 string Host,
                 int Port) { public bool UseTls { get; init; } = true; }
-            public record Container<T>(T Value, int Count) where T : class;
+            public record Container<T>(T? Value, int Count) where T : class;
+
+            public sealed class PrimaryService(string prefix)
+            {
+                public string Format(string value) => prefix + value;
+            }
+
+            public readonly struct PrimaryPoint(int x, int y);
+
+            public sealed class Holder
+            {
+                private sealed class Nested(
+                    [Tag] string inner,
+                    long maxBytes)
+                {
+                    public string Value { get; } = inner;
+                }
+            }
             """;
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
@@ -2963,18 +2972,26 @@ public partial class SymbolExtractorTests
         Assert.Equal("double", vec3Z.ReturnType);
         Assert.Equal("struct", vec3Z.ContainerKind);
 
+        var settingsEndpoint = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Endpoint" && s.ContainerName == "Settings"));
+        Assert.Equal("string?", settingsEndpoint.ReturnType);
+
         var dogBreed = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Breed" && s.ContainerName == "Dog"));
         Assert.Equal("string", dogBreed.ReturnType);
 
         var optionsHost = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Host" && s.ContainerName == "Options"));
         Assert.Equal("string", optionsHost.ReturnType);
         Assert.Contains("string Host", optionsHost.Signature);
-        Assert.Equal(8, optionsHost.Line);
+        Assert.Equal(9, optionsHost.Line);
         var optionsRecord = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Options"));
-        Assert.Equal(9, optionsRecord.EndLine);
+        Assert.Equal(10, optionsRecord.EndLine);
 
         var containerValue = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Value" && s.ContainerName == "Container"));
-        Assert.Equal("T", containerValue.ReturnType);
+        Assert.Equal("T?", containerValue.ReturnType);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "prefix" && s.ContainerName == "PrimaryService");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name is "x" or "y" && s.ContainerName == "PrimaryPoint");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name is "inner" or "maxBytes" && s.ContainerName == "Nested");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Value" && s.ContainerName == "Nested");
     }
 
     [Fact]
