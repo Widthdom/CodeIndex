@@ -62,10 +62,11 @@ internal static class LogicalPartialSymbolGrouper
         string familyKeySql,
         string? returnTypeSql = null,
         string? isPartialDeclarationSql = null,
-        bool csharpFamilyContractReady = true)
+        bool csharpFamilyContractReady = true,
+        string? fallbackKeySql = null)
     {
         if (!csharpFamilyContractReady)
-            return $"'symbol:' || {symbolIdSql}";
+            return fallbackKeySql ?? $"'symbol:' || {symbolIdSql}";
 
         var persistedFamilySql = $"NULLIF(TRIM({familyKeySql}), '')";
         var scopedPersistedFamilySql = persistedFamilySql;
@@ -104,7 +105,7 @@ internal static class LogicalPartialSymbolGrouper
              AND {callableIdentitySql} IS NOT NULL
             THEN 'family:' || {languageSql} || CHAR(31) || 'function' || CHAR(31) ||
                  {callableContainerSql} || CHAR(31) || {callableIdentitySql}
-            ELSE 'symbol:' || {symbolIdSql}
+            ELSE {fallbackKeySql ?? $"'symbol:' || {symbolIdSql}"}
         END";
     }
 
