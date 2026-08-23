@@ -7,18 +7,29 @@ public static partial class ReferenceExtractor
     private sealed class CoreReferenceLineContainerResolver
     {
         private readonly CoreReferenceLoopContext _loop;
-        private readonly int _lineIndex;
-        private readonly int _lineNumber;
-        private readonly SymbolRecord? _container;
-        private readonly bool _csharpLineHasWhereClause;
-        private readonly (
+        private int _lineIndex;
+        private int _lineNumber;
+        private SymbolRecord? _container;
+        private bool _csharpLineHasWhereClause;
+        private (
             SymbolRecord Synthetic,
             int NameIndex,
             int OpenBraceIndex,
             int CloseBraceIndex)? _javaSameLineCtor;
 
-        internal CoreReferenceLineContainerResolver(
-            CoreReferenceLoopContext loop,
+        internal CoreReferenceLineContainerResolver(CoreReferenceLoopContext loop)
+        {
+            _loop = loop;
+            ResolveContainerForCall = ResolveContainer;
+            ResolveSwiftPropertyContainerForCall =
+                ResolveSwiftPropertyContainer;
+        }
+
+        // One resolver belongs to one CoreReferenceLoopState. The extraction
+        // loop resets it immediately before processing a non-empty line, and
+        // all consumers invoke these bound delegates synchronously before the
+        // next reset. The delegates must not escape the prepared line.
+        internal void ResetForLine(
             int lineIndex,
             int lineNumber,
             SymbolRecord? container,
@@ -26,15 +37,11 @@ public static partial class ReferenceExtractor
             (SymbolRecord Synthetic, int NameIndex, int OpenBraceIndex,
                 int CloseBraceIndex)? javaSameLineCtor)
         {
-            _loop = loop;
             _lineIndex = lineIndex;
             _lineNumber = lineNumber;
             _container = container;
             _csharpLineHasWhereClause = csharpLineHasWhereClause;
             _javaSameLineCtor = javaSameLineCtor;
-            ResolveContainerForCall = ResolveContainer;
-            ResolveSwiftPropertyContainerForCall =
-                ResolveSwiftPropertyContainer;
         }
 
         internal Func<int, SymbolRecord?> ResolveContainerForCall { get; }

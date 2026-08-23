@@ -25,7 +25,9 @@ public static partial class SymbolExtractor
             string[] lines,
             IReadOnlyList<SymbolPattern> applicablePatterns,
             bool applyRequiredLiteralMatchInputGate,
-            RequiredLiteralGateCounts? requiredLiteralGateCounts)
+            RequiredLiteralGateCounts? requiredLiteralGateCounts,
+            bool applyCSharpRegexProbeOptimizations,
+            CSharpRegexProbeCounts? csharpRegexProbeCounts)
         {
             _lang = lang;
             _lines = lines;
@@ -83,6 +85,8 @@ public static partial class SymbolExtractor
                     applicablePatterns,
                     applyRequiredLiteralMatchInputGate,
                     requiredLiteralGateCounts,
+                    applyCSharpRegexProbeOptimizations,
+                    csharpRegexProbeCounts,
                     out csharpMatchColumnToRaw)
                 : null;
             CSharpMatchColumnToRaw = csharpMatchColumnToRaw;

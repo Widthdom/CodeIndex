@@ -361,8 +361,16 @@ dropped only when an actual graph refresh is about to delete or materialize
 candidate rows, so marker-only and high-cardinality no-op updates do not rebuild
 that whole index. The candidate primary key remains available for reference-scoped
 materialization and resolution, and the file and reference-line maintenance indexes
-remain available during the load, while identity and resolution finalization
-continues without query indexes. The
+normally remain available during the load. The sole exception is an authoritative
+empty-database first CLI full scan whose transaction-local recheck still owns the
+fresh-resolution claim: while it persists raw references, it also defers
+`idx_symbol_refs_reference_line` and `idx_reference_lines_file_line`. It restores
+both before the first candidate, deferred-graph, mutual-recursion, or completion
+boundary (and therefore before fresh planner statistics). Rebuilds, existing-database
+full scans and updates, a fresh-claim race, and recoverable MCP indexing keep both
+indexes throughout. Their drop and restore DDL remains in the caller-owned outer
+transaction, so cancellation or failure rolls the schema back atomically. Identity
+and resolution finalization otherwise continues without query indexes. The
 guard forces any active dirty graph scope onto its full-refresh plan before the
 indexes disappear. While that force-full plan is known, do not populate the
 dirty-file/name/reference TEMP scope: fresh indexes and rebuilds never consume
@@ -391,13 +399,16 @@ index catalog so every path converges on an identical schema.
 Reference context text is normalized into `reference_lines`; the legacy
 `symbol_references.context` column is therefore written as a SQL `NULL` literal
 rather than bound once per reference. Reference-line materialization builds a
-batch-local key-to-ordinal map, resolves each unique line ID, then releases the
-tuple lookup before binding `symbol_references` from ordinal arrays. Preserve
-this path for both new-file inserts and replacement upserts, including atomic
-file windows, so large multi-language reference sets do not rehash file/line/
-context tuples for every persisted edge. Atomic window sizing uses the worst-case
-rows-per-statement bound and leaves the materializer as the only tuple-hash pass;
-do not restore a duplicate key-sizing set before it.
+batch-local key-to-ordinal map and releases it as soon as the unique input array
+is built. Both new-file `RETURNING` and replacement lookup SQL project only the
+materialized ID plus the batch-local input ordinal; they must not return context
+text or reconstruct tuple keys in managed code. Ordinal bounds, duplicates,
+missing rows, and non-positive IDs fail closed before `symbol_references` binding.
+Preserve this path across atomic file windows so large multi-language reference
+sets do not copy or rehash file/line/context tuples after deduplication. Atomic
+window sizing uses the worst-case rows-per-statement bound and leaves the
+materializer as the only tuple-hash pass; do not restore a duplicate key-sizing
+set before it.
 
 Use the same secondary-index deferral for an existing-database full scan when
 the established FTS dirty-byte policy selects bulk loading. Scoped updates have
@@ -945,6 +956,15 @@ per candidate. If scope or delimiter information is needed for many candidates,
 precompute the ranges once per file, function, or block and reuse that structure
 for the per-candidate lookup.
 
+C# declaration recovery also treats repeated pattern probes as candidate-local
+work. The outer pattern loop and the recoverable-pattern helper may share only a
+contiguous prefix of deterministic negative results for the exact
+`PreparedLine.MatchLine` at the same candidate start. Do not carry that prefix
+into merged multiline property/function inputs, another offset, or another
+line. A regex timeout is not a deterministic miss and must never enter the
+prefix; pattern order, successful probes, timeout diagnostics, and cancellation
+boundaries remain unchanged.
+
 The same rule applies to extracted-symbol membership. When a later per-line or
 per-match decision repeatedly asks whether a class, property, import alias, or
 other symbol exists, build a dictionary or set once and reuse it. A helper that
@@ -957,6 +977,15 @@ Container ownership follows the same contract. If references repeatedly resolve
 an extracted declaration by name and source range, index candidates by name once
 and scan only that name's ordered range list. Preserve first-candidate behavior
 for duplicate names and keep the index local to one extraction call.
+The core reference loop owns one `CoreReferenceLineContainerResolver` per
+extraction and resets its line coordinates, fallback container, and
+language-specific state immediately before each non-empty line. Its bound
+container delegates are created once, consumed synchronously by that prepared
+line, and must not be retained past it. Exceptions and cancellation abandon the
+extraction-local resolver; do not pool it or make it static. C# declaration
+generic-parameter discovery may share an empty `IReadOnlySet` only after the
+line has no `<` marker. Consumers must keep that set read-only, while any line
+with `<` continues through the full callable/type declaration parser.
 For C#, both symbol assignment and reference resolution prefer the narrowest
 active callable range, including `test.method` and nested local functions, before
 an enclosing type. Named lambdas without a complete body range attach to that
@@ -1329,7 +1358,8 @@ Current stable codes and triggers:
 | Maintenance error contract | `vacuum`, `backfill-fold`, `optimize` / `index --optimize`, and `db integrity` route failures through `MaintenanceDatabaseErrorClassifier` version `1` and one JSON/human writer. SQLite primary codes `5`/`6`, `8`, `11`, and `26` classify locked/busy, not-writable, corrupt, and not-a-database failures without inspecting exception wording. The shared response carries a stable error code/category, conditional recovery hint, redacted path metadata, and optional primary/extended SQLite codes. Absolute paths are redacted by default; `--show-paths` is the explicit diagnostic opt-in. |
 | Durable WAL file set | When WAL is active, the durable SQLite index is the `.db` file plus sibling `.db-wal` and `.db-shm` files. Backups, diagnostics bundles, and manual copies must include all three files when the siblings exist, or use SQLite's `.backup` command/API from a live connection. Copying only `codeindex.db` can produce a stale snapshot because committed pages may still live in `codeindex.db-wal`. |
 | `synchronous=NORMAL` | Under WAL, `NORMAL` avoids per-commit fsync pressure during 500-row indexing batches while preserving database consistency after crashes. |
-| Caller-owned write batching | Full-scan and other atomic file writes already run inside one caller-owned transaction, so their language-neutral chunk, symbol, issue, reference-line, and reference inserts cap each named-parameter statement at 32 parameters. `Microsoft.Data.Sqlite` resolves every parameter name again on execution; this smaller shape avoids dense binding lookup without adding transaction scopes. Cancellation and test checkpoints remain at every statement. For operations above 500 rows, persistent `db_writer_batch_checkpoint` records are emitted only when progress crosses a 500-row boundary and at completion, avoiding a synchronous log flush for every tiny statement. Public writer APIs retain the SQLite-variable-limit batch shape and their existing per-batch transaction/SAVEPOINT contract. |
+| Caller-owned write batching | Full-scan and other atomic file writes already run inside one caller-owned transaction, so their language-neutral chunk, symbol, issue, reference-line, and reference inserts cap each statement at 32 parameters. Every batch uses compact, one-origin SQLite numeric slots (`?1` through `?N`) in row/column order; this reduces parameter-name resolution work while preserving the existing statement-size, cancellation, and checkpoint contracts. For operations above 500 rows, persistent `db_writer_batch_checkpoint` records are emitted only when progress crosses a 500-row boundary and at completion, avoiding a synchronous log flush for every tiny statement. Public writer APIs retain the SQLite-variable-limit batch shape and their existing per-batch transaction/SAVEPOINT contract. |
+| Authoritative-fresh raw insert scope | After the empty-database CLI path revalidates its authoritative-fresh claim inside the caller-owned transaction, only the extraction pipeline's new-file and fresh reference-line `RETURNING` INSERTs plus its DONE-only chunk, symbol, new-file issue, and atomic fresh-reference INSERTs may bind and execute through SQLitePCLRaw on the provider-owned connection handle. The scope preserves the existing 32-parameter statement boundaries, exact tail/result shapes, batch hooks, row-skip replay, and outer transaction atomicity; a 32-entry LRU covers all 25 production row shapes. The synchronous full-scan persistence consumer and `DbWriter` transaction-owner check keep the non-thread-safe cache single-owner. Every lease resets and clears bindings, errors retain the original step result, cancellation maps SQLite interrupt to `OperationCanceledException`, and all cached statements are finalized before graph/index/FTS work. A `RETURNING` lease buffers and validates every positive ID and input ordinal through terminal `DONE` before publishing; malformed, incomplete, duplicate, failed, or cancelled streams discard the prepared statement, while the caller's per-file savepoint owns data rollback. Replacement, incremental, rebuild, symbols-only, fresh-claim race fallback, MCP, and public writer paths remain on Microsoft.Data.Sqlite. |
 | Checkpointing | `DbWriter` runs `PRAGMA wal_checkpoint(PASSIVE)` after each outer transaction commit, and SQLite may also checkpoint automatically after the configured 1000-page threshold. Both checkpoint paths are opportunistic: active readers are not blocked, and an uncheckpointed WAL is expected state rather than corruption. |
 | Checkpoint result contract | Explicit `PRAGMA wal_checkpoint(TRUNCATE)` paths execute a reader and return a structured result containing SQLite's `(busy, log, checkpointed)` values. Non-zero `busy` or positive remaining pages is unsuccessful with a bounded machine reason. `(0, -1, -1)` is SQLite's successful non-WAL no-op. Instance checkpointing, the static read-only-fallback preflight, query diagnostics, top-level status, and nested connection-policy status preserve the same result and counts. Raw exception text and paths must not enter diagnostics. |
 | Crash recovery | If the process is killed after SQLite has committed a transaction but before checkpointing, the next normal opener rolls the WAL forward; no manual recovery step is required. If the process dies before a transaction commits, SQLite rolls that transaction back. |
@@ -2013,22 +2043,39 @@ Extractor strategy by language surface:
 | Windows application manifests | Manifest element paths, assembly identities, execution levels, and supported-OS values remain structural symbols. Dependent assembly identities emit `dependency` references, while local `file`, `codeBase`, and probing paths emit `project_reference` edges. |
 | XML / NuGet.config | Generic XML emits bounded element and attribute paths. NuGet.config additionally promotes package sources, source mappings, signature validation mode, trusted signer names, certificate fingerprints, and `allowUntrustedRoot` values to semantic `property` symbols with `nuget.*` subkinds. |
 
-Before the line-oriented regex loop, built-in case-sensitive patterns may opt into an explicit
-`RequiredLiteral` Tier A gate. The literal must contain at least two characters and be an Ordinal
-substring of every successful regex path. If it is absent from the normalized file content, that
-pattern is skipped without changing the order of the remaining patterns. `IgnoreCase` patterns,
-one-character literals, optional or alternative paths without a shared literal, project custom
-patterns, and plugins are deliberately excluded. Supplemental scans that consult the pattern list,
-including C# incomplete-attribute recovery and C++ same-line member recovery, must consume the same
-ordered applicable set. Immediately before each regex call, the same Ordinal proof is applied to the
-exact input presented to that call, after transformations such as C# property-header merging, Fortran
-continuation joining, Java/Kotlin annotation stripping, C# wrapped-modifier synthesis, C++ same-line
-segmentation, or CSS selector-brace reconstruction. A miss behaves like a failed regex attempt rather
-than terminating language-specific recovery: notably, a C# static-constructor pattern rejected on the
-bare identifier line must still try each synthesized `static ...` wrapper. The content-wide check may
-retain a pattern because its literal appears in a comment, string, annotation, or another declaration;
-the exact-input check then recovers that lost optimization without changing matches. Patterns without
-`RequiredLiteral`, including custom and plugin patterns, still run unchanged.
+Before the line-oriented regex loop, built-in case-sensitive patterns may opt into one of two mutually
+exclusive Tier A gates: a single `RequiredLiteral`, or `RequiredAnyLiterals` for audited alternatives.
+Every literal must contain at least two characters and use Ordinal matching. A single literal must be a
+substring of every successful regex path; for an any-of set, every successful path must contain at least
+one distinct member. A pattern is skipped only when its literal, or every member of its any-of set, is
+absent from normalized file content, without changing the order of the remaining patterns. The any-of
+form is currently limited to the proved JavaScript/TypeScript HOC family, both quoted and identifier
+TypeScript `namespace` / `module` patterns, Kotlin `class` / `object`, and Kotlin `val` / `var`.
+`IgnoreCase` patterns, one-character literals, optional or alternative paths without either proof,
+project custom patterns, and plugins are deliberately excluded.
+
+Supplemental scans that consult the pattern list, including C# incomplete-attribute recovery and C++
+same-line member recovery, must consume the same ordered applicable set. Immediately before each regex
+call, the same single-or-any Ordinal proof is applied to the exact input presented to that call, after
+transformations such as C# property-header merging, Fortran continuation joining, Java/Kotlin annotation
+stripping, C# wrapped-modifier synthesis, C++ same-line segmentation, or CSS selector-brace
+reconstruction. An any-of input is skipped only when none of its members is present. A miss behaves like
+a failed regex attempt rather than terminating language-specific recovery: notably, a C#
+static-constructor pattern rejected on the bare identifier line must still try each synthesized
+`static ...` wrapper. The content-wide check may retain a pattern because a required literal appears in
+a comment, string, annotation, or another declaration; the exact-input check then recovers that lost
+optimization without changing matches. Patterns without either gate, including custom and plugin
+patterns, still run unchanged.
+
+C# adds three narrower, proof-preserving gates on top of that general contract. Property-header
+lookahead returns before its prefix regexes for empty inputs and completed `;` / `}` lines; a trailing
+`=` is skipped only when no `(` is present, preserving multiline default arguments. The built-in
+plain-field regex is attempted only when its exact transformed input contains `=` or `;`, which every
+successful path must consume. Wrapped-modifier recovery caches both found and absent prefixes for all
+function patterns at one scan offset, rejects predecessor lines with characters outside the regex's
+lowercase-ASCII-plus-whitespace alphabet, and materializes a confirmed prefix once in forward order.
+These are private built-in optimizations: pattern/plugin APIs, symbol fields, diagnostic output,
+cancellation points, and same-line column mapping remain unchanged.
 
 JavaScript and TypeScript export/reference details:
 
@@ -2529,6 +2576,7 @@ Process exit codes are coarse (`0` success including valid zero-row queries, `1`
 - **Dependency-cycle audits separate analysis from display** — CLI `deps --cycles` and MCP `deps` with `cycles=true` analyze a deterministic, path-ordered edge set up to the independent `--graph-budget` / `graphBudget` before computing and stably ranking strongly connected components. `--limit` / `limit` only paginates that ranked SCC set, and opaque cursors are bound to the filters, graph budget, and indexed graph that produced them. Machine-readable responses expose `analysis_complete`, graph edge count/budget, stable ranking mode, authoritative total-cycle status, and continuation metadata; exhausting the graph budget is reported as an explicitly incomplete analysis rather than a complete cycle audit (#4731).
 - **No ORM** — Raw `Microsoft.Data.Sqlite` with parameterized queries. Keeps dependencies minimal and control explicit.
 - **Batch commits** — 500 records per transaction for write performance. Reduces fsync overhead.
+- **Set-based C# instantiation fallback** — The rank-5 unqualified `instantiate` candidate stage materializes C# type members, unique raw-name/arity families, family-scoped constructor members, and per-family explicit-constructor summaries before matching references. Unique families drive indexed constructor lookups instead of scanning every constructor or running correlated type/constructor scalar probes per candidate. Raw type names, identities, and constructor containers remain `BINARY`, family/member arity joins remain NULL-safe, partial types keep their path/start/id representative, and the final lower-rank suppression stays reference-scoped so the optimization preserves overload, implicit-default, value-type, enum, delegate, ambiguity, and unparseable-arity semantics.
 - **Partial batch failures** — `DbWriter` keeps the fast multi-row `INSERT` path for normal chunk and symbol batches. If SQLite rejects a batch, the writer rolls that batch back, retries rows under per-row `SAVEPOINT`s, commits the valid rows, skips only the failing rows, increments `BatchRowsSkipped`, and emits a warning containing the row identifier and SQLite error. This keeps one corrupt extracted row from discarding the rest of a large indexing batch (#1754).
 - **WAL mode + busy_timeout** — Write-Ahead Logging for concurrent read/write access and crash safety. 5-second busy timeout avoids immediate SQLITE_BUSY errors.
 - **Content-external FTS5 with triggers** — Avoids doubling storage by pointing to `chunks` table instead of storing a copy. Database triggers keep the FTS index in sync automatically.
@@ -4328,8 +4376,15 @@ fresh な CLI scan と明示的 rebuild は、raw reference の永続化が完�
 reverse lookup は raw persistence 中は維持し、実際の graph refresh が candidate row を削除・
 構築する直前だけ外すため、marker-only / 高 cardinality no-op update はこの index 全体を
 再構築しません。reference scope の materialization / resolution に使う candidate primary key は
-維持します。load 中も file と reference-line の保守用 index は残し、identity / resolution
-finalization 中は query index を遅延したままにします。guard は index を外す前に active な dirty graph scope を full refresh へ
+維持します。load 中も通常は file と reference-line の保守用 index を残します。唯一の例外は、
+transaction-local な再確認後も fresh-resolution claim を所有する authoritative な空DB初回CLI
+full scan です。この経路だけは raw reference の永続化中に
+`idx_symbol_refs_reference_line` と `idx_reference_lines_file_line` も遅延し、candidate、
+deferred graph、mutual recursion、または完了の最初の境界（したがって fresh planner statistics
+より前）で2本とも復元します。rebuild、既存DBのfull scan / update、fresh claimのrace、
+recoverableなMCP indexingでは2本を常時維持します。drop / restore DDLはcaller-owned outer
+transaction内に置くため、cancellationや失敗時はschemaも原子的にrollbackされます。
+identity / resolution finalization 中は query index を遅延したままにします。guard は index を外す前に active な dirty graph scope を full refresh へ
 昇格します。この force-full plan が確定している間は dirty file / name / reference の TEMP scope を
 投入しないでください。fresh index と rebuild はその scope を参照せず、追跡すると全言語の batch ごとに
 不要な set materialization が発生します。mutual-recursion 評価の直前に、その graph transaction 内で unresolved-folded、
@@ -4349,10 +4404,12 @@ repair は同じ canonical index catalog を使い、すべての経路が同一
 reference の context text は `reference_lines` へ正規化されるため、legacy な
 `symbol_references.context` column は reference ごとの parameter ではなく SQL の `NULL`
 literal として書き込みます。reference-line materialization は batch-local な key-to-ordinal
-map を構築し、unique な line ID を解決した後、`symbol_references` を ordinal array から bind
-する前に tuple lookup を解放します。巨大な multi-language reference 集合で file / line /
-context tuple を edge ごとに再 hash しないよう、新規 file insert と replacement upsert の両方、
-atomic file window を含む全経路でこの契約を維持してください。
+map でuniqueなinput arrayを構築した直後にmapを解放します。新規fileの`RETURNING`とreplacement
+lookup SQLはいずれもmaterialized IDとbatch-local input ordinalだけを返し、context textを返したり
+managed codeでtuple keyを再構築したりしません。ordinalの範囲外・重複・欠落と非正のIDは
+`symbol_references` bind前にfail-closedとします。巨大なmulti-language reference集合でdedupe後の
+file / line / context tupleを再copy・再hashしないよう、atomic file windowを含む全経路でこの契約を
+維持してください。
 atomic window の size は rows-per-statement の最悪ケース境界から算出し、materializer だけを
 tuple-hash pass として保ちます。その前段に重複した key-sizing set を戻さないでください。
 
@@ -4823,6 +4880,13 @@ symbol / reference extractor は `cdidx index` 中に実行されるため、言
 多数の候補に対して scope や delimiter 情報が必要な場合は、file / function / block 単位で
 範囲情報を一度だけ事前計算し、候補ごとの lookup でその構造を再利用する。
 
+C# declaration recovery でも、重複する pattern probe は candidate-local な work として扱う。
+outer pattern loop と recoverable-pattern helper が共有してよいのは、同じ candidate start の
+厳密に同一な `PreparedLine.MatchLine` に対する deterministic negative result の連続 prefix
+だけである。この prefix を multiline property / function の結合 input、別 offset、別 line へ
+持ち越してはならない。regex timeout は deterministic miss ではないため prefix に入れず、
+pattern order、成功 probe、timeout diagnostic、cancellation boundary を変えない。
+
 同じ規則を extracted symbol の membership にも適用する。後続の per-line / per-match 判定が
 class、property、import alias などの存在を繰り返し確認する場合は、dictionary / set を一度だけ
 構築して再利用する。candidate loop の中で `symbols.Any(...)`、LINQ 列挙、signature parse を
@@ -4833,6 +4897,13 @@ container ownership にも同じ契約を適用する。reference が extracted 
 source range で繰り返し解決する場合は、candidate を name ごとに一度だけ索引化し、その name の
 ordered range list だけを走査する。duplicate name の first-candidate behavior を維持し、index は
 1 回の extraction call 内だけに保持する。
+core reference loop は extraction ごとに1つの `CoreReferenceLineContainerResolver` を所有し、
+空でない各行の直前に line 座標、fallback container、言語固有 state を reset する。bound 済みの
+container delegate は1回だけ生成し、その prepared line 内で同期的に消費し、後続行へ保持しては
+ならない。例外または cancellation では extraction-local resolver を破棄し、pool 化や static 化を
+しない。C# declaration の generic parameter 検出が空の `IReadOnlySet` を共有できるのは、行に
+`<` marker がないことを確認した場合だけである。consumer はこの集合を read-only のまま扱い、
+`<` を含む行は従来どおり callable / type declaration の完全な parser を通す。
 C# では symbol assignment と reference resolution の両方が、enclosing type より先に、
 `test.method` や nested local function を含む最も狭い active callable range を選ぶ。
 完全な body range を持たない named lambda はその enclosing callable に所属し、
@@ -5212,7 +5283,8 @@ apply 時は `PRAGMA optimize` を実行します。
 | maintenance error contract | `vacuum`、`backfill-fold`、`optimize` / `index --optimize`、`db integrity` の失敗は `MaintenanceDatabaseErrorClassifier` version `1` と単一の JSON / human writer を通ります。SQLite primary code `5` / `6`、`8`、`11`、`26` から locked / busy、not-writable、corrupt、not-a-database を分類し、例外 message は判定に使いません。共有 response は stable error code / category、条件別 recovery hint、redaction 済み path metadata、任意の primary / extended SQLite code を返します。absolute path は既定で redaction し、`--show-paths` を明示的な diagnostic opt-in とします。 |
 | durable WAL file set | WAL が有効な場合、永続化された SQLite index は `.db` file と sibling の `.db-wal` / `.db-shm` file の組です。backup、diagnostics bundle、手動 copy では sibling が存在する場合に 3 file すべてを含めるか、live connection から SQLite の `.backup` command/API を使う必要があります。`codeindex.db` だけを copy すると、committed page がまだ `codeindex.db-wal` に残っているため stale snapshot になる可能性があります。 |
 | `synchronous=NORMAL` | WAL では `NORMAL` により 500 row 単位の indexing batch ごとの fsync 負荷を避けつつ、crash 後の database consistency を保ちます。 |
-| caller-owned write batch | full-scan などの atomic file write は既に1つの caller-owned transaction 内で実行されるため、言語共通の chunk、symbol、issue、reference-line、reference insert は named parameter statement を32 parameter以下に制限します。`Microsoft.Data.Sqlite` は実行ごとに全 parameter name を再解決するため、この小さい形状で追加 transaction scope を増やさず dense binding lookup を避けます。cancellation / test checkpoint はstatementごとに維持します。500 rowを超えるoperationでは、永続 `db_writer_batch_checkpoint` を500 row境界をまたいだ時点と完了時だけ出力することで、小さなstatementごとの同期log flushを避けます。public writer API は SQLite variable limit までの batch 形状と既存の batch ごとの transaction / SAVEPOINT 契約を維持します。 |
+| caller-owned write batch | full-scan などの atomic file write は既に1つの caller-owned transaction 内で実行されるため、言語共通の chunk、symbol、issue、reference-line、reference insert は statement を32 parameter以下に制限します。すべてのbatchはrow / column順にcompactな1-origin SQLite numeric slot（`?1`〜`?N`）を使い、既存のstatement-size、cancellation、checkpoint契約を保ったままparameter name解決の処理を抑えます。500 rowを超えるoperationでは、永続 `db_writer_batch_checkpoint` を500 row境界をまたいだ時点と完了時だけ出力することで、小さなstatementごとの同期log flushを避けます。public writer API は SQLite variable limit までの batch 形状と既存の batch ごとの transaction / SAVEPOINT 契約を維持します。 |
+| authoritative-fresh raw insert scope | empty-database CLI経路がcaller-owned transaction内でauthoritative-fresh claimを再検証した後に限り、extraction pipelineのnew-file / fresh reference-line `RETURNING` INSERTと、DONE-onlyなchunk、symbol、new-file issue、atomic fresh-reference INSERTをprovider所有connection handle上のSQLitePCLRawでbind / executeします。scopeは既存の32 parameter statement境界、正確なtail / result形状、batch hook、row-skip replay、outer transaction atomicityを維持し、32-entry LRUで本番25形状すべてを保持します。同期的なfull-scan persistence consumerと`DbWriter`のtransaction owner検査により、非thread-safe cacheはsingle-ownerのままです。各leaseはresetとbinding clearを行い、error時は元のstep結果を保持し、SQLite interruptを`OperationCanceledException`へ変換し、graph / index / FTS処理より前に全cached statementをfinalizeします。`RETURNING` leaseは正のIDとinput ordinalを終端`DONE`まで全件buffer / validationしてから公開し、不正、欠落、重複、失敗、cancelされたstreamではprepared statementを破棄し、data rollbackはcallerのfile単位SAVEPOINTが所有します。replacement、incremental、rebuild、symbols-only、fresh-claim race fallback、MCP、public writer経路はMicrosoft.Data.Sqliteを維持します。 |
 | checkpoint | `DbWriter` は outer transaction commit 後に `PRAGMA wal_checkpoint(PASSIVE)` を実行し、SQLite も設定済みの 1000 page threshold を超えると自動 checkpoint する場合があります。どちらの checkpoint path も opportunistic で、active reader は block されず、未 checkpoint の WAL は corruption ではなく期待される状態です。 |
 | checkpoint result contract | 明示的な `PRAGMA wal_checkpoint(TRUNCATE)` path は reader を実行し、SQLite の `(busy, log, checkpointed)` を含む構造化結果を返します。`busy` が 0 以外、または remaining page が正の場合は、上限付き machine reason を伴う unsuccessful result です。`(0, -1, -1)` は SQLite の非 WAL database に対する成功 no-op です。instance checkpoint、read-only fallback 前の static preflight、query diagnostics、top-level status、nested connection-policy status は同じ結果と count を保持します。raw exception text や path を diagnostics に含めてはいけません。 |
 | crash recovery | SQLite が transaction を commit した後、checkpoint 前に process が kill された場合、次の通常 open が WAL を roll forward するため手動 recovery は不要です。commit 前に process が終了した transaction は SQLite により rollback されます。 |
@@ -5901,21 +5973,36 @@ LIMIT 20;
 | Windows application manifest | manifest element path、assembly identity、execution level、supported OS value を structural symbol として維持します。依存 assembly identity は `dependency` reference、local な `file` / `codeBase` / probing path は `project_reference` edge を出力します。 |
 | XML / NuGet.config | 汎用 XML は上限付きの element / attribute path を出力します。NuGet.config ではさらに package source、source mapping、署名検証モード、trusted signer 名、証明書 fingerprint、`allowUntrustedRoot` の値を `nuget.*` subkind 付きの semantic `property` symbol にします。 |
 
-行指向の正規表現 loop に入る前に、built-in の case-sensitive pattern は明示的な
-`RequiredLiteral` Tier A gate を opt-in できます。literal は2文字以上で、正規表現の全成功経路に
-Ordinal の substring として必ず現れなければなりません。正規化済み file content に存在しない
-場合だけその pattern を skip し、残る pattern の順序は変えません。`IgnoreCase` pattern、1文字の
-literal、共通 literal を持たない optional / alternative path、project の custom pattern、plugin は
-意図的に対象外です。C# の不完全 attribute recovery や C++ の same-line member recovery を含め、
-pattern list を参照する補助 scan は同じ順序の applicable set を使わなければなりません。comment や
-string 内に literal があるため pattern を残すことはあります。各 regex call の直前には、C# property
+行指向の正規表現 loop に入る前に、built-in の case-sensitive pattern は、単一の
+`RequiredLiteral` または監査済み alternative 用の `RequiredAnyLiterals` という、相互排他的な2種類の
+Tier A gate のどちらかへ opt-in できます。すべての literal は2文字以上で Ordinal matching を使います。
+単一 literal は正規表現の全成功経路に substring として必ず現れ、any-of set では全成功経路に distinct な
+member の少なくとも1つが必ず現れなければなりません。正規化済み file content に単一 literal がない場合、
+または any-of set の全 member がない場合だけその pattern を skip し、残る pattern の順序は変えません。
+any-of 形式は、証明済みの JavaScript / TypeScript HOC family、TypeScript の quoted / identifier 両方の
+`namespace` / `module` pattern、Kotlin の `class` / `object` と `val` / `var` に限定しています。
+`IgnoreCase` pattern、1文字の literal、いずれの証明もない optional / alternative path、project の custom
+pattern、plugin は意図的に対象外です。
+
+C# の不完全 attribute recovery や C++ の same-line member recovery を含め、pattern list を参照する補助
+scan は同じ順序の applicable set を使わなければなりません。各 regex call の直前には、C# property
 header の結合、Fortran continuation の連結、Java / Kotlin annotation の除去、C# wrapped modifier の
 合成、C++ same-line segment、CSS selector の brace 再構成などを反映した、実際に regex へ渡す input
-そのものに同じ Ordinal 判定を適用します。miss は言語固有 recovery を終了せず、regex failure と同様に
-扱います。特に C# static constructor の bare identifier 行が gate miss しても、合成した各 `static ...`
-wrapper は引き続き試さなければなりません。comment、string、annotation、別 declaration にだけ literal
-がある場合は exact-input 判定が失われた最適化を回収し、match は変えません。custom / plugin pattern を
-含む `RequiredLiteral` のない pattern は従来どおり実行します。
+そのものに同じ single-or-any の Ordinal 判定を適用します。any-of input は member が1つもない場合だけ
+skip します。miss は言語固有 recovery を終了せず、regex failure と同様に扱います。特に C# static
+constructor の bare identifier 行が gate miss しても、合成した各 `static ...` wrapper は引き続き試さなければ
+なりません。comment、string、annotation、別 declaration にだけ required literal がある場合は
+exact-input 判定が失われた最適化を回収し、match は変えません。custom / plugin pattern を含む、どちらの
+gate も持たない pattern は従来どおり実行します。
+
+C# では、この一般契約に加えて、成功可能性を変えない3つの狭い gate を使います。property-header
+lookahead は、空 input と `;` / `}` で完結した行で prefix regex より前に戻ります。末尾 `=` は
+`(` が無い場合だけ skip し、複数行 default argument を保持します。built-in plain-field regex は、全成功経路が
+必ず消費する `=` または `;` が、変換後の実 input にある場合だけ実行します。wrapped-modifier recovery は、
+同一 scan offset の function pattern 間で、見つかった prefix と見つからなかった null の両方を cache します。
+また、確認 regex の lowercase ASCII + whitespace の形に合わない直前行を先に除外し、確定した prefix は前向きに
+1回だけ materialize します。これらは private な built-in 最適化であり、pattern / plugin API、symbol field、diagnostic output、
+cancellation point、same-line column mapping は変えません。
 
 JavaScript / TypeScript の export / reference 詳細:
 
@@ -6462,6 +6549,7 @@ USER_GUIDEの[終了コード](USER_GUIDE.md#終了コード)セクションを�
 - **依存サイクル監査では解析と表示を分離** — CLI の `deps --cycles` と MCP `deps` の `cycles=true` は、独立した `--graph-budget` / `graphBudget` まで path 順で決定的な edge 集合を解析してから、強連結成分を安定順位付けします。`--limit` / `limit` はその SCC 順位集合をページ分割するだけで、不透明 cursor は生成時の filter、graph budget、indexed graph に結び付けます。machine-readable 応答は `analysis_complete`、graph edge 件数/予算、安定 ranking mode、authoritative な総 cycle 件数かどうか、continuation metadata を公開し、graph budget 枯渇時は完全な cycle 監査を装わず明示的な未完了解析として報告します（#4731）。
 - **ORMなし** — `Microsoft.Data.Sqlite`でパラメータ化クエリを直接使用。依存関係を最小限に、制御を明確に。
 - **バッチコミット** — 書き込み性能のため1トランザクション500レコード。fsyncオーバーヘッドを削減。
+- **C# instantiation fallback の集合処理** — rank 5 の無修飾 `instantiate` candidate 段階は、参照との照合前に C# type member、raw name / arity 単位の一意 family、family 内 constructor member、family ごとの明示 constructor summary を materialize します。一意 family から indexed constructor lookup を駆動するため、全 constructor scan や candidate ごとの相関 type / constructor scalar probe を行いません。raw type name・identity・constructor container は `BINARY`、family/member の arity join は NULL-safe のまま維持し、partial type は path/start/id 順の代表を使い、最後の lower-rank suppression も reference 単位に保つため、overload、implicit default、value type、enum、delegate、ambiguity、arity を解析できない場合の意味を変えずに高速化します。
 - **部分的なバッチ失敗** — `DbWriter` は通常の chunk / symbol batch では高速な multi-row `INSERT` 経路を保ちます。SQLite が batch を拒否した場合、その batch を rollback し、各 row を per-row `SAVEPOINT` の下で再試行し、有効な row だけを commit し、失敗 row だけを skip して `BatchRowsSkipped` を増やし、row identifier と SQLite error を含む warning を出します。これにより、抽出された 1 行の破損で大きな indexing batch 全体が捨てられることを防ぎます（#1754）。
 - **WALモード + busy_timeout** — Write-Ahead Loggingで読み書き同時アクセスとクラッシュ安全性を確保。5秒のbusy_timeoutで即座のSQLITE_BUSYエラーを回避。
 - **複数 SELECT をまたぐ reader の snapshot 隔離** — 1 回の呼び出しで複数 SQL を発行する read エントリポイント（`DbReader.GetStatus`、`DbReader.AnalyzeSymbol`（CLI `inspect` / MCP `analyze_symbol`）、`RepoMapBuilder.Build`（CLI `map` / MCP `repo_map`））は、本体を 1 つの `BEGIN DEFERRED` transaction で囲み、すべての sub-query が同じ WAL snapshot を参照するようにする。これが無いと、2 つの `COUNT(*)` の間に writer が commit した結果として並行 reader が `files=836, refs=0` のような不整合状態を観測しうる（issue #180 で露見）。`DEFERRED` は最初の SELECT で `SHARED` lock を取るだけで writer を阻害せず、末尾で明示 Commit して `SHARED` lock を早期解放する。独自に `SqliteDataReader` を開く sub-query は内側ブロックに閉じ込めて `Commit()` より前に handle を解放すること — `SqliteTransaction.Commit()` は同じ connection 上で開いている reader があると失敗する。新しい多段 read エントリポイントは同じパターンに従うこと。単一 SQL のクエリは SQLite の auto-commit が文単位の snapshot を与えるため不要。

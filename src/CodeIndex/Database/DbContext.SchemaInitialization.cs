@@ -308,7 +308,6 @@ public partial class DbContext : IDisposable
         // 新しいクエリパターン用: --kind フィルタ、可視性ランキング、ホットスポット/未使用分析
         Execute("CREATE INDEX IF NOT EXISTS idx_symbols_kind            ON symbols(kind)");
         Execute("CREATE INDEX IF NOT EXISTS idx_symbols_visibility      ON symbols(visibility)");
-        Execute("CREATE INDEX IF NOT EXISTS idx_reference_lines_file_line ON reference_lines(file_id, line)");
         // #86: Indexes on the Unicode-folded columns. Used when FoldReadyFlag is set on the
         // DB (= the write path filled every folded column). Legacy / partial DBs keep using
         // the NOCASE indexes above. Both sets coexist so mixed-state DBs cannot regress.

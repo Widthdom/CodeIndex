@@ -70,6 +70,7 @@ public static partial class ReferenceExtractor
         internal bool SassStylusOriginalInBlockComment;
         internal readonly ShaderReferenceExtractor.State? ShaderState;
         internal readonly Func<string, bool> IsIgnoredCallName;
+        internal readonly CoreReferenceLineContainerResolver LineContainerResolver;
 
         internal CoreReferenceLoopState(CoreReferenceLoopContext loop)
         {
@@ -113,6 +114,7 @@ public static partial class ReferenceExtractor
                 loop.Request.ReportDiagnostic);
             IsIgnoredCallName =
                 name => ReferenceExtractor.IsIgnoredCallName(language, name);
+            LineContainerResolver = new CoreReferenceLineContainerResolver(loop);
         }
     }
 

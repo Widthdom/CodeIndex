@@ -38,6 +38,9 @@ public sealed class ReferenceSecondaryIndexBulkLoadGuardTests : IDisposable
         var rawNames = ReferenceSecondaryIndexSql.RawPersistenceRequired
             .Select(static definition => definition.Name)
             .ToHashSet(StringComparer.Ordinal);
+        var authoritativeFreshPersistenceNames = ReferenceSecondaryIndexSql.AuthoritativeFreshPersistenceDeferred
+            .Select(static definition => definition.Name)
+            .ToHashSet(StringComparer.Ordinal);
         var graphNames = ReferenceSecondaryIndexSql.GraphFinalizationRequired
             .Select(static definition => definition.Name)
             .ToHashSet(StringComparer.Ordinal);
@@ -61,6 +64,13 @@ public sealed class ReferenceSecondaryIndexBulkLoadGuardTests : IDisposable
                 "idx_symbol_refs_unresolved_mutual_folded",
             ],
             graphNames.Order(StringComparer.Ordinal));
+        Assert.Equal(
+            [
+                "idx_reference_lines_file_line",
+                "idx_symbol_refs_reference_line",
+            ],
+            authoritativeFreshPersistenceNames.Order(StringComparer.Ordinal));
+        Assert.Contains("idx_symbol_refs_reference_line", rawNames);
         Assert.Empty(rawNames.Intersect(deferredNames));
         Assert.Empty(graphNames.Intersect(remainingNames));
         Assert.Contains(candidateReverseIndexName, remainingNames);
@@ -83,6 +93,51 @@ public sealed class ReferenceSecondaryIndexBulkLoadGuardTests : IDisposable
         Assert.Equal(
             candidatePopulationNames.Order(StringComparer.Ordinal),
             ReferenceSecondaryIndexBulkLoadGuard.CandidatePopulationIndexNames.Order(StringComparer.Ordinal));
+        Assert.Equal(
+            authoritativeFreshPersistenceNames.Order(StringComparer.Ordinal),
+            ReferenceSecondaryIndexBulkLoadGuard.AuthoritativeFreshPersistenceIndexNames.Order(StringComparer.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("candidate")]
+    [InlineData("deferred_graph")]
+    [InlineData("mutual")]
+    [InlineData("complete")]
+    public void AuthoritativeFreshPersistenceDeferral_RestoresBeforeEveryReadDependentBoundary(
+        string boundary)
+    {
+        AssertAuthoritativeFreshPersistenceIndexesPresent(_db.Connection);
+
+        using var transaction = _writer.BeginTransaction();
+        using var guard = ReferenceSecondaryIndexBulkLoadGuard.StartTransactional(
+            _writer,
+            enabled: true,
+            deferAuthoritativeFreshPersistenceIndexes: true);
+
+        Assert.NotNull(guard);
+        AssertAuthoritativeFreshPersistenceIndexesAbsent(_db.Connection);
+
+        switch (boundary)
+        {
+            case "candidate":
+                guard.PrepareForCandidatePopulation();
+                break;
+            case "deferred_graph":
+                guard.PrepareForDeferredGraphRefresh();
+                break;
+            case "mutual":
+                guard.PrepareForMutualRecursion();
+                break;
+            case "complete":
+                guard.Complete();
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(boundary), boundary, null);
+        }
+
+        AssertAuthoritativeFreshPersistenceIndexesPresent(_db.Connection);
+        guard.Complete();
+        transaction.Commit();
     }
 
     [Fact]
@@ -161,19 +216,45 @@ public sealed class ReferenceSecondaryIndexBulkLoadGuardTests : IDisposable
         {
             using (var guard = ReferenceSecondaryIndexBulkLoadGuard.StartTransactional(
                        _writer,
-                       enabled: true))
+                       enabled: true,
+                       deferAuthoritativeFreshPersistenceIndexes: true))
             {
                 Assert.NotNull(guard);
                 AssertInitialBulkPersistenceSchema(_db.Connection);
+                AssertAuthoritativeFreshPersistenceIndexesAbsent(_db.Connection);
             }
 
             // Dispose must not rebuild a large index set while cancellation is unwinding.
             AssertInitialBulkPersistenceSchema(_db.Connection);
+            AssertAuthoritativeFreshPersistenceIndexesAbsent(_db.Connection);
         }
 
         Assert.Equal(
             baseline.Order(StringComparer.Ordinal),
             ReadReferenceIndexNames(_db.Connection).Order(StringComparer.Ordinal));
+        AssertAuthoritativeFreshPersistenceIndexesPresent(_db.Connection);
+    }
+
+    [Fact]
+    public void TransactionalCancelledFreshPersistenceRestore_RemainsRetryable()
+    {
+        using var transaction = _writer.BeginTransaction();
+        using var guard = ReferenceSecondaryIndexBulkLoadGuard.StartTransactional(
+            _writer,
+            enabled: true,
+            deferAuthoritativeFreshPersistenceIndexes: true);
+        Assert.NotNull(guard);
+        AssertAuthoritativeFreshPersistenceIndexesAbsent(_db.Connection);
+
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        Assert.Throws<OperationCanceledException>(() => guard.Complete(cancellation.Token));
+        AssertAuthoritativeFreshPersistenceIndexesAbsent(_db.Connection);
+
+        guard.PrepareForCandidatePopulation();
+        AssertAuthoritativeFreshPersistenceIndexesPresent(_db.Connection);
+        guard.Complete();
+        transaction.Commit();
     }
 
     [Fact]
@@ -219,6 +300,7 @@ public sealed class ReferenceSecondaryIndexBulkLoadGuardTests : IDisposable
             Assert.NotNull(guard);
             AssertInitialBulkPersistenceSchema(_db.Connection);
             AssertRawPersistenceIndexesPresent(_db.Connection);
+            AssertAuthoritativeFreshPersistenceIndexesPresent(_db.Connection);
         }
 
         AssertDeferredIndexesPresent(_db.Connection);
@@ -344,7 +426,8 @@ public sealed class ReferenceSecondaryIndexBulkLoadGuardTests : IDisposable
             using var guard = ReferenceSecondaryIndexBulkLoadGuard.StartTransactional(
                 _writer,
                 enabled: true,
-                refreshPlannerStatisticsBeforeCandidatePopulation: true);
+                refreshPlannerStatisticsBeforeCandidatePopulation: true,
+                deferAuthoritativeFreshPersistenceIndexes: true);
             Assert.NotNull(guard);
 
             guard.PrepareForDeferredGraphRefresh();
@@ -674,6 +757,21 @@ public sealed class ReferenceSecondaryIndexBulkLoadGuardTests : IDisposable
             Assert.Contains(definition.Name, names);
     }
 
+    private static void AssertAuthoritativeFreshPersistenceIndexesPresent(
+        SqliteConnection connection)
+    {
+        var names = ReadAuthoritativeFreshPersistenceIndexNames(connection);
+        Assert.Equal(
+            ReferenceSecondaryIndexSql.AuthoritativeFreshPersistenceDeferred
+                .Select(static definition => definition.Name)
+                .Order(StringComparer.Ordinal),
+            names.Order(StringComparer.Ordinal));
+    }
+
+    private static void AssertAuthoritativeFreshPersistenceIndexesAbsent(
+        SqliteConnection connection)
+        => Assert.Empty(ReadAuthoritativeFreshPersistenceIndexNames(connection));
+
     private static void AssertGraphFinalizationIndexesPresent(SqliteConnection connection)
     {
         var names = ReadReferenceIndexNames(connection);
@@ -822,6 +920,23 @@ public sealed class ReferenceSecondaryIndexBulkLoadGuardTests : IDisposable
             WHERE type = 'index'
               AND tbl_name IN ('symbol_references', 'symbol_reference_candidates')
               AND name NOT LIKE 'sqlite_autoindex_%'
+            """;
+        using var reader = command.ExecuteReader();
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        while (reader.Read())
+            names.Add(reader.GetString(0));
+        return names;
+    }
+
+    private static HashSet<string> ReadAuthoritativeFreshPersistenceIndexNames(
+        SqliteConnection connection)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT name
+            FROM sqlite_schema
+            WHERE type = 'index'
+              AND name IN ('idx_symbol_refs_reference_line', 'idx_reference_lines_file_line')
             """;
         using var reader = command.ExecuteReader();
         var names = new HashSet<string>(StringComparer.Ordinal);

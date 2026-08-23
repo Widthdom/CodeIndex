@@ -21,6 +21,8 @@ public static partial class SymbolExtractor
             IReadOnlyList<SymbolPattern> applicablePatterns,
             bool applyRequiredLiteralMatchInputGate,
             RequiredLiteralGateCounts? requiredLiteralGateCounts,
+            bool applyCSharpRegexProbeOptimizations,
+            CSharpRegexProbeCounts? csharpRegexProbeCounts,
             CancellationToken cancellationToken,
             int? maxSymbols)
         {
@@ -34,6 +36,8 @@ public static partial class SymbolExtractor
             ApplicablePatterns = applicablePatterns;
             ApplyRequiredLiteralMatchInputGate = applyRequiredLiteralMatchInputGate;
             RequiredLiteralGateCounts = requiredLiteralGateCounts;
+            ApplyCSharpRegexProbeOptimizations = applyCSharpRegexProbeOptimizations;
+            CSharpRegexProbeCounts = csharpRegexProbeCounts;
             CancellationToken = cancellationToken;
 
             ScanInputs = new PatternScanInputs(
@@ -42,7 +46,9 @@ public static partial class SymbolExtractor
                 lines,
                 applicablePatterns,
                 applyRequiredLiteralMatchInputGate,
-                requiredLiteralGateCounts);
+                requiredLiteralGateCounts,
+                applyCSharpRegexProbeOptimizations,
+                csharpRegexProbeCounts);
             GetJavaScriptTypeScriptSanitizedLines = ScanInputs.GetJavaScriptTypeScriptSanitizedLines;
             GetDartInsideClassBody = ScanInputs.GetDartInsideClassBody;
             GetCSharpInsideTypeBody = ScanInputs.GetCSharpInsideTypeBody;
@@ -71,6 +77,8 @@ public static partial class SymbolExtractor
         public IReadOnlyList<SymbolPattern> ApplicablePatterns { get; }
         public bool ApplyRequiredLiteralMatchInputGate { get; }
         public RequiredLiteralGateCounts? RequiredLiteralGateCounts { get; }
+        public bool ApplyCSharpRegexProbeOptimizations { get; }
+        public CSharpRegexProbeCounts? CSharpRegexProbeCounts { get; }
         public CancellationToken CancellationToken { get; }
         public PatternScanInputs ScanInputs { get; }
         public Func<string[]> GetJavaScriptTypeScriptSanitizedLines { get; }
@@ -98,7 +106,9 @@ public static partial class SymbolExtractor
         int? maxSymbols,
         bool applyRequiredLiteralFileGate,
         bool applyRequiredLiteralMatchInputGate,
-        RequiredLiteralGateCounts? requiredLiteralGateCounts)
+        RequiredLiteralGateCounts? requiredLiteralGateCounts,
+        bool applyCSharpRegexProbeOptimizations,
+        CSharpRegexProbeCounts? csharpRegexProbeCounts)
     {
         // Normalize CRLF / CR to LF first so direct callers that bypass FileIndexer
         // still present a `\n`-only content stream, and then strip line-leading
@@ -157,6 +167,8 @@ public static partial class SymbolExtractor
                 applicablePatterns,
                 applyRequiredLiteralMatchInputGate,
                 requiredLiteralGateCounts,
+                applyCSharpRegexProbeOptimizations,
+                csharpRegexProbeCounts,
                 cancellationToken,
                 maxSymbols),
             null);

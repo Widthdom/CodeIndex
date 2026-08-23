@@ -202,8 +202,6 @@ public partial class DbContext : IDisposable
                 scope_rank   INTEGER NOT NULL,
                  PRIMARY KEY(reference_id, symbol_id)
              )"));
-        yield return ("CREATE INDEX idx_reference_lines_file_line",
-            () => Execute("CREATE INDEX IF NOT EXISTS idx_reference_lines_file_line ON reference_lines(file_id, line)"));
         foreach (var definition in ReferenceSecondaryIndexSql.All)
         {
             if (definition.RequiresFoldedColumns)

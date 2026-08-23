@@ -63,8 +63,12 @@ public partial class IndexCommandRunnerTests
         var previousGraphHook = DbWriter.MutualRecursionRefreshForTesting;
         var previousScopeHook = DbWriter.ReferenceGraphRefreshScopeForTesting;
         var previousHotspotHook = DbWriter.HotspotAggregateRefreshStatementExecutingForTesting;
+        var previousRawHook = DbWriter.AuthoritativeFreshRawInsertExecutingForTesting;
+        var previousRawScopeHook = DbWriter.AuthoritativeFreshRawInsertScopeDisposedForTesting;
         var snapshots = new ConcurrentQueue<ReferenceIndexStageSnapshot>();
         var scopeSnapshots = new ConcurrentQueue<DbWriter.ReferenceGraphRefreshScopeStats>();
+        var rawWork = new ConcurrentQueue<DbWriter.AuthoritativeFreshRawInsertWork>();
+        var rawScopeSnapshots = new ConcurrentQueue<DbWriter.AuthoritativeFreshRawInsertScopeStats>();
         var lifecycle = new ConcurrentQueue<string>();
         var statisticsPhases = new ConcurrentQueue<string>();
         SqliteConnection? activeConnection = null;
@@ -81,8 +85,40 @@ public partial class IndexCommandRunnerTests
                 Assert.Equal(CommandExitCodes.Success, seedExitCode);
             }
 
+            DbWriter.AuthoritativeFreshRawInsertExecutingForTesting = work =>
+            {
+                rawWork.Enqueue(work);
+                if (!rebuild
+                    && string.Equals(
+                        work.Operation,
+                        "insert_reference_lines",
+                        StringComparison.Ordinal))
+                {
+                    var connection = Volatile.Read(ref activeConnection);
+                    if (connection == null)
+                    {
+                        Interlocked.Increment(ref missingConnectionObservations);
+                    }
+                    else
+                    {
+                        snapshots.Enqueue(
+                            CaptureReferenceIndexSnapshot(
+                                "insert_reference_lines",
+                                connection));
+                    }
+                }
+                previousRawHook?.Invoke(work);
+            };
+            DbWriter.AuthoritativeFreshRawInsertScopeDisposedForTesting = stats =>
+            {
+                rawScopeSnapshots.Enqueue(stats);
+                previousRawScopeHook?.Invoke(stats);
+            };
+
             DbWriter.ReferenceSecondaryIndexBulkLoadStateForTesting = (connection, phase) =>
             {
+                if (!rebuild && phase is "deferred_graph_prepared" or "identity_started")
+                    Assert.Single(rawScopeSnapshots);
                 Volatile.Write(ref activeConnection, connection);
                 snapshots.Enqueue(CaptureReferenceIndexSnapshot(phase, connection));
                 lifecycle.Enqueue(phase);
@@ -92,6 +128,8 @@ public partial class IndexCommandRunnerTests
             };
             DbWriter.FreshBulkLoadPlannerStatisticsStateForTesting = (connection, phase) =>
             {
+                if (!rebuild && string.Equals(phase, "post_load_statistics_started", StringComparison.Ordinal))
+                    Assert.Single(rawScopeSnapshots);
                 statisticsPhases.Enqueue(phase);
                 lifecycle.Enqueue(phase);
                 previousStatisticsHook?.Invoke(connection, phase);
@@ -141,6 +179,10 @@ public partial class IndexCommandRunnerTests
             var captured = snapshots.ToArray();
             Assert.Equal(1, captured.Count(snapshot => snapshot.Stage == "dropped"));
             Assert.Contains(captured, snapshot => snapshot.Stage == "insert_references");
+            if (rebuild)
+                Assert.DoesNotContain(captured, snapshot => snapshot.Stage == "insert_reference_lines");
+            else
+                Assert.Contains(captured, snapshot => snapshot.Stage == "insert_reference_lines");
             Assert.Equal(1, captured.Count(snapshot => snapshot.Stage == "deferred_graph_prepared"));
             Assert.Equal(1, captured.Count(snapshot => snapshot.Stage == "candidate_deferred"));
             Assert.Equal(1, captured.Count(snapshot => snapshot.Stage == "identity_started"));
@@ -154,7 +196,7 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(
                 ["dropped", "deferred_graph_prepared", "candidate_deferred", "identity_started", "graph_required_restored", "mutual_started", "readiness_completed", "restored", "full_scan_committed"],
                 captured
-                    .Where(snapshot => snapshot.Stage != "insert_references")
+                    .Where(snapshot => snapshot.Stage is not "insert_reference_lines" and not "insert_references")
                     .Select(snapshot => snapshot.Stage));
             Assert.Equal(
                 rebuild
@@ -167,13 +209,14 @@ public partial class IndexCommandRunnerTests
                     : ["dropped", "deferred_graph_prepared", "candidate_deferred", "post_load_statistics_started", "post_load_statistics_completed", "identity_started", "graph_required_restored", "mutual_started", "readiness_completed", "restored", "full_scan_committed"],
                 lifecycle);
 
-            var requiredNames = GetRequiredReferenceIndexNames();
-            var initialBulkNames = GetInitialBulkPersistenceReferenceIndexNames();
+            var initialBulkNames = rebuild
+                ? GetInitialBulkPersistenceReferenceIndexNames()
+                : GetAuthoritativeFreshInitialBulkPersistenceReferenceIndexNames();
             var deferredGraphNames = GetDeferredGraphPreparationReferenceIndexNames();
             var allNames = GetAllReferenceIndexNames();
             Assert.Equal(initialBulkNames, captured.First(snapshot => snapshot.Stage == "dropped").Names);
             Assert.All(
-                captured.Where(snapshot => snapshot.Stage == "insert_references"),
+                captured.Where(snapshot => snapshot.Stage is "insert_reference_lines" or "insert_references"),
                 snapshot => Assert.Equal(initialBulkNames, snapshot.Names));
             Assert.Equal(
                 allNames,
@@ -218,6 +261,22 @@ public partial class IndexCommandRunnerTests
                 Assert.Equal(provisionalRows.Total, provisionalRows.UnresolvedResolutionStateCount);
             }
             Assert.Equal(2, CountMutualRecursionReferences(dbPath));
+            if (rebuild)
+            {
+                Assert.Empty(rawWork);
+                Assert.Empty(rawScopeSnapshots);
+            }
+            else
+            {
+                var rawOperations = rawWork.Select(work => work.Operation).ToArray();
+                Assert.Contains("insert_chunks", rawOperations);
+                Assert.Contains("insert_symbols", rawOperations);
+                Assert.Contains("insert_reference_lines", rawOperations);
+                Assert.Contains("insert_references", rawOperations);
+                var rawScope = Assert.Single(rawScopeSnapshots);
+                Assert.True(rawScope.Completed);
+                Assert.Equal(rawScope.PrepareCount, rawScope.FinalizeCount);
+            }
         }
         finally
         {
@@ -227,6 +286,8 @@ public partial class IndexCommandRunnerTests
             DbWriter.MutualRecursionRefreshForTesting = previousGraphHook;
             DbWriter.ReferenceGraphRefreshScopeForTesting = previousScopeHook;
             DbWriter.HotspotAggregateRefreshStatementExecutingForTesting = previousHotspotHook;
+            DbWriter.AuthoritativeFreshRawInsertExecutingForTesting = previousRawHook;
+            DbWriter.AuthoritativeFreshRawInsertScopeDisposedForTesting = previousRawScopeHook;
             DeleteDirectory(projectRoot);
         }
     }
@@ -323,7 +384,7 @@ public partial class IndexCommandRunnerTests
             Assert.NotNull(failureSnapshot);
             Assert.Equal(
                 failurePhase == "dropped"
-                    ? GetInitialBulkPersistenceReferenceIndexNames()
+                    ? GetAuthoritativeFreshInitialBulkPersistenceReferenceIndexNames()
                     : GetDeferredGraphPreparationReferenceIndexNames(),
                 failureSnapshot!.Names);
             Assert.True(File.Exists(dbPath));
@@ -357,8 +418,12 @@ public partial class IndexCommandRunnerTests
         var previousGraphHook = DbWriter.MutualRecursionRefreshForTesting;
         var previousScopeHook = DbWriter.ReferenceGraphRefreshScopeForTesting;
         var previousHotspotHook = DbWriter.HotspotAggregateRefreshStatementExecutingForTesting;
+        var previousRawHook = DbWriter.AuthoritativeFreshRawInsertExecutingForTesting;
+        var previousRawScopeHook = DbWriter.AuthoritativeFreshRawInsertScopeDisposedForTesting;
         var snapshots = new ConcurrentQueue<ReferenceIndexStageSnapshot>();
         var scopeSnapshots = new ConcurrentQueue<DbWriter.ReferenceGraphRefreshScopeStats>();
+        var rawWork = new ConcurrentQueue<DbWriter.AuthoritativeFreshRawInsertWork>();
+        var rawScopeSnapshots = new ConcurrentQueue<DbWriter.AuthoritativeFreshRawInsertScopeStats>();
         SqliteConnection? activeConnection = null;
         string[]? hotspotIndexNamesDuringRefresh = null;
         try
@@ -369,6 +434,17 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, seedExitCode);
             foreach (var relativePath in relativePaths)
                 File.AppendAllText(Path.Combine(projectRoot, relativePath), "\n// changed\n");
+
+            DbWriter.AuthoritativeFreshRawInsertExecutingForTesting = work =>
+            {
+                rawWork.Enqueue(work);
+                previousRawHook?.Invoke(work);
+            };
+            DbWriter.AuthoritativeFreshRawInsertScopeDisposedForTesting = stats =>
+            {
+                rawScopeSnapshots.Enqueue(stats);
+                previousRawScopeHook?.Invoke(stats);
+            };
 
             DbWriter.ReferenceSecondaryIndexBulkLoadStateForTesting = (connection, phase) =>
             {
@@ -459,6 +535,8 @@ public partial class IndexCommandRunnerTests
             }
             var scope = Assert.Single(scopeSnapshots);
             Assert.True(scope.UsedFullRefresh);
+            Assert.Empty(rawWork);
+            Assert.Empty(rawScopeSnapshots);
         }
         finally
         {
@@ -467,6 +545,8 @@ public partial class IndexCommandRunnerTests
             DbWriter.MutualRecursionRefreshForTesting = previousGraphHook;
             DbWriter.ReferenceGraphRefreshScopeForTesting = previousScopeHook;
             DbWriter.HotspotAggregateRefreshStatementExecutingForTesting = previousHotspotHook;
+            DbWriter.AuthoritativeFreshRawInsertExecutingForTesting = previousRawHook;
+            DbWriter.AuthoritativeFreshRawInsertScopeDisposedForTesting = previousRawScopeHook;
             DeleteDirectory(projectRoot);
         }
     }
@@ -898,7 +978,10 @@ public partial class IndexCommandRunnerTests
             SELECT name
             FROM sqlite_schema
             WHERE type = 'index'
-              AND tbl_name IN ('symbol_references', 'symbol_reference_candidates')
+              AND tbl_name IN (
+                  'reference_lines',
+                  'symbol_references',
+                  'symbol_reference_candidates')
               AND name NOT LIKE 'sqlite_autoindex_%'
             ORDER BY name
             """;
@@ -916,26 +999,41 @@ public partial class IndexCommandRunnerTests
             .ToArray();
 
     private static string[] GetAllReferenceIndexNames()
-        => GetRequiredReferenceIndexNames()
-            .Concat(ReferenceSecondaryIndexBulkLoadGuard.IndexNames)
+        => ReferenceSecondaryIndexSql.All
+            .Select(static definition => definition.Name)
+            .Distinct(StringComparer.Ordinal)
             .Order(StringComparer.Ordinal)
             .ToArray();
 
     private static string[] GetInitialBulkPersistenceReferenceIndexNames()
         => GetRequiredReferenceIndexNames()
+            .Concat(ReferenceSecondaryIndexBulkLoadGuard.AuthoritativeFreshPersistenceIndexNames)
             .Concat(ReferenceSecondaryIndexBulkLoadGuard.CandidatePopulationIndexNames)
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+    private static string[] GetAuthoritativeFreshInitialBulkPersistenceReferenceIndexNames()
+        => GetInitialBulkPersistenceReferenceIndexNames()
+            .Except(
+                ReferenceSecondaryIndexBulkLoadGuard.AuthoritativeFreshPersistenceIndexNames,
+                StringComparer.Ordinal)
             .Order(StringComparer.Ordinal)
             .ToArray();
 
     private static string[] GetGraphFinalizationReferenceIndexNames()
         => GetRequiredReferenceIndexNames()
+            .Concat(ReferenceSecondaryIndexBulkLoadGuard.AuthoritativeFreshPersistenceIndexNames)
             .Concat(ReferenceSecondaryIndexBulkLoadGuard.GraphFinalizationIndexNames)
+            .Distinct(StringComparer.Ordinal)
             .Order(StringComparer.Ordinal)
             .ToArray();
 
     private static string[] GetDeferredGraphPreparationReferenceIndexNames()
         => GetRequiredReferenceIndexNames()
+            .Concat(ReferenceSecondaryIndexBulkLoadGuard.AuthoritativeFreshPersistenceIndexNames)
             .Concat(ReferenceSecondaryIndexBulkLoadGuard.DeferredGraphPreparationIndexNames)
+            .Distinct(StringComparer.Ordinal)
             .Order(StringComparer.Ordinal)
             .ToArray();
 

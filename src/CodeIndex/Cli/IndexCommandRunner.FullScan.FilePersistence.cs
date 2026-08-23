@@ -214,7 +214,7 @@ public static partial class IndexCommandRunner
                 : AppendIssue([symbolRegexTimeoutIssue], issue);
             writer.InsertSymbols([], cancellationToken);
             writer.InsertReferencesInAtomicFileScope([], cancellationToken);
-            writer.InsertIssues(fileId, capIssues);
+            context.ExtractionSession.InsertIssuesForIndexedFile(fileId, capIssues);
             txn.Commit();
             return new FullScanFilePersistenceResult(
                 chunks.Count,

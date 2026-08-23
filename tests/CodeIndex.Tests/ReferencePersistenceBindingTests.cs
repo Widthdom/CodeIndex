@@ -28,6 +28,8 @@ public sealed class ReferencePersistenceBindingTests : IDisposable
         bool atomicFileScope,
         bool referenceLinesAreNew)
     {
+        var longUnicodeContext = string.Concat(
+            Enumerable.Repeat("長い文脈😀e\u0301();", 512));
         var fileId = _writer.UpsertFile(new FileRecord
         {
             Path = $"src/reference-binding-{atomicFileScope}-{referenceLinesAreNew}.cs",
@@ -40,8 +42,9 @@ public sealed class ReferencePersistenceBindingTests : IDisposable
         var references = new[]
         {
             CreateReference(fileId, "First", line: 10, context: "shared();"),
-            CreateReference(fileId, "Second", line: 20, context: "other();"),
+            CreateReference(fileId, "Second", line: 20, context: longUnicodeContext),
             CreateReference(fileId, "Third", line: 10, context: "shared();"),
+            CreateReference(fileId, "Fourth", line: 10, context: "同じ行の別文脈();"),
         };
         var observedWork = new List<DbWriter.ReferenceInsertBindingWork>();
         var previousWorkHook = DbWriter.ReferenceInsertBindingWorkForTesting;
@@ -94,19 +97,19 @@ public sealed class ReferencePersistenceBindingTests : IDisposable
 
         if (atomicFileScope)
         {
-            Assert.Equal([2, 1], observedWork.Select(work => work.StatementRows));
-            Assert.Equal([2 * 14, 14], observedWork.Select(work => work.BoundParameterCount));
+            Assert.Equal([2, 2], observedWork.Select(work => work.StatementRows));
+            Assert.Equal([2 * 14, 2 * 14], observedWork.Select(work => work.BoundParameterCount));
         }
         else
         {
             var work = Assert.Single(observedWork);
-            Assert.Equal(3, work.StatementRows);
-            Assert.Equal(3 * 14, work.BoundParameterCount);
+            Assert.Equal(4, work.StatementRows);
+            Assert.Equal(4 * 14, work.BoundParameterCount);
         }
         Assert.All(observedWork, work =>
         {
-            Assert.Equal(3, work.MaterializedReferenceCount);
-            Assert.Equal(2, work.MaterializedReferenceLineCount);
+            Assert.Equal(4, work.MaterializedReferenceCount);
+            Assert.Equal(3, work.MaterializedReferenceLineCount);
         });
 
         using var command = _db.Connection.CreateCommand();
@@ -123,8 +126,9 @@ public sealed class ReferencePersistenceBindingTests : IDisposable
             var expected = new[]
             {
                 (Symbol: "First", Context: "shared();"),
-                (Symbol: "Second", Context: "other();"),
+                (Symbol: "Second", Context: longUnicodeContext),
                 (Symbol: "Third", Context: "shared();"),
+                (Symbol: "Fourth", Context: "同じ行の別文脈();"),
             };
             foreach (var row in expected)
             {
@@ -142,7 +146,24 @@ public sealed class ReferencePersistenceBindingTests : IDisposable
             FROM symbol_references
             WHERE file_id = @fileId
             """;
-        Assert.Equal(2L, (long)command.ExecuteScalar()!);
+        Assert.Equal(3L, (long)command.ExecuteScalar()!);
+    }
+
+    [Fact]
+    public void ReferenceLineMaterializationOrdinals_FailClosedOnMissingDuplicateOrInvalidResults()
+    {
+        DbWriter.ValidateReferenceLineMaterializedOrdinalsForTesting(
+            expectedCount: 3,
+            [2, 0, 1]);
+
+        Assert.Throws<InvalidDataException>(() =>
+            DbWriter.ValidateReferenceLineMaterializedOrdinalsForTesting(3, [0, 1]));
+        Assert.Throws<InvalidDataException>(() =>
+            DbWriter.ValidateReferenceLineMaterializedOrdinalsForTesting(3, [0, 1, 1]));
+        Assert.Throws<InvalidDataException>(() =>
+            DbWriter.ValidateReferenceLineMaterializedOrdinalsForTesting(3, [0, 1, 3]));
+        Assert.Throws<InvalidDataException>(() =>
+            DbWriter.ValidateReferenceLineMaterializedOrdinalsForTesting(3, [0, null, 2]));
     }
 
     public void Dispose()

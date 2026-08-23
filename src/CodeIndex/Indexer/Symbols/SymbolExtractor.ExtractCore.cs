@@ -23,7 +23,9 @@ public static partial class SymbolExtractor
         int? maxSymbols = null,
         bool applyRequiredLiteralFileGate = true,
         bool applyRequiredLiteralMatchInputGate = true,
-        RequiredLiteralGateCounts? requiredLiteralGateCounts = null)
+        RequiredLiteralGateCounts? requiredLiteralGateCounts = null,
+        bool applyCSharpRegexProbeOptimizations = true,
+        CSharpRegexProbeCounts? csharpRegexProbeCounts = null)
     {
         var originalLang = lang;
         if (TryPrepareSymbolExtraction(
@@ -67,7 +69,9 @@ public static partial class SymbolExtractor
             maxSymbols,
             applyRequiredLiteralFileGate,
             applyRequiredLiteralMatchInputGate,
-            requiredLiteralGateCounts);
+            requiredLiteralGateCounts,
+            applyCSharpRegexProbeOptimizations,
+            csharpRegexProbeCounts);
         if (preparation.ImmediateSymbols != null)
             return preparation.ImmediateSymbols;
 
@@ -94,8 +98,8 @@ public static partial class SymbolExtractor
         for (var patternIndex = 0; patternIndex < patterns.Count; patternIndex++)
         {
             var pattern = patterns[patternIndex];
-            if (pattern.RequiredLiteral is { } requiredLiteral
-                && !content.Contains(requiredLiteral, StringComparison.Ordinal))
+            if ((pattern.RequiredLiteral is not null || pattern.RequiredAnyLiterals is not null)
+                && !ContainsRequiredGateLiteral(pattern, content.AsSpan()))
             {
                 if (applicablePatterns == null)
                 {
@@ -117,24 +121,71 @@ public static partial class SymbolExtractor
         SymbolPattern pattern,
         ReadOnlySpan<char> matchInput,
         bool applyRequiredLiteralMatchInputGate,
-        RequiredLiteralGateCounts? requiredLiteralGateCounts)
+        RequiredLiteralGateCounts? requiredLiteralGateCounts,
+        bool applyCSharpRegexProbeOptimizations = true,
+        CSharpRegexProbeCounts? csharpRegexProbeCounts = null)
     {
         // This second-stage proof must inspect the exact transformed input for one regex call.
         // Callers treat false as a failed match and must still run language-specific recovery.
         // 第2段の proof は1回の regex call に渡す変換済み input そのものを調べる。
         // false は match failure と同様に扱い、言語固有 recovery は引き続き実行する。
         if (applyRequiredLiteralMatchInputGate
-            && pattern.RequiredLiteral is { } requiredLiteral
-            && matchInput.IndexOf(requiredLiteral.AsSpan(), StringComparison.Ordinal) < 0)
+            && (pattern.RequiredLiteral is not null || pattern.RequiredAnyLiterals is not null)
+            && !ContainsRequiredGateLiteral(pattern, matchInput))
         {
             if (requiredLiteralGateCounts != null)
                 requiredLiteralGateCounts.MatchInputLiteralSkipCount++;
             return false;
         }
 
+        if (ReferenceEquals(pattern.Regex, CSharpPlainFieldRegex))
+        {
+            // Every successful plain-field path consumes `=` or `;`. Inspect the exact
+            // transformed input rather than its final character because a same-line class
+            // segment can contain the field terminator before a later sibling or `}`.
+            // plain-field の全成功経路は `=` または `;` を必ず消費する。same-line class
+            // segment では field 終端の後ろに sibling / `}` が続き得るため、末尾文字ではなく
+            // regex に渡す変換済み input 全体を検査する。
+            if (applyCSharpRegexProbeOptimizations
+                && matchInput.IndexOfAny('=', ';') < 0)
+            {
+                if (csharpRegexProbeCounts != null)
+                    csharpRegexProbeCounts.PlainFieldTerminatorSkipCount++;
+                return false;
+            }
+
+            if (csharpRegexProbeCounts != null)
+                csharpRegexProbeCounts.PlainFieldRegexAttemptCount++;
+        }
+
         if (requiredLiteralGateCounts != null)
             requiredLiteralGateCounts.RegexAttemptCount++;
         return true;
+    }
+
+    private static bool ContainsRequiredGateLiteral(
+        SymbolPattern pattern,
+        ReadOnlySpan<char> input)
+    {
+        if (pattern.RequiredLiteral is { } requiredLiteral)
+        {
+            return input.IndexOf(requiredLiteral.AsSpan(), StringComparison.Ordinal) >= 0;
+        }
+
+        if (pattern.RequiredAnyLiterals is not { } requiredAnyLiterals)
+            return true;
+
+        for (var literalIndex = 0; literalIndex < requiredAnyLiterals.Count; literalIndex++)
+        {
+            if (input.IndexOf(
+                    requiredAnyLiterals[literalIndex].AsSpan(),
+                    StringComparison.Ordinal) >= 0)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static readonly Regex PrologOpenClauseRegex = new(

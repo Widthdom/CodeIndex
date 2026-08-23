@@ -373,19 +373,48 @@ public static partial class SymbolExtractor
         SqlProcBody,
     }
 
-    // RequiredLiteral is an explicit Tier A opt-in for built-in, case-sensitive patterns only.
-    // It must be an Ordinal substring of every successful regex path and contain at least two
-    // characters. IgnoreCase, custom/plugin, one-character, and path-optional literals stay null.
-    // RequiredLiteral は built-in の case-sensitive pattern だけが明示的に opt-in する Tier A
-    // metadata。全成功経路に Ordinal で必ず現れる2文字以上の substring に限定し、IgnoreCase、
-    // custom/plugin、1文字、optional path の literal には設定しない。
+    // RequiredLiteral and RequiredAnyLiterals are explicit Tier A opt-ins for built-in,
+    // case-sensitive patterns only. The singular form must be an Ordinal substring of every
+    // successful regex path. The any-of form is for alternations where every successful path
+    // contains at least one member. Every member must contain at least two characters; the two
+    // forms are mutually exclusive. IgnoreCase, custom/plugin, one-character, and path-optional
+    // literals stay null.
+    // RequiredLiteral / RequiredAnyLiterals は built-in の case-sensitive pattern だけが明示的に
+    // opt-in する Tier A metadata。単一形は全成功経路に Ordinal で必ず現れる substring、any-of
+    // 形は全成功経路が集合中の1つ以上を必ず含む alternation に限定する。各要素は2文字以上で、
+    // 両形式は併用しない。IgnoreCase、custom/plugin、1文字、optional path の literal には設定しない。
     private sealed record SymbolPattern(
         string Kind,
         Regex Regex,
         BodyStyle BodyStyle,
         string? VisibilityGroup = null,
         string? ReturnTypeGroup = null,
-        string? RequiredLiteral = null);
+        string? RequiredLiteral = null,
+        IReadOnlyList<string>? RequiredAnyLiterals = null);
+
+    // Read-only snapshots keep the audited any-of metadata immutable after PatternCache is built.
+    // PatternCache 構築後に監査済み any-of metadata が変化しないよう read-only snapshot にする。
+    private static readonly IReadOnlyList<string> JavaScriptTypeScriptHocRequiredAnyLiterals =
+        Array.AsReadOnly(new[]
+        {
+            "React.",
+            "styled",
+            "connect",
+            "memo",
+            "forwardRef",
+            "lazy",
+            "observer",
+            "with",
+        });
+
+    private static readonly IReadOnlyList<string> TypeScriptNamespaceRequiredAnyLiterals =
+        Array.AsReadOnly(new[] { "namespace", "module" });
+
+    private static readonly IReadOnlyList<string> KotlinClassRequiredAnyLiterals =
+        Array.AsReadOnly(new[] { "class", "object" });
+
+    private static readonly IReadOnlyList<string> KotlinPropertyRequiredAnyLiterals =
+        Array.AsReadOnly(new[] { "val", "var" });
 
     private enum CssContextKind
     {
@@ -528,6 +557,12 @@ public static partial class SymbolExtractor
     private static readonly Regex CSharpEnumDeclarationRegex = new($@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+|(?:file|new)\s+)*enum\s+(?<name>{CSharpIdentifierPattern})", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CSharpEnumMemberRegex = new($@"^\s*(?<name>{CSharpIdentifierPattern})\s*(?:=\s*(?:-?\d|0x|{CSharpIdentifierPattern}(?:\s*\|\s*{CSharpIdentifierPattern})*)[^""']*)?,?\s*$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CSharpEnumMemberNameRegex = new($@"^\s*(?<name>{CSharpIdentifierPattern})\b", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CSharpPlainFieldRegex = new(
+        $@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|readonly|volatile|new|unsafe|extern|required)\s+)*"
+      + @"(?!(?:public|private|protected|internal|static|readonly|volatile|new|unsafe|extern|required|abstract|virtual|override|sealed|async|partial|file|ref|var|class|struct|interface|enum|record|namespace|delegate\b(?!\*)|event|const|using|return|throw|yield|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await|try|do|typeof|sizeof|nameof|default|operator|this|base)\b)"
+      + $@"(?<returnType>{CSharpTypePattern})\s+"
+      + @"(?<name>" + CSharpIdentifierPattern + @")\s*(?:=(?![=>])|;)",
+        RegexOptions.Compiled);
     private static readonly Regex JavaCompactConstructorRegex = new(
         @"^\s*(?:(?<visibility>public|private|protected)\s+)?(?<name>\w+)\s*(?=\{|$)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -819,7 +854,7 @@ public static partial class SymbolExtractor
             // arrow パターンより後に置き、大文字始まりの arrow 束縛は先に一致した段階で
             // stopAfterFirstPatternMatch が立ち、こちらで上書きされないようにする。
             // Closes #240.
-            new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>[A-Z]\w*)\s*=\s*(?:React\.(?:memo|forwardRef|lazy)\s*\(|styled[.(`]|connect\s*\(|memo\s*\(|forwardRef\s*\(|lazy\s*\(|observer\s*\(|with[A-Z]\w*\s*\()", RegexOptions.Compiled), BodyStyle.None, "visibility"),
+            new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>[A-Z]\w*)\s*=\s*(?:React\.(?:memo|forwardRef|lazy)\s*\(|styled[.(`]|connect\s*\(|memo\s*\(|forwardRef\s*\(|lazy\s*\(|observer\s*\(|with[A-Z]\w*\s*\()", RegexOptions.Compiled), BodyStyle.None, "visibility", RequiredAnyLiterals: JavaScriptTypeScriptHocRequiredAnyLiterals),
             new("class",    new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:default\s+)?class\s+(?<name>(?!extends\b)\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "class"),
             new("import",   new Regex(@"^\s*import\s+(?<name>.+?)\s+from\s+", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "import"),
         ],
@@ -885,15 +920,15 @@ public static partial class SymbolExtractor
             // 型注釈付き arrow 束縛（`const Callback: (x: number) => number = (x) =>
             // x + 1;`）は BodyStyle.Brace 側で先勝ちし、こちらで上書きされない。
             // Closes #240.
-            new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>[A-Z]\w*)\s*(?::\s*.+?)?\s*=\s*(?:React\.(?:memo|forwardRef|lazy)\s*" + TypeScriptOptionalHocTypeArgsPattern + @"\(|styled[.(`]|connect\s*" + TypeScriptOptionalHocTypeArgsPattern + @"\(|memo\s*" + TypeScriptOptionalHocTypeArgsPattern + @"\(|forwardRef\s*" + TypeScriptOptionalHocTypeArgsPattern + @"\(|lazy\s*" + TypeScriptOptionalHocTypeArgsPattern + @"\(|observer\s*" + TypeScriptOptionalHocTypeArgsPattern + @"\(|with[A-Z]\w*\s*" + TypeScriptOptionalHocTypeArgsPattern + @"\()", RegexOptions.Compiled), BodyStyle.None, "visibility"),
+            new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>[A-Z]\w*)\s*(?::\s*.+?)?\s*=\s*(?:React\.(?:memo|forwardRef|lazy)\s*" + TypeScriptOptionalHocTypeArgsPattern + @"\(|styled[.(`]|connect\s*" + TypeScriptOptionalHocTypeArgsPattern + @"\(|memo\s*" + TypeScriptOptionalHocTypeArgsPattern + @"\(|forwardRef\s*" + TypeScriptOptionalHocTypeArgsPattern + @"\(|lazy\s*" + TypeScriptOptionalHocTypeArgsPattern + @"\(|observer\s*" + TypeScriptOptionalHocTypeArgsPattern + @"\(|with[A-Z]\w*\s*" + TypeScriptOptionalHocTypeArgsPattern + @"\()", RegexOptions.Compiled), BodyStyle.None, "visibility", RequiredAnyLiterals: JavaScriptTypeScriptHocRequiredAnyLiterals),
               // Abstract class, declare class / 抽象クラス、declare クラス
               new("class",    new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:default\s+)?(?:(?:abstract|declare)\s+)*class\s+(?<name>(?!(?:extends|implements)\b)\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "class"),
               // UMD namespace export / UMD 名前空間エクスポート
               new("namespace", new Regex($@"^\s*export\s+as\s+namespace\s+(?<name>{JavaScriptTypeScriptIdentifierPattern})", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "namespace"),
               // namespace/module — supports both identifier (namespace Foo) and quoted ambient (declare module 'express')
               // 名前空間・モジュール — 識別子形式と引用符付きアンビエント形式の両方に対応
-              new("namespace", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:declare\s+)?(?:namespace|module)\s+['""](?<name>[^'""]+)['""]", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-              new("namespace", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:declare\s+)?(?:namespace|module)\s+(?<name>[\w.]+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+              new("namespace", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:declare\s+)?(?:namespace|module)\s+['""](?<name>[^'""]+)['""]", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredAnyLiterals: TypeScriptNamespaceRequiredAnyLiterals),
+              new("namespace", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:declare\s+)?(?:namespace|module)\s+(?<name>[\w.]+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredAnyLiterals: TypeScriptNamespaceRequiredAnyLiterals),
               new("interface", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:declare\s+)?interface\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "interface"),
               new("import", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:declare\s+)?type\s+(?<name>\w+)(?:\s*<[^=]+>)?", RegexOptions.Compiled), BodyStyle.None, "visibility", RequiredLiteral: "type"),
             new("enum",     new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:declare\s+)?(?:const\s+)?enum\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "enum"),
@@ -986,13 +1021,7 @@ public static partial class SymbolExtractor
             // sequence (e.g. `static public int X;`). Closes #355.
             // 修飾子順序は自由で、visibility を修飾子列の任意位置に置ける
             // （例: `static public int X;`）。Closes #355.
-            new("property",  new Regex(
-                $@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|readonly|volatile|new|unsafe|extern|required)\s+)*"
-              + @"(?!(?:public|private|protected|internal|static|readonly|volatile|new|unsafe|extern|required|abstract|virtual|override|sealed|async|partial|file|ref|var|class|struct|interface|enum|record|namespace|delegate\b(?!\*)|event|const|using|return|throw|yield|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await|try|do|typeof|sizeof|nameof|default|operator|this|base)\b)"
-              + $@"(?<returnType>{CSharpTypePattern})\s+"
-              + @"(?<name>" + CSharpIdentifierPattern + @")\s*(?:=(?![=>])|;)",
-                RegexOptions.Compiled),
-                BodyStyle.None, "visibility", "returnType"),
+            new("property", CSharpPlainFieldRegex, BodyStyle.None, "visibility", "returnType"),
             // Interface — visibility optional; modifier order is free, so visibility may appear
             // anywhere in the modifier sequence (e.g. `partial public interface`, `file interface`,
             // `new public interface` for nested types). Closes #355.
@@ -1391,7 +1420,7 @@ public static partial class SymbolExtractor
             new("enum",     new Regex($@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:expect|actual)\s+)*enum\s+class\s+(?<name>{KotlinIdentifierPattern})", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "enum"),
             // Class/object with expanded modifiers: data, sealed, value, inline, inner, annotation, expect, actual
             // クラス/オブジェクト — 拡張修飾子対応: data, sealed, value, inline, inner, annotation, expect, actual
-            new("class",    new Regex($@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:abstract|data|sealed|open|inner|value|inline|annotation|expect|actual)\s+)*(?:class|object)\s+(?<name>{KotlinIdentifierPattern})", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("class",    new Regex($@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:abstract|data|sealed|open|inner|value|inline|annotation|expect|actual)\s+)*(?:class|object)\s+(?<name>{KotlinIdentifierPattern})", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredAnyLiterals: KotlinClassRequiredAnyLiterals),
             // Function / 関数 (including extension, secondary constructor, override, and abstract forms)
             // 関数 — 拡張・セカンダリコンストラクタ・override・abstract 形を含む
             new("function", new Regex($@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:suspend|inline|infix|operator|tailrec|external|expect|actual|abstract|override|open|final)\s+)*fun\s+(?:<[^>]+>\s+)?(?:{KotlinIdentifierPattern}(?:<[^>]+>)?\.)?(?<name>{KotlinIdentifierPattern})\s*[\(<](?:.*?\))?(?::\s*(?<returnType>[^ {{=]+))?", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType", RequiredLiteral: "fun"),
@@ -1400,7 +1429,7 @@ public static partial class SymbolExtractor
             // Enum entry / enum エントリ
             new("property", new Regex($@"^\s{{2,}}(?<name>(?:[A-Z][A-Z0-9_]*|`[^`\r\n]+`))\s*(?:\((?<returnType>[^)]*)\))?\s*(?:,|\{{|;)?\s*$", RegexOptions.Compiled), BodyStyle.Brace, "returnType"),
             // Top-level val/var property / トップレベルプロパティ
-            new("property", new Regex($@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:const|lateinit|override)\s+)?(?:val|var)\s+(?<name>{KotlinIdentifierPattern})\s*[=:]", RegexOptions.Compiled), BodyStyle.None, "visibility"),
+            new("property", new Regex($@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:const|lateinit|override)\s+)?(?:val|var)\s+(?<name>{KotlinIdentifierPattern})\s*[=:]", RegexOptions.Compiled), BodyStyle.None, "visibility", RequiredAnyLiterals: KotlinPropertyRequiredAnyLiterals),
             // Type alias / 型エイリアス
             new("import",   new Regex($@"^\s*(?<visibility>public|private|protected|internal)?\s*typealias\s+(?<name>{KotlinIdentifierPattern})(?:\s*<[^=]+>)?\s*=", RegexOptions.Compiled), BodyStyle.None, "visibility", RequiredLiteral: "typealias"),
             new("import",   new Regex(@"^\s*import\s+(?<name>.+)", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "import"),
@@ -2273,7 +2302,14 @@ public static partial class SymbolExtractor
         foreach (var (language, patterns) in PatternCache)
         {
             foreach (var pattern in patterns)
-                ValidateRequiredLiteralGate(language, pattern.Kind, pattern.Regex.Options, pattern.RequiredLiteral);
+            {
+                ValidateRequiredLiteralGate(
+                    language,
+                    pattern.Kind,
+                    pattern.Regex.Options,
+                    pattern.RequiredLiteral,
+                    pattern.RequiredAnyLiterals);
+            }
         }
     }
 
@@ -2281,15 +2317,53 @@ public static partial class SymbolExtractor
         string language,
         string kind,
         RegexOptions regexOptions,
-        string? requiredLiteral)
+        string? requiredLiteral,
+        IReadOnlyList<string>? requiredAnyLiterals)
     {
-        if (requiredLiteral is null)
+        if (requiredLiteral is not null && requiredAnyLiterals is not null)
+        {
+            throw new InvalidOperationException(
+                $"Required literal and any-of literal gates are mutually exclusive ({language}/{kind}).");
+        }
+
+        if (requiredLiteral is null && requiredAnyLiterals is null)
             return;
 
-        if (requiredLiteral.Length < 2)
+        if (requiredLiteral is { Length: < 2 })
         {
             throw new InvalidOperationException(
                 $"Required literal gates must contain at least two characters ({language}/{kind}).");
+        }
+
+        if (requiredAnyLiterals is { Count: 0 })
+        {
+            throw new InvalidOperationException(
+                $"Required any-of literal gates must contain at least one literal ({language}/{kind}).");
+        }
+
+        if (requiredAnyLiterals is not null)
+        {
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var literal in requiredAnyLiterals)
+            {
+                if (literal is null)
+                {
+                    throw new InvalidOperationException(
+                        $"Required any-of literal gates cannot contain null ({language}/{kind}).");
+                }
+
+                if (literal.Length < 2)
+                {
+                    throw new InvalidOperationException(
+                        $"Required any-of literal gates must contain at least two characters per literal ({language}/{kind}).");
+                }
+
+                if (!seen.Add(literal))
+                {
+                    throw new InvalidOperationException(
+                        $"Required any-of literal gates cannot contain Ordinal duplicates ({language}/{kind}).");
+                }
+            }
         }
 
         if ((regexOptions & RegexOptions.IgnoreCase) != 0)
@@ -2301,8 +2375,9 @@ public static partial class SymbolExtractor
 
     internal static void ValidateRequiredLiteralGateForTesting(
         RegexOptions regexOptions,
-        string? requiredLiteral) =>
-        ValidateRequiredLiteralGate("test", "test", regexOptions, requiredLiteral);
+        string? requiredLiteral,
+        IReadOnlyList<string>? requiredAnyLiterals = null) =>
+        ValidateRequiredLiteralGate("test", "test", regexOptions, requiredLiteral, requiredAnyLiterals);
 
     internal static IReadOnlyList<(string Language, string Kind, string Literal, RegexOptions Options)>
         GetRequiredLiteralGateMetadataForTesting()
@@ -2314,6 +2389,29 @@ public static partial class SymbolExtractor
             {
                 if (pattern.RequiredLiteral is { } literal)
                     metadata.Add((language, pattern.Kind, literal, pattern.Regex.Options));
+            }
+        }
+
+        return metadata;
+    }
+
+    internal static IReadOnlyList<(
+        string Language,
+        string Kind,
+        IReadOnlyList<string> Literals,
+        RegexOptions Options)> GetRequiredAnyLiteralGateMetadataForTesting()
+    {
+        var metadata = new List<(
+            string Language,
+            string Kind,
+            IReadOnlyList<string> Literals,
+            RegexOptions Options)>();
+        foreach (var (language, patterns) in PatternCache)
+        {
+            foreach (var pattern in patterns)
+            {
+                if (pattern.RequiredAnyLiterals is { } literals)
+                    metadata.Add((language, pattern.Kind, literals.ToArray(), pattern.Regex.Options));
             }
         }
 

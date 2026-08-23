@@ -7786,15 +7786,24 @@ public partial class McpServerTests
             .OrderBy(static indexName => indexName, StringComparer.Ordinal)
             .ToArray();
         var deferredGraphPreparedIndexNames = ReferenceSecondaryIndexSql.RawPersistenceRequired
+            .Concat(ReferenceSecondaryIndexSql.AuthoritativeFreshPersistenceDeferred)
             .Concat(ReferenceSecondaryIndexSql.DeferredGraphPreparation)
             .Select(static definition => definition.Name)
+            .Distinct(StringComparer.Ordinal)
             .OrderBy(static indexName => indexName, StringComparer.Ordinal)
             .ToArray();
         var initialBulkPersistenceIndexNames = ReferenceSecondaryIndexSql.RawPersistenceRequired
+            .Concat(ReferenceSecondaryIndexSql.AuthoritativeFreshPersistenceDeferred)
             .Concat(ReferenceSecondaryIndexSql.CandidatePopulationDeferred)
             .Select(static definition => definition.Name)
+            .Distinct(StringComparer.Ordinal)
             .OrderBy(static indexName => indexName, StringComparer.Ordinal)
             .ToArray();
+        var authoritativeFreshPersistenceIndexNames =
+            ReferenceSecondaryIndexSql.AuthoritativeFreshPersistenceDeferred
+                .Select(static definition => definition.Name)
+                .OrderBy(static indexName => indexName, StringComparer.Ordinal)
+                .ToArray();
         var hotspotIndexNames = HotspotReferenceAggregateSql.Indexes
             .Select(static definition => definition.Name)
             .OrderBy(static indexName => indexName, StringComparer.Ordinal)
@@ -7909,6 +7918,11 @@ public partial class McpServerTests
             var restoredStateIndex = referenceIndexStates.FindIndex(
                 static state => state.Phase == "restored");
             Assert.Equal(referenceIndexStates.Count - 1, restoredStateIndex);
+            Assert.All(
+                referenceIndexStates,
+                state => Assert.All(
+                    authoritativeFreshPersistenceIndexNames,
+                    indexName => Assert.Contains(indexName, state.PresentIndexNames)));
             Assert.Equal(
                 initialBulkPersistenceIndexNames,
                 Assert.Single(referenceIndexStates, static state => state.Phase == "dropped")
@@ -7996,7 +8010,10 @@ public partial class McpServerTests
                 SELECT name
                 FROM sqlite_schema
                 WHERE type = 'index'
-                  AND tbl_name IN ('symbol_references', 'symbol_reference_candidates')
+                  AND tbl_name IN (
+                      'reference_lines',
+                      'symbol_references',
+                      'symbol_reference_candidates')
                   AND name NOT LIKE 'sqlite_autoindex_%'
                 ORDER BY name
                 """;
@@ -9299,8 +9316,22 @@ public partial class McpServerTests
         var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_fixture_{Guid.NewGuid():N}");
         Directory.CreateDirectory(fixtureDir);
         var filePath = Path.Combine(fixtureDir, "bom_sample.cs");
+        var previousRawHook = DbWriter.AuthoritativeFreshRawInsertExecutingForTesting;
+        var previousRawScopeHook = DbWriter.AuthoritativeFreshRawInsertScopeDisposedForTesting;
+        var rawWork = new List<DbWriter.AuthoritativeFreshRawInsertWork>();
+        var rawScopeSnapshots = new List<DbWriter.AuthoritativeFreshRawInsertScopeStats>();
         try
         {
+            DbWriter.AuthoritativeFreshRawInsertExecutingForTesting = work =>
+            {
+                rawWork.Add(work);
+                previousRawHook?.Invoke(work);
+            };
+            DbWriter.AuthoritativeFreshRawInsertScopeDisposedForTesting = stats =>
+            {
+                rawScopeSnapshots.Add(stats);
+                previousRawScopeHook?.Invoke(stats);
+            };
             File.WriteAllBytes(filePath, [0xEF, 0xBB, 0xBF, (byte)'c', (byte)'l', (byte)'a', (byte)'s', (byte)'s', (byte)' ', (byte)'A', (byte)' ', (byte)'{', (byte)'}', (byte)'\n']);
 
             var indexRequest = new JsonObject
@@ -9325,9 +9356,13 @@ public partial class McpServerTests
             var issues = validateResponse["result"]!["structuredContent"]!["issues"]!.AsArray();
 
             Assert.Contains(issues, issue => issue!["kind"]!.GetValue<string>() == "bom");
+            Assert.Empty(rawWork);
+            Assert.Empty(rawScopeSnapshots);
         }
         finally
         {
+            DbWriter.AuthoritativeFreshRawInsertExecutingForTesting = previousRawHook;
+            DbWriter.AuthoritativeFreshRawInsertScopeDisposedForTesting = previousRawScopeHook;
             TestProjectHelper.DeleteDirectory(fixtureDir);
         }
     }

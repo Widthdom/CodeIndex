@@ -7,6 +7,7 @@ public static partial class SymbolExtractor
     private static PatternScanResult TryCapturePatternMatch(
         PatternLineScanContext lineContext,
         SymbolPattern pattern,
+        int patternIndex,
         int patternStartOffset,
         int lineOffset,
         ref string patternMatchLine,
@@ -22,10 +23,29 @@ public static partial class SymbolExtractor
         var applicablePatterns = extraction.ApplicablePatterns;
         var applyRequiredLiteralMatchInputGate = extraction.ApplyRequiredLiteralMatchInputGate;
         var requiredLiteralGateCounts = extraction.RequiredLiteralGateCounts;
+        var applyCSharpRegexProbeOptimizations = extraction.ApplyCSharpRegexProbeOptimizations;
+        var csharpRegexProbeCounts = extraction.CSharpRegexProbeCounts;
         var csharpMatchLines = extraction.ScanInputs.CSharpMatchLines;
         var javaLeadingAnnotationOffset = 0;
+        var patternMatchTimedOut = false;
+        // BuildCSharpPropertyMatchLine may replace the physical line with a merged multiline
+        // input. A miss on one representation proves nothing about the other, so recovery
+        // sharing is restricted to the exact PreparedLine.MatchLine at this candidate start.
+        // multiline 結合 input と物理行の miss は相互に証明にならないため、同じ candidate
+        // start の PreparedLine.MatchLine そのものだけを recovery cache の対象にする。
+        var canUseCSharpPhysicalInputNegativePrefix = lang == "csharp"
+            && applyCSharpRegexProbeOptimizations
+            && lineOffset == patternStartOffset
+            && ReferenceEquals(patternMatchLine, matchLine);
         Match match;
-        if (lang is "java" or "kotlin")
+        if (canUseCSharpPhysicalInputNegativePrefix
+            && patternStartState.CSharpPhysicalInputNegativePrefix.IsKnownNegative(patternIndex))
+        {
+            if (csharpRegexProbeCounts != null)
+                csharpRegexProbeCounts.PhysicalInputNegativePrefixCacheHitCount++;
+            match = Match.Empty;
+        }
+        else if (lang is "java" or "kotlin")
         {
             var javaPatternMatched = TryMatchJavaDeclarationPatternSegment(
                 pattern,
@@ -43,7 +63,9 @@ public static partial class SymbolExtractor
                     pattern,
                     patternMatchLine.AsSpan(lineOffset),
                     applyRequiredLiteralMatchInputGate,
-                    requiredLiteralGateCounts))
+                    requiredLiteralGateCounts,
+                    applyCSharpRegexProbeOptimizations,
+                    csharpRegexProbeCounts))
             {
                 // Preserve the existing failed-helper fallback attempt. This is
                 // intentionally gated again because it is a distinct regex call.
@@ -54,13 +76,28 @@ public static partial class SymbolExtractor
                      pattern,
                      patternMatchLine.AsSpan(lineOffset),
                      applyRequiredLiteralMatchInputGate,
-                     requiredLiteralGateCounts))
+                     requiredLiteralGateCounts,
+                     applyCSharpRegexProbeOptimizations,
+                     csharpRegexProbeCounts))
         {
-            match = pattern.Regex.Match(patternMatchLine[lineOffset..]);
+            if (csharpRegexProbeCounts != null)
+                csharpRegexProbeCounts.DeclarationPatternRegexAttemptCount++;
+            match = canUseCSharpPhysicalInputNegativePrefix
+                ? pattern.Regex.MatchWithTimeoutStatus(
+                    patternMatchLine[lineOffset..],
+                    out patternMatchTimedOut)
+                : pattern.Regex.Match(patternMatchLine[lineOffset..]);
         }
         else
         {
             match = Match.Empty;
+        }
+
+        if (canUseCSharpPhysicalInputNegativePrefix && !match.Success)
+        {
+            patternStartState.CSharpPhysicalInputNegativePrefix.RecordFailedProbe(
+                patternIndex,
+                patternMatchTimedOut);
         }
 
         if (!match.Success
@@ -85,21 +122,33 @@ public static partial class SymbolExtractor
             // 先頭モディファイアが無くても識別子行単体でマッチするため、この
             // 分岐は修飾子が識別子と同行に必要な constructor / static ctor
             // シェイプでのみ発火する。Closes #348.
-            var wrappedInfo = TryFindCSharpWrappedHeaderModifier(csharpMatchLines!, i);
+            var wrappedInfo = GetCSharpWrappedHeaderModifier(
+                csharpMatchLines!,
+                i,
+                ref patternStartState,
+                applyCSharpRegexProbeOptimizations,
+                csharpRegexProbeCounts);
             if (wrappedInfo != null)
             {
-                foreach (var candidatePrefix in EnumerateCSharpWrappedModifierCandidates(wrappedInfo.Value.Prefix))
+                foreach (var candidatePrefix in EnumerateCSharpWrappedModifierCandidates(wrappedInfo.Value))
                 {
-                    var wrappedMatchLine = candidatePrefix + " " + patternMatchLine.TrimStart();
+                    var wrappedMatchLine = BuildCSharpWrappedPatternMatchLine(
+                        candidatePrefix,
+                        patternMatchLine,
+                        csharpRegexProbeCounts);
                     if (!ShouldAttemptPatternRegex(
                             pattern,
                             wrappedMatchLine.AsSpan(),
                             applyRequiredLiteralMatchInputGate,
-                            requiredLiteralGateCounts))
+                            requiredLiteralGateCounts,
+                            applyCSharpRegexProbeOptimizations,
+                            csharpRegexProbeCounts))
                     {
                         continue;
                     }
 
+                    if (csharpRegexProbeCounts != null)
+                        csharpRegexProbeCounts.DeclarationPatternRegexAttemptCount++;
                     var wrappedMatch = pattern.Regex.Match(wrappedMatchLine);
                     if (wrappedMatch.Success)
                     {
@@ -173,16 +222,21 @@ public static partial class SymbolExtractor
                             attributeParenDepth: 0,
                             applicablePatterns,
                             applyRequiredLiteralMatchInputGate,
-                            requiredLiteralGateCounts)
+                            requiredLiteralGateCounts,
+                            applyCSharpRegexProbeOptimizations,
+                            csharpRegexProbeCounts)
                         : patternStartState.RecoverableCSharpPattern ??=
-                            TryMatchAnyRecoverableCSharpPattern(
+                            TryMatchAnyRecoverableCSharpPatternAtPatternStart(
                                 matchLine,
                                 lineOffset,
                                 insideEnumBody: false,
                                 attributeParenDepth: 0,
                                 applicablePatterns,
                                 applyRequiredLiteralMatchInputGate,
-                                requiredLiteralGateCounts))))
+                                requiredLiteralGateCounts,
+                                applyCSharpRegexProbeOptimizations,
+                                csharpRegexProbeCounts,
+                                ref patternStartState.CSharpPhysicalInputNegativePrefix))))
             {
                 lineOffset = FindNextSameLineBraceStatementStart(matchLine, lineOffset + 1, lang);
                 return PatternScanResult.ContinueAt(lineOffset);

@@ -39,9 +39,27 @@ public partial class DbWriter
         }
 
         if (issues.Count == 0) return;
+        var rawInsert = !deleteExisting
+            ? _authoritativeFreshBulkInsertScope
+            : null;
         if (issues.Count == 1)
         {
-            InsertSingleIssue(fileId, issues[0]);
+            if (rawInsert != null)
+            {
+                // The provider singleton predates the batch-statement test hook and does
+                // not report it. Preserve that observable contract on the raw route.
+                // provider singletonはbatch hookを報告しないためraw経路でも維持する。
+                rawInsert.InsertIssues(
+                    fileId,
+                    issues,
+                    start: 0,
+                    end: 1,
+                    reportBatchStatement: false);
+            }
+            else
+            {
+                InsertSingleIssue(fileId, issues[0]);
+            }
             return;
         }
 
@@ -51,7 +69,19 @@ public partial class DbWriter
         for (int i = 0; i < issues.Count; i += rowsPerStatement)
         {
             int end = Math.Min(i + rowsPerStatement, issues.Count);
-            InsertIssueBatch(fileId, issues, i, end);
+            if (rawInsert != null)
+            {
+                rawInsert.InsertIssues(
+                    fileId,
+                    issues,
+                    i,
+                    end,
+                    reportBatchStatement: true);
+            }
+            else
+            {
+                InsertIssueBatch(fileId, issues, i, end);
+            }
         }
     }
 
@@ -94,26 +124,37 @@ public partial class DbWriter
     private void InsertIssueBatch(long fileId, IReadOnlyList<CodeIndex.Models.FileIssue> issues, int start, int end)
     {
         using var cmd = _conn.CreateCommand();
-        var sql = CreateBatchSqlBuilder(end - start, estimatedCharsPerRow: 96);
-        sql.Append("INSERT INTO file_issues (file_id, kind, line, message, origin, severity) VALUES ");
+        var parameterIndex = 0;
         for (int j = start; j < end; j++)
         {
-            if (j > start)
-                sql.Append(", ");
-
             var issue = issues[j];
-            var suffix = j - start;
-            sql.Append($"(@fid{suffix}, @kind{suffix}, @line{suffix}, @message{suffix}, @origin{suffix}, @severity{suffix})");
-            cmd.Parameters.Add($"@fid{suffix}", SqliteType.Integer).Value = fileId;
-            cmd.Parameters.Add($"@kind{suffix}", SqliteType.Text).Value = issue.Kind;
-            cmd.Parameters.Add($"@line{suffix}", SqliteType.Integer).Value = issue.Line;
-            cmd.Parameters.Add($"@message{suffix}", SqliteType.Text).Value = issue.Message;
-            cmd.Parameters.Add($"@origin{suffix}", SqliteType.Text).Value = issue.Origin ?? (object)DBNull.Value;
-            cmd.Parameters.Add($"@severity{suffix}", SqliteType.Text).Value = issue.Severity ?? (object)DBNull.Value;
+            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Integer).Value = fileId;
+            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Text).Value = issue.Kind;
+            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Integer).Value = issue.Line;
+            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Text).Value = issue.Message;
+            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Text).Value = issue.Origin ?? (object)DBNull.Value;
+            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Text).Value = issue.Severity ?? (object)DBNull.Value;
         }
 
-        cmd.CommandText = sql.ToString();
+        cmd.CommandText = IssueInsertSqlCache.GetOrAdd(
+            end - start,
+            static count => BuildIssueInsertSql(count));
         ReportBatchStatementForTesting("insert_issues", end - start, end - start);
         cmd.ExecuteNonQuery();
+    }
+
+    private static string BuildIssueInsertSql(int rowCount)
+    {
+        var sql = CreateBatchSqlBuilder(rowCount, estimatedCharsPerRow: 96);
+        sql.Append("INSERT INTO file_issues (file_id, kind, line, message, origin, severity) VALUES ");
+        var parameterIndex = 0;
+        for (var row = 0; row < rowCount; row++)
+        {
+            if (row > 0)
+                sql.Append(", ");
+            AppendBatchParameterTuple(sql, ref parameterIndex, columnCount: 6);
+        }
+
+        return sql.ToString();
     }
 }

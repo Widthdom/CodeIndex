@@ -76,14 +76,16 @@ public static partial class SymbolExtractor
     {
         var extraction = lineContext.Extraction;
         var patternStartState = new PatternStartScanState();
-        foreach (var pattern in extraction.ApplicablePatterns)
+        for (var patternIndex = 0; patternIndex < extraction.ApplicablePatterns.Count; patternIndex++)
         {
+            var pattern = extraction.ApplicablePatterns[patternIndex];
             if (!IsPatternApplicableToLine(lineContext, pattern))
                 continue;
 
             var patternScan = CreatePatternCandidateScan(
                 lineContext,
                 pattern,
+                patternIndex,
                 patternStartOffset,
                 ref patternStartState);
             var result = ScanApplicablePattern(
@@ -128,6 +130,7 @@ public static partial class SymbolExtractor
     private static PatternCandidateScan CreatePatternCandidateScan(
         PatternLineScanContext lineContext,
         SymbolPattern pattern,
+        int patternIndex,
         int patternStartOffset,
         ref PatternStartScanState patternStartState)
     {
@@ -150,7 +153,12 @@ public static partial class SymbolExtractor
         var csharpPropertyCandidate = extraction.Lang == "csharp"
             && pattern.Kind is "property" or "function"
                 ? patternStartState.CSharpPropertyCandidateForLine ??=
-                    BuildCSharpPropertyMatchLine(lines, csharpMatchLines!, i)
+                    BuildCSharpPropertyMatchLine(
+                        lines,
+                        csharpMatchLines!,
+                        i,
+                        extraction.ApplyCSharpRegexProbeOptimizations,
+                        extraction.CSharpRegexProbeCounts)
                 : new CSharpPropertyMatchCandidate(
                     lineContext.PreparedLine.MatchLine,
                     i,
@@ -160,6 +168,7 @@ public static partial class SymbolExtractor
         return new PatternCandidateScan(
             lineContext,
             pattern,
+            patternIndex,
             patternStartOffset,
             csharpPropertyCandidate,
             patternMatchLine);
@@ -175,6 +184,7 @@ public static partial class SymbolExtractor
             var captureResult = TryCapturePatternMatch(
                 patternScan.LineContext,
                 patternScan.Pattern,
+                patternScan.PatternIndex,
                 patternScan.PatternStartOffset,
                 patternScan.LineOffset,
                 ref patternScan.PatternMatchLine,

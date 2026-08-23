@@ -450,7 +450,9 @@ public static partial class SymbolExtractor
         bool insideEnumBody,
         IReadOnlyList<SymbolPattern> applicablePatterns,
         bool applyRequiredLiteralMatchInputGate,
-        RequiredLiteralGateCounts? requiredLiteralGateCounts)
+        RequiredLiteralGateCounts? requiredLiteralGateCounts,
+        bool applyCSharpRegexProbeOptimizations,
+        CSharpRegexProbeCounts? csharpRegexProbeCounts)
     {
         var index = 0;
         while (index < line.Length && char.IsWhiteSpace(line[index]))
@@ -469,7 +471,9 @@ public static partial class SymbolExtractor
                 attributeParenDepth,
                 applicablePatterns,
                 applyRequiredLiteralMatchInputGate,
-                requiredLiteralGateCounts))
+                requiredLiteralGateCounts,
+                applyCSharpRegexProbeOptimizations,
+                csharpRegexProbeCounts))
         {
             inLeadingAttributeBlock = false;
             attributeBracketDepth = 0;
@@ -541,7 +545,9 @@ public static partial class SymbolExtractor
         int attributeParenDepth,
         IReadOnlyList<SymbolPattern> applicablePatterns,
         bool applyRequiredLiteralMatchInputGate,
-        RequiredLiteralGateCounts? requiredLiteralGateCounts)
+        RequiredLiteralGateCounts? requiredLiteralGateCounts,
+        bool applyCSharpRegexProbeOptimizations,
+        CSharpRegexProbeCounts? csharpRegexProbeCounts)
     {
         if (firstNonWhitespaceIndex >= line.Length || line[firstNonWhitespaceIndex] == '[')
             return false;
@@ -553,7 +559,9 @@ public static partial class SymbolExtractor
             attributeParenDepth,
             applicablePatterns,
             applyRequiredLiteralMatchInputGate,
-            requiredLiteralGateCounts);
+            requiredLiteralGateCounts,
+            applyCSharpRegexProbeOptimizations,
+            csharpRegexProbeCounts);
     }
 
     private static bool TryMatchAnyRecoverableCSharpPattern(
@@ -563,27 +571,125 @@ public static partial class SymbolExtractor
         int attributeParenDepth,
         IReadOnlyList<SymbolPattern> applicablePatterns,
         bool applyRequiredLiteralMatchInputGate,
-        RequiredLiteralGateCounts? requiredLiteralGateCounts)
+        RequiredLiteralGateCounts? requiredLiteralGateCounts,
+        bool applyCSharpRegexProbeOptimizations,
+        CSharpRegexProbeCounts? csharpRegexProbeCounts)
+    {
+        // Attribute preprocessing runs before PatternStartScanState exists. Keep that
+        // cross-phase recovery independent rather than retaining per-line cache state.
+        // attribute prepass は PatternStartScanState より前に実行されるため、per-line state を
+        // 保持せず従来どおり独立した recovery とする。
+        var unusedNegativePrefix = new CSharpPhysicalInputNegativePrefixCache();
+        return TryMatchAnyRecoverableCSharpPatternCore(
+            line,
+            lineOffset,
+            insideEnumBody,
+            attributeParenDepth,
+            applicablePatterns,
+            applyRequiredLiteralMatchInputGate,
+            requiredLiteralGateCounts,
+            applyCSharpRegexProbeOptimizations,
+            csharpRegexProbeCounts,
+            usePhysicalInputNegativePrefix: false,
+            ref unusedNegativePrefix);
+    }
+
+    private static bool TryMatchAnyRecoverableCSharpPatternAtPatternStart(
+        string line,
+        int lineOffset,
+        bool insideEnumBody,
+        int attributeParenDepth,
+        IReadOnlyList<SymbolPattern> applicablePatterns,
+        bool applyRequiredLiteralMatchInputGate,
+        RequiredLiteralGateCounts? requiredLiteralGateCounts,
+        bool applyCSharpRegexProbeOptimizations,
+        CSharpRegexProbeCounts? csharpRegexProbeCounts,
+        ref CSharpPhysicalInputNegativePrefixCache physicalInputNegativePrefix) =>
+        TryMatchAnyRecoverableCSharpPatternCore(
+            line,
+            lineOffset,
+            insideEnumBody,
+            attributeParenDepth,
+            applicablePatterns,
+            applyRequiredLiteralMatchInputGate,
+            requiredLiteralGateCounts,
+            applyCSharpRegexProbeOptimizations,
+            csharpRegexProbeCounts,
+            usePhysicalInputNegativePrefix: applyCSharpRegexProbeOptimizations,
+            ref physicalInputNegativePrefix);
+
+    private static bool TryMatchAnyRecoverableCSharpPatternCore(
+        string line,
+        int lineOffset,
+        bool insideEnumBody,
+        int attributeParenDepth,
+        IReadOnlyList<SymbolPattern> applicablePatterns,
+        bool applyRequiredLiteralMatchInputGate,
+        RequiredLiteralGateCounts? requiredLiteralGateCounts,
+        bool applyCSharpRegexProbeOptimizations,
+        CSharpRegexProbeCounts? csharpRegexProbeCounts,
+        bool usePhysicalInputNegativePrefix,
+        ref CSharpPhysicalInputNegativePrefixCache physicalInputNegativePrefix)
     {
         var matchInputSpan = line.AsSpan(lineOffset);
         string? matchInput = null;
-        foreach (var pattern in applicablePatterns)
+        for (var patternIndex = 0; patternIndex < applicablePatterns.Count; patternIndex++)
         {
+            var pattern = applicablePatterns[patternIndex];
             if (ReferenceEquals(pattern.Regex, CSharpEnumMemberRegex))
+            {
+                if (usePhysicalInputNegativePrefix)
+                {
+                    physicalInputNegativePrefix.RecordFailedProbe(
+                        patternIndex,
+                        timedOut: false);
+                }
                 continue;
+            }
+
+            if (usePhysicalInputNegativePrefix
+                && physicalInputNegativePrefix.IsKnownNegative(patternIndex))
+            {
+                if (csharpRegexProbeCounts != null)
+                    csharpRegexProbeCounts.PhysicalInputNegativePrefixCacheHitCount++;
+                continue;
+            }
 
             if (!ShouldAttemptPatternRegex(
                     pattern,
                     matchInputSpan,
                     applyRequiredLiteralMatchInputGate,
-                    requiredLiteralGateCounts))
+                    requiredLiteralGateCounts,
+                    applyCSharpRegexProbeOptimizations,
+                    csharpRegexProbeCounts))
             {
+                if (csharpRegexProbeCounts != null
+                    && applyCSharpRegexProbeOptimizations
+                    && ReferenceEquals(pattern.Regex, CSharpPlainFieldRegex)
+                    && matchInputSpan.IndexOfAny('=', ';') < 0)
+                {
+                    csharpRegexProbeCounts.RecoverablePlainFieldTerminatorSkipCount++;
+                }
+                if (usePhysicalInputNegativePrefix)
+                {
+                    physicalInputNegativePrefix.RecordFailedProbe(
+                        patternIndex,
+                        timedOut: false);
+                }
                 continue;
             }
 
             matchInput ??= lineOffset == 0 ? line : line[lineOffset..];
-            if (pattern.Regex.IsMatch(matchInput))
+            if (csharpRegexProbeCounts != null)
+                csharpRegexProbeCounts.DeclarationPatternRegexAttemptCount++;
+            var timedOut = false;
+            var patternMatched = usePhysicalInputNegativePrefix
+                ? pattern.Regex.IsMatchWithTimeoutStatus(matchInput, out timedOut)
+                : pattern.Regex.IsMatch(matchInput);
+            if (patternMatched)
                 return true;
+            if (usePhysicalInputNegativePrefix)
+                physicalInputNegativePrefix.RecordFailedProbe(patternIndex, timedOut);
         }
 
         if (!insideEnumBody || attributeParenDepth != 0)
@@ -1197,6 +1303,46 @@ public static partial class SymbolExtractor
         return line.Length;
     }
 
+    private static CSharpWrappedHeaderModifierInfo? GetCSharpWrappedHeaderModifier(
+        string[] csharpMatchLines,
+        int nameLineIndex,
+        ref PatternStartScanState patternStartState,
+        bool applyCSharpRegexProbeOptimizations,
+        CSharpRegexProbeCounts? csharpRegexProbeCounts)
+    {
+        // PatternStartScanState is shared by all patterns at this physical offset. Cache
+        // both a found prefix and the null result so failed function patterns do not repeat
+        // the same upward scan.
+        // PatternStartScanState は同じ物理 offset の全 pattern で共有される。prefix が
+        // 見つかった場合だけでなく null も cache し、失敗した function pattern ごとに
+        // 同じ上向き scan を繰り返さない。
+        if (!applyCSharpRegexProbeOptimizations)
+        {
+            if (csharpRegexProbeCounts != null)
+                csharpRegexProbeCounts.WrappedModifierLookupCount++;
+            return TryFindCSharpWrappedHeaderModifier(
+                csharpMatchLines,
+                nameLineIndex,
+                applyAsciiShapeGate: false,
+                csharpRegexProbeCounts);
+        }
+
+        if (!patternStartState.CSharpWrappedHeaderModifierLookupCompleted)
+        {
+            patternStartState.CSharpWrappedHeaderModifierLookupCompleted = true;
+            if (csharpRegexProbeCounts != null)
+                csharpRegexProbeCounts.WrappedModifierLookupCount++;
+            patternStartState.CSharpWrappedHeaderModifierInfo =
+                TryFindCSharpWrappedHeaderModifier(
+                    csharpMatchLines,
+                    nameLineIndex,
+                    applyAsciiShapeGate: true,
+                    csharpRegexProbeCounts);
+        }
+
+        return patternStartState.CSharpWrappedHeaderModifierInfo;
+    }
+
     // Walk upward from the identifier line looking for a contiguous run of modifier-only
     // physical lines, skipping blank lines and attribute-stripped whitespace. Returns the
     // concatenated modifier prefix (in declaration order) so callers can prepend it to the
@@ -1210,31 +1356,111 @@ public static partial class SymbolExtractor
     // ラップ型コンストラクタを拾うために使う。Closes #348.
     private static CSharpWrappedHeaderModifierInfo? TryFindCSharpWrappedHeaderModifier(
         string[] csharpMatchLines,
-        int nameLineIndex)
+        int nameLineIndex,
+        bool applyAsciiShapeGate,
+        CSharpRegexProbeCounts? csharpRegexProbeCounts)
     {
         if (nameLineIndex <= 0)
             return null;
 
-        string? prefix = null;
+        var firstModifierLineIndex = -1;
+        var modifierLineCount = 0;
+        var prefixCharacterCount = 0;
         for (int index = nameLineIndex - 1; index >= 0; index--)
         {
             var structural = csharpMatchLines[index];
-            if (string.IsNullOrWhiteSpace(structural))
+            var trimmed = structural.AsSpan().Trim();
+            if (trimmed.IsEmpty)
                 continue;
 
+            if (applyAsciiShapeGate && !HasCSharpWrappedModifierAsciiShape(trimmed))
+            {
+                if (csharpRegexProbeCounts != null)
+                    csharpRegexProbeCounts.WrappedModifierAsciiShapeSkipCount++;
+                break;
+            }
+
+            if (csharpRegexProbeCounts != null)
+                csharpRegexProbeCounts.WrappedModifierLineRegexAttemptCount++;
             if (!CSharpWrappedHeaderModifierLineRegex.IsMatch(structural))
                 break;
 
-            var structuralTrimmed = structural.Trim();
-            prefix = prefix == null
-                ? structuralTrimmed
-                : structuralTrimmed + " " + prefix;
+            firstModifierLineIndex = index;
+            modifierLineCount++;
+            prefixCharacterCount += trimmed.Length;
         }
 
-        if (prefix == null)
+        if (firstModifierLineIndex < 0)
             return null;
 
-        return new CSharpWrappedHeaderModifierInfo(prefix);
+        // Only materialize after the backward pass has confirmed the complete prefix.
+        // The forward pass preserves declaration order without prepend concatenations.
+        // 後方 scan で prefix 全体を確定してから初めて materialize する。前向きに連結し、
+        // prepend の反復割り当てを避けながら宣言順を保持する。
+        var builder = new StringBuilder(prefixCharacterCount + modifierLineCount - 1);
+        for (var index = firstModifierLineIndex; index < nameLineIndex; index++)
+        {
+            var trimmed = csharpMatchLines[index].AsSpan().Trim();
+            if (trimmed.IsEmpty)
+                continue;
+
+            if (builder.Length > 0)
+                builder.Append(' ');
+            builder.Append(trimmed);
+        }
+
+        if (csharpRegexProbeCounts != null)
+            csharpRegexProbeCounts.WrappedModifierPrefixMaterializationCount++;
+        return CreateCSharpWrappedHeaderModifierInfo(builder.ToString());
+    }
+
+    private static bool HasCSharpWrappedModifierAsciiShape(ReadOnlySpan<char> line)
+    {
+        // The confirming regex accepts only lowercase ASCII modifier words separated by
+        // whitespace. Rejecting any other character first cannot hide a successful match.
+        // 確認 regex は lowercase ASCII の modifier 語と区切り whitespace だけを受理する。
+        // それ以外の文字を先に弾いても成功 match は失われない。
+        var hasAsciiLetter = false;
+        foreach (var ch in line)
+        {
+            if ((uint)(ch - 'a') <= 'z' - 'a')
+            {
+                hasAsciiLetter = true;
+                continue;
+            }
+
+            if (!char.IsWhiteSpace(ch))
+                return false;
+        }
+
+        return hasAsciiLetter;
+    }
+
+    private static string BuildCSharpWrappedPatternMatchLine(
+        string prefix,
+        string patternMatchLine,
+        CSharpRegexProbeCounts? csharpRegexProbeCounts)
+    {
+        var contentStart = 0;
+        while (contentStart < patternMatchLine.Length
+            && char.IsWhiteSpace(patternMatchLine[contentStart]))
+        {
+            contentStart++;
+        }
+
+        var wrappedMatchLine = string.Create(
+            prefix.Length + 1 + patternMatchLine.Length - contentStart,
+            (Prefix: prefix, PatternMatchLine: patternMatchLine, ContentStart: contentStart),
+            static (destination, state) =>
+            {
+                state.Prefix.AsSpan().CopyTo(destination);
+                destination[state.Prefix.Length] = ' ';
+                state.PatternMatchLine.AsSpan(state.ContentStart).CopyTo(
+                    destination[(state.Prefix.Length + 1)..]);
+            });
+        if (csharpRegexProbeCounts != null)
+            csharpRegexProbeCounts.WrappedModifierMatchInputMaterializationCount++;
+        return wrappedMatchLine;
     }
 
     // Enumerate candidate prefixes to retry against the C# function-kind regexes when the
@@ -1250,10 +1476,23 @@ public static partial class SymbolExtractor
     // `unsafe` / `extern` しか許さず、静的 ctor regex は `static` 先頭を要求するため、
     // このままではどちらもマッチしない。`static` 単独や visibility 単独の variant に
     // フォールバックして、適合する regex を拾えるようにする。Closes #348.
-    private static IEnumerable<string> EnumerateCSharpWrappedModifierCandidates(string prefix)
+    private static IEnumerable<string> EnumerateCSharpWrappedModifierCandidates(
+        CSharpWrappedHeaderModifierInfo info)
     {
-        yield return prefix;
+        yield return info.Prefix;
 
+        if (info.TokenCount <= 1)
+            yield break;
+
+        if (info.HasStatic)
+            yield return "static";
+        if (info.Visibility != null)
+            yield return info.Visibility;
+    }
+
+    private static CSharpWrappedHeaderModifierInfo CreateCSharpWrappedHeaderModifierInfo(
+        string prefix)
+    {
         var tokenCount = 0;
         var hasStatic = false;
         string? visibility = null;
@@ -1261,7 +1500,7 @@ public static partial class SymbolExtractor
         for (var index = 0; index <= prefix.Length; index++)
         {
             var atEnd = index == prefix.Length;
-            if (!atEnd && prefix[index] != ' ')
+            if (!atEnd && !char.IsWhiteSpace(prefix[index]))
             {
                 if (tokenStart < 0)
                     tokenStart = index;
@@ -1273,41 +1512,36 @@ public static partial class SymbolExtractor
 
             var tokenLength = index - tokenStart;
             tokenCount++;
-            if (IsCSharpWrappedModifierToken(prefix, tokenStart, tokenLength, "static"))
+            var token = prefix.AsSpan(tokenStart, tokenLength);
+            if (token.SequenceEqual("static".AsSpan()))
             {
                 hasStatic = true;
             }
             else if (visibility == null)
             {
-                visibility = TryGetCSharpWrappedVisibilityModifier(prefix, tokenStart, tokenLength);
+                visibility = TryGetCSharpWrappedVisibilityModifier(token);
             }
 
             tokenStart = -1;
         }
 
-        if (tokenCount <= 1)
-            yield break;
-
-        if (hasStatic)
-            yield return "static";
-        if (visibility != null)
-            yield return visibility;
+        return new CSharpWrappedHeaderModifierInfo(
+            prefix,
+            tokenCount,
+            hasStatic,
+            visibility);
     }
 
-    private static string? TryGetCSharpWrappedVisibilityModifier(string text, int start, int length)
+    private static string? TryGetCSharpWrappedVisibilityModifier(ReadOnlySpan<char> token)
     {
         foreach (var modifier in CSharpWrappedVisibilityModifiers)
         {
-            if (IsCSharpWrappedModifierToken(text, start, length, modifier))
+            if (token.SequenceEqual(modifier.AsSpan()))
                 return modifier;
         }
 
         return null;
     }
-
-    private static bool IsCSharpWrappedModifierToken(string text, int start, int length, string modifier) =>
-        length == modifier.Length
-        && string.CompareOrdinal(text, start, modifier, 0, length) == 0;
 
     private static readonly string[] CSharpWrappedVisibilityModifiers =
     [
@@ -1318,11 +1552,25 @@ public static partial class SymbolExtractor
         "file",
     ];
 
-    private static CSharpPropertyMatchCandidate BuildCSharpPropertyMatchLine(string[] lines, string[] csharpMatchLines, int startLineIndex)
+    private static CSharpPropertyMatchCandidate BuildCSharpPropertyMatchLine(
+        string[] lines,
+        string[] csharpMatchLines,
+        int startLineIndex,
+        bool applyCSharpRegexProbeOptimizations,
+        CSharpRegexProbeCounts? csharpRegexProbeCounts)
     {
         var matchLine = csharpMatchLines[startLineIndex];
-        if (IsCSharpNonMemberHeaderLine(matchLine))
+        var matchLineSpan = matchLine.AsSpan();
+        if (IsCSharpNonMemberHeaderLine(matchLineSpan))
             return new CSharpPropertyMatchCandidate(matchLine, startLineIndex, startLineIndex);
+
+        var trimmedMatchLine = matchLineSpan.Trim();
+        if (applyCSharpRegexProbeOptimizations && trimmedMatchLine.IsEmpty)
+        {
+            if (csharpRegexProbeCounts != null)
+                csharpRegexProbeCounts.PropertyPrefixSuffixSkipCount++;
+            return new CSharpPropertyMatchCandidate(matchLine, startLineIndex, startLineIndex);
+        }
 
         if (IsCSharpDeclarationExpressionArrow(matchLine)
             && TryFindCSharpExpressionArrow(lines, startLineIndex, startLineIndex, out var sameLineArrowLineIndex, out var sameLineArrowColumn))
@@ -1341,10 +1589,36 @@ public static partial class SymbolExtractor
                 expressionEndLineExclusiveEndColumn);
         }
 
+        // Completed statements/bodies cannot be a declaration prefix that needs lookahead.
+        // A trailing `=` is also terminal for this merger when no `(` exists; keep `(` forms
+        // because a valid multiline default argument can end its first line with `=`.
+        // 完結済み statement / body は lookahead が必要な宣言 prefix ではない。末尾 `=` も
+        // `(` が無ければここでは終端だが、複数行 default argument の先頭行は `(` を含んだまま
+        // `=` で終わり得るため、その形は method header regex へ残す。
+        if (applyCSharpRegexProbeOptimizations
+            && CanSkipCSharpPropertyPrefixRegexes(trimmedMatchLine))
+        {
+            if (csharpRegexProbeCounts != null)
+                csharpRegexProbeCounts.PropertyPrefixSuffixSkipCount++;
+            return new CSharpPropertyMatchCandidate(matchLine, startLineIndex, startLineIndex);
+        }
+
+        if (csharpRegexProbeCounts != null)
+            csharpRegexProbeCounts.PropertyHeaderRegexAttemptCount++;
         var isPropertyHeaderPrefix = CSharpPropertyHeaderPrefixRegex.IsMatch(matchLine);
-        var isMethodHeaderPrefix = !isPropertyHeaderPrefix
-            && (CSharpMethodHeaderPrefixRegex.IsMatch(matchLine)
-                || CSharpMultilineTupleReturnPrefixRegex.IsMatch(matchLine));
+        var isMethodHeaderPrefix = false;
+        if (!isPropertyHeaderPrefix)
+        {
+            if (csharpRegexProbeCounts != null)
+                csharpRegexProbeCounts.MethodHeaderRegexAttemptCount++;
+            isMethodHeaderPrefix = CSharpMethodHeaderPrefixRegex.IsMatch(matchLine);
+            if (!isMethodHeaderPrefix)
+            {
+                if (csharpRegexProbeCounts != null)
+                    csharpRegexProbeCounts.MethodHeaderRegexAttemptCount++;
+                isMethodHeaderPrefix = CSharpMultilineTupleReturnPrefixRegex.IsMatch(matchLine);
+            }
+        }
         if (!isPropertyHeaderPrefix
             && isMethodHeaderPrefix
             && matchLine.IndexOf('(') >= 0
@@ -1353,8 +1627,7 @@ public static partial class SymbolExtractor
             return new CSharpPropertyMatchCandidate(matchLine, startLineIndex, startLineIndex);
         }
 
-        if (string.IsNullOrWhiteSpace(matchLine)
-            || (!isPropertyHeaderPrefix && !isMethodHeaderPrefix)
+        if ((!isPropertyHeaderPrefix && !isMethodHeaderPrefix)
             || HasCSharpPropertyAccessorStart(matchLine)
             || CSharpWrappedHeaderModifierLineRegex.IsMatch(matchLine))
         {
@@ -1481,15 +1754,22 @@ public static partial class SymbolExtractor
         return new CSharpPropertyMatchCandidate(matchLine, startLineIndex, startLineIndex);
     }
 
-    private static bool IsCSharpNonMemberHeaderLine(string line)
+    private static bool CanSkipCSharpPropertyPrefixRegexes(ReadOnlySpan<char> line)
+    {
+        var terminal = line[^1];
+        return terminal is ';' or '}'
+            || terminal == '=' && line.IndexOf('(') < 0;
+    }
+
+    private static bool IsCSharpNonMemberHeaderLine(ReadOnlySpan<char> line)
     {
         var trimmed = line.TrimStart();
-        return trimmed.StartsWith("namespace ", StringComparison.Ordinal)
-            || trimmed.StartsWith("using ", StringComparison.Ordinal)
-            || trimmed.StartsWith("global using ", StringComparison.Ordinal)
-            || trimmed.StartsWith("extern alias ", StringComparison.Ordinal)
-            || trimmed.StartsWith("var ", StringComparison.Ordinal)
-            || trimmed.StartsWith("//", StringComparison.Ordinal);
+        return trimmed.StartsWith("namespace ".AsSpan(), StringComparison.Ordinal)
+            || trimmed.StartsWith("using ".AsSpan(), StringComparison.Ordinal)
+            || trimmed.StartsWith("global using ".AsSpan(), StringComparison.Ordinal)
+            || trimmed.StartsWith("extern alias ".AsSpan(), StringComparison.Ordinal)
+            || trimmed.StartsWith("var ".AsSpan(), StringComparison.Ordinal)
+            || trimmed.StartsWith("//".AsSpan(), StringComparison.Ordinal);
     }
 
     private static CSharpPropertyMatchCandidate ContinueConfirmedCSharpPropertyMatch(
@@ -3633,6 +3913,8 @@ public static partial class SymbolExtractor
         IReadOnlyList<SymbolPattern> applicablePatterns,
         bool applyRequiredLiteralMatchInputGate,
         RequiredLiteralGateCounts? requiredLiteralGateCounts,
+        bool applyCSharpRegexProbeOptimizations,
+        CSharpRegexProbeCounts? csharpRegexProbeCounts,
         out int[]?[] collapsedToRaw)
     {
         var matchLines = new string[structuralLines.Length];
@@ -3656,7 +3938,9 @@ public static partial class SymbolExtractor
                     activeEnumBodyDepth > 0,
                     applicablePatterns,
                     applyRequiredLiteralMatchInputGate,
-                    requiredLiteralGateCounts),
+                    requiredLiteralGateCounts,
+                    applyCSharpRegexProbeOptimizations,
+                    csharpRegexProbeCounts),
                 out var lineCollapsedToRaw);
             collapsedToRaw[lineIndex] = lineCollapsedToRaw;
 
@@ -3767,7 +4051,11 @@ public static partial class SymbolExtractor
         @"^\s*(?:public|private|protected|internal|static|partial|readonly|abstract|sealed|virtual|override|async|new|file|unsafe|extern|required|volatile)(?:\s+(?:public|private|protected|internal|static|partial|readonly|abstract|sealed|virtual|override|async|new|file|unsafe|extern|required|volatile))*\s*$",
         RegexOptions.Compiled);
 
-    private readonly record struct CSharpWrappedHeaderModifierInfo(string Prefix);
+    private readonly record struct CSharpWrappedHeaderModifierInfo(
+        string Prefix,
+        int TokenCount,
+        bool HasStatic,
+        string? Visibility);
 
 
     private static bool TryGetFirstNonWhitespaceColumn(string line, int startColumn, int endColumnExclusive, out int column)
