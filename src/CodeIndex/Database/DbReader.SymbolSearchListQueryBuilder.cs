@@ -109,14 +109,21 @@ public partial class DbReader
         var conservativeSignal = includeRankSignals
             ? $"(f.lang = 'csharp' AND (s.kind = 'property' OR ({definitionSites}) > 1 OR lower(s.name) IN {GenericSymbolRankNamesSql}))"
             : "0";
-        var csharpPartialIdentitySignal = includeRankSignals && CanUseCSharpIdentityHotspotCounts()
+        var useCSharpIdentityRank = includeRankSignals && CanUseCSharpIdentityHotspotCounts();
+        var csharpPartialIdentitySignal = useCSharpIdentityRank
             ? $"(f.lang = 'csharp' AND ({logicalPartialKeySql}) LIKE 'family:%')"
             : "0";
+        var fallbackReferenceCount = $"CASE WHEN {conservativeSignal} THEN COALESCE(symbol_file_rank.reference_count, 0) ELSE COALESCE(symbol_rank.reference_count, 0) END";
+        var fallbackHotspotScore = $"CASE WHEN {conservativeSignal} THEN COALESCE(symbol_file_rank.hotspot_score, 0.0) ELSE COALESCE(symbol_rank.hotspot_score, 0.0) END";
         var referenceCount = includeRankSignals
-            ? $"CASE WHEN {csharpPartialIdentitySignal} THEN COALESCE(symbol_identity_rank.reference_count, 0) WHEN {conservativeSignal} THEN COALESCE(symbol_file_rank.reference_count, 0) ELSE COALESCE(symbol_rank.reference_count, 0) END"
+            ? useCSharpIdentityRank
+                ? $"CASE WHEN {csharpPartialIdentitySignal} THEN COALESCE(symbol_identity_rank.reference_count, 0) ELSE {fallbackReferenceCount} END"
+                : fallbackReferenceCount
             : "CAST(0 AS INTEGER)";
         var hotspotScore = includeRankSignals
-            ? $"CASE WHEN {csharpPartialIdentitySignal} THEN COALESCE(symbol_identity_rank.hotspot_score, 0.0) WHEN {conservativeSignal} THEN COALESCE(symbol_file_rank.hotspot_score, 0.0) ELSE COALESCE(symbol_rank.hotspot_score, 0.0) END"
+            ? useCSharpIdentityRank
+                ? $"CASE WHEN {csharpPartialIdentitySignal} THEN COALESCE(symbol_identity_rank.hotspot_score, 0.0) ELSE {fallbackHotspotScore} END"
+                : fallbackHotspotScore
             : "CAST(0.0 AS REAL)";
         var dilution = $"CASE WHEN ({definitionSites}) > 1 THEN CAST(({definitionSites}) * ({definitionSites}) AS REAL) ELSE 1.0 END";
         var structuralPenalty = includeRankSignals
@@ -136,7 +143,7 @@ public partial class DbReader
                        ELSE 0.0
                    END)";
         return new SymbolSearchRankingSql(
-            BuildSymbolRankJoin(includeRankSignals, logicalPartialKeySql),
+            BuildSymbolRankJoin(includeRankSignals, useCSharpIdentityRank, logicalPartialKeySql),
             genericPenalty,
             definitionSites,
             referenceCount,
@@ -148,12 +155,15 @@ public partial class DbReader
             BuildExactSymbolNameOrderSql());
     }
 
-    private string BuildSymbolRankJoin(bool includeRankSignals, string logicalPartialKeySql)
+    private string BuildSymbolRankJoin(
+        bool includeRankSignals,
+        bool useCSharpIdentityRank,
+        string logicalPartialKeySql)
     {
         if (!includeRankSignals)
             return string.Empty;
 
-        var identityJoin = CanUseCSharpIdentityHotspotCounts()
+        var identityJoin = useCSharpIdentityRank
             ? $@"
             LEFT JOIN (
                 SELECT identity_site.lang,
