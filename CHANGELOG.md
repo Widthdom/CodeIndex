@@ -11,6 +11,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.43.1] - 2026-08-23
+
+#### Changed
+
+- **Authoritative empty CLI scans now bind their complete fresh-file persistence sequence through SQLitePCLRaw** — file and fresh reference-line `RETURNING` inserts join chunk, symbol, new-file issue, and atomic fresh-reference batches in a bounded native statement cache during extraction, removing row-count-proportional Microsoft.Data.Sqlite command, reader, and parameter allocation while retaining the existing 32-parameter statement/tail boundaries, transaction atomicity, row-skip replay, cancellation, hooks, date/Unicode/NULL semantics, and provider-owned connection lifetime. Returned IDs and input ordinals are fully buffered and validated before publication; malformed, incomplete, duplicate, failed, or cancelled result streams discard the statement and roll back through the per-file savepoint. Rebuild, incremental, replacement, symbols-only, race-fallback, MCP, and public-writer paths continue to use Microsoft.Data.Sqlite.
+- **Authoritative empty-database CLI indexing now defers two reference-persistence indexes during the raw load** — after transaction-local fresh-ownership revalidation, the initial full scan omits the reference-line foreign-key and file/line lookup indexes until candidate or graph work begins, then restores both inside the same outer transaction. Rebuilds, existing-database updates, raced fresh claims, and MCP indexing keep both indexes available, while cancellation and failure retain atomic schema rollback.
+- **Cold C# graph finalization now resolves unqualified instantiations with set-based family facts** — Rank-5 constructor and type candidates materialize unique families and explicit-constructor summaries once, preserving exact case, arity, partial-type representatives, overloads, implicit defaults, ambiguity, and lower-rank semantics while avoiding repeated correlated symbol probes.
+- **Cold C# indexing avoids duplicate declaration regex probes** — the declaration loop and its recoverable-pattern check now share candidate-local deterministic misses for the same physical input, while merged multiline inputs, successful matches, timeouts, pattern priority, output, and cancellation behavior retain their previous contracts.
+- **Index write batches now use compact SQLite numeric parameter slots across every persistence table** — chunk, symbol, issue, reference-line, and reference inserts share a one-origin `?1` through `?N` contract, reducing parameter-resolution work during full indexing while retaining the 32-parameter caller-transaction cap, exact tail statements, prepared-command reuse, NULL handling, and fresh-reference semantics.
+- **Reference-line materialization now returns compact input ordinals instead of context tuples** — fresh inserts and replacement lookups project only each line ID and its batch-local ordinal, release the deduplication dictionary before SQLite work, and fail closed on missing, duplicate, or invalid results. Large Unicode contexts no longer cross back from SQLite or get rehashed in managed code before multilingual references are bound.
+- **Initial reference extraction reuses per-file line state instead of allocating it for every declaration** — the synchronous core line loop now creates its container resolver and bound delegates once per extraction, while common non-generic C# declarations share a read-only empty generic-parameter set after a cheap `<` gate. Container attribution, generic suppression, exception and cancellation behavior, and concurrent extraction isolation remain unchanged.
+- **Initial symbol indexing avoids more provably impossible regular-expression work** — Audited JavaScript/TypeScript HOC, TypeScript namespace/module, and Kotlin declaration/property alternatives now skip a built-in pattern at both file and exact-input scope only when none of its case-sensitive required literals is present, while preserving symbol output, pattern order, and recovery behavior.
+
+#### Internal
+
+- **Cold full-index performance work now has an end-to-end multilingual regression contract** — a fresh external database fixture exercises the real CLI pipeline for C#, TypeScript, Python, Java, Go, Rust, C++, and Kotlin, checks phase ordering, persisted counts, readiness, workspace status, FTS searchability, and database integrity under a broad runaway budget, and provides a larger opt-in manual smoke using the same assertions.
+- **C# symbol extraction now avoids regex probes that cannot succeed** — completed property inputs and plain-field inputs without a required terminator are rejected with allocation-free character checks, while wrapped-modifier recovery caches absent and present lookups and materializes confirmed prefixes once. Multiline default arguments, incomplete-attribute recovery, same-line offsets, diagnostics, and cancellation behavior remain unchanged.
+- **Fresh reference integration contracts now observe the complete raw and schema surface** — the full-scan lifecycle fixture includes raw reference-line RETURNING work and verifies its deferred-index snapshot, while the MCP readiness-failure fixture includes the `reference_lines` table when comparing the persisted schema with the canonical reference-index set.
+
 ### [1.43.0] - 2026-08-22
 
 #### Added
@@ -6594,6 +6613,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.43.1] - 2026-08-23
+
+#### 変更
+
+- **authoritative empty CLI scanのfresh-file永続化全体をSQLitePCLRawでbindするようになりました** — file / fresh reference-lineの`RETURNING` insertをchunk、symbol、new-file issue、atomic fresh-reference batchと同じbounded native statement cacheへ加え、既存の32 parameter statement / tail境界、transaction atomicity、row-skip replay、cancellation、hook、date / Unicode / NULL semantics、provider所有connection lifetimeを保ったまま、row数に比例するMicrosoft.Data.Sqlite command / reader / parameter allocationを除きます。返却IDとinput ordinalは公開前に全件buffer / validationし、不正、欠落、重複、失敗、cancelされたresult streamではstatementを破棄してfile単位SAVEPOINTからrollbackします。rebuild、incremental、replacement、symbols-only、race fallback、MCP、public writer経路は引き続きMicrosoft.Data.Sqliteを使います。
+- **authoritativeな空DB初回CLI indexで、raw load中のreference永続化index 2本を遅延するようになりました** — transaction-localなfresh ownership再確認後、初回full scanはreference-line foreign-key用とfile/line lookup用のindexをcandidateまたはgraph処理の開始まで外し、同じouter transaction内で2本とも復元します。rebuild、既存DB update、競合で失効したfresh claim、MCP indexingでは常時維持し、cancellationや失敗時もschema rollbackの原子性を保ちます。
+- **C# graph の cold finalization は無修飾 instantiation を family fact の集合処理で解決するようになりました** — rank 5 の constructor / type candidate は一意 family と明示 constructor summary を一度だけ materialize し、exact case、arity、partial type の代表、overload、implicit default、ambiguity、lower-rank の意味を維持しながら、相関 symbol probe の反復を避けます。
+- **C# の初回インデックスで宣言 regex の重複 probe を回避します** — declaration loop と recoverable-pattern 判定が、同じ物理 input に対する candidate-local な deterministic miss を共有するようになりました。multiline 結合 input、成功 match、timeout、pattern priority、出力、cancellation の従来契約は維持します。
+- **インデックス書き込みbatchが全永続化tableでcompactなSQLite numeric parameter slotを使うようになりました** — chunk、symbol、issue、reference-line、reference insertを1-originの`?1`〜`?N`契約へ統一し、32 parameterのcaller transaction上限、正確なtail statement、prepared command再利用、NULL処理、fresh reference semanticsを保ったまま、full index中のparameter解決処理を削減します。
+- **reference-line materializationがcontext tupleではなくcompactなinput ordinalを返すようになりました** — fresh insertとreplacement lookupはline IDとbatch-local ordinalだけを返し、SQLite処理前にdedupe辞書を解放し、欠落・重複・不正な結果をfail-closedにします。大きなUnicode contextをSQLiteから戻したり、multi-language referenceのbind前にmanaged codeで再hashしたりしません。
+- **初回の参照抽出で、宣言行ごとの state allocation を file 内で再利用します** — 同期的な core line loop は container resolver と bound delegate を extraction ごとに1回だけ生成し、一般的な非 generic C# declaration は安価な `<` gate の後に read-only の空 generic-parameter 集合を共有します。container 帰属、generic parameter の抑制、例外と cancellation の動作、並行 extraction の分離は維持します。
+- **初回のシンボルインデックスで、成功し得ないことを証明できる正規表現処理をさらに回避します** — 監査済みの JavaScript / TypeScript HOC、TypeScript namespace / module、Kotlin declaration / property の alternative について、case-sensitive な必須 literal が1つもない場合だけ built-in pattern を file 単位と exact-input 単位の両方で skip し、symbol output、pattern 順序、recovery 動作は維持します。
+
+#### 内部変更
+
+- **空DBの初回フルインデックス高速化に、多言語のend-to-end回帰契約を追加しました** — 外部の新規DBを使うfixtureがC#、TypeScript、Python、Java、Go、Rust、C++、Kotlinの実CLI pipelineを通り、広いrunaway budgetのもとでphase順序、永続化件数、readiness、workspace status、FTS検索可能性、DB integrityを検証します。同じassertionを使う大きめのopt-in手動smokeも追加しました。
+- **C# symbol extraction が成功不可能な regex probe を回避するようになりました** — 完結済み property input と必須終端を含まない plain-field input を allocation-free な文字判定で除外し、wrapped-modifier recovery は有無どちらの lookup も cache し、確定した prefix を1回だけ materialize します。複数行 default argument、不完全 attribute recovery、same-line offset、diagnostic、cancellation の振る舞いは変わりません。
+- **fresh reference のintegration契約がraw処理とschemaの全範囲を観測するようになりました** — full-scan lifecycle fixtureはraw reference-line RETURNING処理とその遅延index snapshotを含め、MCP readiness失敗fixtureは永続化済みschemaをcanonical reference-index集合と比較するときに`reference_lines` tableも対象にします。
+
 ### [1.43.0] - 2026-08-22
 
 #### 追加
@@ -13149,7 +13187,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.43.0...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.43.1...HEAD
+[1.43.1]: https://github.com/Widthdom/CodeIndex/compare/v1.43.0...v1.43.1
 [1.43.0]: https://github.com/Widthdom/CodeIndex/compare/v1.42.0...v1.43.0
 [1.42.0]: https://github.com/Widthdom/CodeIndex/compare/v1.41.2...v1.42.0
 [1.41.2]: https://github.com/Widthdom/CodeIndex/compare/v1.41.1...v1.41.2
