@@ -171,13 +171,27 @@ visible here as a compact compatibility index.
 | Version compatibility | `index_writer_version`, `index_newer_than_reader`, `index_newer_than_reader_reason`. |
 | Extension and extractor diagnostics | `unknown_extension_file_count`, `unknown_extension_files`, `unknown_extension_files_truncated`, `unknown_extension_file_path_limit`, `unknown_extension_extension_counts`, `unknown_extension_category_counts`, `unknown_extension_groups`, `unknown_extension_group_count`, `unknown_extension_groups_truncated`, `unknown_extension_group_limit`, `unknown_extension_group_omitted_count`, `unknown_extension_guidance`, `extractors`, `hooks`, `hook_diagnostics`. |
 | Runtime trust and permissions | `trust_overrides`, `git_executable`, `path_case_sensitive`, `data_dir_mode`, `db_file_mode`, `database_permission_policy`, `database_permission_diagnostics`, `mac_profile`, `mac_profile_diagnostics`. |
-| Check context and run diagnostics | `stale_after_seconds`, `index_age_seconds`, `query_context.check_mode`, `query_context.stale_after_seconds`, `process`, `last_index_run`, `last_workspace_freshened_at`, `last_failed_or_partial_index_run`. |
+| Check context and run diagnostics | `stale_after_seconds`, `index_age_seconds`, `query_context.check_mode`, `query_context.stale_after_seconds`, `process`, `last_index_run`, `last_workspace_freshened_at`, `last_failed_or_partial_index_run`, `status_metadata_diagnostics`. |
 | Last-run detail | `last_index_run.bytes_read_skipped_file_count`, `last_index_run.bytes_read_incomplete`, `last_index_run.diagnostics`, `last_index_run.diagnostic_count`, `last_index_run.diagnostics_truncated`, `last_index_run.reference_extraction_cap_hits`, `last_index_run.rebuild_reclaim`, `last_failed_or_partial_index_run.progress_persisted`, `last_failed_or_partial_index_run.recovery_hint`, `last_failed_or_partial_index_run.file_errors`. |
 | SQLite and maintenance | `sqlite_connection_policy`, `db_size_bytes`, `wal_size_bytes`, `db_pragma_settings`, `prepared_command_cache`, `maintenance_guidance`, `maintenance_guidance.fts_optimization`, `threshold_writes`, `observed_writes`. |
 | WAL checkpoint diagnostics | `read_only_fallback`, `wal_checkpoint_attempted`, `wal_checkpoint_succeeded`, `wal_checkpoint_skipped_reason`, `wal_checkpoint_failure_reason`, `wal_checkpoint_busy`, `wal_checkpoint_log_page_count`, `wal_checkpoint_checkpointed_page_count`, `wal_checkpoint_remaining_page_count`, `read_only_immutable_fallback`, `wal_stale_snapshot_risk`, `wal_stale_snapshot_reason`. |
 | Database size attribution | `database_size_attribution`. |
 | Remediation | `degraded_root_cause`, `degraded_reason`, `recommended_action`, `alternative_action`, `readiness_degradations`, `repair_commands`. |
 | MCP-only session diagnostics | `mcp_session`, `mcp_session.metrics`, `queue_capacity`, `queue_depth`, `queued_event_count`, `written_event_count`, `dropped_event_count`, `queue_full_drop_count`, `serialization_failure_count`, `write_failure_count`, `rotation_failure_count`, `batch_flush_count`, `consecutive_failure_count`, `recovery_count`, `next_retry_at`, `last_recovery_at`, `last_failure`, `mcp_session.audit_log`, `queued_record_count`, `written_record_count`, `mcp.rate_limit.bucket_limit`, `mcp.rate_limit.bucket_limit_rejection_count`. |
+
+Persisted JSON subdocuments for `last_index_run.reference_extraction_cap_hits`,
+`last_index_run.rebuild_reclaim`, and
+`last_failed_or_partial_index_run.file_errors` have a 512 KiB UTF-8 input limit
+and a maximum nesting depth of 16. File-error and cap-hit file lists accept at
+most 50 entries; nested reason lists accept at most 16. Paths accept 32,768
+characters, category/phase/reason codes accept 128, detail/rebuild-reason text
+accepts 4,096, and each subdocument accepts at most 262,144 decoded string
+characters in aggregate. An unavailable subdocument does not fail the rest of
+`status`; `status_metadata_diagnostics` identifies its field with the stable
+reason `raw_size_exceeded`, `invalid_json`, or `semantic_validation_failed`, the
+configured `max_utf8_bytes`, and the observed byte size when available. Human
+status output flattens persisted control characters and uses the stable bounded
+value truncation marker, while accepted JSON values remain unchanged.
 
 Full index completion, the watch initial scan, and full-scan dry runs also report
 the unknown-language file count, the top 10 extension groups, explicit omission
@@ -388,13 +402,26 @@ field group を表に残します。
 | version compatibility | `index_writer_version`、`index_newer_than_reader`、`index_newer_than_reader_reason`。 |
 | extension / extractor diagnostics | `unknown_extension_file_count`、`unknown_extension_files`、`unknown_extension_files_truncated`、`unknown_extension_file_path_limit`、`unknown_extension_extension_counts`、`unknown_extension_category_counts`、`unknown_extension_groups`、`unknown_extension_group_count`、`unknown_extension_groups_truncated`、`unknown_extension_group_limit`、`unknown_extension_group_omitted_count`、`unknown_extension_guidance`、`extractors`、`hooks`、`hook_diagnostics`。 |
 | runtime trust / permissions | `trust_overrides`、`git_executable`、`path_case_sensitive`、`data_dir_mode`、`db_file_mode`、`database_permission_policy`、`database_permission_diagnostics`、`mac_profile`、`mac_profile_diagnostics`。 |
-| check context / run diagnostics | `stale_after_seconds`、`index_age_seconds`、`query_context.check_mode`、`query_context.stale_after_seconds`、`process`、`last_index_run`、`last_workspace_freshened_at`、`last_failed_or_partial_index_run`。 |
+| check context / run diagnostics | `stale_after_seconds`、`index_age_seconds`、`query_context.check_mode`、`query_context.stale_after_seconds`、`process`、`last_index_run`、`last_workspace_freshened_at`、`last_failed_or_partial_index_run`、`status_metadata_diagnostics`。 |
 | last-run detail | `last_index_run.bytes_read_skipped_file_count`、`last_index_run.bytes_read_incomplete`、`last_index_run.diagnostics`、`last_index_run.diagnostic_count`、`last_index_run.diagnostics_truncated`、`last_index_run.reference_extraction_cap_hits`、`last_index_run.rebuild_reclaim`、`last_failed_or_partial_index_run.progress_persisted`、`last_failed_or_partial_index_run.recovery_hint`、`last_failed_or_partial_index_run.file_errors`。 |
 | SQLite / maintenance | `sqlite_connection_policy`、`db_size_bytes`、`wal_size_bytes`、`db_pragma_settings`、`prepared_command_cache`、`maintenance_guidance`、`maintenance_guidance.fts_optimization`、`threshold_writes`、`observed_writes`。 |
 | WAL checkpoint diagnostics | `read_only_fallback`、`wal_checkpoint_attempted`、`wal_checkpoint_succeeded`、`wal_checkpoint_skipped_reason`、`wal_checkpoint_failure_reason`、`wal_checkpoint_busy`、`wal_checkpoint_log_page_count`、`wal_checkpoint_checkpointed_page_count`、`wal_checkpoint_remaining_page_count`、`read_only_immutable_fallback`、`wal_stale_snapshot_risk`、`wal_stale_snapshot_reason`。 |
 | database size attribution | `database_size_attribution`。 |
 | remediation | `degraded_root_cause`、`degraded_reason`、`recommended_action`、`alternative_action`、`readiness_degradations`、`repair_commands`。 |
 | MCP-only session diagnostics | `mcp_session`、`mcp_session.metrics`、`queue_capacity`、`queue_depth`、`queued_event_count`、`written_event_count`、`dropped_event_count`、`queue_full_drop_count`、`serialization_failure_count`、`write_failure_count`、`rotation_failure_count`、`batch_flush_count`、`consecutive_failure_count`、`recovery_count`、`next_retry_at`、`last_recovery_at`、`last_failure`、`mcp_session.audit_log`、`queued_record_count`、`written_record_count`、`mcp.rate_limit.bucket_limit`、`mcp.rate_limit.bucket_limit_rejection_count`。 |
+
+`last_index_run.reference_extraction_cap_hits`、`last_index_run.rebuild_reclaim`、
+`last_failed_or_partial_index_run.file_errors` の永続化 JSON subdocument には、
+UTF-8 で 512 KiB の入力上限と最大 depth 16 を適用します。file error と cap-hit
+file の一覧は最大 50 件、入れ子の reason 一覧は最大 16 件です。path は 32,768
+文字、category / phase / reason code は 128 文字、detail / rebuild reason は
+4,096 文字、subdocument 内の decoded string 合計は 262,144 文字まで受け付けます。
+利用不能な subdocument があっても `status` の残りは失敗せず、
+`status_metadata_diagnostics` が対象 field、安定した reason
+（`raw_size_exceeded`、`invalid_json`、`semantic_validation_failed`）、設定済みの
+`max_utf8_bytes`、取得できる場合は実測 byte size を返します。human status 出力は
+永続化された control character を平坦化し、安定した bounded-value truncation marker
+を使いますが、契約内で受理した JSON 値は変更しません。
 
 全体 index の完了時、watch の初回 scan、全体 scan の dry-run でも、言語未対応
 ファイル数、上位 10 個の拡張子 group、明示的な省略 metadata、対処 guidance を

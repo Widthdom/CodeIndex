@@ -220,7 +220,8 @@ public partial class DbReader
             dbSizeBytes,
             dbPragmaSettings.AutoVacuum),
             ftsOptimization: ftsOptimization);
-        var lastIndexRun = GetLastIndexRun();
+        var statusMetadataDiagnostics = new List<StatusMetadataDiagnostic>();
+        var lastIndexRun = GetLastIndexRun(statusMetadataDiagnostics);
         var referenceExtractionCapHits = GetReferenceExtractionCapHits();
         var persistedReadiness = GetPersistedIndexGenerationReadiness(
             referenceExtractionCapHits,
@@ -228,7 +229,9 @@ public partial class DbReader
             hdlGraphContractReady,
             txn);
         var batchInProgress = persistedReadiness.MigrationInProgress;
-        var lastFailedOrPartialIndexRun = GetLastFailedOrPartialIndexRun(batchInProgress);
+        var lastFailedOrPartialIndexRun = GetLastFailedOrPartialIndexRun(
+            batchInProgress,
+            statusMetadataDiagnostics);
 
         var result = new StatusResult
         {
@@ -305,6 +308,9 @@ public partial class DbReader
             Process = StatusProcessMetrics.Capture(),
             LastIndexRun = lastIndexRun,
             LastFailedOrPartialIndexRun = lastFailedOrPartialIndexRun,
+            StatusMetadataDiagnostics = statusMetadataDiagnostics.Count > 0
+                ? statusMetadataDiagnostics
+                : null,
             ReadOnlyFallback = _readOnlyFallback,
             WalCheckpointAttempted = _walCheckpointAttempted,
             WalCheckpointSucceeded = _walCheckpointSucceeded,

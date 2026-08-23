@@ -19,7 +19,7 @@ public static partial class IndexCommandRunner
 {
     internal static Action<string>? FullScanInputSnapshotBarrierForTesting { get; set; }
 
-    private const int PartialIndexFileErrorLimit = 50;
+    private const int PartialIndexFileErrorLimit = StatusMetadataLimits.MaxFileErrors;
 
     internal static bool ShouldUseFreshReferenceResolutionDefaults(
         bool startedWithNoIndexedFiles,

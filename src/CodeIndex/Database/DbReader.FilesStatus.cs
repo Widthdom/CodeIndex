@@ -1,10 +1,12 @@
 using System.Buffers;
+using CodeIndex.Diagnostics;
 using CodeIndex.Indexer;
 using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization.Metadata;
 using System.Text.RegularExpressions;
 using System.Threading;
 
@@ -36,6 +38,12 @@ public partial class DbReader
     internal const int MaxLegacyResourceReadSqliteVmSteps = 250_000;
     private const string EmptyIndexedContentChecksum =
         "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+    internal const string StatusMetadataRawSizeExceededReason = "raw_size_exceeded";
+    internal const string StatusMetadataInvalidJsonReason = "invalid_json";
+    internal const string StatusMetadataSemanticValidationFailedReason = "semantic_validation_failed";
+    private const string LastIndexRunReferenceCapHitsField = "last_index_run.reference_extraction_cap_hits";
+    private const string LastIndexRunRebuildReclaimField = "last_index_run.rebuild_reclaim";
+    private const string LastFailedRunFileErrorsField = "last_failed_or_partial_index_run.file_errors";
 
     private static readonly AsyncLocal<TimeSpan?> FindRegexMatchTimeoutOverride = new();
     private static readonly AsyncLocal<Action?> FindLineScannedOverride = new();
@@ -688,7 +696,7 @@ public partial class DbReader
         }
     }
 
-    private StatusLastIndexRun? GetLastIndexRun()
+    private StatusLastIndexRun? GetLastIndexRun(List<StatusMetadataDiagnostic> metadataDiagnostics)
     {
         var mode = TryGetMetaStringInternal(DbContext.LastIndexRunModeMetaKey);
         var startedAt = ParseMetaDateTime(TryGetMetaStringInternal(DbContext.LastIndexRunStartedAtMetaKey));
@@ -705,10 +713,18 @@ public partial class DbReader
         var diagnostics = ParseMetaStringList(TryGetMetaStringInternal(DbContext.LastIndexRunDiagnosticsMetaKey));
         var diagnosticCount = ParseMetaLong(TryGetMetaStringInternal(DbContext.LastIndexRunDiagnosticCountMetaKey));
         var diagnosticsTruncated = ParseMetaBool(TryGetMetaStringInternal(DbContext.LastIndexRunDiagnosticsTruncatedMetaKey));
-        var referenceExtractionCapHits = ParseReferenceExtractionCapHits(
-            TryGetMetaStringInternal(DbContext.LastIndexRunReferenceExtractionCapHitsMetaKey));
-        var rebuildReclaim = ParseRebuildReclaim(
-            TryGetMetaStringInternal(DbContext.LastIndexRunRebuildReclaimMetaKey));
+        var referenceExtractionCapHits = ReadStructuredStatusMetadata(
+            DbContext.LastIndexRunReferenceExtractionCapHitsMetaKey,
+            LastIndexRunReferenceCapHitsField,
+            StatusMetadataJsonContext.Default.ReferenceExtractionCapHitSummary,
+            ValidateReferenceExtractionCapHits,
+            metadataDiagnostics);
+        var rebuildReclaim = ReadStructuredStatusMetadata(
+            DbContext.LastIndexRunRebuildReclaimMetaKey,
+            LastIndexRunRebuildReclaimField,
+            StatusMetadataJsonContext.Default.StatusRebuildReclaim,
+            ValidateRebuildReclaim,
+            metadataDiagnostics);
         if (mode == null && startedAt == null && durationMs == null && filesScanned == null && filesSkipped == null
             && parseErrors == null && bytesRead == null && bytesReadSkippedFileCount == null && bytesReadIncomplete == null
             && rowsUpserted == null && rowsDeleted == null && peakMemoryMb == null
@@ -740,35 +756,80 @@ public partial class DbReader
         };
     }
 
-    private static StatusRebuildReclaim? ParseRebuildReclaim(string? json)
+    private T? ReadStructuredStatusMetadata<T>(
+        string key,
+        string field,
+        JsonTypeInfo<T> jsonTypeInfo,
+        Func<T, bool> validate,
+        List<StatusMetadataDiagnostic> metadataDiagnostics)
+        where T : class
     {
-        if (string.IsNullOrWhiteSpace(json))
+        var read = TryGetBoundedStatusMetaStringInternal(key);
+        if (!read.Exists)
             return null;
+
+        if (read.Utf8ByteCount > StatusMetadataLimits.MaxRawUtf8Bytes)
+        {
+            AddStatusMetadataDiagnostic(
+                metadataDiagnostics,
+                field,
+                StatusMetadataRawSizeExceededReason,
+                read.Utf8ByteCount);
+            return null;
+        }
+
+        if (!read.IsText || string.IsNullOrWhiteSpace(read.Value))
+        {
+            AddStatusMetadataDiagnostic(
+                metadataDiagnostics,
+                field,
+                StatusMetadataSemanticValidationFailedReason,
+                read.Utf8ByteCount);
+            return null;
+        }
+
         try
         {
-            return JsonSerializer.Deserialize(json, StatusMetadataJsonContext.Default.StatusRebuildReclaim);
+            var value = BoundedJson.Deserialize(
+                read.Value,
+                StatusMetadataLimits.MaxRawUtf8Bytes,
+                StatusMetadataLimits.MaxJsonDepth,
+                jsonTypeInfo);
+            if (value == null || !validate(value))
+            {
+                AddStatusMetadataDiagnostic(
+                    metadataDiagnostics,
+                    field,
+                    StatusMetadataSemanticValidationFailedReason,
+                    read.Utf8ByteCount);
+                return null;
+            }
+
+            return value;
         }
         catch (JsonException)
         {
+            AddStatusMetadataDiagnostic(
+                metadataDiagnostics,
+                field,
+                StatusMetadataInvalidJsonReason,
+                read.Utf8ByteCount);
+            return null;
+        }
+        catch (InvalidDataException)
+        {
+            AddStatusMetadataDiagnostic(
+                metadataDiagnostics,
+                field,
+                StatusMetadataRawSizeExceededReason,
+                read.Utf8ByteCount);
             return null;
         }
     }
 
-    private static ReferenceExtractionCapHitSummary? ParseReferenceExtractionCapHits(string? json)
-    {
-        if (string.IsNullOrWhiteSpace(json))
-            return null;
-        try
-        {
-            return JsonSerializer.Deserialize(json, StatusMetadataJsonContext.Default.ReferenceExtractionCapHitSummary);
-        }
-        catch (JsonException)
-        {
-            return null;
-        }
-    }
-
-    private StatusFailedOrPartialIndexRun? GetLastFailedOrPartialIndexRun(bool batchInProgress)
+    private StatusFailedOrPartialIndexRun? GetLastFailedOrPartialIndexRun(
+        bool batchInProgress,
+        List<StatusMetadataDiagnostic> metadataDiagnostics)
     {
         var status = TryGetMetaStringInternal(DbContext.LastFailedIndexRunStatusMetaKey);
         var mode = TryGetMetaStringInternal(DbContext.LastFailedIndexRunModeMetaKey);
@@ -780,7 +841,12 @@ public partial class DbReader
         var reason = TryGetMetaStringInternal(DbContext.LastFailedIndexRunReasonMetaKey);
         var progressPersisted = ParseMetaBool(TryGetMetaStringInternal(DbContext.LastFailedIndexRunProgressPersistedMetaKey));
         var recoveryHint = TryGetMetaStringInternal(DbContext.LastFailedIndexRunRecoveryHintMetaKey);
-        var fileErrors = ParseStatusIndexFileErrors(TryGetMetaStringInternal(DbContext.LastFailedIndexRunFileErrorsMetaKey));
+        var fileErrors = ReadStructuredStatusMetadata(
+            DbContext.LastFailedIndexRunFileErrorsMetaKey,
+            LastFailedRunFileErrorsField,
+            StatusMetadataJsonContext.Default.ListStatusIndexFileError,
+            ValidateStatusIndexFileErrors,
+            metadataDiagnostics);
         if (status == null && mode == null && startedAt == null && durationMs == null && filesProcessed == null
             && filesTotal == null && errorCode == null && reason == null && progressPersisted == null && recoveryHint == null
             && fileErrors == null)
@@ -968,6 +1034,217 @@ public partial class DbReader
         }
     }
 
+    private readonly record struct BoundedStatusMetaRead(
+        bool Exists,
+        string? Value,
+        long? Utf8ByteCount,
+        bool IsText);
+
+    private BoundedStatusMetaRead TryGetBoundedStatusMetaStringInternal(string key)
+    {
+        try
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = """
+                SELECT
+                    CASE
+                        WHEN typeof(value) = 'text'
+                         AND length(CAST(value AS BLOB)) <= @maxUtf8Bytes
+                        THEN value
+                        ELSE NULL
+                    END,
+                    length(CAST(value AS BLOB)),
+                    typeof(value)
+                FROM codeindex_meta
+                WHERE key = @key
+                """;
+            SqliteCommandPolicy.Add(cmd, "@key", key);
+            SqliteCommandPolicy.Add(cmd, "@maxUtf8Bytes", StatusMetadataLimits.MaxRawUtf8Bytes);
+            using var reader = cmd.ExecuteTrackedReader();
+            if (!reader.TrackedRead())
+                return default;
+
+            var valueType = reader.GetString(2);
+            if (string.Equals(valueType, "null", StringComparison.Ordinal))
+                return default;
+
+            var utf8ByteCount = reader.IsDBNull(1) ? (long?)null : reader.GetInt64(1);
+            var isText = string.Equals(valueType, "text", StringComparison.Ordinal);
+            var value = reader.IsDBNull(0) ? null : reader.GetString(0);
+            return new BoundedStatusMetaRead(
+                Exists: true,
+                value,
+                utf8ByteCount,
+                isText);
+        }
+        catch (SqliteException)
+        {
+            return default;
+        }
+    }
+
+    private static void AddStatusMetadataDiagnostic(
+        List<StatusMetadataDiagnostic> diagnostics,
+        string field,
+        string reason,
+        long? observedUtf8Bytes)
+    {
+        diagnostics.Add(new StatusMetadataDiagnostic
+        {
+            Field = field,
+            Reason = reason,
+            MaxUtf8Bytes = StatusMetadataLimits.MaxRawUtf8Bytes,
+            ObservedUtf8Bytes = observedUtf8Bytes,
+        });
+    }
+
+    private static bool ValidateStatusIndexFileErrors(List<StatusIndexFileError> fileErrors)
+    {
+        if (fileErrors.Count > StatusMetadataLimits.MaxFileErrors)
+            return false;
+
+        var decodedCharacters = 0;
+        foreach (var fileError in fileErrors)
+        {
+            if (fileError == null
+                || !TryAcceptStatusMetadataString(
+                    fileError.File,
+                    StatusMetadataLimits.MaxPathCharacters,
+                    ref decodedCharacters)
+                || !TryAcceptStatusMetadataString(
+                    fileError.Category,
+                    StatusMetadataLimits.MaxCodeCharacters,
+                    ref decodedCharacters)
+                || !TryAcceptStatusMetadataString(
+                    fileError.Phase,
+                    StatusMetadataLimits.MaxCodeCharacters,
+                    ref decodedCharacters)
+                || !TryAcceptStatusMetadataString(
+                    fileError.Detail,
+                    StatusMetadataLimits.MaxDetailCharacters,
+                    ref decodedCharacters)
+                || fileError.Line < 0
+                || fileError.Column < 0)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool ValidateReferenceExtractionCapHits(ReferenceExtractionCapHitSummary summary)
+    {
+        if (summary.HitCount < 0
+            || summary.AffectedFileCount < 0
+            || summary.FileLimit != StatusMetadataLimits.MaxReferenceCapHitFiles
+            || summary.Reasons == null
+            || summary.Files == null
+            || summary.Reasons.Count > StatusMetadataLimits.MaxReferenceReasons
+            || summary.Files.Count > StatusMetadataLimits.MaxReferenceCapHitFiles
+            || summary.Files.Count > summary.AffectedFileCount
+            || summary.FilesTruncated != (summary.AffectedFileCount > summary.Files.Count))
+        {
+            return false;
+        }
+
+        var decodedCharacters = 0;
+        foreach (var reason in summary.Reasons)
+        {
+            if (!TryAcceptStatusMetadataString(
+                reason,
+                StatusMetadataLimits.MaxCodeCharacters,
+                ref decodedCharacters))
+            {
+                return false;
+            }
+        }
+
+        long sampledHitCount = 0;
+        foreach (var file in summary.Files)
+        {
+            if (file == null
+                || file.HitCount < 0
+                || file.Reasons == null
+                || file.Reasons.Count > StatusMetadataLimits.MaxReferenceReasons
+                || !TryAcceptStatusMetadataString(
+                    file.File,
+                    StatusMetadataLimits.MaxPathCharacters,
+                    ref decodedCharacters))
+            {
+                return false;
+            }
+
+            if (sampledHitCount > long.MaxValue - file.HitCount)
+                return false;
+            sampledHitCount += file.HitCount;
+            foreach (var reason in file.Reasons)
+            {
+                if (!TryAcceptStatusMetadataString(
+                    reason,
+                    StatusMetadataLimits.MaxCodeCharacters,
+                    ref decodedCharacters))
+                {
+                    return false;
+                }
+            }
+        }
+
+        return summary.HitCount >= sampledHitCount;
+    }
+
+    private static bool ValidateRebuildReclaim(StatusRebuildReclaim reclaim)
+    {
+        var decodedCharacters = 0;
+        return TryAcceptStatusMetadataString(
+                reclaim.State,
+                StatusMetadataLimits.MaxCodeCharacters,
+                ref decodedCharacters)
+            && TryAcceptStatusMetadataString(
+                reclaim.Reason,
+                StatusMetadataLimits.MaxDetailCharacters,
+                ref decodedCharacters)
+            && reclaim.DurationMs >= 0
+            && IsNonNegative(reclaim.PageSizeBytes)
+            && IsNonNegative(reclaim.PageCountBefore)
+            && IsNonNegative(reclaim.FreelistCountBefore)
+            && IsRatio(reclaim.FreelistRatioBefore)
+            && IsRatio(reclaim.FreelistThresholdRatio)
+            && IsNonNegative(reclaim.EstimatedBytesReclaimableBefore)
+            && IsNonNegative(reclaim.PageCountAfter)
+            && IsNonNegative(reclaim.FreelistCountAfter)
+            && IsRatio(reclaim.FreelistRatioAfter)
+            && IsNonNegative(reclaim.PagesReclaimed)
+            && IsNonNegative(reclaim.BytesReclaimed)
+            && IsNonNegative(reclaim.LogicalDatabaseBytesBefore)
+            && IsNonNegative(reclaim.LogicalDatabaseBytesAfter)
+            && IsNonNegative(reclaim.DbSizeBytesBefore)
+            && IsNonNegative(reclaim.DbSizeBytesAfter)
+            && reclaim.AutoVacuumMode is null or >= 0 and <= 2;
+    }
+
+    private static bool TryAcceptStatusMetadataString(
+        string? value,
+        int maxCharacters,
+        ref int decodedCharacters)
+    {
+        if (string.IsNullOrEmpty(value)
+            || value.Length > maxCharacters
+            || value.Length > StatusMetadataLimits.MaxDecodedStringCharacters - decodedCharacters)
+        {
+            return false;
+        }
+
+        decodedCharacters += value.Length;
+        return true;
+    }
+
+    private static bool IsNonNegative(long? value)
+        => value is null or >= 0;
+
+    private static bool IsRatio(double? value)
+        => value is null || (double.IsFinite(value.Value) && value.Value >= 0 && value.Value <= 1);
+
     // Parse an ISO-8601 timestamp persisted via SetMeta. Offsetless legacy values are
     // treated as UTC, while explicit offsets are honored before normalizing to UTC JSON.
     // SetMeta で保存された ISO-8601 timestamp を読む。offset の無い legacy 値は UTC 扱いし、
@@ -1006,21 +1283,6 @@ public partial class DbReader
             return null;
 
         return JsonStringListCodec.Deserialize(raw);
-    }
-
-    private static List<StatusIndexFileError>? ParseStatusIndexFileErrors(string? raw)
-    {
-        if (string.IsNullOrWhiteSpace(raw))
-            return null;
-
-        try
-        {
-            return JsonSerializer.Deserialize(raw, StatusMetadataJsonContext.Default.ListStatusIndexFileError);
-        }
-        catch (JsonException)
-        {
-            return null;
-        }
     }
 
     private static long? ParseMetaLong(string? raw)
