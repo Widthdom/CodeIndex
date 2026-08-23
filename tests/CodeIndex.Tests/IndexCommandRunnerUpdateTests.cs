@@ -510,6 +510,17 @@ public partial class IndexCommandRunnerTests
                 Assert.Equal(expectedDefinitionSites, hotspot.DefinitionSites);
                 Assert.Equal(expectedReferenceCount, hotspot.ReferenceCount);
 
+                var defaultHotspot = Assert.Single(
+                    reader.GetSymbolHotspots(
+                        limit: 20,
+                        kind: "class",
+                        lang: "csharp",
+                        pathPatterns: ["*.cs"],
+                        excludePathPatterns: null,
+                        excludeTests: false),
+                    result => result.Symbol.Name == "Runner5158");
+                Assert.Equal(expectedReferenceCount, defaultHotspot.ReferenceCount);
+
                 var analysis = reader.AnalyzeSymbol(
                     "Runner5158",
                     limit: 20,

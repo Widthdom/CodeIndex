@@ -965,10 +965,10 @@ public partial class DbReader
             visibilityFilters,
             excludeVisibilityFilters);
         var csharpIdentityCountSql = CanUseCSharpIdentityHotspotCounts()
-            ? "WHEN gr.lang = 'csharp' AND gr.kind IN ('function', 'test.method', 'property') THEN COALESCE(circ.ref_count, 0)"
+            ? "WHEN gr.lang = 'csharp' AND (gr.kind IN ('function', 'test.method', 'property') OR (gr.kind IN ('class', 'struct', 'interface', 'record') AND gr.logical_target_key LIKE 'family|csharp|%')) THEN COALESCE(circ.ref_count, 0)"
             : string.Empty;
         var csharpIdentityScoreSql = CanUseCSharpIdentityHotspotCounts()
-            ? "WHEN gr.lang = 'csharp' AND gr.kind IN ('function', 'test.method', 'property') THEN COALESCE(circ.ref_score, 0.0)"
+            ? "WHEN gr.lang = 'csharp' AND (gr.kind IN ('function', 'test.method', 'property') OR (gr.kind IN ('class', 'struct', 'interface', 'record') AND gr.logical_target_key LIKE 'family|csharp|%')) THEN COALESCE(circ.ref_score, 0.0)"
             : string.Empty;
         var sql = candidatePlan.Sql + @"
             grouped_candidates AS (
