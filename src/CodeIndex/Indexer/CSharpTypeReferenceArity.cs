@@ -121,6 +121,12 @@ internal static class CSharpTypeReferenceArity
             if (!IsIdentifierOccurrence(signature, occurrence, symbolName.Length))
                 continue;
 
+            // A partial method's defining declaration and implementation may legally
+            // disagree about where an optional default is written. Treat the physical
+            // rows as one binding-sensitive family instead of narrowing only one side.
+            if (ContainsIdentifier(signature, "partial", occurrence))
+                return null;
+
             var cursor = occurrence + symbolName.Length;
             if (!SkipCSharpTrivia(signature, ref cursor)
                 || cursor >= signature.Length
@@ -607,6 +613,16 @@ internal static class CSharpTypeReferenceArity
             var c = text[i];
             if (c is '"' or '\'')
             {
+                // Raw strings can contain unescaped commas and quote characters. The
+                // lightweight scanner deliberately keeps those calls ambiguous.
+                if (c == '"'
+                    && i + 2 < text.Length
+                    && text[i + 1] == '"'
+                    && text[i + 2] == '"')
+                {
+                    return false;
+                }
+
                 i = SkipQuotedLiteral(text, i, c);
                 if (i >= text.Length)
                     return false;

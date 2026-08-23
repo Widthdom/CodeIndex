@@ -638,6 +638,20 @@ public partial class DbWriter
         )
         """;
 
+    private static string BuildCSharpCallCandidatePredicateSql(string symbolAlias) => $"""
+        (
+            r.reference_kind <> 'call'
+            OR (
+                {symbolAlias}.kind = 'function'
+                AND {CSharpReferenceArgumentCountSql} IS NOT NULL
+                AND {BuildCSharpCallableParameterCountSql(symbolAlias)}
+                    = {CSharpReferenceArgumentCountSql}
+            )
+            OR {CSharpReferenceArgumentCountSql} IS NULL
+            OR {BuildCSharpCallableParameterCountSql(symbolAlias)} IS NULL
+        )
+        """;
+
     private static string CSharpTypeReferenceCandidatePredicateSql => $"""
         (
             source_file.lang <> 'csharp'
@@ -1441,6 +1455,7 @@ public partial class DbWriter
         WHERE source_file.lang = 'csharp'
           AND r.target_qualifier IS NULL
           AND r.reference_kind NOT IN ('instantiate', 'type_reference')
+          AND {BuildCSharpCallCandidatePredicateSql("target")}
           AND NOT EXISTS (
               SELECT 1
               FROM temp.{ReferenceLowerRankCandidateMatchesTable} AS lower_rank_match

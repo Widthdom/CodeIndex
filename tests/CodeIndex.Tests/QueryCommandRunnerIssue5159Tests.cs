@@ -27,6 +27,7 @@ public sealed class QueryCommandRunnerIssue5159Tests
     [InlineData("service.Ping(condition ? 1 : 2)")]
     [InlineData("service.Ping(a < b, c > d)")]
     [InlineData("service.Ping(1,)")]
+    [InlineData("service.Ping(\"\"\"a\" , \"b\"\"\")")]
     public void UnambiguousInvocationArity_RejectsBindingSensitiveCalls_Issue5159(string context)
     {
         Assert.Null(CSharpTypeReferenceArity.GetUnambiguousInvocationArgumentCount(
@@ -58,6 +59,7 @@ public sealed class QueryCommandRunnerIssue5159Tests
     [InlineData("public void Ping([Optional] int value)")]
     [InlineData("public void Ping([System.Runtime.InteropServices.OptionalAttribute] int value)")]
     [InlineData("public void Ping([DefaultParameterValue(0)] int value)")]
+    [InlineData("partial void Ping(int value)")]
     public void UnambiguousCallableArity_RejectsBindingSensitiveDeclarations_Issue5159(
         string signature)
     {
@@ -76,12 +78,25 @@ public sealed class QueryCommandRunnerIssue5159Tests
             TestProjectHelper.WriteTextFile(
                 projectRoot,
                 "src/Fixture.cs",
-                """
+                """"
+                using static SelectorFixture.StaticService;
+
                 namespace SelectorFixture;
 
-                public sealed class Service
+                [System.AttributeUsage(System.AttributeTargets.Method)]
+                public sealed class PingAttribute : System.Attribute { }
+
+                public static class StaticService
                 {
+                    public static void StaticPing() { }
+                    public static void StaticPing(int value) { }
+                }
+
+                public sealed partial class Service
+                {
+                    [Ping()]
                     public void Ping() { }
+                    [Ping()]
                     public void Ping(int value) { }
                     public void Optional(int value = 0) { }
                     public void Optional(string value = "") { }
@@ -89,6 +104,11 @@ public sealed class QueryCommandRunnerIssue5159Tests
                     public void AttributeOptional(object value) { }
                     public void Incomplete() { }
                     public void Incomplete(int value) { }
+                    public void RawPing(string value) { }
+                    public void RawPing(string left, string right) { }
+                    partial void PartialPing(int value = 0);
+                    partial void PartialPing(int value) { }
+                    public void RunPartial() { PartialPing(); }
                 }
 
                 public sealed class Caller
@@ -102,9 +122,12 @@ public sealed class QueryCommandRunnerIssue5159Tests
                         service.Optional();
                         service.AttributeOptional(1);
                         service.Incomplete(1,);
+                        service.RawPing("""a" , "b""");
+                        StaticPing();
+                        StaticPing(1);
                     }
                 }
-                """);
+                """");
             TestProjectHelper.WriteTextFile(
                 projectRoot,
                 "docs/Evidence.md",
@@ -147,6 +170,35 @@ public sealed class QueryCommandRunnerIssue5159Tests
             Assert.All(
                 oneParameterBundle.GetProperty("references").EnumerateArray(),
                 reference => Assert.Matches(@"Ping\([12]\)", reference.GetProperty("context").GetString()));
+            Assert.DoesNotContain(
+                zeroParameterBundle.GetProperty("references").EnumerateArray(),
+                reference => reference.GetProperty("context").GetString()!.TrimStart()
+                    .StartsWith("[Ping()]", StringComparison.Ordinal));
+            Assert.DoesNotContain(
+                oneParameterBundle.GetProperty("references").EnumerateArray(),
+                reference => reference.GetProperty("context").GetString()!.TrimStart()
+                    .StartsWith("[Ping()]", StringComparison.Ordinal));
+
+            var (staticExitCode, staticStdout, staticStderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunInspect(
+                    ["StaticPing", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp", "--limit", "10"],
+                    JsonOptions));
+            using var staticDocument = ParseJsonOutput(staticStdout);
+            var staticBundles = staticDocument.RootElement.GetProperty("candidate_bundles").EnumerateArray().ToArray();
+            var staticZeroBundle = Assert.Single(staticBundles.Where(bundle =>
+                bundle.GetProperty("definition").GetProperty("signature").GetString()!.Contains("StaticPing()", StringComparison.Ordinal)));
+            var staticOneBundle = Assert.Single(staticBundles.Where(bundle =>
+                bundle.GetProperty("definition").GetProperty("signature").GetString()!.Contains("StaticPing(int value)", StringComparison.Ordinal)));
+            Assert.Equal(CommandExitCodes.Success, staticExitCode);
+            Assert.Equal(string.Empty, staticStderr);
+            Assert.True(staticZeroBundle.GetProperty("identity_scoped").GetBoolean());
+            Assert.True(staticOneBundle.GetProperty("identity_scoped").GetBoolean());
+            Assert.All(
+                staticZeroBundle.GetProperty("references").EnumerateArray(),
+                reference => Assert.Contains("StaticPing()", reference.GetProperty("context").GetString(), StringComparison.Ordinal));
+            Assert.All(
+                staticOneBundle.GetProperty("references").EnumerateArray(),
+                reference => Assert.Contains("StaticPing(1)", reference.GetProperty("context").GetString(), StringComparison.Ordinal));
 
             var selectorArgs = new[]
             {
@@ -210,7 +262,7 @@ public sealed class QueryCommandRunnerIssue5159Tests
                 "ambiguous_reference_candidates",
                 bundle.GetProperty("identity_scope_reason").GetString()));
 
-            foreach (var ambiguousName in new[] { "AttributeOptional", "Incomplete" })
+            foreach (var ambiguousName in new[] { "AttributeOptional", "Incomplete", "PartialPing", "RawPing" })
             {
                 var (conservativeExitCode, conservativeStdout, conservativeStderr) = CaptureConsole(() =>
                     QueryCommandRunner.RunInspect(
