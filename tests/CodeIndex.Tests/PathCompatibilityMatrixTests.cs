@@ -132,18 +132,78 @@ public sealed class PathCompatibilityMatrixTests
     }
 
     [Fact]
-    public void CaseProbeMatrix_SnapshotOverloadMatchesLegacyEnumeration()
+    public void CaseProbeMatrix_SnapshotIsBoundedAndCancelable_Issue5160()
     {
         using var workspace = MatrixWorkspace.Create("cdidx_case_probe_snapshot");
         var target = workspace.FullPath("target");
         Directory.CreateDirectory(target);
         File.WriteAllText(Path.Combine(target, "dockerfile"), "FROM scratch\n");
+        File.WriteAllText(Path.Combine(target, "makefile"), "all:\n\t@true\n");
         var entries = Directory.EnumerateFileSystemEntries(target).ToArray();
 
+        using var canceledWriteProbe = new CancellationTokenSource();
+        canceledWriteProbe.Cancel();
+        var canceledWriteException = Assert.Throws<OperationCanceledException>(() =>
+            CaseSensitivityProbeDirectory.ProbeIgnoreCase(
+                workspace.Root,
+                "case-probe-test-",
+                canceledWriteProbe.Token));
+        Assert.Equal(canceledWriteProbe.Token, canceledWriteException.CancellationToken);
+        Assert.Empty(Directory.GetDirectories(
+            workspace.Root,
+            $"{CaseSensitivityProbeDirectory.IsolatedProbeDirectoryPrefix}*",
+            SearchOption.TopDirectoryOnly));
+
         var legacyResult = CaseSensitivityProbeDirectory.ProbeExistingChildIgnoreCase(target);
-        var snapshotResult = CaseSensitivityProbeDirectory.ProbeExistingChildIgnoreCase(target, entries);
+        var snapshotResult = CaseSensitivityProbeDirectory.ProbeExistingChildIgnoreCase(
+            target,
+            entries,
+            maxEntries: entries.Length);
 
         Assert.Equal(legacyResult, snapshotResult);
+        Assert.Null(CaseSensitivityProbeDirectory.ProbeExistingChildIgnoreCase(target, maxEntries: 1));
+
+        var entriesObserved = 0;
+        IEnumerable<string> CountedEntries()
+        {
+            foreach (var entry in entries)
+            {
+                entriesObserved++;
+                yield return entry;
+            }
+        }
+
+        Assert.Null(CaseSensitivityProbeDirectory.ProbeExistingChildIgnoreCase(
+            target,
+            CountedEntries(),
+            maxEntries: 1));
+        Assert.Equal(2, entriesObserved);
+
+        using var preCanceled = new CancellationTokenSource();
+        preCanceled.Cancel();
+        var preCanceledException = Assert.Throws<OperationCanceledException>(() =>
+            CaseSensitivityProbeDirectory.ProbeExistingChildIgnoreCase(
+                target,
+                entries,
+                preCanceled.Token,
+                entries.Length));
+        Assert.Equal(preCanceled.Token, preCanceledException.CancellationToken);
+
+        using var canceledDuringEnumeration = new CancellationTokenSource();
+        IEnumerable<string> CancelingEntries()
+        {
+            yield return entries[0];
+            canceledDuringEnumeration.Cancel();
+            yield return entries[1];
+        }
+
+        var midEnumerationException = Assert.Throws<OperationCanceledException>(() =>
+            CaseSensitivityProbeDirectory.ProbeExistingChildIgnoreCase(
+                target,
+                CancelingEntries(),
+                canceledDuringEnumeration.Token,
+                entries.Length));
+        Assert.Equal(canceledDuringEnumeration.Token, midEnumerationException.CancellationToken);
     }
 
     public static TheoryData<string, string, string, string> LongPathCases()
