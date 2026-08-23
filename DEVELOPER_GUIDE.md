@@ -1990,7 +1990,10 @@ the index provides declaration coordinates. C# positional-record properties
 store the span from the component's first attribute or type token through its
 identifier, so record keywords, record type names, base arguments, and body
 members remain attributed to their actual enclosing symbols even when they
-share a physical line with a positional component. Legacy rows without column
+share a physical line with a positional component. Only `record`, `record class`,
+and `record struct` declarations synthesize these property symbols; ordinary C#
+class and struct primary-constructor parameters are not member definitions.
+Legacy rows without column
 metadata retain the line-based fallback. Primary-match selection mirrors the
 displayed focus line. Exact-source names are normalized with each result's
 language when the query does not specify one, and raw source-column maps are
@@ -5931,6 +5934,8 @@ CLI は exact-mode alias を正規化してから、raw `--fts` と `--exact`、
 判定します。C# の位置 record property は、component の最初の attribute または型 token から
 識別子までの範囲を保持します。これにより、同じ物理行に位置 component があっても、
 record keyword、record 型名、base 引数、body member は実際の囲みシンボルに帰属します。
+これらの property symbol を合成するのは `record`、`record class`、`record struct` 宣言だけであり、
+通常の C# class / struct の primary constructor parameter は member definition ではありません。
 列 metadata がない旧 row では行ベースの fallback を維持します。主要一致の選択は表示される
 focus 行と一致します。query が言語を指定しない場合、exact-source 名は各結果の言語で正規化し、
 raw source の列 map は escaped name が正規化で実際に変わる行にだけ作成します。

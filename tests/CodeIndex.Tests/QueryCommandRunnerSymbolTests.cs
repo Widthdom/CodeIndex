@@ -3962,6 +3962,152 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSymbolsDefinitionAndOutline_CSharpPrimaryConstructorPropertiesMatchRecordSemantics_Issue5157()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_csharp_primary_constructor_properties_5157");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            var sourcePath = Path.Combine(projectRoot, "src", "fixture.cs");
+            File.WriteAllText(
+                sourcePath,
+                """
+                namespace Demo;
+
+                [AttributeUsage(AttributeTargets.Parameter)]
+                public sealed class TagAttribute : Attribute;
+
+                public sealed class PrimaryService(
+                    [Tag] string prefix,
+                    int count)
+                {
+                    public string Visible => prefix + count;
+
+                    private sealed class Nested(
+                        [Tag] long inner,
+                        long maxBytes)
+                    {
+                        public long NestedValue => inner + maxBytes;
+                    }
+                }
+
+                public readonly struct PrimaryPoint(int x, int y)
+                {
+                    public int Sum => x + y;
+                }
+
+                public record PositionalRecord(string RecordValue);
+                public record class ExplicitRecord(string? ExplicitRecordValue);
+                public readonly record struct PositionalStruct(int RecordStructValue);
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json", "--quiet"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            AssertPrimaryConstructorNavigationContract();
+
+            File.AppendAllText(sourcePath, "\n// Force an incremental refresh.\n");
+            File.SetLastWriteTimeUtc(sourcePath, File.GetLastWriteTimeUtc(sourcePath).AddSeconds(2));
+            var (updateExitCode, updateStdout, updateStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json", "--quiet"],
+                _jsonOptions));
+            using var updateDocument = ParseJsonOutput(updateStdout);
+
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.Equal(string.Empty, updateStderr);
+            Assert.Equal("incremental", updateDocument.RootElement.GetProperty("mode").GetString());
+            AssertPrimaryConstructorNavigationContract();
+
+            void AssertPrimaryConstructorNavigationContract()
+            {
+                var (symbolsExitCode, symbolsStdout, symbolsStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                    [
+                        "--db", dbPath,
+                        "--json",
+                        "--lang", "csharp",
+                        "--kind", "property",
+                        "--visibility", "public",
+                        "--name", "prefix",
+                        "--exact-name",
+                        "--count",
+                    ],
+                    _jsonOptions));
+                var (recordExitCode, recordStdout, recordStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                    [
+                        "--db", dbPath,
+                        "--json",
+                        "--lang", "csharp",
+                        "--kind", "property",
+                        "--visibility", "public",
+                        "--name", "RecordValue",
+                        "--exact-name",
+                        "--count",
+                    ],
+                    _jsonOptions));
+                var (definitionExitCode, definitionStdout, definitionStderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
+                    [
+                        "prefix",
+                        "--db", dbPath,
+                        "--json",
+                        "--lang", "csharp",
+                        "--kind", "property",
+                        "--exact-name",
+                        "--count",
+                    ],
+                    _jsonOptions));
+                var (outlineExitCode, outlineStdout, outlineStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                    ["src/fixture.cs", "--db", dbPath, "--json", "--kind", "property"],
+                    _jsonOptions));
+
+                using var symbolsDocument = ParseJsonOutput(symbolsStdout);
+                using var recordDocument = ParseJsonOutput(recordStdout);
+                using var definitionDocument = ParseJsonOutput(definitionStdout);
+                using var outlineDocument = ParseJsonOutput(outlineStdout);
+                var outlineNames = outlineDocument.RootElement
+                    .GetProperty("symbols")
+                    .EnumerateArray()
+                    .Select(symbol => symbol.GetProperty("name").GetString())
+                    .ToArray();
+
+                Assert.Equal(CommandExitCodes.Success, symbolsExitCode);
+                Assert.Equal(string.Empty, symbolsStderr);
+                Assert.Equal(0, symbolsDocument.RootElement.GetProperty("count").GetInt32());
+
+                Assert.Equal(CommandExitCodes.Success, recordExitCode);
+                Assert.Equal(string.Empty, recordStderr);
+                Assert.Equal(1, recordDocument.RootElement.GetProperty("count").GetInt32());
+
+                Assert.Equal(CommandExitCodes.Success, definitionExitCode);
+                Assert.Equal(string.Empty, definitionStderr);
+                Assert.Equal(0, definitionDocument.RootElement.GetProperty("count").GetInt32());
+
+                Assert.Equal(CommandExitCodes.Success, outlineExitCode);
+                Assert.Equal(string.Empty, outlineStderr);
+                Assert.DoesNotContain("prefix", outlineNames);
+                Assert.DoesNotContain("count", outlineNames);
+                Assert.DoesNotContain("inner", outlineNames);
+                Assert.DoesNotContain("maxBytes", outlineNames);
+                Assert.DoesNotContain("x", outlineNames);
+                Assert.DoesNotContain("y", outlineNames);
+                Assert.Contains("Visible", outlineNames);
+                Assert.Contains("NestedValue", outlineNames);
+                Assert.Contains("Sum", outlineNames);
+                Assert.Contains("RecordValue", outlineNames);
+                Assert.Contains("ExplicitRecordValue", outlineNames);
+                Assert.Contains("RecordStructValue", outlineNames);
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSymbols_And_Definition_NormalizeCSharpVerbatimIdentifiers()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_csharp_verbatim_query_normalization");
