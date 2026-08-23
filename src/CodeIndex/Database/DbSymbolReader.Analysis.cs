@@ -251,7 +251,9 @@ public partial class DbReader
         long symbolId,
         bool includeBody,
         int? bodyStartLine,
-        int? bodyLineCount)
+        int? bodyLineCount,
+        string? lang,
+        string? kind)
     {
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = $@"
@@ -269,9 +271,17 @@ public partial class DbReader
                    {GetSymbolColumnSql("container_qualified_name")} AS container_qualified_name
             FROM symbols s
             JOIN files f ON s.file_id = f.id
-            WHERE s.id = @symbol_id
-            LIMIT 1";
+            WHERE s.id = @symbol_id";
+        if (lang != null)
+            cmd.CommandText += " AND f.lang = @lang";
+        if (kind != null)
+            cmd.CommandText += " AND s.kind = @kind";
+        cmd.CommandText += " LIMIT 1";
         SqliteCommandPolicy.Add(cmd, "@symbol_id", symbolId);
+        if (lang != null)
+            SqliteCommandPolicy.Add(cmd, "@lang", lang);
+        if (kind != null)
+            SqliteCommandPolicy.Add(cmd, "@kind", kind);
         using var reader = cmd.ExecuteTrackedReader();
         if (!reader.TrackedRead())
             return null;
@@ -332,7 +342,7 @@ public partial class DbReader
                 StringComparison.Ordinal);
         var definitions = selectedSymbolId is long symbolId
             ? selectedGenerationMatches
-                ? GetDefinitionBySymbolId(symbolId, includeBody, bodyStartLine, bodyLineCount) is { } selectedDefinition
+                ? GetDefinitionBySymbolId(symbolId, includeBody, bodyStartLine, bodyLineCount, lang, kind) is { } selectedDefinition
                     ? new List<DefinitionResult> { selectedDefinition }
                     : []
                 : []
@@ -376,20 +386,21 @@ public partial class DbReader
         var fallbackReferenceOffset = GetGraphSectionOffset(graphPage, "references", candidateSelector: null);
         var fallbackCallerOffset = GetGraphSectionOffset(graphPage, "callers", candidateSelector: null);
         var fallbackCalleeOffset = GetGraphSectionOffset(graphPage, "callees", candidateSelector: null);
+        var allowNameGraphFallback = selectedSymbolId == null && definitions.Count == 0;
         var references = selectedBundle?.References
-            ?? (definitions.Count == 0
+            ?? (allowNameGraphFallback
                 ? SearchReferences(normalizedQuery, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact, maxLineWidth, offset: fallbackReferenceOffset)
                 : []);
         var callers = selectedBundle?.Callers
-            ?? (definitions.Count == 0
+            ?? (allowNameGraphFallback
                 ? GetCallers(normalizedQuery, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact, offset: fallbackCallerOffset)
                 : []);
         var callees = selectedBundle?.Callees
-            ?? (definitions.Count == 0
+            ?? (allowNameGraphFallback
                 ? GetCallees(normalizedQuery, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact, offset: fallbackCalleeOffset)
                 : []);
         var graphSections = selectedBundle?.GraphSections
-            ?? (definitions.Count == 0
+            ?? (allowNameGraphFallback
                 ? BuildGraphSections(
                     CountSearchReferencesTotal(normalizedQuery, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact).Count,
                     references.Count,

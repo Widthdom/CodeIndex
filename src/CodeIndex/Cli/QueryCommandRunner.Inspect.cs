@@ -999,7 +999,7 @@ public static partial class QueryCommandRunner
 
         var definition = analysis.Definitions.FirstOrDefault();
         var path = inspectPath
-            ?? GetSingleSpecificPathPattern(options.PathPatterns)
+            ?? (options.Selector == null ? GetSingleSpecificPathPattern(options.PathPatterns) : null)
             ?? definition?.Path
             ?? analysis.File?.Path;
         if (path == null)

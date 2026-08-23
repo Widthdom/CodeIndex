@@ -26,6 +26,7 @@ public sealed class QueryCommandRunnerIssue5159Tests
     [InlineData("service.Ping<int>(1)")]
     [InlineData("service.Ping(condition ? 1 : 2)")]
     [InlineData("service.Ping(a < b, c > d)")]
+    [InlineData("service.Ping(1,)")]
     public void UnambiguousInvocationArity_RejectsBindingSensitiveCalls_Issue5159(string context)
     {
         Assert.Null(CSharpTypeReferenceArity.GetUnambiguousInvocationArgumentCount(
@@ -54,6 +55,9 @@ public sealed class QueryCommandRunnerIssue5159Tests
     [InlineData("public void Ping(params int[] values)")]
     [InlineData("public void Ping<T>(T value)")]
     [InlineData("public static void Ping(this Service service)")]
+    [InlineData("public void Ping([Optional] int value)")]
+    [InlineData("public void Ping([System.Runtime.InteropServices.OptionalAttribute] int value)")]
+    [InlineData("public void Ping([DefaultParameterValue(0)] int value)")]
     public void UnambiguousCallableArity_RejectsBindingSensitiveDeclarations_Issue5159(
         string signature)
     {
@@ -81,6 +85,10 @@ public sealed class QueryCommandRunnerIssue5159Tests
                     public void Ping(int value) { }
                     public void Optional(int value = 0) { }
                     public void Optional(string value = "") { }
+                    public void AttributeOptional([System.Runtime.InteropServices.Optional] int value, [System.Runtime.InteropServices.Optional] string text) { }
+                    public void AttributeOptional(object value) { }
+                    public void Incomplete() { }
+                    public void Incomplete(int value) { }
                 }
 
                 public sealed class Caller
@@ -92,9 +100,15 @@ public sealed class QueryCommandRunnerIssue5159Tests
                         service.Ping(1);
                         service.Ping(2);
                         service.Optional();
+                        service.AttributeOptional(1);
+                        service.Incomplete(1,);
                     }
                 }
                 """);
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "docs/Evidence.md",
+                string.Join('\n', Enumerable.Range(1, 30).Select(line => $"unrelated evidence line {line}")));
 
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
                 [projectRoot, "--json", "--quiet"],
@@ -195,6 +209,55 @@ public sealed class QueryCommandRunnerIssue5159Tests
             Assert.All(ambiguousBundles, bundle => Assert.Equal(
                 "ambiguous_reference_candidates",
                 bundle.GetProperty("identity_scope_reason").GetString()));
+
+            foreach (var ambiguousName in new[] { "AttributeOptional", "Incomplete" })
+            {
+                var (conservativeExitCode, conservativeStdout, conservativeStderr) = CaptureConsole(() =>
+                    QueryCommandRunner.RunInspect(
+                        [ambiguousName, "--db", dbPath, "--json", "--exact-name", "--lang", "csharp", "--limit", "10"],
+                        JsonOptions));
+                using var conservativeDocument = ParseJsonOutput(conservativeStdout);
+                var conservativeBundles = conservativeDocument.RootElement
+                    .GetProperty("candidate_bundles")
+                    .EnumerateArray()
+                    .ToArray();
+                Assert.Equal(CommandExitCodes.Success, conservativeExitCode);
+                Assert.Equal(string.Empty, conservativeStderr);
+                Assert.Equal(2, conservativeBundles.Length);
+                Assert.All(conservativeBundles, bundle => Assert.False(bundle.GetProperty("identity_scoped").GetBoolean()));
+                Assert.All(conservativeBundles, bundle => Assert.Equal(
+                    "ambiguous_reference_candidates",
+                    bundle.GetProperty("identity_scope_reason").GetString()));
+            }
+
+            var (excerptExitCode, excerptStdout, excerptStderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunInspect(
+                    [
+                        "--selector", zeroSelector,
+                        "--db", dbPath,
+                        "--json",
+                        "--path", "docs/Evidence.md",
+                        "--context", "1",
+                        "--fields", "definitions,source_excerpt",
+                    ],
+                    JsonOptions));
+            using var excerptDocument = ParseJsonOutput(excerptStdout);
+            var excerpt = excerptDocument.RootElement.GetProperty("source_excerpt");
+            Assert.Equal(CommandExitCodes.Success, excerptExitCode);
+            Assert.Equal(string.Empty, excerptStderr);
+            Assert.Equal("src/Fixture.cs", excerpt.GetProperty("path").GetString());
+            Assert.Contains("Ping()", excerpt.GetProperty("content").GetString(), StringComparison.Ordinal);
+
+            var (languageMismatchExitCode, languageMismatchStdout, languageMismatchStderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunInspect(
+                    ["--selector", zeroSelector, "--db", dbPath, "--json", "--lang", "python"],
+                    JsonOptions));
+            using var languageMismatchDocument = ParseJsonOutput(languageMismatchStdout);
+            Assert.Equal(CommandExitCodes.NotFound, languageMismatchExitCode);
+            Assert.Equal(string.Empty, languageMismatchStderr);
+            Assert.Equal(
+                "E018_QUERY_NOT_FOUND",
+                languageMismatchDocument.RootElement.GetProperty("error_code").GetString());
 
             Assert.Contains("--selector", CliFlagSchema.GetAcceptedFlagNamesForCommand("inspect"));
 

@@ -601,6 +601,7 @@ internal static class CSharpTypeReferenceArity
         var braceDepth = 0;
         var angleDepth = 0;
         var hasItemContent = false;
+        var hasTopLevelSeparator = false;
         for (var i = openParenthesis + 1; i < text.Length; i++)
         {
             var c = text[i];
@@ -636,6 +637,8 @@ internal static class CSharpTypeReferenceArity
                     hasItemContent = true;
                     break;
                 case ')' when bracketDepth == 0 && braceDepth == 0 && angleDepth == 0:
+                    if (hasTopLevelSeparator && !hasItemContent)
+                        return false;
                     count = hasItemContent ? count + 1 : 0;
                     return true;
                 case '[':
@@ -671,6 +674,7 @@ internal static class CSharpTypeReferenceArity
                         return false;
                     count++;
                     hasItemContent = false;
+                    hasTopLevelSeparator = true;
                     break;
                 case ':' when parenthesisDepth == 0
                                   && bracketDepth == 0
@@ -688,7 +692,6 @@ internal static class CSharpTypeReferenceArity
                     break;
                 default:
                     if (parenthesisDepth == 0
-                        && bracketDepth == 0
                         && braceDepth == 0
                         && angleDepth == 0
                         && IsIdentifierStart(c))
@@ -697,8 +700,13 @@ internal static class CSharpTypeReferenceArity
                         while (identifierEnd < text.Length && IsIdentifierPart(text[identifierEnd]))
                             identifierEnd++;
                         var identifier = text.AsSpan(i, identifierEnd - i);
-                        hasBindingSensitiveModifier |= identifier.SequenceEqual("params".AsSpan())
-                            || identifier.SequenceEqual("this".AsSpan());
+                        hasBindingSensitiveModifier |= bracketDepth == 0
+                            ? identifier.SequenceEqual("params".AsSpan())
+                              || identifier.SequenceEqual("this".AsSpan())
+                            : identifier.SequenceEqual("Optional".AsSpan())
+                              || identifier.SequenceEqual("OptionalAttribute".AsSpan())
+                              || identifier.SequenceEqual("DefaultParameterValue".AsSpan())
+                              || identifier.SequenceEqual("DefaultParameterValueAttribute".AsSpan());
                         i = identifierEnd - 1;
                     }
                     hasItemContent |= !char.IsWhiteSpace(c);
