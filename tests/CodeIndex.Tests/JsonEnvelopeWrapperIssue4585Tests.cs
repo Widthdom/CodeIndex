@@ -388,7 +388,7 @@ public sealed class JsonEnvelopeWrapperIssue4585Tests
             MarkGraphAndFoldReady(dbPath);
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
-                ["impact", "Run", "--db", dbPath, "--fields", "file_impacts.path", "--limit", "1", "--max-json-bytes", "4096"],
+                ["impact", "Run", "--db", dbPath, "--fields", "file_impacts.source_path", "--limit", "1", "--max-json-bytes", "4096"],
                 _jsonOptions,
                 "1.0.0-test"));
 

@@ -2241,6 +2241,15 @@ case-sensitive; unknown values use the versioned `E010_USAGE_ERROR` command
 error when JSON is requested, and discovery runs before query or database
 access.
 
+For `impact`, the `file_impacts` collection derives its allowed leaves from
+`FileDependencyResult`: `result_kind`, `source_path`, `target_path`,
+`source_db`, `target_db`, `reference_count`, `ranking_score`, `symbols`, and
+`evidence`. Compact file-impact rows retain `source_path`, `target_path`,
+`reference_count`, and `result_kind`, so every non-empty row remains
+self-identifying. The ambiguous `file_impacts.path` and `file_impacts.file`
+aliases are rejected; callers and definitions keep their established path
+aliases.
+
 `inspect` keeps a dedicated typed schema in the same registry because its
 established JSON bundle is not a shared bounded-response envelope. It accepts
 top-level groups and exactly one `collection.field` level for definitions,
@@ -6221,6 +6230,14 @@ bounded projection field は `ProjectionFieldRegistry` だけで定義します�
 help はすべてこのレジストリを参照します。field 名は大文字・小文字を区別し、未知の
 値で JSON が要求されている場合は versioned `E010_USAGE_ERROR` command error を
 返します。発見処理は query や database access より先に実行します。
+
+`impact` の `file_impacts` collection では、許可する leaf を
+`FileDependencyResult` から導出します。対象は `result_kind`、`source_path`、
+`target_path`、`source_db`、`target_db`、`reference_count`、`ranking_score`、
+`symbols`、`evidence` です。compact な file-impact row は `source_path`、
+`target_path`、`reference_count`、`result_kind` を保持するため、空でない各 row を
+一意に識別できます。曖昧な `file_impacts.path` と `file_impacts.file` alias は拒否し、
+callers と definitions では既存の path alias を維持します。
 
 `inspect` は従来の JSON bundle を shared bounded-response envelope に変更しないため、
 同じレジストリ内に専用の typed schema を持ちます。top-level group に加え、definitions、

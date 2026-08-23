@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using CodeIndex.Cli;
 using CodeIndex.Database;
@@ -461,7 +462,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunImpact_ClassSymbolJsonReturnsHeuristicFileDependencyHints()
+    public void RunImpact_ClassSymbolJsonAndProjectionsPreserveFileDependencyHints_Issue5156()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_impact_class_fallback");
         try
@@ -484,6 +485,16 @@ public partial class QueryCommandRunnerTests
                     }
                 }
                 """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Worker.cs", "csharp",
+                """
+                public class Worker
+                {
+                    public void Run(FolderDiffService service)
+                    {
+                        service.ExecuteFolderDiffAsync();
+                    }
+                }
+                """);
             MarkGraphAndFoldReady(dbPath);
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
@@ -497,15 +508,131 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("file_dependency_hints", json.GetProperty("impact_mode").GetString());
             Assert.True(json.GetProperty("heuristic").GetBoolean());
-            Assert.Equal(1, json.GetProperty("count").GetInt32());
+            Assert.Equal(2, json.GetProperty("count").GetInt32());
             Assert.Equal(0, json.GetProperty("confirmed_count").GetInt32());
             Assert.Equal(0, json.GetProperty("confirmed_file_count").GetInt32());
-            Assert.Equal(1, json.GetProperty("hint_count").GetInt32());
-            Assert.Equal(1, json.GetProperty("hint_file_count").GetInt32());
+            Assert.Equal(2, json.GetProperty("hint_count").GetInt32());
+            Assert.Equal(2, json.GetProperty("hint_file_count").GetInt32());
             Assert.False(json.GetProperty("has_multiple_definitions").GetBoolean());
             Assert.True(json.GetProperty("has_class_like_definitions").GetBoolean());
-            Assert.Equal("src/App.cs", json.GetProperty("file_impacts")[0].GetProperty("source_path").GetString());
-            Assert.Equal("src/FolderDiffService.cs", json.GetProperty("file_impacts")[0].GetProperty("target_path").GetString());
+            var fullRows = json.GetProperty("file_impacts").EnumerateArray()
+                .ToDictionary(
+                    row => row.GetProperty("source_path").GetString()!,
+                    row => row.Clone(),
+                    StringComparer.Ordinal);
+            Assert.Equal(["src/App.cs", "src/Worker.cs"], fullRows.Keys.Order(StringComparer.Ordinal));
+            Assert.All(
+                fullRows.Values,
+                row => Assert.Equal("src/FolderDiffService.cs", row.GetProperty("target_path").GetString()));
+
+            var compactArgs = new[]
+            {
+                "impact", "FolderDiffService", "--db", dbPath, "--json", "--compact",
+                "--limit", "1", "--max-json-bytes", "4096",
+            };
+            var (compactExitCode, compactStdout, compactStderr) = CaptureConsole(() => ProgramRunner.Run(
+                compactArgs,
+                _jsonOptions,
+                "1.0.0-test"));
+
+            Assert.Equal(CommandExitCodes.Success, compactExitCode);
+            Assert.Equal(string.Empty, compactStderr);
+            Assert.True(Encoding.UTF8.GetByteCount(compactStdout) <= 4096);
+            using var compactDocument = ParseJsonOutput(compactStdout);
+            var compactRoot = compactDocument.RootElement;
+            var compactMetadata = compactRoot.GetProperty("metadata");
+            Assert.Equal("file_impacts", compactMetadata.GetProperty("primary_collection").GetString());
+            Assert.Equal(1, compactMetadata.GetProperty("returned_count").GetInt32());
+            Assert.Equal(2, compactMetadata.GetProperty("total_count").GetInt32());
+            Assert.True(compactMetadata.GetProperty("total_count_authoritative").GetBoolean());
+            Assert.True(compactMetadata.GetProperty("has_more").GetBoolean());
+            var compactRow = Assert.Single(compactRoot.GetProperty("results").EnumerateArray());
+            Assert.True(compactRow.TryGetProperty("source_path", out var firstSourcePath));
+            Assert.Equal("src/FolderDiffService.cs", compactRow.GetProperty("target_path").GetString());
+            Assert.Equal("file_heuristic", compactRow.GetProperty("result_kind").GetString());
+            Assert.True(compactRow.GetProperty("reference_count").GetInt32() > 0);
+            var cursor = Assert.IsType<string>(compactMetadata.GetProperty("next_cursor").GetString());
+
+            var (pageExitCode, pageStdout, pageStderr) = CaptureConsole(() => ProgramRunner.Run(
+                compactArgs.Concat(["--cursor", cursor]).ToArray(),
+                _jsonOptions,
+                "1.0.0-test"));
+
+            Assert.Equal(CommandExitCodes.Success, pageExitCode);
+            Assert.Equal(string.Empty, pageStderr);
+            Assert.True(Encoding.UTF8.GetByteCount(pageStdout) <= 4096);
+            using var pageDocument = ParseJsonOutput(pageStdout);
+            var pageRoot = pageDocument.RootElement;
+            Assert.Equal(1, pageRoot.GetProperty("metadata").GetProperty("cursor_offset").GetInt32());
+            Assert.False(pageRoot.GetProperty("metadata").GetProperty("has_more").GetBoolean());
+            var pageRow = Assert.Single(pageRoot.GetProperty("results").EnumerateArray());
+            Assert.NotEqual(firstSourcePath.GetString(), pageRow.GetProperty("source_path").GetString());
+            Assert.Equal("src/FolderDiffService.cs", pageRow.GetProperty("target_path").GetString());
+
+            var (pathsExitCode, pathsStdout, pathsStderr) = CaptureConsole(() => ProgramRunner.Run(
+                [
+                    "impact", "FolderDiffService", "--db", dbPath, "--json", "--limit", "5",
+                    "--fields", "file_impacts.source_path,file_impacts.target_path",
+                ],
+                _jsonOptions,
+                "1.0.0-test"));
+
+            Assert.Equal(CommandExitCodes.Success, pathsExitCode);
+            Assert.Equal(string.Empty, pathsStderr);
+            using var pathsDocument = ParseJsonOutput(pathsStdout);
+            Assert.All(
+                pathsDocument.RootElement.GetProperty("results").EnumerateArray(),
+                row =>
+                {
+                    Assert.Equal(2, row.EnumerateObject().Count());
+                    Assert.Contains(row.GetProperty("source_path").GetString(), fullRows.Keys);
+                    Assert.Equal("src/FolderDiffService.cs", row.GetProperty("target_path").GetString());
+                });
+
+            const string allFileImpactFields =
+                "file_impacts.result_kind,file_impacts.source_path,file_impacts.target_path," +
+                "file_impacts.source_db,file_impacts.target_db,file_impacts.reference_count," +
+                "file_impacts.ranking_score,file_impacts.symbols,file_impacts.evidence";
+            var (allExitCode, allStdout, allStderr) = CaptureConsole(() => ProgramRunner.Run(
+                [
+                    "impact", "FolderDiffService", "--db", dbPath, "--json", "--limit", "5",
+                    "--fields", allFileImpactFields,
+                ],
+                _jsonOptions,
+                "1.0.0-test"));
+
+            Assert.Equal(CommandExitCodes.Success, allExitCode);
+            Assert.Equal(string.Empty, allStderr);
+            using var allDocument = ParseJsonOutput(allStdout);
+            var projectedRows = allDocument.RootElement.GetProperty("results").EnumerateArray().ToArray();
+            Assert.Equal(2, projectedRows.Length);
+            Assert.DoesNotContain(projectedRows, row => !row.EnumerateObject().Any());
+            foreach (var projectedRow in projectedRows)
+            {
+                var sourcePath = projectedRow.GetProperty("source_path").GetString()!;
+                foreach (var property in fullRows[sourcePath].EnumerateObject())
+                {
+                    Assert.True(projectedRow.TryGetProperty(property.Name, out var projectedValue), property.Name);
+                    Assert.Equal(property.Value.GetRawText(), projectedValue.GetRawText());
+                }
+            }
+
+            var (invalidExitCode, invalidStdout, invalidStderr) = CaptureConsole(() => ProgramRunner.Run(
+                [
+                    "impact", "FolderDiffService", "--db", dbPath, "--json",
+                    "--fields", "file_impacts.path",
+                ],
+                _jsonOptions,
+                "1.0.0-test"));
+
+            Assert.Equal(CommandExitCodes.UsageError, invalidExitCode);
+            Assert.Equal(string.Empty, invalidStderr);
+            using var invalidDocument = ParseJsonOutput(invalidStdout);
+            Assert.Contains(
+                "Unknown --fields value 'file_impacts.path'",
+                invalidDocument.RootElement.GetProperty("message").GetString(),
+                StringComparison.Ordinal);
+            Assert.False(invalidDocument.RootElement.TryGetProperty("results", out _));
         }
         finally
         {
