@@ -1217,13 +1217,13 @@ public static partial class GitHelper
     {
         var repoRoot = TryGetRepositoryRoot(projectRoot, gitEnvironmentOverrides, cancellationToken);
         if (repoRoot == null)
-            return ProbeFileSystemIgnoreCase(projectRoot);
+            return ProbeFileSystemIgnoreCase(projectRoot, cancellationToken);
 
         var configured = TryRunGit(repoRoot, gitEnvironmentOverrides, cancellationToken, "config", "--bool", "--get", "core.ignorecase")?.Trim();
         if (bool.TryParse(configured, out var ignoreCase))
             return ignoreCase;
 
-        return ProbeFileSystemIgnoreCase(projectRoot);
+        return ProbeFileSystemIgnoreCase(projectRoot, cancellationToken);
     }
 
     /// <summary>
@@ -1518,7 +1518,9 @@ public static partial class GitHelper
     private static string FormatGitDiagnostic(string diagnostic) =>
         GitProcessRunner.FormatDiagnostic(diagnostic);
 
-    private static bool ProbeFileSystemIgnoreCase(string projectRoot)
+    private static bool ProbeFileSystemIgnoreCase(
+        string projectRoot,
+        CancellationToken cancellationToken)
     {
         var normalizedRoot = projectRoot;
         try
@@ -1531,7 +1533,7 @@ public static partial class GitHelper
             {
                 try
                 {
-                    if (CaseSensitivityProbeDirectory.ProbeExistingChildIgnoreCase(normalizedRoot) is { } existingChildIgnoreCase)
+                    if (CaseSensitivityProbeDirectory.ProbeExistingChildIgnoreCase(normalizedRoot, cancellationToken) is { } existingChildIgnoreCase)
                         return existingChildIgnoreCase;
                 }
                 catch (Exception ex) when (IsCaseSensitivityProbeFailure(ex))
@@ -1546,14 +1548,14 @@ public static partial class GitHelper
                     if (!string.IsNullOrEmpty(parent)
                         && !string.Equals(parent, normalizedRoot, StringComparison.Ordinal))
                     {
-                        return ProbeFileSystemIgnoreCase(parent);
+                        return ProbeFileSystemIgnoreCase(parent, cancellationToken);
                     }
 
                     throw;
                 }
             }
 
-            return CaseSensitivityProbeDirectory.ProbeIgnoreCase(normalizedRoot, "case-probe-");
+            return CaseSensitivityProbeDirectory.ProbeIgnoreCase(normalizedRoot, "case-probe-", cancellationToken);
         }
         catch (CaseSensitivityProbeException ex)
         {

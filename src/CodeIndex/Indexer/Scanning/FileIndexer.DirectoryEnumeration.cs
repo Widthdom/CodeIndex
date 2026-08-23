@@ -77,14 +77,14 @@ public partial class FileIndexer
                 if (_usesDefaultDirectoryIgnoreCaseProbe)
                 {
                     entries = MaterializeDirectoryEntries(dir, cancellationToken);
-                    directoryIgnoreCase = DirectoryUsesIgnoreCase(dir, entries);
+                    directoryIgnoreCase = DirectoryUsesIgnoreCase(dir, entries, cancellationToken);
                 }
                 else
                 {
                     // Preserve the custom-probe contract, including one invocation for a directory
                     // whose subsequent entry enumeration fails.
                     // custom probe は後続の entry 列挙が失敗する directory でも従来どおり1回呼ぶ。
-                    directoryIgnoreCase = DirectoryUsesIgnoreCase(dir);
+                    directoryIgnoreCase = DirectoryUsesIgnoreCase(dir, entries: null, cancellationToken);
                     entries = MaterializeDirectoryEntries(dir, cancellationToken);
                 }
                 RecordDirectoryCaseSensitivityWarning(relativeDir, directoryIgnoreCase, scanState);
@@ -101,7 +101,7 @@ public partial class FileIndexer
             }
             else
             {
-                var directoryIgnoreCase = DirectoryUsesIgnoreCase(dir);
+                var directoryIgnoreCase = DirectoryUsesIgnoreCase(dir, entries: null, cancellationToken);
                 RecordDirectoryCaseSensitivityWarning(relativeDir, directoryIgnoreCase, scanState);
                 if (!passthrough)
                     EnumerateIndexableFilesInDirectory(dir, scanState, activeIgnoreRules, directoryIgnoreCase, cancellationToken);

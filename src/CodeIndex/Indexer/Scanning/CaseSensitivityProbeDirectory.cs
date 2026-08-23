@@ -8,6 +8,7 @@ internal static class CaseSensitivityProbeDirectory
     internal const string DataDirectoryName = ".cdidx";
     internal const string ProbeDirectoryName = "probes";
     internal const string IsolatedProbeDirectoryPrefix = ".cdidx-case-probe-";
+    internal const int MaxExistingChildProbeEntries = 4096;
 
     private const UnixFileMode PrivateDirectoryMode =
         UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
@@ -15,14 +16,20 @@ internal static class CaseSensitivityProbeDirectory
     internal static Action<string>? DeleteCreatedEmptyDirectoryForTesting { get; set; }
     internal static Action<CaseSensitivityProbeCleanupDiagnostic>? CleanupDiagnosticSinkForTesting { get; set; }
 
-    internal static bool ProbeIgnoreCase(string projectRoot, string prefix)
+    internal static bool ProbeIgnoreCase(
+        string projectRoot,
+        string prefix,
+        CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var normalizedRoot = Path.GetFullPath(projectRoot);
         using var probe = CreateIsolatedProbePathScope(normalizedRoot, prefix);
         var probePath = probe.Path;
-        FileWriteProbe.WriteEmptyFile(probePath);
         try
         {
+            cancellationToken.ThrowIfCancellationRequested();
+            FileWriteProbe.WriteEmptyFile(probePath);
+            cancellationToken.ThrowIfCancellationRequested();
             if (TryCreateLeafNameCaseVariant(probePath, out var probeVariant))
                 return File.Exists(LongPath.EnsureWindowsPrefix(probeVariant));
         }
@@ -58,23 +65,56 @@ internal static class CaseSensitivityProbeDirectory
         return false;
     }
 
-    internal static bool? ProbeExistingChildIgnoreCase(string directory)
+    internal static bool? ProbeExistingChildIgnoreCase(
+        string directory,
+        CancellationToken cancellationToken = default,
+        int maxEntries = MaxExistingChildProbeEntries)
     {
         var normalizedDirectory = Path.GetFullPath(directory);
-        var entries = Directory.EnumerateFileSystemEntries(LongPath.EnsureWindowsPrefix(normalizedDirectory))
-            .Select(LongPath.RemoveWindowsPrefix)
-            .ToArray();
-        return ProbeExistingChildIgnoreCase(normalizedDirectory, entries);
+        var options = new FileSystemTraversalOptions(maxEntries, cancellationToken);
+        try
+        {
+            var entries = FileSystemTraversalPolicy.EnumerateFileSystemEntries(
+                LongPath.EnsureWindowsPrefix(normalizedDirectory),
+                options);
+            return ProbeExistingChildIgnoreCase(normalizedDirectory, entries, cancellationToken, maxEntries);
+        }
+        catch (FileSystemTraversalBudgetExceededException)
+        {
+            // A partial directory snapshot cannot establish case-sensitivity. Returning unknown
+            // lets callers use their isolated-write or cached root-policy fallback.
+            // directory snapshot が不完全な場合は大小文字 policy を確定できないため、unknown を
+            // 返して caller 側の isolated-write / cached root-policy fallback に委ねる。
+            return null;
+        }
     }
 
-    internal static bool? ProbeExistingChildIgnoreCase(string directory, IReadOnlyList<string> entries)
+    internal static bool? ProbeExistingChildIgnoreCase(
+        string directory,
+        IEnumerable<string> entries,
+        CancellationToken cancellationToken = default,
+        int maxEntries = MaxExistingChildProbeEntries)
     {
-        _ = Path.GetFullPath(directory);
-        var exactNames = entries
-            .Select(Path.GetFileName)
-            .ToHashSet(StringComparer.Ordinal);
-        foreach (var normalizedEntry in entries)
+        if (maxEntries < 0)
+            throw new ArgumentOutOfRangeException(nameof(maxEntries), "Case-probe entry budget must be zero or greater.");
+
+        var normalizedDirectory = Path.GetFullPath(directory);
+        var exactNames = new HashSet<string>(StringComparer.Ordinal);
+        var entriesObserved = 0;
+        foreach (var entry in entries)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+            entriesObserved++;
+            if (entriesObserved > maxEntries)
+                return null;
+
+            exactNames.Add(Path.GetFileName(entry));
+        }
+
+        foreach (var entryName in exactNames)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var normalizedEntry = Path.Combine(normalizedDirectory, entryName);
             if (!TryCreateLeafNameCaseVariant(normalizedEntry, out var variant))
                 continue;
 
