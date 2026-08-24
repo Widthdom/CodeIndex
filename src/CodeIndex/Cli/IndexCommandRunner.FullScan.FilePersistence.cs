@@ -157,9 +157,14 @@ public static partial class IndexCommandRunner
             record.Path,
             item.FilePath,
             record.Lang);
-        context.PostExtractionHooks.ObserveCSharpStaticInterfaceSourceSymbols(
-            fileContext,
-            symbols);
+        if (string.Equals(record.Lang, "csharp", StringComparison.Ordinal)
+            && !item.SymbolPreparation.CSharpSourceObservationCompleted)
+        {
+            context.PostExtractionHooks.ObserveCSharpStaticInterfaceSourceSymbols(
+                fileContext,
+                symbols);
+            FullScanCSharpSourceObservedForTesting?.Invoke(record.Path);
+        }
         if (symbols.Count > options.MaxSymbolsPerFile)
         {
             var issue = BuildSymbolCountExceededIssue(
@@ -187,13 +192,22 @@ public static partial class IndexCommandRunner
                 $"  [SKIP] {record.Path} ({issue.Message})");
         }
 
-        var familyScopeKey = context.Indexer.GetFamilyScopeKey(item.FilePath, record.Lang);
+        var familyScopeKey = item.SymbolPreparation.AppliedFamilyScopeKey;
         if (item.Symbols == null)
         {
+            familyScopeKey = context.Indexer.GetFamilyScopeKey(item.FilePath, record.Lang);
+            FullScanFamilyScopeResolvedForTesting?.Invoke(record.Path);
             SymbolExtractor.ApplyFamilyScope(
                 symbols,
                 familyScopeKey,
                 record.Lang);
+        }
+        else if (!item.SymbolPreparation.FamilyScopeApplied
+                 && context.PostExtractionHooks.HasHooks
+                 && string.Equals(record.Lang, "csharp", StringComparison.Ordinal))
+        {
+            familyScopeKey = context.Indexer.GetFamilyScopeKey(item.FilePath, record.Lang);
+            FullScanFamilyScopeResolvedForTesting?.Invoke(record.Path);
         }
         var mutableSymbols = symbols as IList<SymbolRecord> ?? symbols.ToList();
         context.PostExtractionHooks.OnSymbolsExtractedAfterSourceObservation(

@@ -66,6 +66,14 @@ public static partial class IndexCommandRunner
         }
     }
 
+    private readonly record struct FullScanSymbolPreparation(
+        string? AppliedFamilyScopeKey,
+        bool FamilyScopeApplied,
+        bool CSharpSourceObservationCompleted)
+    {
+        internal static FullScanSymbolPreparation None => default;
+    }
+
     private sealed record FullScanFileWorkItem(
         int FileIndex,
         string FilePath,
@@ -76,6 +84,7 @@ public static partial class IndexCommandRunner
         string? Warning,
         IReadOnlyList<ChunkRecord>? Chunks,
         IReadOnlyList<SymbolRecord>? Symbols,
+        FullScanSymbolPreparation SymbolPreparation,
         IReadOnlyList<ReferenceRecord>? References,
         IReadOnlyList<FileIssue>? Issues,
         FileIssue? GeneratedSuppressionIssue,
@@ -111,6 +120,7 @@ public static partial class IndexCommandRunner
                 warning,
                 chunks,
                 symbols,
+                FullScanSymbolPreparation.None,
                 references,
                 issues,
                 generatedSuppressionIssue,
@@ -127,6 +137,7 @@ public static partial class IndexCommandRunner
             string? warning,
             IReadOnlyList<ChunkRecord> chunks,
             IReadOnlyList<SymbolRecord> symbols,
+            FullScanSymbolPreparation symbolPreparation,
             IReadOnlyList<ReferenceRecord> references,
             IReadOnlyList<FileIssue> issues,
             FileIssue? generatedSuppressionIssue = null,
@@ -144,6 +155,7 @@ public static partial class IndexCommandRunner
                 warning,
                 chunks,
                 symbols,
+                symbolPreparation,
                 references,
                 issues,
                 generatedSuppressionIssue,
@@ -153,10 +165,10 @@ public static partial class IndexCommandRunner
         }
 
         public static FullScanFileWorkItem Failure(int fileIndex, string filePath, string relativePath, string phase, Exception exception)
-            => new(fileIndex, filePath, relativePath, null, null, null, null, null, null, null, null, null, false, phase, exception);
+            => new(fileIndex, filePath, relativePath, null, null, null, null, null, null, FullScanSymbolPreparation.None, null, null, null, false, phase, exception);
 
         public static FullScanFileWorkItem Skipped(int fileIndex, string filePath, string relativePath, string warning)
-            => new(fileIndex, filePath, relativePath, null, null, null, warning, null, null, null, null, null, false, null, null);
+            => new(fileIndex, filePath, relativePath, null, null, null, warning, null, null, FullScanSymbolPreparation.None, null, null, null, false, null, null);
     }
 
     private sealed class CSharpWorkspaceSnapshotDriftException(string path)

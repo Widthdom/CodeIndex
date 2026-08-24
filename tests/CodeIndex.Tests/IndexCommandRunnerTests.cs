@@ -2266,19 +2266,129 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_ParallelCSharpSymbolCapCarriesSourceObservationWithoutAppliedFamilyScope()
+    {
+        var projectRoot = CreateTempProject();
+        var previousSchedulingHook =
+            IndexCommandRunner.FullScanExtractionSchedulingForTesting;
+        var previousFamilyScopeHook =
+            IndexCommandRunner.FullScanFamilyScopeResolvedForTesting;
+        var previousCSharpSourceHook =
+            IndexCommandRunner.FullScanCSharpSourceObservedForTesting;
+        bool? parallelized = null;
+        var familyScopeResolutionCount = 0;
+        var csharpSourceObservationCount = 0;
+        try
+        {
+            var filePath = Path.Combine(projectRoot, "Generated.cs");
+            File.WriteAllText(
+                filePath,
+                string.Join(
+                    '\n',
+                    Enumerable.Range(0, 4).Select(i => $"public class Generated{i} {{ }}")));
+
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--max-symbols-per-file", "10", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            IndexCommandRunner.FullScanExtractionSchedulingForTesting = (enabled, reason) =>
+            {
+                parallelized = enabled;
+                previousSchedulingHook?.Invoke(enabled, reason);
+            };
+            IndexCommandRunner.FullScanFamilyScopeResolvedForTesting = path =>
+            {
+                Interlocked.Increment(ref familyScopeResolutionCount);
+                previousFamilyScopeHook?.Invoke(path);
+            };
+            IndexCommandRunner.FullScanCSharpSourceObservedForTesting = path =>
+            {
+                Interlocked.Increment(ref csharpSourceObservationCount);
+                previousCSharpSourceHook?.Invoke(path);
+            };
+
+            var (exitCode, json) = RunAndCaptureJson(
+                [projectRoot, "--parallelism", "4", "--max-symbols-per-file", "2", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("errors").GetInt32());
+            Assert.True(parallelized);
+            Assert.Equal(0, familyScopeResolutionCount);
+            Assert.Equal(1, csharpSourceObservationCount);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            Assert.Equal(1, CountRows(dbPath, "files"));
+            Assert.Equal(0, CountRows(dbPath, "chunks"));
+            Assert.Equal(0, CountRows(dbPath, "symbols"));
+            Assert.Equal(0, CountRows(dbPath, "symbol_references"));
+
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            db.TryMigrateForRead();
+            var reader = new DbReader(db.Connection, db.IsReadOnly);
+            var issue = Assert.Single(reader.GetIssues("symbol_count_exceeded"));
+            Assert.Equal("Generated.cs", issue.Path);
+            Assert.Equal(0, issue.Line);
+            Assert.Contains("--max-symbols-per-file", issue.Message);
+
+            IndexCommandRunner.FullScanExtractionSchedulingForTesting =
+                previousSchedulingHook;
+            IndexCommandRunner.FullScanFamilyScopeResolvedForTesting =
+                previousFamilyScopeHook;
+            IndexCommandRunner.FullScanCSharpSourceObservedForTesting =
+                previousCSharpSourceHook;
+            var (raisedExitCode, raisedJson) = RunAndCaptureJson([projectRoot, "--max-symbols-per-file", "10", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, raisedExitCode);
+            Assert.Equal("success", raisedJson.GetProperty("status").GetString());
+            Assert.True(CountRows(dbPath, "chunks") > 0);
+            Assert.True(CountRows(dbPath, "symbols") > 0);
+            Assert.Empty(reader.GetIssues("symbol_count_exceeded"));
+        }
+        finally
+        {
+            IndexCommandRunner.FullScanExtractionSchedulingForTesting =
+                previousSchedulingHook;
+            IndexCommandRunner.FullScanFamilyScopeResolvedForTesting =
+                previousFamilyScopeHook;
+            IndexCommandRunner.FullScanCSharpSourceObservedForTesting =
+                previousCSharpSourceHook;
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_FileAboveMaxReferencesPerFile_FullScanAndUpdatePersistReferenceCountExceededIssueOnly_Issue3719()
     {
         var projectRoot = CreateTempProject();
+        var previousFamilyScopeHook =
+            IndexCommandRunner.FullScanFamilyScopeResolvedForTesting;
+        var previousCSharpSourceHook =
+            IndexCommandRunner.FullScanCSharpSourceObservedForTesting;
+        var familyScopeResolutionCount = 0;
+        var csharpSourceObservationCount = 0;
         try
         {
             var filePath = Path.Combine(projectRoot, "DenseReferences.cs");
             File.WriteAllText(filePath, BuildDenseReferenceCSharpSource(3));
+
+            IndexCommandRunner.FullScanFamilyScopeResolvedForTesting = path =>
+            {
+                Interlocked.Increment(ref familyScopeResolutionCount);
+                previousFamilyScopeHook?.Invoke(path);
+            };
+            IndexCommandRunner.FullScanCSharpSourceObservedForTesting = path =>
+            {
+                Interlocked.Increment(ref csharpSourceObservationCount);
+                previousCSharpSourceHook?.Invoke(path);
+            };
 
             var (exitCode, json) = RunAndCaptureJson([projectRoot, "--max-references-per-file", "2", "--json"]);
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal("success", json.GetProperty("status").GetString());
             Assert.Equal(0, json.GetProperty("summary").GetProperty("errors").GetInt32());
+            Assert.Equal(1, familyScopeResolutionCount);
+            Assert.Equal(1, csharpSourceObservationCount);
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             Assert.Equal(1, CountRows(dbPath, "files"));
@@ -2294,6 +2404,10 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(0, issue.Line);
             Assert.Contains("--max-references-per-file", issue.Message);
 
+            IndexCommandRunner.FullScanFamilyScopeResolvedForTesting =
+                previousFamilyScopeHook;
+            IndexCommandRunner.FullScanCSharpSourceObservedForTesting =
+                previousCSharpSourceHook;
             var (raisedExitCode, raisedJson) = RunAndCaptureJson([projectRoot, "--max-references-per-file", "10", "--json"]);
 
             Assert.Equal(CommandExitCodes.Success, raisedExitCode);
@@ -2318,6 +2432,10 @@ public partial class IndexCommandRunnerTests
         }
         finally
         {
+            IndexCommandRunner.FullScanFamilyScopeResolvedForTesting =
+                previousFamilyScopeHook;
+            IndexCommandRunner.FullScanCSharpSourceObservedForTesting =
+                previousCSharpSourceHook;
             DeleteDirectory(projectRoot);
         }
     }

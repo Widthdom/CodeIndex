@@ -39,8 +39,14 @@ public partial class IndexCommandRunnerTests
         var dbPath = Path.Combine(dbRoot, "codeindex.db");
         var previousRawHook = DbWriter.AuthoritativeFreshRawInsertExecutingForTesting;
         var previousRawScopeHook = DbWriter.AuthoritativeFreshRawInsertScopeDisposedForTesting;
+        var previousFamilyScopeHook =
+            IndexCommandRunner.FullScanFamilyScopeResolvedForTesting;
+        var previousCSharpSourceHook =
+            IndexCommandRunner.FullScanCSharpSourceObservedForTesting;
         var rawWork = new List<DbWriter.AuthoritativeFreshRawInsertWork>();
         var rawScopeSnapshots = new List<DbWriter.AuthoritativeFreshRawInsertScopeStats>();
+        var familyScopeResolutionCount = 0;
+        var csharpSourceObservationCount = 0;
         try
         {
             var fixture = WriteInitialFullIndexFixture(projectRoot, copiesPerLanguage);
@@ -55,6 +61,16 @@ public partial class IndexCommandRunnerTests
             {
                 rawScopeSnapshots.Add(stats);
                 previousRawScopeHook?.Invoke(stats);
+            };
+            IndexCommandRunner.FullScanFamilyScopeResolvedForTesting = path =>
+            {
+                Interlocked.Increment(ref familyScopeResolutionCount);
+                previousFamilyScopeHook?.Invoke(path);
+            };
+            IndexCommandRunner.FullScanCSharpSourceObservedForTesting = path =>
+            {
+                Interlocked.Increment(ref csharpSourceObservationCount);
+                previousCSharpSourceHook?.Invoke(path);
             };
 
             var stopwatch = Stopwatch.StartNew();
@@ -79,6 +95,10 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(fixture.FileCount, summary.GetProperty("files_persisted").GetInt32());
             Assert.Equal(0, summary.GetProperty("files_skipped").GetInt32());
             Assert.Equal(0, summary.GetProperty("errors").GetInt32());
+            Assert.Equal(fixture.FileCount, familyScopeResolutionCount);
+            Assert.Equal(
+                fixture.FilesPerLanguage["csharp"],
+                csharpSourceObservationCount);
             Assert.True(summary.GetProperty("chunks_persisted").GetInt32() >= fixture.FileCount);
             Assert.True(summary.GetProperty("symbols_persisted").GetInt32() >= fixture.FileCount);
             Assert.True(summary.GetProperty("references_persisted").GetInt32() > 0);
@@ -229,6 +249,10 @@ public partial class IndexCommandRunnerTests
         {
             DbWriter.AuthoritativeFreshRawInsertExecutingForTesting = previousRawHook;
             DbWriter.AuthoritativeFreshRawInsertScopeDisposedForTesting = previousRawScopeHook;
+            IndexCommandRunner.FullScanFamilyScopeResolvedForTesting =
+                previousFamilyScopeHook;
+            IndexCommandRunner.FullScanCSharpSourceObservedForTesting =
+                previousCSharpSourceHook;
             SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
             DeleteDirectory(dbRoot);

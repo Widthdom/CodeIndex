@@ -319,6 +319,18 @@ do not probe, and the bounded completion queue still publishes in completion
 order. Keep this tail probe and its schedule state independent of repository
 size; an all-file metadata pass can regress network and virtual filesystems.
 
+Parallel full-scan workers also carry symbol-preparation state to the single
+persistence consumer. Reuse the worker's family-scope key and completed C#
+source observation instead of resolving or observing them again per file. Keep
+`FamilyScopeApplied` separate from the nullable key: a resolver may legitimately
+return `null`, while a symbol-capped or otherwise unprepared payload also has no
+key. A symbol cap carries the completed C# observation but no applied scope, a
+reference cap carries both completed stages, and generated-code suppression
+carries neither. Serial filter/hook fallbacks still perform each stage once on
+the consumer, before hook mutation, and must preserve the rebuilt family-key
+parity. This handoff belongs only to parallel full scans; scoped update, MCP,
+and dry-run paths retain their existing preparation boundaries.
+
 Scoped updates may also parallelize extraction when the immutable C# prepass is
 authoritative and finds static-interface contracts. This path requires at least
 two snapshotted C# targets, `--parallelism > 1`, no active symbol-kind filter,
@@ -4432,6 +4444,16 @@ claimします。同一size、metadata取得不能、設定size上限を既に�
 target arrayと論理file indexは並べ替えず、serialなhook/filter経路はprobeせず、bounded completion
 queueは引き続き完了順でpublishします。network/virtual filesystemで全file metadata passへ
 退行しないよう、tail probeとschedule stateをrepository規模に依存しない固定上限に保ってください。
+
+parallel full scan の worker は、symbol preparation の状態も single persistence consumer へ
+引き渡します。worker が解決した family-scope key と完了済みの C# source observation を再利用し、
+file ごとに再解決・再観測しないでください。nullable key と `FamilyScopeApplied` は分離します。
+resolver が正当に `null` を返す場合と、symbol cap などで scope 未適用の payload は同じ key 値に
+なり得るためです。symbol cap は完了済み C# observation だけを、reference cap は両 stage を、
+generated-code suppression はどちらも未完了として引き渡します。serial の filter/hook fallback は
+consumer 側で各 stage を1回だけ実行し、hook mutation より前に family key を渡して、再構築後の
+family-key parity を維持してください。この handoff は parallel full scan 専用です。scoped update、
+MCP、dry-run の既存 preparation boundary へ一般化しないでください。
 
 scoped update でも、immutable な C# prepass が authoritative で static-interface
 contract を検出した場合は extraction を並列化できます。この経路は snapshot 済み C# target
