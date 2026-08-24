@@ -4,10 +4,11 @@ namespace CodeIndex.Indexer;
 
 public partial class FileIndexer
 {
-    // Shebang detection reads at most the first physical line within this
+    // Script-header detection reads at most the first physical line within this
     // byte cap. NUL bytes or a line that reaches the cap without LF/CR are treated as
     // unsupported so binary executables and minified data are not parsed as scripts.
     internal const int ShebangProbeByteLimit = 256;
+    private const string ZshCompdefDirective = "#compdef";
     private const string PythonShebangInterpreterPrefix = "python";
     private static readonly UTF8Encoding StrictShebangUtf8Encoding = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
     private static readonly UnicodeEncoding StrictShebangUtf16LittleEndianEncoding = new(bigEndian: false, byteOrderMark: false, throwOnInvalidBytes: true);
@@ -47,20 +48,22 @@ public partial class FileIndexer
         string Language);
 
     /// <summary>
-    /// Try to infer a language from a script shebang.
+    /// Try to infer a language from a bounded first-line script signature.
     /// This is a cheap fallback for extensionless/unknown files and an authoritative signal
-    /// for explicitly ambiguous extensions after language-map overrides have been applied.
+    /// from shebangs for explicitly ambiguous extensions after language-map overrides have
+    /// been applied. Zsh #compdef metadata is accepted only for extensionless/unknown files.
     /// It reads at most <see cref="ShebangProbeByteLimit"/> bytes from the first line;
     /// NUL bytes and over-cap first lines are treated as non-scripts.
-    /// 拡張子なし/未知のファイルでは fallback として、明示的に曖昧な拡張子では override 適用後の
-    /// authoritative signal として shebang から言語を推定する。
+    /// 拡張子なし/未知ファイルでは shebang または zsh #compdef metadata を fallback として使い、
+    /// 明示的に曖昧な拡張子では override 適用後の shebang だけを authoritative signal として使う。
     /// </summary>
-    private static LanguageDetectionResult TryDetectLanguageFromShebang(
+    private static LanguageDetectionResult TryDetectLanguageFromScriptHeader(
         string filePath,
         SymlinkPolicy symlinkPolicy,
         string? projectRoot,
         FileProbeStatus? knownIndexability,
-        Func<string, FileStream>? openReadForIndexContent)
+        Func<string, FileStream>? openReadForIndexContent,
+        bool allowZshCompdef)
     {
         var indexability = knownIndexability ?? GetFileIndexability(filePath, symlinkPolicy, projectRoot);
         if (indexability == FileProbeStatus.Missing)
@@ -82,19 +85,19 @@ public partial class FileIndexer
                 return new LanguageDetectionResult(FileProbeStatus.Unsupported, null);
 
             var bytes = buffer[..bytesRead];
-            var shebangEncoding = DetectShebangEncoding(bytes);
-            if (shebangEncoding == ShebangEncoding.Unsupported)
+            var scriptHeaderEncoding = DetectScriptHeaderEncoding(bytes);
+            if (scriptHeaderEncoding == ScriptHeaderEncoding.Unsupported)
                 return new LanguageDetectionResult(FileProbeStatus.Unsupported, null);
 
-            if ((shebangEncoding == ShebangEncoding.Utf8 || shebangEncoding == ShebangEncoding.Utf8Bom)
+            if ((scriptHeaderEncoding == ScriptHeaderEncoding.Utf8 || scriptHeaderEncoding == ScriptHeaderEncoding.Utf8Bom)
                 && bytes.Contains((byte)0))
                 return new LanguageDetectionResult(FileProbeStatus.Unsupported, null);
 
-            var preambleLength = GetShebangPreambleLength(shebangEncoding);
-            if (!HasRawShebangPrefix(bytes, shebangEncoding, preambleLength))
+            var preambleLength = GetScriptHeaderPreambleLength(scriptHeaderEncoding);
+            if (!HasRawScriptHeaderPrefix(bytes, scriptHeaderEncoding, preambleLength, allowZshCompdef))
                 return new LanguageDetectionResult(FileProbeStatus.Unsupported, null);
 
-            var lineEnd = FindShebangLineEnd(bytes, shebangEncoding, preambleLength);
+            var lineEnd = FindScriptHeaderLineEnd(bytes, scriptHeaderEncoding, preambleLength);
             if (lineEnd < 0)
             {
                 if (bytesRead == ShebangProbeByteLimit)
@@ -103,10 +106,18 @@ public partial class FileIndexer
             }
 
             var firstLineBytes = bytes[preambleLength..lineEnd];
-            var firstLine = DecodeShebangLine(firstLineBytes, shebangEncoding);
+            var firstLine = DecodeScriptHeaderLine(firstLineBytes, scriptHeaderEncoding);
 
             if (firstLine.StartsWith('\uFEFF'))
                 firstLine = firstLine[1..];
+
+            if (allowZshCompdef && IsZshCompdefDirective(firstLine))
+            {
+                return new LanguageDetectionResult(
+                    FileProbeStatus.Supported,
+                    "shell",
+                    DetectionSource: ZshCompdefDetectionSource);
+            }
 
             if (!firstLine.StartsWith("#!", StringComparison.Ordinal))
                 return new LanguageDetectionResult(FileProbeStatus.Unsupported, null);
@@ -150,7 +161,12 @@ public partial class FileIndexer
         }
     }
 
-    private enum ShebangEncoding
+    private static bool IsZshCompdefDirective(string firstLine)
+        => firstLine.StartsWith(ZshCompdefDirective, StringComparison.Ordinal)
+            && (firstLine.Length == ZshCompdefDirective.Length
+                || char.IsWhiteSpace(firstLine[ZshCompdefDirective.Length]));
+
+    private enum ScriptHeaderEncoding
     {
         Utf8,
         Utf8Bom,
@@ -159,84 +175,114 @@ public partial class FileIndexer
         Unsupported,
     }
 
-    private static ShebangEncoding DetectShebangEncoding(ReadOnlySpan<byte> bytes)
+    private static ScriptHeaderEncoding DetectScriptHeaderEncoding(ReadOnlySpan<byte> bytes)
     {
         if (bytes.Length >= 4)
         {
             if (bytes[0] == 0x00 && bytes[1] == 0x00 && bytes[2] == 0xFE && bytes[3] == 0xFF)
-                return ShebangEncoding.Unsupported;
+                return ScriptHeaderEncoding.Unsupported;
             if (bytes[0] == 0xFF && bytes[1] == 0xFE && bytes[2] == 0x00 && bytes[3] == 0x00)
-                return ShebangEncoding.Unsupported;
+                return ScriptHeaderEncoding.Unsupported;
         }
 
         if (bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF)
-            return ShebangEncoding.Utf8Bom;
+            return ScriptHeaderEncoding.Utf8Bom;
         if (bytes.Length >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE)
-            return ShebangEncoding.Utf16LittleEndian;
+            return ScriptHeaderEncoding.Utf16LittleEndian;
         if (bytes.Length >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF)
-            return ShebangEncoding.Utf16BigEndian;
+            return ScriptHeaderEncoding.Utf16BigEndian;
 
-        return ShebangEncoding.Utf8;
+        return ScriptHeaderEncoding.Utf8;
     }
 
-    private static int GetShebangPreambleLength(ShebangEncoding encoding) => encoding switch
+    private static int GetScriptHeaderPreambleLength(ScriptHeaderEncoding encoding) => encoding switch
     {
-        ShebangEncoding.Utf8Bom => 3,
-        ShebangEncoding.Utf16LittleEndian or ShebangEncoding.Utf16BigEndian => 2,
+        ScriptHeaderEncoding.Utf8Bom => 3,
+        ScriptHeaderEncoding.Utf16LittleEndian or ScriptHeaderEncoding.Utf16BigEndian => 2,
         _ => 0,
     };
 
-    private static bool HasRawShebangPrefix(ReadOnlySpan<byte> bytes, ShebangEncoding encoding, int start)
+    private static bool HasRawScriptHeaderPrefix(
+        ReadOnlySpan<byte> bytes,
+        ScriptHeaderEncoding encoding,
+        int start,
+        bool allowZshCompdef)
     {
         var remaining = bytes[start..];
-        return encoding switch
+        if (StartsWithSupportedScriptHeader(remaining, encoding, allowZshCompdef))
+            return true;
+
+        var duplicatePreambleLength = encoding switch
         {
-            ShebangEncoding.Utf16LittleEndian => StartsWithUtf16LeShebang(remaining)
-                || (remaining.Length >= 2
-                    && remaining[0] == 0xFF
-                    && remaining[1] == 0xFE
-                    && StartsWithUtf16LeShebang(remaining[2..])),
-            ShebangEncoding.Utf16BigEndian => StartsWithUtf16BeShebang(remaining)
-                || (remaining.Length >= 2
-                    && remaining[0] == 0xFE
-                    && remaining[1] == 0xFF
-                    && StartsWithUtf16BeShebang(remaining[2..])),
-            _ => StartsWithUtf8Shebang(remaining)
-                || (remaining.Length >= 3
+            ScriptHeaderEncoding.Utf16LittleEndian
+                when remaining.Length >= 2 && remaining[0] == 0xFF && remaining[1] == 0xFE => 2,
+            ScriptHeaderEncoding.Utf16BigEndian
+                when remaining.Length >= 2 && remaining[0] == 0xFE && remaining[1] == 0xFF => 2,
+            ScriptHeaderEncoding.Utf8 or ScriptHeaderEncoding.Utf8Bom
+                when remaining.Length >= 3
                     && remaining[0] == 0xEF
                     && remaining[1] == 0xBB
-                    && remaining[2] == 0xBF
-                    && StartsWithUtf8Shebang(remaining[3..])),
+                    && remaining[2] == 0xBF => 3,
+            _ => 0,
         };
+
+        return duplicatePreambleLength > 0
+            && StartsWithSupportedScriptHeader(
+                remaining[duplicatePreambleLength..],
+                encoding,
+                allowZshCompdef);
     }
 
-    private static bool StartsWithUtf8Shebang(ReadOnlySpan<byte> bytes)
-        => bytes.Length >= 2 && bytes[0] == (byte)'#' && bytes[1] == (byte)'!';
+    private static bool StartsWithSupportedScriptHeader(
+        ReadOnlySpan<byte> bytes,
+        ScriptHeaderEncoding encoding,
+        bool allowZshCompdef)
+        => StartsWithEncodedAsciiPrefix(bytes, encoding, "#!")
+            || (allowZshCompdef && StartsWithEncodedAsciiPrefix(bytes, encoding, ZshCompdefDirective));
 
-    private static bool StartsWithUtf16LeShebang(ReadOnlySpan<byte> bytes)
-        => bytes.Length >= 4
-            && bytes[0] == (byte)'#'
-            && bytes[1] == 0
-            && bytes[2] == (byte)'!'
-            && bytes[3] == 0;
-
-    private static bool StartsWithUtf16BeShebang(ReadOnlySpan<byte> bytes)
-        => bytes.Length >= 4
-            && bytes[0] == 0
-            && bytes[1] == (byte)'#'
-            && bytes[2] == 0
-            && bytes[3] == (byte)'!';
-
-    private static int FindShebangLineEnd(ReadOnlySpan<byte> bytes, ShebangEncoding encoding, int start)
+    private static bool StartsWithEncodedAsciiPrefix(
+        ReadOnlySpan<byte> bytes,
+        ScriptHeaderEncoding encoding,
+        string prefix)
     {
-        if (encoding is ShebangEncoding.Utf8 or ShebangEncoding.Utf8Bom)
+        var bytesPerCharacter = encoding is ScriptHeaderEncoding.Utf16LittleEndian or ScriptHeaderEncoding.Utf16BigEndian
+            ? 2
+            : 1;
+        if (bytes.Length < prefix.Length * bytesPerCharacter)
+            return false;
+
+        for (var i = 0; i < prefix.Length; i++)
+        {
+            var expected = (byte)prefix[i];
+            if (encoding == ScriptHeaderEncoding.Utf16LittleEndian)
+            {
+                if (bytes[i * 2] != expected || bytes[(i * 2) + 1] != 0)
+                    return false;
+            }
+            else if (encoding == ScriptHeaderEncoding.Utf16BigEndian)
+            {
+                if (bytes[i * 2] != 0 || bytes[(i * 2) + 1] != expected)
+                    return false;
+            }
+            else if (bytes[i] != expected)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static int FindScriptHeaderLineEnd(ReadOnlySpan<byte> bytes, ScriptHeaderEncoding encoding, int start)
+    {
+        if (encoding is ScriptHeaderEncoding.Utf8 or ScriptHeaderEncoding.Utf8Bom)
             return bytes[start..].IndexOfAny((byte)'\r', (byte)'\n') is var lineEnd && lineEnd >= 0
                 ? start + lineEnd
                 : -1;
 
         for (var i = start; i + 1 < bytes.Length; i += 2)
         {
-            var ch = encoding == ShebangEncoding.Utf16LittleEndian
+            var ch = encoding == ScriptHeaderEncoding.Utf16LittleEndian
                 ? (bytes[i] | (bytes[i + 1] << 8))
                 : ((bytes[i] << 8) | bytes[i + 1]);
             if (ch is '\r' or '\n')
@@ -246,10 +292,10 @@ public partial class FileIndexer
         return -1;
     }
 
-    private static string DecodeShebangLine(ReadOnlySpan<byte> bytes, ShebangEncoding encoding) => encoding switch
+    private static string DecodeScriptHeaderLine(ReadOnlySpan<byte> bytes, ScriptHeaderEncoding encoding) => encoding switch
     {
-        ShebangEncoding.Utf16LittleEndian => StrictShebangUtf16LittleEndianEncoding.GetString(bytes),
-        ShebangEncoding.Utf16BigEndian => StrictShebangUtf16BigEndianEncoding.GetString(bytes),
+        ScriptHeaderEncoding.Utf16LittleEndian => StrictShebangUtf16LittleEndianEncoding.GetString(bytes),
+        ScriptHeaderEncoding.Utf16BigEndian => StrictShebangUtf16BigEndianEncoding.GetString(bytes),
         _ => StrictShebangUtf8Encoding.GetString(bytes),
     };
 

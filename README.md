@@ -149,6 +149,15 @@ mode and corresponding `Error`, `Hint`, and `Usage` lines in human mode. See
 the [Developer Guide](DEVELOPER_GUIDE.md#cli-recoverable-error-format) for the
 field definitions and stable code/category mapping.
 
+## Extensionless zsh Completion Functions
+
+For extensionless files and files with an unknown extension, the bounded
+first-line probe treats a token-delimited `#compdef` directive as zsh `shell`
+source. Known extensions, exact or prefix filename matches, explicit
+language-map overrides, extractor plugins, and ambiguous extensions retain
+their existing precedence. `#compdef` is not a generic remedy for source in
+other languages.
+
 ## Index Dry-Run Mutation Estimates
 
 `cdidx index <project> --dry-run --json` previews file actions and bounded
@@ -379,6 +388,13 @@ MCP / LSP setup は [AI との連携](USER_GUIDE.md#aiとの連携)を参照し�
 human mode では対応する `Error`、`Hint`、`Usage` 行を返します。field 定義と
 安定した code/category 対応は
 [開発者ガイド](DEVELOPER_GUIDE.md#cli-の回復可能エラー形式)を参照してください。
+
+## 拡張子なしの zsh 補完関数
+
+拡張子なし、または未知拡張子のファイルでは、上限付き先頭行 probe が token 境界を持つ
+`#compdef` directive を zsh の `shell` source として認識します。既知拡張子、exact / prefix
+filename match、明示的な language-map override、extractor plugin、曖昧拡張子は既存の
+precedence を維持します。`#compdef` は他言語の source に対する一般的な解決策ではありません。
 
 ## index dry-run の mutation 推定
 

@@ -221,7 +221,7 @@ public class JsonStringListCodecTests
 
             var status = new DbReader(db.Connection).GetStatus();
             Assert.Contains(
-                "recognized shebang or rename",
+                "for zsh completion functions, a first-line `#compdef` directive",
                 Assert.IsType<string>(status.UnknownExtensionGuidance));
             Assert.Contains(
                 Assert.IsType<List<StatusUnknownExtensionGroup>>(status.UnknownExtensionGroups),

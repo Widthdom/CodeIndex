@@ -26,7 +26,9 @@ internal static class UnknownExtensionClassifier
         "then add a trusted mapping in `.cdidx-langmap.yaml`, register an extractor, " +
         "or ignore intentional non-code files.";
     internal const string ExtensionlessGuidance =
-        "For extensionless source files, add a recognized shebang or rename them with a supported extension. " +
+        "For extensionless source files, add a recognized shebang or, for zsh completion functions, " +
+        "a first-line `#compdef` directive, " +
+        "or rename them with a supported extension. " +
         "For suffixed files, inspect an extension with `cdidx languages --extension <extension> --json`; " +
         "then add a trusted mapping in `.cdidx-langmap.yaml`, register an extractor, " +
         "or ignore intentional non-code files.";
