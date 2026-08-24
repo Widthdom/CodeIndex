@@ -249,6 +249,46 @@ public class ProgramRunnerTests
     }
 
     [Fact]
+    public void Run_ConventionalHelpEveryPublicCommandSucceedsAndHelpFlagsUseCanonicalOutput_Issue5166()
+    {
+        var (canonicalExitCode, canonicalStdout, canonicalStderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["help", "help"],
+            appVersion: "1.10.0"));
+
+        Assert.Equal(CommandExitCodes.Success, canonicalExitCode);
+        Assert.Contains("cdidx help <command> [subcommand]", canonicalStdout, StringComparison.Ordinal);
+        Assert.Empty(canonicalStderr);
+
+        foreach (var command in CliCommandCatalog.PublicCommandNames)
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                [command, "--help"],
+                appVersion: "1.10.0"));
+
+            Assert.True(
+                exitCode == CommandExitCodes.Success,
+                $"Expected `cdidx {command} --help` to succeed, but it exited {exitCode}: {stderr}");
+            Assert.False(
+                string.IsNullOrWhiteSpace(stdout),
+                $"Expected `cdidx {command} --help` to write help to stdout.");
+            Assert.True(
+                string.IsNullOrEmpty(stderr),
+                $"Expected `cdidx {command} --help` to leave stderr empty, but got: {stderr}");
+
+            if (command == "help")
+                Assert.Equal(canonicalStdout, stdout);
+        }
+
+        var (shortExitCode, shortStdout, shortStderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["help", "-h"],
+            appVersion: "1.10.0"));
+
+        Assert.Equal(CommandExitCodes.Success, shortExitCode);
+        Assert.Equal(canonicalStdout, shortStdout);
+        Assert.Empty(shortStderr);
+    }
+
+    [Fact]
     public void Run_ConventionalHelpEveryCatalogSubcommandHasVerbSpecificUsage_Issue4733()
     {
         foreach (var (command, subcommands) in CliCommandCatalog.CommandSubcommands)
@@ -479,6 +519,7 @@ public class ProgramRunnerTests
 
     [Theory]
     [InlineData(new[] { "help" }, "help requires a command name", "help_command_required")]
+    [InlineData(new[] { "help", "--unknown" }, "help requires a command name", "help_command_required")]
     [InlineData(new[] { "help", "serch" }, "Did you mean: `cdidx help search`?", "help_command_unknown")]
     [InlineData(new[] { "help", "index-files" }, "unknown help command `index-files`", "help_command_unknown")]
     [InlineData(new[] { "help", "db-schema" }, "unknown help command `db-schema`", "help_command_unknown")]

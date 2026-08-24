@@ -81,6 +81,9 @@ internal static partial class ProgramRunner
     private static int RunHelpCommand(string[] helpArgs, System.Text.Json.JsonSerializerOptions jsonOptions)
     {
         const string usage = "cdidx help <command> [subcommand]";
+        if (helpArgs.Length == 1 && helpArgs[0] is "--help" or "-h")
+            helpArgs = ["help"];
+
         var wantsJson = ContainsJsonOutputFlag(helpArgs);
         if (helpArgs.Length == 0 || helpArgs[0].StartsWith("-", StringComparison.Ordinal))
         {
