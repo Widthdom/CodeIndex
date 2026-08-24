@@ -4,6 +4,10 @@ namespace CodeIndex.Database;
 
 public partial class DbWriter
 {
+    private const string FirstNestedSavepointSql = "SAVEPOINT sp_1";
+    private const string ReleaseFirstNestedSavepointSql = "RELEASE SAVEPOINT sp_1";
+    private const string RollbackFirstNestedSavepointSql = "ROLLBACK TO SAVEPOINT sp_1";
+
     /// <summary>
     /// Lease a command for <paramref name="sql"/>. When the writer is wired to a
     /// <see cref="PreparedCommandCache"/> the cache returns a reused prepared command
@@ -41,6 +45,27 @@ public partial class DbWriter
     {
         if (_commandCache == null)
             cmd.Dispose();
+    }
+
+    /// <summary>
+    /// Execute one member of the writer's fixed, bounded control-statement set through the
+    /// prepared-command cache. Callers must pass only compile-time-stable SQL; dynamic
+    /// savepoint names and row-dependent statements stay on the per-call command path.
+    /// writer 内の固定・有界な control statement だけを prepared-command cache 経由で
+    /// 実行する。呼び出し側は compile-time で固定した SQL だけを渡し、動的な
+    /// savepoint 名や row-dependent statement は従来の per-call command 経路に残す。
+    /// </summary>
+    private void ExecuteReusableControlStatement(string sql)
+    {
+        var cmd = RentCommand(sql, static _ => { });
+        try
+        {
+            cmd.ExecuteNonQuery();
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
+        }
     }
 
     private void Execute(string sql)

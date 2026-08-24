@@ -29,16 +29,18 @@ public partial class DbWriter
 
         if (!IsInTransaction())
         {
-            Execute("SAVEPOINT set_meta_atomic");
+            ExecuteReusableControlStatement("SAVEPOINT set_meta_atomic");
             try
             {
                 SetMetaCore(key, value);
-                Execute("RELEASE SAVEPOINT set_meta_atomic");
+                ExecuteReusableControlStatement("RELEASE SAVEPOINT set_meta_atomic");
             }
             catch
             {
-                try { Execute("ROLLBACK TO SAVEPOINT set_meta_atomic"); } catch (SqliteException) { /* best effort */ }
-                try { Execute("RELEASE SAVEPOINT set_meta_atomic"); } catch (SqliteException) { /* best effort */ }
+                try { ExecuteReusableControlStatement("ROLLBACK TO SAVEPOINT set_meta_atomic"); }
+                catch (SqliteException) { /* best effort */ }
+                try { ExecuteReusableControlStatement("RELEASE SAVEPOINT set_meta_atomic"); }
+                catch (SqliteException) { /* best effort */ }
                 throw;
             }
             return;
@@ -77,16 +79,18 @@ public partial class DbWriter
 
         if (!IsInTransaction())
         {
-            Execute("SAVEPOINT set_meta_values_atomic");
+            ExecuteReusableControlStatement("SAVEPOINT set_meta_values_atomic");
             try
             {
                 SetMetaValuesCore(values);
-                Execute("RELEASE SAVEPOINT set_meta_values_atomic");
+                ExecuteReusableControlStatement("RELEASE SAVEPOINT set_meta_values_atomic");
             }
             catch
             {
-                try { Execute("ROLLBACK TO SAVEPOINT set_meta_values_atomic"); } catch (SqliteException) { /* best effort */ }
-                try { Execute("RELEASE SAVEPOINT set_meta_values_atomic"); } catch (SqliteException) { /* best effort */ }
+                try { ExecuteReusableControlStatement("ROLLBACK TO SAVEPOINT set_meta_values_atomic"); }
+                catch (SqliteException) { /* best effort */ }
+                try { ExecuteReusableControlStatement("RELEASE SAVEPOINT set_meta_values_atomic"); }
+                catch (SqliteException) { /* best effort */ }
                 throw;
             }
             return;
@@ -142,16 +146,18 @@ public partial class DbWriter
 
         if (!IsInTransaction())
         {
-            Execute("SAVEPOINT clear_meta_keys_atomic");
+            ExecuteReusableControlStatement("SAVEPOINT clear_meta_keys_atomic");
             try
             {
                 ClearMetaKeysCore(keys);
-                Execute("RELEASE SAVEPOINT clear_meta_keys_atomic");
+                ExecuteReusableControlStatement("RELEASE SAVEPOINT clear_meta_keys_atomic");
             }
             catch
             {
-                try { Execute("ROLLBACK TO SAVEPOINT clear_meta_keys_atomic"); } catch (SqliteException) { /* best effort */ }
-                try { Execute("RELEASE SAVEPOINT clear_meta_keys_atomic"); } catch (SqliteException) { /* best effort */ }
+                try { ExecuteReusableControlStatement("ROLLBACK TO SAVEPOINT clear_meta_keys_atomic"); }
+                catch (SqliteException) { /* best effort */ }
+                try { ExecuteReusableControlStatement("RELEASE SAVEPOINT clear_meta_keys_atomic"); }
+                catch (SqliteException) { /* best effort */ }
                 throw;
             }
             return;

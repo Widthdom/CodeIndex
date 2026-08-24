@@ -382,6 +382,133 @@ public class PreparedCommandCacheTests : IDisposable
     }
 
     [Fact]
+    public void DbWriter_WithCache_FixedSavepointControlsReuseAcrossCommitRollbackAndTransactionRebind()
+    {
+        var writer = new DbWriter(_db);
+        var initial = _db.PreparedCommands.GetDiagnostics();
+
+        using (var outer = writer.BeginTransaction())
+        {
+            using (var nested = writer.BeginTransaction())
+                nested.Commit();
+            outer.Commit();
+        }
+
+        var afterFirstCommit = _db.PreparedCommands.GetDiagnostics();
+        Assert.Equal(initial.MissCount + 2, afterFirstCommit.MissCount);
+        Assert.Equal(initial.HitCount, afterFirstCommit.HitCount);
+
+        using (var outer = writer.BeginTransaction())
+        {
+            using (var committed = writer.BeginTransaction())
+                committed.Commit();
+            using (var rolledBack = writer.BeginTransaction())
+                rolledBack.Rollback();
+            outer.Commit();
+        }
+
+        var afterCommitAndRollback = _db.PreparedCommands.GetDiagnostics();
+        Assert.Equal(afterFirstCommit.MissCount + 1, afterCommitAndRollback.MissCount);
+        Assert.Equal(afterFirstCommit.HitCount + 3, afterCommitAndRollback.HitCount);
+
+        using (var outer = writer.BeginTransaction())
+        {
+            using (var rolledBack = writer.BeginTransaction())
+                rolledBack.Rollback();
+            outer.Commit();
+        }
+
+        var afterReboundRollback = _db.PreparedCommands.GetDiagnostics();
+        Assert.Equal(afterCommitAndRollback.MissCount, afterReboundRollback.MissCount);
+        Assert.Equal(afterCommitAndRollback.HitCount + 2, afterReboundRollback.HitCount);
+    }
+
+    [Fact]
+    public void DbWriter_WithCache_DynamicDeepSavepointsStayOutsideCache()
+    {
+        var writer = new DbWriter(_db);
+        var initial = _db.PreparedCommands.GetDiagnostics();
+
+        using (var outer = writer.BeginTransaction())
+        {
+            using (var firstNested = writer.BeginTransaction())
+            {
+                using (var secondNested = writer.BeginTransaction())
+                    secondNested.Commit();
+                firstNested.Commit();
+            }
+            outer.Commit();
+        }
+
+        var after = _db.PreparedCommands.GetDiagnostics();
+        Assert.Equal(initial.Count + 2, after.Count);
+        Assert.Equal(initial.MissCount + 2, after.MissCount);
+        Assert.Equal(initial.HitCount, after.HitCount);
+    }
+
+    [Fact]
+    public void DbWriter_CancelledNestedBeginDoesNotLeaseReusableSavepointCommand()
+    {
+        var writer = new DbWriter(_db);
+        using var outer = writer.BeginTransaction();
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        var before = _db.PreparedCommands.GetDiagnostics();
+
+        Assert.Throws<OperationCanceledException>(() =>
+        {
+            using var cancelled = writer.BeginTransaction(cancellation.Token);
+        });
+
+        var after = _db.PreparedCommands.GetDiagnostics();
+        Assert.Equal(before, after);
+        using (var retry = writer.BeginTransaction())
+            retry.Commit();
+        outer.Commit();
+    }
+
+    [Fact]
+    public void DbWriter_WithCache_FixedMetadataAndFtsSavepointsReusePreparedCommands()
+    {
+        var writer = new DbWriter(_db);
+
+        writer.SetMeta("prepared_control_meta_a", "1");
+        var beforeSecondMeta = _db.PreparedCommands.GetDiagnostics();
+        writer.SetMeta("prepared_control_meta_b", "2");
+        var afterSecondMeta = _db.PreparedCommands.GetDiagnostics();
+        Assert.Equal(beforeSecondMeta.MissCount, afterSecondMeta.MissCount);
+        Assert.Equal(beforeSecondMeta.HitCount + 4, afterSecondMeta.HitCount);
+
+        writer.SetMetaValues(
+            ("prepared_control_values_a", "1"),
+            ("prepared_control_values_b", null));
+        var beforeSecondMetaValues = _db.PreparedCommands.GetDiagnostics();
+        writer.SetMetaValues(
+            ("prepared_control_values_c", "3"),
+            ("prepared_control_values_d", null));
+        var afterSecondMetaValues = _db.PreparedCommands.GetDiagnostics();
+        Assert.Equal(beforeSecondMetaValues.MissCount, afterSecondMetaValues.MissCount);
+        Assert.Equal(beforeSecondMetaValues.HitCount + 4, afterSecondMetaValues.HitCount);
+
+        writer.SuspendFtsSyncTriggersForBulkLoad();
+        writer.RestoreFtsSyncTriggers();
+        writer.ClearFtsBulkLoadInProgress();
+        var beforeSecondFtsMarker = _db.PreparedCommands.GetDiagnostics();
+        try
+        {
+            writer.SuspendFtsSyncTriggersForBulkLoad();
+            var afterSecondFtsMarker = _db.PreparedCommands.GetDiagnostics();
+            Assert.Equal(beforeSecondFtsMarker.MissCount, afterSecondFtsMarker.MissCount);
+            Assert.True(afterSecondFtsMarker.HitCount >= beforeSecondFtsMarker.HitCount + 5);
+        }
+        finally
+        {
+            writer.RestoreFtsSyncTriggers();
+            writer.ClearFtsBulkLoadInProgress();
+        }
+    }
+
+    [Fact]
     public void DbWriter_WithCache_NestedSavepointStillBindsToOuterTransaction()
     {
         // Microsoft.Data.Sqlite does not create a new SqliteTransaction for SAVEPOINTs,

@@ -234,18 +234,18 @@ public partial class DbWriter
         // guaranteeing that the primary-row cleanup trigger runs before the generation write.
         // legacy reader が読める primary marker と generation の関連付けを atomic に保ち、
         // primary-row cleanup trigger が generation write より先に動く順序も保証する。
-        Execute("SAVEPOINT set_fts_bulk_load_owner_atomic");
+        ExecuteReusableControlStatement("SAVEPOINT set_fts_bulk_load_owner_atomic");
         try
         {
             SetMetaCore(FtsBulkLoadInProgressMetaKey, CreateFtsBulkLoadMarker());
             SetMetaCore(FtsBulkLoadOwnerGenerationMetaKey, CreateFtsBulkLoadOwnerGeneration());
-            Execute("RELEASE SAVEPOINT set_fts_bulk_load_owner_atomic");
+            ExecuteReusableControlStatement("RELEASE SAVEPOINT set_fts_bulk_load_owner_atomic");
         }
         catch
         {
-            try { Execute("ROLLBACK TO SAVEPOINT set_fts_bulk_load_owner_atomic"); }
+            try { ExecuteReusableControlStatement("ROLLBACK TO SAVEPOINT set_fts_bulk_load_owner_atomic"); }
             catch (SqliteException) { /* best effort */ }
-            try { Execute("RELEASE SAVEPOINT set_fts_bulk_load_owner_atomic"); }
+            try { ExecuteReusableControlStatement("RELEASE SAVEPOINT set_fts_bulk_load_owner_atomic"); }
             catch (SqliteException) { /* best effort */ }
             throw;
         }
