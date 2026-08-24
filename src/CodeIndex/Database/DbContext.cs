@@ -107,6 +107,13 @@ public partial class DbContext : IDisposable
         ON CONFLICT(key) DO UPDATE SET
             value = CAST(COALESCE(CAST(value AS INTEGER), 0) + 1 AS TEXT)
         """;
+    private const string IncrementResourceListGenerationWhenFilesExistSql = """
+        INSERT INTO codeindex_meta(key, value)
+        SELECT 'resource_list_generation', '1'
+        WHERE EXISTS (SELECT 1 FROM files LIMIT 1)
+        ON CONFLICT(key) DO UPDATE SET
+            value = CAST(COALESCE(CAST(value AS INTEGER), 0) + 1 AS TEXT)
+        """;
     private const string CreateResourceListGenerationInsertTriggerSql = """
         CREATE TRIGGER IF NOT EXISTS files_resource_generation_ai AFTER INSERT ON files BEGIN
             INSERT INTO codeindex_meta(key, value)
@@ -131,6 +138,16 @@ public partial class DbContext : IDisposable
                 value = CAST(COALESCE(CAST(value AS INTEGER), 0) + 1 AS TEXT);
         END
         """;
+    internal const string DropResourceListGenerationTriggersSql = """
+        DROP TRIGGER IF EXISTS files_resource_generation_ai;
+        DROP TRIGGER IF EXISTS files_resource_generation_ad;
+        DROP TRIGGER IF EXISTS files_resource_generation_au;
+        """;
+    internal const string RestoreResourceListGenerationTriggersAndAdvanceSql =
+        CreateResourceListGenerationInsertTriggerSql + ";\n"
+        + CreateResourceListGenerationDeleteTriggerSql + ";\n"
+        + CreateResourceListGenerationUpdateTriggerSql + ";\n"
+        + IncrementResourceListGenerationWhenFilesExistSql;
 
     private static readonly string[] RequiredCodeIndexTables =
     [

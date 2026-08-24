@@ -113,6 +113,74 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
     }
 
     [Fact]
+    public void Scope_CoalescesResourceGenerationAndRestoresTriggersAcrossCommitAndRollback()
+    {
+        var initialGeneration = ResourceListGeneration();
+        Assert.Equal(3L, ResourceListGenerationTriggerCount());
+
+        using (var freshGraph = _writer.BeginReferenceGraphRefreshScope(
+                   forceFullRefresh: true,
+                   useFreshReferenceResolutionDefaults: true))
+        using (var transaction = _writer.BeginTransaction())
+        using (var raw = _writer.BeginAuthoritativeFreshBulkInsertScope(
+                   enabled: true,
+                   CancellationToken.None)!)
+        {
+            _ = InsertNewFile("src/generation-rolled-back.cs");
+        }
+
+        Assert.Equal(initialGeneration, ResourceListGeneration());
+        Assert.Equal(3L, ResourceListGenerationTriggerCount());
+        Assert.Equal(
+            0L,
+            ScalarLong("SELECT COUNT(*) FROM files WHERE path = 'src/generation-rolled-back.cs'"));
+
+        using (var freshGraph = _writer.BeginReferenceGraphRefreshScope(
+                   forceFullRefresh: true,
+                   useFreshReferenceResolutionDefaults: true))
+        using (var transaction = _writer.BeginTransaction())
+        using (var raw = _writer.BeginAuthoritativeFreshBulkInsertScope(
+                   enabled: true,
+                   CancellationToken.None)!)
+        {
+            raw.Complete();
+            transaction.Commit();
+        }
+
+        Assert.Equal(initialGeneration, ResourceListGeneration());
+        Assert.Equal(3L, ResourceListGenerationTriggerCount());
+
+        using (var freshGraph = _writer.BeginReferenceGraphRefreshScope(
+                   forceFullRefresh: true,
+                   useFreshReferenceResolutionDefaults: true))
+        using (var transaction = _writer.BeginTransaction())
+        using (var raw = _writer.BeginAuthoritativeFreshBulkInsertScope(
+                   enabled: true,
+                   CancellationToken.None)!)
+        {
+            _ = InsertNewFile("src/generation-a.cs");
+            _ = InsertNewFile("src/generation-b.cs");
+            _ = InsertNewFile("src/generation-c.cs");
+            raw.Complete();
+            transaction.Commit();
+        }
+
+        Assert.Equal(initialGeneration + 1, ResourceListGeneration());
+        Assert.Equal(3L, ResourceListGenerationTriggerCount());
+
+        _ = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/generation-provider.cs",
+            Lang = "csharp",
+            Size = 100,
+            Lines = 10,
+            Checksum = "generation-provider",
+            Modified = new DateTime(2026, 8, 23, 0, 0, 0, DateTimeKind.Utc),
+        });
+        Assert.Equal(initialGeneration + 2, ResourceListGeneration());
+    }
+
+    [Fact]
     public void BatchStatements_PreserveShapesUnicodeNullsInt64AndProviderExclusions()
     {
         PrimeSequencesForInt64Returning();
@@ -953,6 +1021,24 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
         command.CommandText = sql;
         return Convert.ToInt64(command.ExecuteScalar(), CultureInfo.InvariantCulture);
     }
+
+    private long ResourceListGeneration()
+        => ScalarLong("""
+            SELECT CAST(value AS INTEGER)
+            FROM codeindex_meta
+            WHERE key = 'resource_list_generation'
+            """);
+
+    private long ResourceListGenerationTriggerCount()
+        => ScalarLong("""
+            SELECT COUNT(*)
+            FROM sqlite_master
+            WHERE type = 'trigger'
+              AND name IN (
+                  'files_resource_generation_ai',
+                  'files_resource_generation_ad',
+                  'files_resource_generation_au')
+            """);
 
     private string? ScalarString(string sql)
     {

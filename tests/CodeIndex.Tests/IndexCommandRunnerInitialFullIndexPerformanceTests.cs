@@ -164,6 +164,27 @@ public partial class IndexCommandRunnerTests
                 Assert.Equal("ok", integrity.ExecuteScalar());
             }
 
+            using (var generation = db.Connection.CreateCommand())
+            {
+                generation.CommandText = """
+                    SELECT
+                        CAST((SELECT value
+                              FROM codeindex_meta
+                              WHERE key = 'resource_list_generation') AS INTEGER),
+                        (SELECT COUNT(*)
+                         FROM sqlite_master
+                         WHERE type = 'trigger'
+                           AND name IN (
+                               'files_resource_generation_ai',
+                               'files_resource_generation_ad',
+                               'files_resource_generation_au'))
+                    """;
+                using var reader = generation.ExecuteReader();
+                Assert.True(reader.Read());
+                Assert.Equal(1L, reader.GetInt64(0));
+                Assert.Equal(3L, reader.GetInt64(1));
+            }
+
             using (var languageCounts = db.Connection.CreateCommand())
             {
                 languageCounts.CommandText = """
