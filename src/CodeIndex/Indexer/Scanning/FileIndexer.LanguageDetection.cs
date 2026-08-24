@@ -552,12 +552,13 @@ public partial class FileIndexer
 
         if (ShebangAmbiguousExtensions.Contains(ext))
         {
-            var shebangLanguage = TryDetectLanguageFromShebang(
+            var shebangLanguage = TryDetectLanguageFromScriptHeader(
                 filePath,
                 symlinkPolicy,
                 projectRoot,
                 knownIndexability,
-                openReadForIndexContent);
+                openReadForIndexContent,
+                allowZshCompdef: false);
             if (shebangLanguage.Status == FileProbeStatus.Supported)
             {
                 return TryGetAmbiguousLanguageDescriptor(ext, out _)
@@ -641,20 +642,22 @@ public partial class FileIndexer
             if (ExtractorPluginRegistry.TryGetLanguageForExtension(ext, projectRoot, out pluginLang))
                 return new LanguageDetectionResult(FileProbeStatus.Supported, pluginLang);
 
-            return TryDetectLanguageFromShebang(
+            return TryDetectLanguageFromScriptHeader(
                 filePath,
                 symlinkPolicy,
                 projectRoot,
                 knownIndexability,
-                openReadForIndexContent);
+                openReadForIndexContent,
+                allowZshCompdef: true);
         }
 
-        return TryDetectLanguageFromShebang(
+        return TryDetectLanguageFromScriptHeader(
             filePath,
             symlinkPolicy,
             projectRoot,
             knownIndexability,
-            openReadForIndexContent);
+            openReadForIndexContent,
+            allowZshCompdef: true);
     }
 
     private static bool TryGetExactFileNameLanguage(string fileName, bool ignoreCase, out string language)

@@ -102,8 +102,8 @@ public partial class FileIndexer
 
         _pathAccessValidator?.Invoke(file);
 
-        // Include files with a known extension/filename or an extensionless recognized shebang
-        // 既知の拡張子・既知ファイル名、または拡張子なしで shebang を認識できるファイルを含める
+        // Include files with a known extension/filename or a recognized bounded script header.
+        // 既知の拡張子・既知ファイル名、または上限付き script header を認識できるファイルを含める
         var language = TryDetectLanguageForIndexing(file, knownIndexability: indexability);
         if (language.Status == FileProbeStatus.Missing)
         {

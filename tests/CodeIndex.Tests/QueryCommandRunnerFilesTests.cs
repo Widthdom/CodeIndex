@@ -408,6 +408,69 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void IndexAndDryRun_ZshCompletionCompdefIsShellAndQueryable_Issue5165()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_zsh_compdef_issue5165");
+        try
+        {
+            const string completionFileName = "_cdidx";
+            var completionPath = Path.Combine(projectRoot, completionFileName);
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            File.WriteAllText(completionPath, ConsoleCompletionRenderer.GetCompletionScript("zsh"));
+
+            var (dryRunExitCode, dryRunStdout, dryRunStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--db", dbPath, "--dry-run", "--json", "--quiet"],
+                _jsonOptions));
+            using var dryRunDocument = ParseJsonOutput(dryRunStdout);
+            Assert.Equal(CommandExitCodes.Success, dryRunExitCode);
+            Assert.Equal(string.Empty, dryRunStderr);
+            Assert.Equal(1, dryRunDocument.RootElement.GetProperty("files_total").GetInt32());
+            Assert.Equal(1, dryRunDocument.RootElement.GetProperty("languages").GetProperty("shell").GetInt32());
+            Assert.Equal(0, dryRunDocument.RootElement.GetProperty("unknown_extension_file_count").GetInt32());
+
+            var (scopedDryRunExitCode, scopedDryRunStdout, scopedDryRunStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--db", dbPath, "--files", completionFileName, "--dry-run", "--json", "--quiet"],
+                _jsonOptions));
+            using var scopedDryRunDocument = ParseJsonOutput(scopedDryRunStdout);
+            Assert.Equal(CommandExitCodes.Success, scopedDryRunExitCode);
+            Assert.Equal(string.Empty, scopedDryRunStderr);
+            Assert.Equal(1, scopedDryRunDocument.RootElement.GetProperty("files_total").GetInt32());
+            Assert.Equal(1, scopedDryRunDocument.RootElement.GetProperty("languages").GetProperty("shell").GetInt32());
+            Assert.Equal(0, scopedDryRunDocument.RootElement.GetProperty("unsupported_total").GetInt32());
+
+            var (indexExitCode, indexStdout, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--db", dbPath, "--json", "--quiet"],
+                _jsonOptions));
+            using var indexDocument = ParseJsonOutput(indexStdout);
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(1, indexDocument.RootElement.GetProperty("summary").GetProperty("files_total").GetInt32());
+            Assert.Equal(0, indexDocument.RootElement.GetProperty("unknown_extension_file_count").GetInt32());
+
+            File.AppendAllText(completionPath, "\n# refreshed\n");
+            var (updateExitCode, _, updateStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--db", dbPath, "--files", completionFileName, "--json", "--quiet"],
+                _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.Equal(string.Empty, updateStderr);
+
+            var (filesExitCode, filesStdout, filesStderr) = CaptureConsole(() => QueryCommandRunner.RunFiles(
+                ["--db", dbPath, "--lang", "shell", "--json=array"],
+                _jsonOptions));
+            using var filesDocument = ParseJsonOutput(filesStdout);
+            var file = Assert.Single(filesDocument.RootElement.EnumerateArray().ToArray());
+            Assert.Equal(CommandExitCodes.Success, filesExitCode);
+            Assert.Equal(string.Empty, filesStderr);
+            Assert.Equal(completionFileName, file.GetProperty("path").GetString());
+            Assert.Equal("shell", file.GetProperty("lang").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunStatus_CanceledToken_RethrowsInsteadOfDatabaseError_Issue3723()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_status_cancel_issue3723");
