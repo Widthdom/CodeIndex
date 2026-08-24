@@ -233,7 +233,7 @@ public partial class DbContext : IDisposable
         yield return ("EnsureColumn symbols.is_metadata_target", () => EnsureColumn("symbols", "is_metadata_target", "INTEGER"));
         yield return ("EnsureColumn symbols.metadata_target_source", () => EnsureColumn("symbols", "metadata_target_source", "TEXT"));
         yield return ("CREATE INDEX idx_symbols_name_nocase",
-            () => Execute("CREATE INDEX IF NOT EXISTS idx_symbols_name_nocase ON symbols(name COLLATE NOCASE)"));
+            () => Execute(CoreSecondaryIndexSql.GetRequired("idx_symbols_name_nocase").CreateSql));
 
         // #86: fold columns must be ensured BEFORE the folded indexes so CREATE INDEX does
         // not fail on legacy DBs where the column did not exist yet.
@@ -243,17 +243,17 @@ public partial class DbContext : IDisposable
         yield return ("EnsureColumn symbol_references.symbol_name_folded", () => EnsureColumn("symbol_references", "symbol_name_folded", "TEXT"));
         yield return ("EnsureColumn symbol_references.container_name_folded", () => EnsureColumn("symbol_references", "container_name_folded", "TEXT"));
         yield return ("CREATE INDEX idx_symbols_name_folded",
-            () => Execute("CREATE INDEX IF NOT EXISTS idx_symbols_name_folded                ON symbols(name_folded)"));
+            () => Execute(CoreSecondaryIndexSql.GetRequired("idx_symbols_name_folded").CreateSql));
         yield return ("CREATE INDEX idx_symbols_display_name_folded",
-            () => Execute("CREATE INDEX IF NOT EXISTS idx_symbols_display_name_folded ON symbols(display_name_folded) WHERE display_name_folded IS NOT NULL"));
+            () => Execute(CoreSecondaryIndexSql.GetRequired("idx_symbols_display_name_folded").CreateSql));
         yield return ("CREATE INDEX idx_symbols_file_name_folded",
-            () => Execute("CREATE INDEX IF NOT EXISTS idx_symbols_file_name_folded ON symbols(file_id, name_folded)"));
+            () => Execute(CoreSecondaryIndexSql.GetRequired("idx_symbols_file_name_folded").CreateSql));
         yield return ("CREATE INDEX idx_symbols_file_name_nocase",
-            () => Execute("CREATE INDEX IF NOT EXISTS idx_symbols_file_name_nocase ON symbols(file_id, name COLLATE NOCASE)"));
+            () => Execute(CoreSecondaryIndexSql.GetRequired("idx_symbols_file_name_nocase").CreateSql));
         yield return ("CREATE INDEX idx_symbols_name_folded_container_name_nocase",
-            () => Execute("CREATE INDEX IF NOT EXISTS idx_symbols_name_folded_container_name_nocase ON symbols(name_folded, container_name COLLATE NOCASE)"));
+            () => Execute(CoreSecondaryIndexSql.GetRequired("idx_symbols_name_folded_container_name_nocase").CreateSql));
         yield return ("CREATE INDEX idx_symbols_name_folded_container_qualified_name_nocase",
-            () => Execute("CREATE INDEX IF NOT EXISTS idx_symbols_name_folded_container_qualified_name_nocase ON symbols(name_folded, container_qualified_name COLLATE NOCASE)"));
+            () => Execute(CoreSecondaryIndexSql.GetRequired("idx_symbols_name_folded_container_qualified_name_nocase").CreateSql));
         foreach (var definition in ReferenceSecondaryIndexSql.All)
         {
             if (!definition.RequiresFoldedColumns)
@@ -291,8 +291,8 @@ public partial class DbContext : IDisposable
         if (!TableExists("chunks"))
             return;
 
-        Execute("CREATE INDEX IF NOT EXISTS idx_chunks_file_end_start_nonnull ON chunks(file_id, end_line, start_line, chunk_index) WHERE content IS NOT NULL");
-        Execute("CREATE INDEX IF NOT EXISTS idx_chunks_file_start_chunk_nonnull ON chunks(file_id, start_line, chunk_index, end_line) WHERE content IS NOT NULL");
+        Execute(CoreSecondaryIndexSql.GetRequired("idx_chunks_file_end_start_nonnull").CreateSql);
+        Execute(CoreSecondaryIndexSql.GetRequired("idx_chunks_file_start_chunk_nonnull").CreateSql);
     }
 
     private bool ReadMigrationSchemaIsCurrent()

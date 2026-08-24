@@ -48,6 +48,8 @@ public partial class DbWriter
     private static readonly AsyncLocal<Action?> ScopedReferenceBatchTransactionOpeningForTesting = new();
     private static readonly AsyncLocal<Action<DbWriterBatchStatement>?> ScopedBatchStatementExecutingForTesting = new();
     private static readonly AsyncLocal<Action<SqliteConnection, string>?>
+        ScopedCoreSecondaryIndexBulkLoadStateForTesting = new();
+    private static readonly AsyncLocal<Action<SqliteConnection, string>?>
         ScopedReferenceSecondaryIndexBulkLoadStateForTesting = new();
     private static readonly AsyncLocal<Action<SqliteConnection, string>?>
         ScopedFreshBulkLoadPlannerStatisticsStateForTesting = new();
@@ -133,6 +135,12 @@ public partial class DbWriter
     {
         get => ScopedBatchStatementExecutingForTesting.Value;
         set => ScopedBatchStatementExecutingForTesting.Value = value;
+    }
+
+    internal static Action<SqliteConnection, string>? CoreSecondaryIndexBulkLoadStateForTesting
+    {
+        get => ScopedCoreSecondaryIndexBulkLoadStateForTesting.Value;
+        set => ScopedCoreSecondaryIndexBulkLoadStateForTesting.Value = value;
     }
 
     internal static Action<SqliteConnection, string>? ReferenceSecondaryIndexBulkLoadStateForTesting

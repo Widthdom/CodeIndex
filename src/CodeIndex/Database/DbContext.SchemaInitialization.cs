@@ -275,58 +275,13 @@ public partial class DbContext : IDisposable
 
     private void CreateCoreSchemaIndexes()
     {
-        // Indexes / インデックス
-        Execute("CREATE INDEX IF NOT EXISTS idx_files_lang     ON files(lang)");
-        Execute("CREATE INDEX IF NOT EXISTS idx_files_modified ON files(modified)");
-        Execute("CREATE INDEX IF NOT EXISTS idx_files_generated ON files(generated)");
-        Execute("CREATE INDEX IF NOT EXISTS idx_files_checksum ON files(checksum)");
-        Execute("CREATE INDEX IF NOT EXISTS idx_files_path_nocase ON files(path COLLATE NOCASE)");
-        Execute("CREATE INDEX IF NOT EXISTS idx_file_issues_file_kind ON file_issues(file_id, kind)");
-        // The UNIQUE path constraint supplies the BINARY exact index. The separate
-        // NOCASE index is only for bounded ASCII case-alias candidate lookups.
-        // path の UNIQUE 制約が BINARY exact index を作り、別の NOCASE index は
-        // bounded ASCII case-alias candidate lookup 専用に使う。
-        Execute("CREATE INDEX IF NOT EXISTS idx_chunks_file    ON chunks(file_id)");
-        Execute("CREATE INDEX IF NOT EXISTS idx_chunks_file_end_start_nonnull ON chunks(file_id, end_line, start_line, chunk_index) WHERE content IS NOT NULL");
-        Execute("CREATE INDEX IF NOT EXISTS idx_chunks_file_start_chunk_nonnull ON chunks(file_id, start_line, chunk_index, end_line) WHERE content IS NOT NULL");
-        Execute("CREATE INDEX IF NOT EXISTS idx_symbols_name   ON symbols(name)");
-        // Case-insensitive exact-match index for `symbols --exact` (and MCP `symbols` exact=true).
-        // Without this, `name = @q COLLATE NOCASE` falls back to a full symbols scan per query name,
-        // which on multi-name exact lookups becomes O(names × symbols).
-        // `symbols --exact` 用の大文字小文字無視 index。無いと multi-name exact でフルスキャンが N 回走る。
-        Execute("CREATE INDEX IF NOT EXISTS idx_symbols_name_nocase ON symbols(name COLLATE NOCASE)");
-        Execute("CREATE INDEX IF NOT EXISTS idx_symbols_file   ON symbols(file_id)");
-        Execute("CREATE INDEX IF NOT EXISTS idx_symbols_start  ON symbols(start_line)");
+        foreach (var definition in CoreSecondaryIndexSql.All)
+            Execute(definition.CreateSql);
+
         foreach (var indexName in ReferenceSecondaryIndexSql.Retired)
             Execute($"DROP INDEX IF EXISTS {indexName}");
         foreach (var definition in ReferenceSecondaryIndexSql.All)
             Execute(definition.CreateSql);
-        // Compound indexes for common query patterns / よくあるクエリパターン用の複合インデックス
-        Execute("CREATE INDEX IF NOT EXISTS idx_symbols_file_kind      ON symbols(file_id, kind)");
-        Execute("CREATE INDEX IF NOT EXISTS idx_files_lang_modified     ON files(lang, modified)");
-        // Indexes for new query patterns: --kind filter, visibility ranking, hotspot/unused analysis
-        // 新しいクエリパターン用: --kind フィルタ、可視性ランキング、ホットスポット/未使用分析
-        Execute("CREATE INDEX IF NOT EXISTS idx_symbols_kind            ON symbols(kind)");
-        Execute("CREATE INDEX IF NOT EXISTS idx_symbols_visibility      ON symbols(visibility)");
-        // #86: Indexes on the Unicode-folded columns. Used when FoldReadyFlag is set on the
-        // DB (= the write path filled every folded column). Legacy / partial DBs keep using
-        // the NOCASE indexes above. Both sets coexist so mixed-state DBs cannot regress.
-        // #86: 折り畳み列のインデックス。FoldReadyFlag が立っている DB でだけ使う。
-        Execute("CREATE INDEX IF NOT EXISTS idx_symbols_name_folded                ON symbols(name_folded)");
-        // Explicit-interface identities occupy name_folded, while unqualified discovery uses
-        // the separately persisted display-name fold. Both predicates stay indexed.
-        // 明示的 interface identity は name_folded、非修飾 discovery は別途永続化した
-        // display-name fold を使い、両方の predicate を index 対応に保つ。
-        Execute("CREATE INDEX IF NOT EXISTS idx_symbols_display_name_folded ON symbols(display_name_folded) WHERE display_name_folded IS NOT NULL");
-        // Reference-source and ranked-candidate resolution repeatedly combines the folded
-        // symbol name with file or container scope. Keep those probes bounded for every
-        // indexed language, including the NOCASE fallback used by partially migrated DBs.
-        // 参照元・rank 候補解決は folded 名と file/container scope を繰り返し組み合わせる。
-        // 全言語と部分 migration DB の NOCASE fallback を複合 index で bounded に保つ。
-        Execute("CREATE INDEX IF NOT EXISTS idx_symbols_file_name_folded ON symbols(file_id, name_folded)");
-        Execute("CREATE INDEX IF NOT EXISTS idx_symbols_file_name_nocase ON symbols(file_id, name COLLATE NOCASE)");
-        Execute("CREATE INDEX IF NOT EXISTS idx_symbols_name_folded_container_name_nocase ON symbols(name_folded, container_name COLLATE NOCASE)");
-        Execute("CREATE INDEX IF NOT EXISTS idx_symbols_name_folded_container_qualified_name_nocase ON symbols(name_folded, container_qualified_name COLLATE NOCASE)");
     }
 
     private void InitializeFullTextSchema()
