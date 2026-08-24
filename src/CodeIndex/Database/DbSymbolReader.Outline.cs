@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
 using CodeIndex.Indexer;
+using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
 using Regex = CodeIndex.Indexer.BoundedRegex;
 
@@ -84,7 +85,7 @@ public partial class DbReader
         using var symCmd = _conn.CreateCommand();
         symCmd.CommandText = $@"
             {symbolRankCteSql}
-            SELECT s.kind, s.name, s.line,
+            SELECT s.id, s.kind, {GetSymbolColumnSql("sub_kind")} AS sub_kind, s.name, s.line,
                    {GetSymbolColumnSql("start_line", "s.line")} AS start_line,
                    {GetSymbolColumnSql("end_line", "s.line")} AS end_line,
                    {GetSymbolColumnSql("body_start_line")} AS body_start_line,
@@ -111,32 +112,45 @@ public partial class DbReader
 
         var symbols = new List<OutlineSymbol>();
         var isJsonStructuredData = lang is "json" or "jsonl";
+        var selectorGenerationFingerprint = SymbolSelector.BuildGenerationFingerprint(
+            GetSymbolSelectorGenerationIdentity());
         using (var reader = symCmd.ExecuteTrackedReader())
         {
             while (reader.TrackedRead())
             {
-                var name = reader.GetString(1);
-                var containerName = GetNullableString(reader, 9);
-                var containerQualifiedName = GetNullableString(reader, 10);
+                var symbolId = reader.GetInt64(0);
+                var subKind = GetNullableString(reader, 2);
+                var name = reader.GetString(3);
+                var containerName = GetNullableString(reader, 11);
+                var containerQualifiedName = GetNullableString(reader, 12);
+                var isSynthetic = SyntheticSymbolIdentity.IsSyntheticSubKind(subKind);
                 symbols.Add(new OutlineSymbol
                 {
-                    Kind = reader.GetString(0),
+                    SymbolId = isSynthetic ? symbolId : null,
+                    Kind = reader.GetString(1),
+                    SubKind = subKind,
                     Name = name,
-                    Line = reader.GetInt32(2),
-                    StartLine = GetInt32OrFallback(reader, 3, 2),
-                    EndLine = GetInt32OrFallback(reader, 4, 2),
-                    BodyStartLine = GetNullableInt32(reader, 5),
-                    BodyEndLine = GetNullableInt32(reader, 6),
-                    Signature = GetNullableString(reader, 7),
-                    ContainerKind = GetNullableString(reader, 8),
+                    Line = reader.GetInt32(4),
+                    StartLine = GetInt32OrFallback(reader, 5, 4),
+                    EndLine = GetInt32OrFallback(reader, 6, 4),
+                    BodyStartLine = GetNullableInt32(reader, 7),
+                    BodyEndLine = GetNullableInt32(reader, 8),
+                    Signature = GetNullableString(reader, 9),
+                    ContainerKind = GetNullableString(reader, 10),
                     ContainerName = containerName,
                     Path = BuildOutlineSymbolPath(
                         containerQualifiedName ?? containerName,
                         name,
                         isJsonStructuredData),
-                    Visibility = GetNullableString(reader, 11),
-                    ReturnType = GetNullableString(reader, 12),
-                    ReferenceCount = GetNullableInt32(reader, 13),
+                    Selector = isSynthetic
+                        ? new SymbolSelector(symbolId, selectorGenerationFingerprint).ToString()
+                        : null,
+                    QualifiedName = isSynthetic
+                        ? SyntheticSymbolIdentity.BuildFileQualifiedName(filePath, name)
+                        : null,
+                    Visibility = GetNullableString(reader, 13),
+                    ReturnType = GetNullableString(reader, 14),
+                    ReferenceCount = GetNullableInt32(reader, 15),
                 });
             }
         }
@@ -145,12 +159,30 @@ public partial class DbReader
         ApplyQueryOutputSignatureLimits(symbols);
         PopulateOutlineDisplayNames(symbols, lang);
 
+        var hasCSharpTopLevelSymbol = symbols.Any(symbol =>
+            symbol.SubKind == SyntheticSymbolIdentity.CSharpTopLevelScopeSubKind);
+        var storedCSharpExtractorVersion = lang == "csharp"
+            ? GetMetaString(DbContext.GetSymbolExtractorVersionMetaKey("csharp"))
+            : null;
+        var csharpTopLevelContractCurrent = lang == "csharp"
+            && (hasCSharpTopLevelSymbol
+                || string.Equals(
+                    storedCSharpExtractorVersion,
+                    SymbolExtractor.CSharpContractVersion.ToString(CultureInfo.InvariantCulture),
+                    StringComparison.Ordinal));
+
         return new OutlineResult
         {
             Path = filePath,
             Lang = lang,
             TotalLines = totalLines,
             SymbolCount = symbols.Count,
+            TopLevelSymbolSupport = lang == "csharp"
+                ? csharpTopLevelContractCurrent ? "indexed" : "reindex_required"
+                : null,
+            TopLevelSymbolLimitation = lang == "csharp" && !csharpTopLevelContractCurrent
+                ? "This index predates C# top-level synthetic symbols; reindex with the current cdidx binary."
+                : null,
             Symbols = symbols,
         };
     }

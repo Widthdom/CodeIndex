@@ -414,6 +414,7 @@ public class PerformanceTests : IDisposable
             }
             transaction.Commit();
         }
+        writer.StampSymbolExtractorVersions(["csharp"]);
 
         _ = writer.LoadReusableIndexedFileStats(
             maxSymbolsPerFile: 10,

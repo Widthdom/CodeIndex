@@ -350,7 +350,12 @@ public static partial class QueryCommandRunner
                 case "all":
                     all = true;
                     continue;
+                case "symbol_id":
                 case "kind":
+                case "sub_kind":
+                case "is_synthetic":
+                case "selector":
+                case "qualified_name":
                 case "name":
                 case "display_name":
                 case "path":
@@ -408,7 +413,7 @@ public static partial class QueryCommandRunner
         {
             var invalidValues = string.Join(", ", invalidFields.Select(field => $"'{ConsoleUi.FormatBoundedValue(field)}'"));
             var valueLabel = invalidFields.Count == 1 ? "value" : "values";
-            addParseError($"Error: unsupported --outline-fields {valueLabel} {invalidValues}. Use one or more of all, kind, name, display_name, path, line, start_line, end_line, depth, body_start_line, body_end_line, signature, signature_truncated, signature_original_length, container_kind, container_name, visibility, return_type, sort_mode, reference_count, size_lines, complexity_score, or aliases range, lines, body, body_range, container, refs, size, span, complexity.");
+            addParseError($"Error: unsupported --outline-fields {valueLabel} {invalidValues}. Use one or more of all, symbol_id, kind, sub_kind, is_synthetic, selector, qualified_name, name, display_name, path, line, start_line, end_line, depth, body_start_line, body_end_line, signature, signature_truncated, signature_original_length, container_kind, container_name, visibility, return_type, sort_mode, reference_count, size_lines, complexity_score, or aliases range, lines, body, body_range, container, refs, size, span, complexity.");
             return all ? null : fields;
         }
 

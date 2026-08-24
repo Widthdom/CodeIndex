@@ -189,7 +189,8 @@ public partial class DbReader
                    {GetSymbolColumnSql("visibility")} AS visibility,
                    {GetSymbolColumnSql("return_type")} AS return_type,
                    s.id AS symbol_id,
-                   {GetSymbolColumnSql("container_qualified_name")} AS container_qualified_name
+                   {GetSymbolColumnSql("container_qualified_name")} AS container_qualified_name,
+                   {GetSymbolColumnSql("sub_kind")} AS sub_kind
             FROM symbols s
             JOIN files f ON s.file_id = f.id
             WHERE f.path = @path
@@ -245,6 +246,7 @@ public partial class DbReader
             ReturnType = GetNullableString(reader, 13),
             SymbolId = reader.GetInt64(14),
             ContainerQualifiedName = GetNullableString(reader, 15),
+            SubKind = GetNullableString(reader, 16),
         };
 
     private DefinitionResult? GetDefinitionBySymbolId(
@@ -268,7 +270,8 @@ public partial class DbReader
                    {GetSymbolColumnSql("visibility")} AS visibility,
                    {GetSymbolColumnSql("return_type")} AS return_type,
                    s.id AS symbol_id,
-                   {GetSymbolColumnSql("container_qualified_name")} AS container_qualified_name
+                   {GetSymbolColumnSql("container_qualified_name")} AS container_qualified_name,
+                   {GetSymbolColumnSql("sub_kind")} AS sub_kind
             FROM symbols s
             JOIN files f ON s.file_id = f.id
             WHERE s.id = @symbol_id";
@@ -614,7 +617,7 @@ public partial class DbReader
                 ? CountCallersTotal(definition.Name, definition.Lang, null, pathPatterns, excludePathPatterns, excludeTests, exact: true).Count
                 : 0;
         var calleeTotal = identityAvailable
-            ? CountCalleesForCandidate(definition, pathPatterns, excludePathPatterns, excludeTests)
+            ? CountCalleesForCandidate(definition, pathPatterns, excludePathPatterns, excludeTests).Count
             : includeNameFallback
                 ? CountCalleesTotal(definition.Name, definition.Lang, null, pathPatterns, excludePathPatterns, excludeTests, exact: true).Count
                 : 0;
@@ -729,9 +732,11 @@ public partial class DbReader
     private SymbolCandidateSelector BuildSymbolCandidateSelector(DefinitionResult definition)
     {
         var container = definition.ContainerQualifiedName ?? definition.ContainerName;
-        var qualifiedName = string.IsNullOrWhiteSpace(container)
-            ? definition.Name
-            : $"{container}.{definition.Name}";
+        var qualifiedName = SyntheticSymbolIdentity.IsSyntheticSubKind(definition.SubKind)
+            ? SyntheticSymbolIdentity.BuildFileQualifiedName(definition.Path, definition.Name)
+            : string.IsNullOrWhiteSpace(container)
+                ? definition.Name
+                : $"{container}.{definition.Name}";
         var generationFingerprint = SymbolSelector.BuildGenerationFingerprint(
             GetSymbolSelectorGenerationIdentity());
         var selector = definition.SymbolId is long symbolId
@@ -750,8 +755,27 @@ public partial class DbReader
             Line = definition.StartLine,
             Lang = definition.Lang,
             Kind = definition.Kind,
+            SubKind = definition.SubKind,
         };
     }
+
+    internal bool IsCurrentSymbolSelector(SymbolSelector selector)
+        => selector.GenerationFingerprint == null
+           || string.Equals(
+               selector.GenerationFingerprint,
+               SymbolSelector.BuildGenerationFingerprint(GetSymbolSelectorGenerationIdentity()),
+               StringComparison.Ordinal);
+
+    internal DefinitionResult? GetDefinitionBySelector(SymbolSelector selector, string? lang = null)
+        => IsCurrentSymbolSelector(selector)
+            ? GetDefinitionBySymbolId(
+                selector.SymbolId,
+                includeBody: false,
+                bodyStartLine: null,
+                bodyLineCount: null,
+                lang,
+                kind: null)
+            : null;
 
     private static List<DefinitionResult> PrioritizeSourceDefinitions(List<DefinitionResult> definitions)
     {

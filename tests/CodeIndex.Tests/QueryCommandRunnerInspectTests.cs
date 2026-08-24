@@ -2999,7 +2999,7 @@ public partial class QueryCommandRunnerTests
             Assert.Single(invalid.ParseError.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries));
             foreach (var invalidValue in testCase.InvalidValues)
                 Assert.Contains($"'{invalidValue}'", invalid.ParseError, StringComparison.Ordinal);
-            Assert.Contains("Use one or more of all, kind, name", invalid.ParseError, StringComparison.Ordinal);
+            Assert.Contains("Use one or more of all, symbol_id, kind, sub_kind, is_synthetic, selector, qualified_name, name", invalid.ParseError, StringComparison.Ordinal);
             Assert.Contains("aliases range, lines, body", invalid.ParseError, StringComparison.Ordinal);
             Assert.DoesNotContain("--outline-fields requires at least one field name", invalid.ParseError, StringComparison.Ordinal);
         }
@@ -3140,7 +3140,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunOutline_Human_CSharpTopLevelStatementsFile_WritesHelpfulNote()
+    public void RunOutline_Human_CSharpTopLevelStatementsFile_ShowsSyntheticScope_Issue5164()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_csharp_toplevel_human");
         try
@@ -3183,8 +3183,9 @@ public partial class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Contains("# src/program.cs", stdout);
-            Assert.Contains("Note: no type/namespace declarations found; this file likely uses C# top-level statements.", stderr);
-            Assert.Contains("Outline lists imports and local functions only; the executable body is not indexed as symbols.", stderr);
+            Assert.Contains("<top-level>", stdout);
+            Assert.Contains("[synthetic function/top_level_scope, lines 4-24, selector id:", stdout);
+            Assert.Equal(string.Empty, stderr);
         }
         finally
         {
@@ -3193,7 +3194,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunOutline_Json_CSharpTopLevelStatementsFile_LeavesJsonContractUnchanged()
+    public void RunOutline_Json_CSharpTopLevelStatementsFile_ExposesSyntheticIdentity_Issue5164()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_csharp_toplevel_json");
         try
@@ -3237,7 +3238,14 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("src/program.cs", json.GetProperty("path").GetString());
             Assert.Equal("csharp", json.GetProperty("lang").GetString());
-            Assert.True(json.TryGetProperty("symbols", out _));
+            Assert.Equal("indexed", json.GetProperty("top_level_symbol_support").GetString());
+            var topLevel = Assert.Single(json.GetProperty("symbols").EnumerateArray().Where(symbol =>
+                symbol.GetProperty("name").GetString() == SyntheticSymbolIdentity.CSharpTopLevelScopeName));
+            Assert.Equal("function", topLevel.GetProperty("kind").GetString());
+            Assert.Equal("top_level_scope", topLevel.GetProperty("sub_kind").GetString());
+            Assert.True(topLevel.GetProperty("is_synthetic").GetBoolean());
+            Assert.StartsWith("id:", topLevel.GetProperty("selector").GetString(), StringComparison.Ordinal);
+            Assert.Equal("src/program.cs::<top-level>", topLevel.GetProperty("qualified_name").GetString());
         }
         finally
         {
@@ -3280,7 +3288,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunOutline_Human_CSharpStatementOnlyTopLevelFile_WritesHelpfulNote()
+    public void RunOutline_Human_CSharpStatementOnlyTopLevelFile_ShowsSyntheticScope_Issue5164()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_csharp_statement_only_human");
         try
@@ -3319,8 +3327,8 @@ public partial class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Contains("# src/program.cs", stdout);
-            Assert.Contains("Note: no type/namespace declarations found; this file likely uses C# top-level statements.", stderr);
-            Assert.Contains("Outline lists imports and local functions only; the executable body is not indexed as symbols.", stderr);
+            Assert.Contains("[synthetic function/top_level_scope", stdout);
+            Assert.Equal(string.Empty, stderr);
         }
         finally
         {
@@ -3329,7 +3337,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunOutline_Human_CSharpUsingVarTopLevelFile_WritesHelpfulNote()
+    public void RunOutline_Human_CSharpUsingVarTopLevelFile_ShowsSyntheticScope_Issue5164()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_csharp_using_var_human");
         try
@@ -3369,8 +3377,8 @@ public partial class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Contains("# src/program.cs", stdout);
-            Assert.Contains("Note: no type/namespace declarations found; this file likely uses C# top-level statements.", stderr);
-            Assert.Contains("Outline lists imports and local functions only; the executable body is not indexed as symbols.", stderr);
+            Assert.Contains("[synthetic function/top_level_scope", stdout);
+            Assert.Equal(string.Empty, stderr);
         }
         finally
         {
@@ -3379,7 +3387,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunOutline_Human_CSharpUsingStatementTopLevelFile_WritesHelpfulNote()
+    public void RunOutline_Human_CSharpUsingStatementTopLevelFile_ShowsSyntheticScope_Issue5164()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_csharp_using_statement_human");
         try
@@ -3421,8 +3429,8 @@ public partial class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Contains("# src/program.cs", stdout);
-            Assert.Contains("Note: no type/namespace declarations found; this file likely uses C# top-level statements.", stderr);
-            Assert.Contains("Outline lists imports and local functions only; the executable body is not indexed as symbols.", stderr);
+            Assert.Contains("[synthetic function/top_level_scope", stdout);
+            Assert.Equal(string.Empty, stderr);
         }
         finally
         {

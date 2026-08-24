@@ -6,6 +6,46 @@ namespace CodeIndex.Tests;
 public partial class DbReaderTests
 {
     [Fact]
+    public void UnusedCandidateQueries_ExcludeCSharpTopLevelSyntheticEntryPoint_Issue5164()
+    {
+        var csharpFileId = CreateMixedCandidateFile("src/issue5164-unused.cs", "csharp", 1);
+        var sqlFileId = CreateMixedCandidateFile("src/issue5164-unused.sql", "sql", 1);
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = csharpFileId,
+                Kind = "function",
+                SubKind = SyntheticSymbolIdentity.CSharpTopLevelScopeSubKind,
+                Name = SyntheticSymbolIdentity.CSharpTopLevelScopeName,
+                Line = 1,
+                StartLine = 1,
+                EndLine = 1,
+            },
+            CreateMixedCandidate(sqlFileId, "dbo.ActuallyUnused", 1, 1),
+        ]);
+
+        var csharpOnly = _reader.GetUnusedSymbols(
+            10, "function", "csharp", ["src/issue5164-unused.*"], null, excludeTests: false);
+        var csharpOnlyCount = _reader.CountUnusedSymbols(
+            "function", "csharp", ["src/issue5164-unused.*"], null, excludeTests: false);
+        var mixed = _reader.GetUnusedSymbols(
+            10, "function", null, ["src/issue5164-unused.*"], null, excludeTests: false);
+        var mixedCount = _reader.CountUnusedSymbols(
+            "function", null, ["src/issue5164-unused.*"], null, excludeTests: false);
+        var detailedCount = _reader.CountUnusedSymbolsDetailed(
+            "function", null, ["src/issue5164-unused.*"], null, excludeTests: false);
+
+        Assert.Empty(csharpOnly);
+        Assert.Equal(new QueryCountResult(0, 0), csharpOnlyCount);
+        Assert.Equal("dbo.ActuallyUnused", Assert.Single(mixed).Name);
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), mixedCount);
+        Assert.Equal(1, detailedCount.Count);
+        Assert.Equal(1, detailedCount.FileCount);
+        Assert.True(detailedCount.IncludesSql);
+    }
+
+    [Fact]
     public void UnusedCandidateQueries_MixedSqlScopePreservesProjectionAndCounts()
     {
         var paths = SeedMixedUnusedCandidates();

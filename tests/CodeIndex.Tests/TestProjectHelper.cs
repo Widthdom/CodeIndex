@@ -354,6 +354,7 @@ internal static class TestProjectHelper
         {
             writer.InsertReferences(references);
         }
+        writer.StampSymbolExtractorVersions([lang]);
         return references.Count > 0;
     }
 

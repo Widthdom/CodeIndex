@@ -8110,6 +8110,7 @@ public class DatabaseTests : IDisposable
             Checksum = checksum,
             Generated = false,
         });
+        _writer.StampSymbolExtractorVersions(["csharp"]);
 
         var id = _writer.GetUnchangedFileId("src/generated.g.cs", modified, checksum, language: "csharp", generated: true);
 
@@ -8152,6 +8153,7 @@ public class DatabaseTests : IDisposable
             Modified = modified,
             Checksum = "caps_checksum",
         });
+        _writer.StampSymbolExtractorVersions(["csharp"]);
 
         Assert.False(_writer.HasExtractionCapViolationForFile(fileId, maxSymbolsPerFile: 2, maxReferencesPerFile: 2));
         Assert.False(_writer.HasReusableFileBlockingIssueForFile(fileId, maxSymbolsPerFile: 2, maxReferencesPerFile: 2, generatedExtractionSuppressed: false));
@@ -8405,6 +8407,7 @@ public class DatabaseTests : IDisposable
                 Checksum = fixture.Path,
             });
         }
+        _writer.StampSymbolExtractorVersions(["csharp"]);
         _writer.SetMeta(DbContext.GetSymbolExtractorVersionMetaKey("python"), "0");
 
         using (var command = _db.Connection.CreateCommand())
@@ -8524,6 +8527,7 @@ public class DatabaseTests : IDisposable
             Modified = modified,
             Checksum = "null_size_checksum",
         });
+        _writer.StampSymbolExtractorVersions(["csharp"]);
         using (var command = _db.Connection.CreateCommand())
         {
             command.CommandText = "UPDATE files SET size = NULL WHERE id = @id";
@@ -12332,6 +12336,7 @@ public class DatabaseTests : IDisposable
             Modified = DateTime.UtcNow,
         };
         var fileId = _writer.UpsertFile(file);
+        _writer.StampSymbolExtractorVersions(["csharp"]);
 
         var unchanged = _writer.GetUnchangedFileId(
             file.Path,

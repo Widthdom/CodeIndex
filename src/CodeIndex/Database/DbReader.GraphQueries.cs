@@ -291,26 +291,64 @@ public partial class DbReader
     public List<CalleeResult> GetCallees(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, bool rawKinds = false, ReferenceRankMode rankMode = ReferenceRankMode.Weighted, int offset = 0, bool includeQualifiedCommonCalls = false, bool includeMemberReads = false)
         => GetCalleesCore(query, limit, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact, rawKinds, rankMode, offset, includeQualifiedCommonCalls, includeMemberReads, sourceSymbolId: null);
 
-    private List<CalleeResult> GetCalleesForCandidate(DefinitionResult definition, int limit, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, int offset = 0)
-        => GetCalleesCore(definition.Name, limit, definition.Lang, referenceKind: null, pathPatterns, excludePathPatterns, excludeTests, exact: true, rawKinds: false, ReferenceRankMode.Weighted, offset, includeQualifiedCommonCalls: false, includeMemberReads: false, sourceSymbolId: definition.SymbolId);
-
-    private int CountCalleesForCandidate(DefinitionResult definition, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
+    internal List<CalleeResult> GetCalleesForCandidate(
+        DefinitionResult definition,
+        int limit,
+        IReadOnlyList<string>? pathPatterns,
+        IReadOnlyList<string>? excludePathPatterns,
+        bool excludeTests,
+        int offset = 0,
+        string? referenceKind = null,
+        bool rawKinds = false,
+        ReferenceRankMode rankMode = ReferenceRankMode.Weighted,
+        bool includeQualifiedCommonCalls = false,
+        bool includeMemberReads = false)
     {
         if (definition.SymbolId is not long symbolId || !_referenceColumns.Contains("source_symbol_id"))
-            return 0;
+            return [];
 
-        return CountCalleesTotalCore(
+        return GetCalleesCore(
             definition.Name,
+            limit,
             definition.Lang,
-            referenceKind: null,
+            referenceKind,
             pathPatterns,
             excludePathPatterns,
             excludeTests,
             exact: true,
-            rawKinds: false,
-            includeQualifiedCommonCalls: false,
-            includeMemberReads: false,
-            symbolId).Count;
+            rawKinds,
+            rankMode,
+            offset,
+            includeQualifiedCommonCalls,
+            includeMemberReads,
+            sourceSymbolId: symbolId);
+    }
+
+    internal QueryCountResult CountCalleesForCandidate(
+        DefinitionResult definition,
+        IReadOnlyList<string>? pathPatterns,
+        IReadOnlyList<string>? excludePathPatterns,
+        bool excludeTests,
+        string? referenceKind = null,
+        bool rawKinds = false,
+        bool includeQualifiedCommonCalls = false,
+        bool includeMemberReads = false)
+    {
+        if (definition.SymbolId is not long symbolId || !_referenceColumns.Contains("source_symbol_id"))
+            return new QueryCountResult(0, 0);
+
+        return CountCalleesTotalCore(
+            definition.Name,
+            definition.Lang,
+            referenceKind,
+            pathPatterns,
+            excludePathPatterns,
+            excludeTests,
+            exact: true,
+            rawKinds,
+            includeQualifiedCommonCalls,
+            includeMemberReads,
+            symbolId);
     }
 
     private List<CalleeResult> GetCalleesCore(string query, int limit, string? lang, string? referenceKind, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, bool exact, bool rawKinds, ReferenceRankMode rankMode, int offset, bool includeQualifiedCommonCalls, bool includeMemberReads, long? sourceSymbolId)

@@ -352,6 +352,9 @@ public class SymbolResult
     public string Kind { get; set; } = string.Empty;
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? SubKind { get; set; }
+    [JsonPropertyName("is_synthetic")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? IsSynthetic => SyntheticSymbolIdentity.IsSyntheticSubKind(SubKind) ? true : null;
     public string Name { get; set; } = string.Empty;
     public int Line { get; set; }
     public int StartLine { get; set; }
@@ -2785,6 +2788,11 @@ public class SymbolCandidateSelector
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Lang { get; set; }
     public string Kind { get; set; } = string.Empty;
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? SubKind { get; set; }
+    [JsonPropertyName("is_synthetic")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? IsSynthetic => SyntheticSymbolIdentity.IsSyntheticSubKind(SubKind) ? true : null;
 }
 
 public class SymbolCandidateBundle
@@ -2845,12 +2853,31 @@ public class OutlineResult
     public string? Lang { get; set; }
     public int TotalLines { get; set; }
     public int SymbolCount { get; set; }
+    [JsonPropertyName("top_level_symbol_support")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? TopLevelSymbolSupport { get; set; }
+    [JsonPropertyName("top_level_symbol_limitation")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? TopLevelSymbolLimitation { get; set; }
     public List<OutlineSymbol> Symbols { get; set; } = [];
 }
 
 public class OutlineSymbol
 {
+    [JsonPropertyName("symbol_id")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? SymbolId { get; set; }
     public string Kind { get; set; } = string.Empty;
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? SubKind { get; set; }
+    [JsonPropertyName("is_synthetic")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? IsSynthetic => SyntheticSymbolIdentity.IsSyntheticSubKind(SubKind) ? true : null;
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Selector { get; set; }
+    [JsonPropertyName("qualified_name")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? QualifiedName { get; set; }
     public string Name { get; set; } = string.Empty;
     public string DisplayName { get; set; } = string.Empty;
     public string Path { get; set; } = string.Empty;

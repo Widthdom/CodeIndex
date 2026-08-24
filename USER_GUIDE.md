@@ -2053,7 +2053,23 @@ cdidx outline src/CodeIndex/Cli/QueryCommandRunner.cs --compact --kind function 
 
 Shows all symbols in a single file ordered deterministically by line, start column when available, kind, and name, with signature, visibility, and container nesting. Lets AI agents understand file structure in one call instead of reading the whole file or chaining `symbols` + `definition`.
 
-For large files, `outline --json` supports `--kind <kind[,kind]>`, `--sort <source|kind|references|size|complexity|path|name>`, `--limit` / `--top`, opaque `--cursor <next_cursor>`, `--max-json-bytes <n>`, and `--outline-fields <csv>` so automation can request only the symbol page and fields it needs. Use `--sort size` (alias `span`) or `--sort complexity` to jump to large bodies first, and combine it with `--compact` for bounded giant-file triage. With `--max-json-bytes`, outline returns the shared bounded envelope, counts complete UTF-8 symbol rows plus the final newline, and uses an opaque `response:v2` continuation cursor. If even the minimum envelope cannot fit, it writes no stdout and reports typed `E010_USAGE_ERROR` diagnostics. Without a byte cap, the existing outline JSON shape and cursor contract remain unchanged. Controlled uncapped JSON output includes `total_symbol_count`, `returned_symbol_count`, `cursor_offset`, `next_cursor`, `has_more`, and `result_stable_at`; it also reports `sort`, `kind_filter`, and `selected_fields` when those controls are used. The cursor is bound to the file path, filters, ordering, and index generation, so changing them or refreshing the index requires restarting without `--cursor`. Pass `--outline-fields all` to keep the full symbol payload while still opting into the paging metadata, or select `reference_count`, `size_lines`, `complexity_score`, and `sort_mode` for compact ranking evidence.
+C# files with executable top-level statements expose a file-scoped synthetic
+`function` named `<top-level>`. JSON and MCP identify it with
+`sub_kind: "top_level_scope"`, `is_synthetic: true`, a
+`<file>::<top-level>` `qualified_name`, and a snapshot-bound `selector` that can
+be passed directly to CLI `callees` as its positional query or to MCP
+`callees.query` (optionally scoped with CLI `--path` or MCP `path`) and is
+distinct for each file. Coordinate `inspect --path <file> --line <line>` selects the same
+node on executable lines. Its span runs from the first through the last
+executable top-level line while excluding imports, comments, directives, and
+compilation metadata where possible. A top-level local function remains a
+normal declared function with its own narrower reference ownership; when it is
+interleaved between statements, the synthetic range may span across it. Older
+indexes report `top_level_symbol_support: "reindex_required"` and a typed
+`top_level_symbol_limitation`; rerun `cdidx index <project>` before using this
+navigation contract.
+
+For large files, `outline --json` supports `--kind <kind[,kind]>`, `--sort <source|kind|references|size|complexity|path|name>`, `--limit` / `--top`, opaque `--cursor <next_cursor>`, `--max-json-bytes <n>`, and `--outline-fields <csv>` so automation can request only the symbol page and fields it needs. Use `--sort size` (alias `span`) or `--sort complexity` to jump to large bodies first, and combine it with `--compact` for bounded giant-file triage. With `--max-json-bytes`, outline returns the shared bounded envelope, counts complete UTF-8 symbol rows plus the final newline, and uses an opaque `response:v2` continuation cursor. If even the minimum envelope cannot fit, it writes no stdout and reports typed `E010_USAGE_ERROR` diagnostics. Without a byte cap, the existing outline JSON shape and cursor contract remain unchanged. Controlled uncapped JSON output includes `total_symbol_count`, `returned_symbol_count`, `cursor_offset`, `next_cursor`, `has_more`, and `result_stable_at`; it also reports `sort`, `kind_filter`, and `selected_fields` when those controls are used. The cursor is bound to the file path, filters, ordering, and index generation, so changing them or refreshing the index requires restarting without `--cursor`. Pass `--outline-fields all` to keep the full symbol payload while still opting into the paging metadata. Synthetic identity can be projected with `symbol_id`, `sub_kind`, `is_synthetic`, `selector`, and `qualified_name`; select `reference_count`, `size_lines`, `complexity_score`, and `sort_mode` for compact ranking evidence.
 
 ### Reconstruct a file excerpt
 
@@ -5658,7 +5674,23 @@ cdidx outline src/CodeIndex/Cli/QueryCommandRunner.cs --compact --kind function 
 
 1ファイル内の全シンボルを行、利用可能な場合は開始列、種別、名前の決定的な順序で、シグネチャ・可視性・コンテナ深さに応じたネスト付きで表示します。ファイル全体を読んだり `symbols` + `definition` をチェーンしたりする代わりに、1回でファイル構造を把握できます。
 
-大きなファイル向けに、`outline --json` は `--kind <kind[,kind]>`、`--sort <source|kind|references|size|complexity|path|name>`、`--limit` / `--top`、opaque な `--cursor <next_cursor>`、`--max-json-bytes <n>`、`--outline-fields <csv>` に対応します。自動化側は必要なシンボルページとフィールドだけを取得できます。`--sort size`（`span` alias）や `--sort complexity` を使うと大きい本体を先に確認でき、`--compact` と組み合わせると巨大ファイル調査向けの上限付きペイロードになります。`--max-json-bytes` を指定すると、outline は共通 bounded envelope を返し、最後の改行を含む完全な UTF-8 symbol row 単位で計測して opaque な `response:v2` continuation cursor を使用します。最小 envelope さえ収まらない場合は stdout を空に保ち、型付きの `E010_USAGE_ERROR` diagnostic を報告します。byte cap がない場合、既存の outline JSON 形状と cursor 契約は変わりません。上限なしの制御付き JSON 出力には `total_symbol_count`、`returned_symbol_count`、`cursor_offset`、`next_cursor`、`has_more`、`result_stable_at` が入り、sort、kind、field を指定した場合は `sort`、`kind_filter`、`selected_fields` も返します。cursor は file path、filter、ordering、index generation に束縛されるため、それらを変更した場合や index を更新した場合は `--cursor` なしで再開してください。`--outline-fields all` を渡すと、シンボルペイロードはフルのままページングメタデータだけを追加できます。ランキング根拠だけが必要な場合は `reference_count`、`size_lines`、`complexity_score`、`sort_mode` を選択できます。
+実行可能な top-level statement を含む C# file は、`<top-level>` という名前の
+file-scoped synthetic `function` を公開します。JSON / MCP では
+`sub_kind: "top_level_scope"`、`is_synthetic: true`、
+`<file>::<top-level>` 形式の `qualified_name`、snapshot に束縛された
+`selector` で識別します。selector は file ごとに異なり、CLI `callees` の positional
+query または MCP `callees.query` として直接渡せます（必要に応じて CLI `--path` または
+MCP `path` で scope を限定できます）。実行行に対する
+`inspect --path <file> --line <line>` も同じ node を選択します。span は import、
+comment、directive、compilation metadata を可能な範囲で除外し、最初から最後の
+実行可能 top-level 行までを覆います。top-level local function は通常の source-declared
+function として、より狭い reference ownership を維持します。statement の間に挟まる
+場合、synthetic range はその local function をまたぐことがあります。旧 index は
+`top_level_symbol_support: "reindex_required"` と型付きの
+`top_level_symbol_limitation` を返すため、この navigation 契約を使う前に
+`cdidx index <project>` を再実行してください。
+
+大きなファイル向けに、`outline --json` は `--kind <kind[,kind]>`、`--sort <source|kind|references|size|complexity|path|name>`、`--limit` / `--top`、opaque な `--cursor <next_cursor>`、`--max-json-bytes <n>`、`--outline-fields <csv>` に対応します。自動化側は必要なシンボルページとフィールドだけを取得できます。`--sort size`（`span` alias）や `--sort complexity` を使うと大きい本体を先に確認でき、`--compact` と組み合わせると巨大ファイル調査向けの上限付きペイロードになります。`--max-json-bytes` を指定すると、outline は共通 bounded envelope を返し、最後の改行を含む完全な UTF-8 symbol row 単位で計測して opaque な `response:v2` continuation cursor を使用します。最小 envelope さえ収まらない場合は stdout を空に保ち、型付きの `E010_USAGE_ERROR` diagnostic を報告します。byte cap がない場合、既存の outline JSON 形状と cursor 契約は変わりません。上限なしの制御付き JSON 出力には `total_symbol_count`、`returned_symbol_count`、`cursor_offset`、`next_cursor`、`has_more`、`result_stable_at` が入り、sort、kind、field を指定した場合は `sort`、`kind_filter`、`selected_fields` も返します。cursor は file path、filter、ordering、index generation に束縛されるため、それらを変更した場合や index を更新した場合は `--cursor` なしで再開してください。`--outline-fields all` を渡すと、シンボルペイロードはフルのままページングメタデータだけを追加できます。synthetic identity は `symbol_id`、`sub_kind`、`is_synthetic`、`selector`、`qualified_name` で projection でき、ランキング根拠だけが必要な場合は `reference_count`、`size_lines`、`complexity_score`、`sort_mode` を選択できます。
 
 ### ファイル抜粋を再構成する
 

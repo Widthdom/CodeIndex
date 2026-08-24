@@ -1,5 +1,6 @@
 using System.Text.Json;
 using CodeIndex.Database;
+using CodeIndex.Models;
 
 namespace CodeIndex.Cli;
 
@@ -325,19 +326,61 @@ public static partial class QueryCommandRunner
             return queryExitCode;
         }
         var query = options.Query!;
+        var selectedSymbol = SymbolSelector.TryParse(query, out var parsedSelector)
+            ? parsedSelector
+            : (SymbolSelector?)null;
 
         return WithDb(options, jsonOptions, reader =>
         {
+            DefinitionResult? selectedDefinition = null;
+            if (selectedSymbol is { } selector)
+            {
+                if (!reader.IsCurrentSymbolSelector(selector))
+                {
+                    return CommandErrorWriter.WriteJsonOrHuman(
+                        options.Json,
+                        jsonOptions,
+                        $"symbol selector is stale or belongs to another index generation: {selector}",
+                        CommandExitCodes.NotFound,
+                        "Rerun outline or inspect against this database and use the current emitted selector.",
+                        errorCode: CommandErrorCodes.QueryNotFound,
+                        category: "not_found");
+                }
+
+                selectedDefinition = reader.GetDefinitionBySelector(selector, options.Lang);
+                if (selectedDefinition == null)
+                {
+                    return CommandErrorWriter.WriteJsonOrHuman(
+                        options.Json,
+                        jsonOptions,
+                        $"symbol selector was not found in the active index: {selector}",
+                        CommandExitCodes.NotFound,
+                        "Rerun outline or inspect and use a selector emitted by the active database.",
+                        errorCode: CommandErrorCodes.QueryNotFound,
+                        category: "not_found");
+                }
+            }
+
             WriteGraphReferenceKindHint("callees", options.Kind, options.Json);
             WriteReferenceGraphCompletenessWarningIfNeeded(options.Json, reader);
             var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
             var hdlGraphSignal = reader.GetHdlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
-            var exactGraphLanguage = exact
+            var exactGraphLanguage = selectedDefinition?.Lang ?? (exact
                 ? reader.GetExactGraphSupportedDefinitionLanguage(query, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests)
-                : null;
+                : null);
             if (options.CountOnly)
             {
-                var counts = reader.CountCalleesTotal(query, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact, options.RawKinds, options.IncludeQualifiedCommonCalls, options.IncludeMemberReads);
+                var counts = selectedDefinition != null
+                    ? reader.CountCalleesForCandidate(
+                        selectedDefinition,
+                        options.PathPatterns,
+                        options.ExcludePaths,
+                        options.ExcludeTests,
+                        options.Kind,
+                        options.RawKinds,
+                        options.IncludeQualifiedCommonCalls,
+                        options.IncludeMemberReads)
+                    : reader.CountCalleesTotal(query, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact, options.RawKinds, options.IncludeQualifiedCommonCalls, options.IncludeMemberReads);
                 var effectiveSqlGraphSignal = NarrowSqlGraphContractSignal(
                     baseSqlGraphSignal,
                     counts.IncludesSql || DbReader.IsSqlLanguage(options.Lang) || DbReader.IsSqlLanguage(exactGraphLanguage));
@@ -361,7 +404,20 @@ public static partial class QueryCommandRunner
                 return CommandExitCodes.Success;
             }
 
-            var results = reader.GetCallees(query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact, options.RawKinds, options.RankMode, offset: JsonEnvelopeWrapper.GetBoundedResponseOffset("callees"), includeQualifiedCommonCalls: options.IncludeQualifiedCommonCalls, includeMemberReads: options.IncludeMemberReads);
+            var results = selectedDefinition != null
+                ? reader.GetCalleesForCandidate(
+                    selectedDefinition,
+                    options.Limit,
+                    options.PathPatterns,
+                    options.ExcludePaths,
+                    options.ExcludeTests,
+                    offset: JsonEnvelopeWrapper.GetBoundedResponseOffset("callees"),
+                    referenceKind: options.Kind,
+                    rawKinds: options.RawKinds,
+                    rankMode: options.RankMode,
+                    includeQualifiedCommonCalls: options.IncludeQualifiedCommonCalls,
+                    includeMemberReads: options.IncludeMemberReads)
+                : reader.GetCallees(query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact, options.RawKinds, options.RankMode, offset: JsonEnvelopeWrapper.GetBoundedResponseOffset("callees"), includeQualifiedCommonCalls: options.IncludeQualifiedCommonCalls, includeMemberReads: options.IncludeMemberReads);
             if (options.IncludeBody && JsonEnvelopeWrapper.ShouldMaterializeBody("callees"))
                 AttachBodyExcerpts(reader, results, options.SnippetLines, options.MaxLineWidth);
             ApplyBodyRecoveryCommands(results, options.DbPath, options.RedactPaths ?? true);

@@ -6825,6 +6825,80 @@ public partial class McpServerTests
     }
 
     [Fact]
+    public void ToolsCall_Outline_ReturnsActionableCSharpTopLevelScope_Issue5164()
+    {
+        InsertIndexedFile(
+            "src/target.cs",
+            "csharp",
+            "public static class Target { public static void Run() { } }\n");
+        InsertIndexedFile(
+            "src/top-level.cs",
+            "csharp",
+            "using System;\nTarget.Run();\n");
+        var request = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":5164,"method":"tools/call","params":{"name":"outline","arguments":{"path":"src/top-level.cs"}}}""")!;
+
+        var response = _server.HandleMessage(request)!;
+
+        var result = response["result"]!;
+        var structured = result["structuredContent"]!;
+        Assert.Equal("src/top-level.cs", structured["path"]!.GetValue<string>());
+        Assert.Equal("indexed", structured["top_level_symbol_support"]!.GetValue<string>());
+        var symbol = Assert.Single(structured["symbols"]!.AsArray().Where(candidate =>
+            candidate!["name"]!.GetValue<string>() == SyntheticSymbolIdentity.CSharpTopLevelScopeName))!;
+        Assert.Equal(SyntheticSymbolIdentity.CSharpTopLevelScopeName, symbol["name"]!.GetValue<string>());
+        Assert.Equal("function", symbol["kind"]!.GetValue<string>());
+        Assert.Equal(SyntheticSymbolIdentity.CSharpTopLevelScopeSubKind, symbol["subKind"]!.GetValue<string>());
+        Assert.True(symbol["is_synthetic"]!.GetValue<bool>());
+        Assert.Equal(2, symbol["startLine"]!.GetValue<int>());
+        Assert.Equal(2, symbol["endLine"]!.GetValue<int>());
+        Assert.Equal("src/top-level.cs::<top-level>", symbol["qualified_name"]!.GetValue<string>());
+        var selector = symbol["selector"]!.GetValue<string>();
+        Assert.StartsWith("id:", selector, StringComparison.Ordinal);
+
+        var calleesRequest = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 5164,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "callees",
+                ["arguments"] = new JsonObject
+                {
+                    ["query"] = selector,
+                    ["path"] = "src/top-level.cs",
+                },
+            },
+        };
+        var callees = _server.HandleMessage(calleesRequest)!["result"]!["structuredContent"]!;
+        var callee = Assert.Single(callees["results"]!.AsArray())!;
+        Assert.Equal(1, callees["count"]!.GetValue<int>());
+        Assert.Equal("Run", callee["calleeName"]!.GetValue<string>());
+        Assert.Equal("src/top-level.cs", callee["path"]!.GetValue<string>());
+
+        var countRequest = calleesRequest.DeepClone();
+        countRequest["params"]!["arguments"]!["countOnly"] = true;
+        var count = _server.HandleMessage(countRequest)!["result"]!["structuredContent"]!;
+        Assert.Equal(1, count["count"]!.GetValue<int>());
+
+        InsertIndexedFile(
+            "src/generation-change.cs",
+            "csharp",
+            "internal sealed class GenerationChange { }\n");
+        var staleResponse = _server.HandleMessage(calleesRequest)!;
+        var staleResult = staleResponse["result"]!;
+        Assert.True(staleResult["isError"]!.GetValue<bool>());
+        Assert.Contains(
+            "stale",
+            staleResult["content"]![0]!["text"]!.GetValue<string>(),
+            StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(
+            McpErrorEnvelope.CategoryIndexStale,
+            staleResult["structuredContent"]!["category"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void ToolsCall_Outline_NotFound_ReturnsError()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"outline","arguments":{"path":"nonexistent.cs"}}}""")!;

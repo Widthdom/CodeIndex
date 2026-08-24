@@ -295,14 +295,66 @@ public partial class McpServer
         var rawKinds = args?["rawKinds"]?.GetValue<bool>() ?? false;
         var includeQualifiedCommonCalls = args?["includeQualifiedCommonCalls"]?.GetValue<bool>() ?? false;
         var includeMemberReads = args?["includeMemberReads"]?.GetValue<bool>() ?? false;
+        var selectedSymbol = SymbolSelector.TryParse(query, out var parsedSelector)
+            ? parsedSelector
+            : (SymbolSelector?)null;
 
         return WithDbReader(id, args, reader =>
         {
+            DefinitionResult? selectedDefinition = null;
+            if (selectedSymbol is { } selector)
+            {
+                if (!reader.IsCurrentSymbolSelector(selector))
+                {
+                    return CreateToolErrorResponse(
+                        id,
+                        $"Symbol selector is stale or belongs to another index generation: {selector}.",
+                        McpErrorEnvelope.CategoryIndexStale,
+                        "Rerun outline or inspect against this database and use the current emitted selector.",
+                        retrySafe: true);
+                }
+
+                selectedDefinition = reader.GetDefinitionBySelector(selector, lang);
+                if (selectedDefinition == null)
+                {
+                    return CreateToolErrorResponse(
+                        id,
+                        $"Symbol selector was not found in the active index: {selector}.",
+                        McpErrorEnvelope.CategoryInvalidArgument,
+                        "Rerun outline or inspect and use a selector emitted by the active database.",
+                        retrySafe: false);
+                }
+            }
+
+            var effectiveLang = selectedDefinition?.Lang ?? lang;
+            var effectiveQuery = selectedDefinition?.Name ?? query;
             if (countOnly)
             {
-                var countOnlyTotal = reader.CountCalleesTotal(query, lang, kind, pathPatterns, excludePaths, excludeTests, exact, rawKinds, includeQualifiedCommonCalls, includeMemberReads).Count;
+                var countOnlyTotal = selectedDefinition != null
+                    ? reader.CountCalleesForCandidate(
+                        selectedDefinition,
+                        pathPatterns,
+                        excludePaths,
+                        excludeTests,
+                        kind,
+                        rawKinds,
+                        includeQualifiedCommonCalls,
+                        includeMemberReads).Count
+                    : reader.CountCalleesTotal(query, lang, kind, pathPatterns, excludePaths, excludeTests, exact, rawKinds, includeQualifiedCommonCalls, includeMemberReads).Count;
                 var histogramResults = countOnlyTotal > 0
-                    ? reader.GetCallees(query, Math.Min(countOnlyTotal, MaxLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact, rawKinds, rankMode: rankMode, includeQualifiedCommonCalls: includeQualifiedCommonCalls, includeMemberReads: includeMemberReads)
+                    ? selectedDefinition != null
+                        ? reader.GetCalleesForCandidate(
+                            selectedDefinition,
+                            Math.Min(countOnlyTotal, MaxLimit),
+                            pathPatterns,
+                            excludePaths,
+                            excludeTests,
+                            referenceKind: kind,
+                            rawKinds: rawKinds,
+                            rankMode: rankMode,
+                            includeQualifiedCommonCalls: includeQualifiedCommonCalls,
+                            includeMemberReads: includeMemberReads)
+                        : reader.GetCallees(query, Math.Min(countOnlyTotal, MaxLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact, rawKinds, rankMode: rankMode, includeQualifiedCommonCalls: includeQualifiedCommonCalls, includeMemberReads: includeMemberReads)
                     : [];
                 var countOnlyPayload = BuildCountOnlyPayload(countOnlyTotal, countOnlyTotal, truncated: false, histogramResults, result => result.Path);
                 countOnlyPayload["query"] = query;
@@ -310,7 +362,7 @@ public partial class McpServer
                 countOnlyPayload["rawKinds"] = rawKinds;
                 countOnlyPayload["includeQualifiedCommonCalls"] = includeQualifiedCommonCalls;
                 countOnlyPayload["includeMemberReads"] = includeMemberReads;
-                countOnlyPayload["lang"] = lang;
+                countOnlyPayload["lang"] = effectiveLang;
                 countOnlyPayload["path"] = PathEcho(pathPatterns);
                 countOnlyPayload["excludeTests"] = excludeTests;
                 countOnlyPayload["rankBy"] = QueryCommandRunner.FormatReferenceRankMode(rankMode);
@@ -318,7 +370,7 @@ public partial class McpServer
                 AddReferenceGraphCompletenessSignal(
                     countOnlyPayload,
                     reader,
-                    lang,
+                    effectiveLang,
                     pathPatterns,
                     excludePaths,
                     excludeTests);
@@ -326,20 +378,50 @@ public partial class McpServer
                 return CreateToolResult(id, $"Counted {ConsoleUi.Counted(countOnlyTotal, "callee")}.", countOnlyPayload);
             }
 
-            var results = reader.GetCallees(query, FetchLimitForEnvelope(limit), lang, kind, pathPatterns, excludePaths, excludeTests, exact, rawKinds, rankMode: rankMode, offset: offset, includeQualifiedCommonCalls: includeQualifiedCommonCalls, includeMemberReads: includeMemberReads);
+            var results = selectedDefinition != null
+                ? reader.GetCalleesForCandidate(
+                    selectedDefinition,
+                    FetchLimitForEnvelope(limit),
+                    pathPatterns,
+                    excludePaths,
+                    excludeTests,
+                    offset,
+                    kind,
+                    rawKinds,
+                    rankMode,
+                    includeQualifiedCommonCalls,
+                    includeMemberReads)
+                : reader.GetCallees(query, FetchLimitForEnvelope(limit), lang, kind, pathPatterns, excludePaths, excludeTests, exact, rawKinds, rankMode: rankMode, offset: offset, includeQualifiedCommonCalls: includeQualifiedCommonCalls, includeMemberReads: includeMemberReads);
             var truncated = TrimToRequestedLimit(results, limit);
             var total = truncated || offset > 0
-                ? reader.CountCalleesTotal(query, lang, kind, pathPatterns, excludePaths, excludeTests, exact, rawKinds, includeQualifiedCommonCalls, includeMemberReads).Count
+                ? selectedDefinition != null
+                    ? reader.CountCalleesForCandidate(
+                        selectedDefinition,
+                        pathPatterns,
+                        excludePaths,
+                        excludeTests,
+                        kind,
+                        rawKinds,
+                        includeQualifiedCommonCalls,
+                        includeMemberReads).Count
+                    : reader.CountCalleesTotal(query, lang, kind, pathPatterns, excludePaths, excludeTests, exact, rawKinds, includeQualifiedCommonCalls, includeMemberReads).Count
                 : results.Count;
-            var graphSupport = ResolveGraphSupport(reader, exact, query, lang, pathPatterns, excludePaths, excludeTests);
+            var graphSupport = ResolveGraphSupport(
+                reader,
+                selectedDefinition != null || exact,
+                effectiveQuery,
+                effectiveLang,
+                pathPatterns,
+                excludePaths,
+                excludeTests);
             var sqlGraphSignal = QueryCommandRunner.NarrowSqlGraphContractSignalByLanguages(
-                reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests),
+                reader.GetSqlGraphContractSignal(effectiveLang, pathPatterns, excludePaths, excludeTests),
                 results.Select(result => result.Lang),
-                lang,
+                effectiveLang,
                 graphSupport.GraphLanguage);
-            var exactSignal = reader.GetCalleesExactQuerySignal(lang, pathPatterns, excludePaths, excludeTests, includeSqlGraphContractSignal: sqlGraphSignal.Relevant);
+            var exactSignal = reader.GetCalleesExactQuerySignal(effectiveLang, pathPatterns, excludePaths, excludeTests, includeSqlGraphContractSignal: sqlGraphSignal.Relevant);
             var exactZeroHint = QueryCommandRunner.BuildExactZeroHint(
-                exact && reader._hasReferencesTable,
+                selectedDefinition == null && exact && reader._hasReferencesTable,
                 () => reader.CountCallees(query, QueryCommandRunner.ExactZeroHintProbeLimit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false, rawKinds: rawKinds, includeQualifiedCommonCalls: includeQualifiedCommonCalls, includeMemberReads: includeMemberReads) > 0,
                 () => reader.CountCallees(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false, rawKinds: rawKinds, includeQualifiedCommonCalls: includeQualifiedCommonCalls, includeMemberReads: includeMemberReads),
                 () => reader.GetCallees(query, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact: false, rawKinds: rawKinds, rankMode: rankMode, includeQualifiedCommonCalls: includeQualifiedCommonCalls, includeMemberReads: includeMemberReads),
@@ -351,7 +433,7 @@ public partial class McpServer
                 ["rawKinds"] = rawKinds,
                 ["includeQualifiedCommonCalls"] = includeQualifiedCommonCalls,
                 ["includeMemberReads"] = includeMemberReads,
-                ["lang"] = lang,
+                ["lang"] = effectiveLang,
                 ["path"] = PathEcho(pathPatterns),
                 ["excludeTests"] = excludeTests,
                 ["rankBy"] = QueryCommandRunner.FormatReferenceRankMode(rankMode),
@@ -371,14 +453,17 @@ public partial class McpServer
             AddReferenceGraphCompletenessSignal(
                 payload,
                 reader,
-                lang,
+                effectiveLang,
                 pathPatterns,
                 excludePaths,
                 excludeTests);
             if (results.Count == 0)
             {
-                AddExactZeroHint(payload, exactZeroHint);
-                AddSymbolRecoveryHint(payload, query, "callees", lang, kind, PathEcho(pathPatterns));
+                if (selectedDefinition == null)
+                {
+                    AddExactZeroHint(payload, exactZeroHint);
+                    AddSymbolRecoveryHint(payload, query, "callees", lang, kind, PathEcho(pathPatterns));
+                }
                 AddFreshnessHint(payload, reader);
             }
             else

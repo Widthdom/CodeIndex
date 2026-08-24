@@ -1139,6 +1139,43 @@ guard that would fail before users see multi-hour indexing stalls.
 
 Do not add mutable static caches, shared `StringBuilder` instances, reused `MatchCollection` enumerators, or singleton scanner state to extractor code. If a future extractor needs cross-call memoization, use an explicit thread-safe collection and add a targeted parallel regression test that proves deterministic output under concurrent calls.
 
+### C# top-level synthetic scope contract
+
+C# extractor contract version 13 persists an actionable file-scoped symbol for
+compilation units with executable top-level statements. The symbol uses
+`kind=function`, `sub_kind=top_level_scope`, and `name=<top-level>`; public
+results derive `is_synthetic=true`, qualify the identity as
+`<indexed-path>::<top-level>`, and emit an `id:<symbol-id>@g:<generation>`
+selector. Selectors are valid only for their active index generation and are
+resolved by symbol id, so identical top-level programs in different files do
+not share callee identity.
+
+Detection runs after container assignment. It excludes declaration-covered
+ranges, imports with any legal whitespace between their C# keywords, comments,
+directives, and assembly/module metadata, recognizes
+both `using var` and explicitly typed `using Type value = ...` declarations as
+executable rather than import directives, then uses the first and last uncovered
+executable lines as both source and body bounds.
+A top-level local function remains source-declared and containerless; its own
+narrower span owns references inside the function, while a synthetic range may
+cross it when executable statements occur on both sides. When a local function
+and an outside statement share one line, declaration columns retain the local
+function while the outside statement belongs to the synthetic scope. Reference extraction
+uses the synthetic symbol's persisted id for otherwise containerless calls in
+that body. The synthetic scope is not a documented declaration, so an XML-doc
+comment before a top-level statement does not attach to it. `outline`,
+coordinate `inspect`, and identity-scoped `callees` must
+therefore navigate the same row; both CLI and MCP `callees` resolve its selector
+by persisted symbol id. Unused-symbol list and count queries exclude this
+synthetic entry point because it is executable infrastructure, not removable
+dead code. Selector-scoped callee queries fail closed when a readable legacy
+schema lacks the persisted source-identity column. If a stored C# extractor version predates this
+contract or is missing, and no synthetic row is available, outline reports
+`top_level_symbol_support=reindex_required` plus a typed limitation instead of
+claiming support. A normal full index re-extracts unchanged C# files before it
+stamps this contract, so the documented reindex remediation repairs unstamped
+legacy databases without requiring `--rebuild`.
+
 ### Symbol Kind Taxonomy
 
 `symbols.kind`, `symbols.container_kind`, and `symbol_references.container_kind` use the public symbol kind taxonomy below. New extractors must register new kind values in `SymbolKindCatalog` before writing them so schema checks, writer validation, CLI filters, and downstream JSON consumers stay aligned.
@@ -5088,6 +5125,34 @@ regression には、scope rule の focused correctness test と、ユーザー�
 `SymbolExtractor` と `ReferenceExtractor` は、異なるファイルへの並行呼び出しや、同じファイル内容に対する繰り返し呼び出しでも安全でなければならない。共有される `Regex` インスタンスや static な lookup table は CLR が一度だけ初期化し、型初期化後は immutable として扱う。抽出ごとの状態は、ローカル変数、メソッド引数、呼び出し元が所有するコレクション、またはその抽出呼び出し用に生成した言語固有の state object に持たせる。
 
 抽出器コードに mutable な static cache、共有 `StringBuilder` インスタンス、使い回しの `MatchCollection` enumerator、シングルトンの scanner state を追加してはならない。将来の抽出器が呼び出しをまたぐ memoization を必要とする場合は、明示的にスレッドセーフなコレクションを使い、並行呼び出し下でも決定的な出力になることを証明する focused な並列回帰テストを追加する。
+
+### C# top-level synthetic scope 契約
+
+C# extractor contract version 13 は、実行可能な top-level statement を持つ
+compilation unit に、操作可能な file-scoped symbol を永続化します。この symbol は
+`kind=function`、`sub_kind=top_level_scope`、`name=<top-level>` を使い、公開結果は
+`is_synthetic=true`、`<indexed-path>::<top-level>` 形式の qualified identity、
+`id:<symbol-id>@g:<generation>` 形式の selector を派生させます。selector は active な
+index generation だけで有効で、symbol id により解決するため、異なる file にある同一内容の
+top-level program が callee identity を共有することはありません。
+
+検出は container assignment の後に実行します。declaration が覆う range、C# keyword 間に
+任意の正当な whitespace を持つ import、comment、directive、assembly/module metadata を除外し、`using var` と明示型の
+`using Type value = ...` declaration の両方を import directive ではなく実行可能コードとして認識し、
+残った最初と最後の実行可能行を source/body 両方の境界にします。top-level local function は container を持たない source-declared symbol
+のままで、その function 内の reference はより狭い自身の span が所有します。両側に実行
+statement がある場合、synthetic range は local function をまたぐことがあります。local function と外側の statement が
+同じ行にある場合、宣言 column は local function が所有し、外側の statement は synthetic scope が所有します。reference
+extraction は、この body 内で従来 container を持たなかった call に synthetic symbol の永続化
+id を使います。synthetic scope は documented declaration ではないため、top-level statement
+直前の XML-doc comment を自身へ結び付けません。そのため `outline`、座標指定 `inspect`、identity-scoped `callees` は同じ row を
+navigate しなければならず、CLI / MCP の両 `callees` が selector を永続化済み symbol id で解決します。
+unused-symbol の list / count query は、この synthetic entry point が削除可能な dead code ではなく実行基盤なので除外します。
+読み取り可能な legacy schema に永続 source-identity column がない場合、selector-scoped callee query は fail-closed します。
+保存済み C# extractor version がこの契約より古いか欠落しており、
+synthetic row も無い場合、outline は対応済みと見せず、`top_level_symbol_support=reindex_required` と型付きの
+limitation を返します。通常の full index はこの contract を stamp する前に未変更 C# file も再抽出するため、
+文書化された reindex remediation は `--rebuild` なしで stamp のない legacy database を修復します。
 
 ### シンボル種別分類
 
