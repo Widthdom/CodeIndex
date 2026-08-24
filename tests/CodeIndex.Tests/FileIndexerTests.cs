@@ -2458,6 +2458,7 @@ public partial class FileIndexerTests
         File.SetLastWriteTimeUtc(replacementPath, DateTime.UtcNow.AddSeconds(5));
         var openCount = 0;
         var authorizationCount = 0;
+        var snapshotCount = 0;
         var indexer = new FileIndexer(
             project.Root,
             ignoreCase: false,
@@ -2478,12 +2479,14 @@ public partial class FileIndexerTests
                 if (openCount == 1)
                     File.Replace(replacementPath, path, destinationBackupFileName: null);
                 return stream;
-            });
+            },
+            fileHandleSnapshotCapturedForTesting: () => snapshotCount++);
 
         var candidateContent = indexer.LoadCSharpStaticInterfaceCandidateContentForPrepass(path, "Fixture.cs");
 
         Assert.Equal(2, openCount);
         Assert.Equal(2, authorizationCount);
+        Assert.Equal(4, snapshotCount);
         Assert.Equal(replacementSource, candidateContent);
         Assert.True(CSharpStaticInterfacePrepass.MayContainCSharpStaticInterfaceContract(candidateContent!));
     }
@@ -6348,6 +6351,7 @@ public partial class FileIndexerTests
         File.SetLastWriteTimeUtc(path, sharedModifiedUtc);
         File.SetLastWriteTimeUtc(replacementPath, sharedModifiedUtc);
         var openCount = 0;
+        var snapshotCount = 0;
         var indexer = new FileIndexer(
             project.Root,
             ignoreCase: false,
@@ -6364,7 +6368,8 @@ public partial class FileIndexerTests
                     File.SetLastWriteTimeUtc(path, sharedModifiedUtc);
                 }
                 return stream;
-            });
+            },
+            fileHandleSnapshotCapturedForTesting: () => snapshotCount++);
 
         var result = indexer.ProbeUnknownLanguageForIndexing(
             path,
@@ -6372,6 +6377,7 @@ public partial class FileIndexerTests
             CancellationToken.None);
 
         Assert.Equal(2, openCount);
+        Assert.Equal(4, snapshotCount);
         Assert.Equal(
             recognizedHeaderFirst
                 ? FileIndexer.FileProbeStatus.Unsupported

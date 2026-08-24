@@ -65,6 +65,11 @@ public partial class FileIndexer
 
     internal readonly record struct FileIdentity(ulong DeviceId, ulong Inode);
 
+    internal readonly record struct FileHandleSnapshot(
+        long Length,
+        DateTime ModifiedUtc,
+        FileIdentity? Identity);
+
     public readonly record struct ScanFilesResult(
         IReadOnlyList<string> Files,
         IReadOnlyDictionary<string, string> FileLanguages,

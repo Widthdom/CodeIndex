@@ -5,6 +5,235 @@ namespace CodeIndex.Tests;
 
 public partial class FileIndexerTests
 {
+    [Fact]
+    public void FileHandleSnapshot_MatchesManagedHandleMetadataOnSupportedPlatforms()
+    {
+        if (!OperatingSystem.IsWindows()
+            && !OperatingSystem.IsLinux()
+            && !OperatingSystem.IsMacOS())
+        {
+            return;
+        }
+
+        using var project = TestProjectHelper.CreateTempProjectScope(
+            "cdidx_file_handle_snapshot_native");
+        var path = TestProjectHelper.WriteBinaryFile(
+            project.Root,
+            "subject.bin",
+            Encoding.UTF8.GetBytes("snapshot parity\n"));
+        File.SetLastWriteTimeUtc(
+            path,
+            new DateTime(2024, 2, 3, 4, 5, 6, DateTimeKind.Utc)
+                .AddTicks(7_654_321));
+        using var stream = BoundedFile.OpenReadForIndexContent(path);
+
+        Assert.True(FileIndexer.TryGetFileHandleSnapshot(
+            stream.SafeFileHandle,
+            out var snapshot));
+        Assert.True(FileIndexer.TryGetFileIdentity(
+            stream.SafeFileHandle,
+            out var identity));
+        Assert.Equal(stream.Length, snapshot.Length);
+        Assert.Equal(
+            File.GetLastWriteTimeUtc(stream.SafeFileHandle),
+            snapshot.ModifiedUtc);
+        Assert.Equal(DateTimeKind.Utc, snapshot.ModifiedUtc.Kind);
+        Assert.Equal<FileIndexer.FileIdentity?>(identity, snapshot.Identity);
+    }
+
+    [Fact]
+    public void FileHandleSnapshot_UnixMetadataConversionsPreserveDeviceAndTimestampContracts()
+    {
+        Assert.Equal(
+            0x100000523467UL,
+            FileIndexer.EncodeLinuxDeviceId(major: 0x1234, minor: 0x0567));
+
+        Assert.True(FileIndexer.TryCreateUnixModifiedUtc(
+            seconds: 0,
+            nanoseconds: 99,
+            out var belowOneTick));
+        Assert.Equal(DateTime.UnixEpoch, belowOneTick);
+
+        Assert.True(FileIndexer.TryCreateUnixModifiedUtc(
+            seconds: 0,
+            nanoseconds: 100,
+            out var oneTick));
+        Assert.Equal(DateTime.UnixEpoch.AddTicks(1), oneTick);
+
+        Assert.True(FileIndexer.TryCreateUnixModifiedUtc(
+            seconds: 0,
+            nanoseconds: 999_999_999,
+            out var finalNanosecond));
+        Assert.Equal(DateTime.UnixEpoch.AddTicks(9_999_999), finalNanosecond);
+        Assert.Equal(DateTimeKind.Utc, finalNanosecond.Kind);
+
+        Assert.False(FileIndexer.TryCreateUnixModifiedUtc(
+            seconds: 0,
+            nanoseconds: -1,
+            out _));
+        Assert.False(FileIndexer.TryCreateUnixModifiedUtc(
+            seconds: 0,
+            nanoseconds: 1_000_000_000,
+            out _));
+        Assert.False(FileIndexer.TryCreateUnixModifiedUtc(
+            seconds: long.MinValue,
+            nanoseconds: 0,
+            out _));
+        Assert.False(FileIndexer.TryCreateUnixModifiedUtc(
+            seconds: long.MaxValue,
+            nanoseconds: 0,
+            out _));
+    }
+
+    [Theory]
+    [InlineData("load")]
+    [InlineData("load-bound")]
+    [InlineData("raw-chunks-negative")]
+    [InlineData("raw-chunks-positive")]
+    [InlineData("csharp-negative")]
+    [InlineData("csharp-positive")]
+    [InlineData("unknown-header")]
+    [InlineData("unknown-coverage")]
+    public void FileContentLoader_StableReadPathsCaptureExactlyTwoHandleSnapshots(
+        string readPathShape)
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope(
+            "cdidx_file_handle_snapshot_counts");
+        var source = readPathShape switch
+        {
+            "csharp-negative" => "public class C { int M() => 0; }\n",
+            "csharp-positive" => "public interface I { static abstract int M(); }\n",
+            "unknown-header" => "#!/bin/sh\necho ok\n",
+            "unknown-coverage" => "plain unknown-language coverage\n",
+            _ => "class Fixture { }\n",
+        };
+        var path = TestProjectHelper.WriteTextFile(project.Root, "subject", source);
+        var snapshotCount = 0;
+        var loader = new FileContentLoader(
+            FileIndexer.DefaultMaxFileSizeBytes,
+            resolveFileReadPath: readPathShape == "load-bound"
+                ? static candidate => Path.GetFullPath(candidate)
+                : null,
+            bindReadToFileSystemIdentity: readPathShape == "load-bound",
+            fileHandleSnapshotCapturedForTesting: () => snapshotCount++);
+
+        switch (readPathShape)
+        {
+            case "load":
+            case "load-bound":
+                Assert.Equal(source, loader.Load(
+                    path,
+                    "subject",
+                    "subject",
+                    CancellationToken.None).Content);
+                break;
+            case "raw-chunks-negative":
+                Assert.False(loader.RawByteChunksMayMatch(
+                    path,
+                    "subject",
+                    static _ => false,
+                    CancellationToken.None));
+                break;
+            case "raw-chunks-positive":
+                Assert.True(loader.RawByteChunksMayMatch(
+                    path,
+                    "subject",
+                    static bytes => bytes.Length > 0,
+                    CancellationToken.None));
+                break;
+            case "csharp-negative":
+            case "csharp-positive":
+                var (candidate, requiresRetry) = loader
+                    .LoadCSharpStaticInterfaceCandidateContentForPrepass(
+                        path,
+                        "subject",
+                        "subject",
+                        retryOnMutation: true,
+                        includeQualifiedMemberAccessCandidate: false,
+                        includeChecksum: false,
+                        CancellationToken.None);
+                Assert.False(requiresRetry);
+                Assert.Equal(readPathShape == "csharp-positive", candidate is not null);
+                break;
+            case "unknown-header":
+            case "unknown-coverage":
+                var unknown = loader.ProbeUnknownLanguage(
+                    path,
+                    "subject",
+                    "subject",
+                    CancellationToken.None);
+                Assert.Equal(
+                    readPathShape == "unknown-header"
+                        ? FileIndexer.FileProbeStatus.Supported
+                        : FileIndexer.FileProbeStatus.Unsupported,
+                    unknown.LanguageDetection.Status);
+                Assert.Equal(
+                    readPathShape == "unknown-coverage",
+                    unknown.IsCoverageCandidate);
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(
+                    nameof(readPathShape),
+                    readPathShape,
+                    null);
+        }
+
+        Assert.Equal(2, snapshotCount);
+    }
+
+    [Fact]
+    public void FileContentLoader_Load_SameMetadataAtomicReplacementCapturesFourSnapshotsAndReadsCurrentPath()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope(
+            "cdidx_file_handle_snapshot_atomic_replace");
+        const string originalSource = "class OldType { }\n";
+        const string replacementSource = "class NewType { }\n";
+        Assert.Equal(
+            Encoding.UTF8.GetByteCount(originalSource),
+            Encoding.UTF8.GetByteCount(replacementSource));
+        var path = TestProjectHelper.WriteTextFile(
+            project.Root,
+            "subject.cs",
+            originalSource);
+        var replacementPath = TestProjectHelper.WriteTextFile(
+            project.Root,
+            "replacement.tmp",
+            replacementSource);
+        var sharedModifiedUtc = DateTime.UtcNow.AddMinutes(-2);
+        File.SetLastWriteTimeUtc(path, sharedModifiedUtc);
+        File.SetLastWriteTimeUtc(replacementPath, sharedModifiedUtc);
+        var openCount = 0;
+        var snapshotCount = 0;
+        var loader = new FileContentLoader(
+            FileIndexer.DefaultMaxFileSizeBytes,
+            openReadForIndexContent: candidate =>
+            {
+                openCount++;
+                var stream = BoundedFile.OpenReadForIndexContent(candidate);
+                if (openCount == 1)
+                {
+                    File.Replace(
+                        replacementPath,
+                        path,
+                        destinationBackupFileName: null);
+                    File.SetLastWriteTimeUtc(path, sharedModifiedUtc);
+                }
+
+                return stream;
+            },
+            fileHandleSnapshotCapturedForTesting: () => snapshotCount++);
+
+        var loaded = loader.Load(
+            path,
+            "subject.cs",
+            "subject.cs",
+            CancellationToken.None);
+
+        Assert.Equal(replacementSource, loaded.Content);
+        Assert.Equal(2, openCount);
+        Assert.Equal(4, snapshotCount);
+    }
+
     [Theory]
     [InlineData("", "", 0)]
     [InlineData("a\nb\n", "a\nb\n", 2)]
@@ -186,6 +415,7 @@ public partial class FileIndexerTests
             }
 
             var retargeted = false;
+            var snapshotCount = 0;
             var indexer = new FileIndexer(
                 projectRoot,
                 ignoreCase: false,
@@ -203,11 +433,13 @@ public partial class FileIndexerTests
                     }
 
                     return BoundedFile.OpenReadForIndexContent(path);
-                });
+                },
+                fileHandleSnapshotCapturedForTesting: () => snapshotCount++);
 
             var exception = Assert.Throws<IOException>(() => indexer.BuildRecord(linkPath));
 
             Assert.True(retargeted);
+            Assert.Equal(1, snapshotCount);
             Assert.Contains("identity changed", exception.Message, StringComparison.OrdinalIgnoreCase);
         }
         finally

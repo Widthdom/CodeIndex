@@ -53,9 +53,11 @@ internal sealed partial class FileContentLoader
         {
             cancellationToken.ThrowIfCancellationRequested();
             var readPath = _resolveFileReadPath(absolutePath);
-            using var stream = OpenValidatedReadStream(absolutePath, readPath);
-            var modifiedBeforeRead = File.GetLastWriteTimeUtc(stream.SafeFileHandle);
-            var initialLength = stream.Length;
+            using var stream = OpenValidatedReadStream(
+                absolutePath,
+                readPath,
+                out var initialSnapshot);
+            var initialLength = initialSnapshot.Length;
 
             var headerByteCount = FileIndexer.ReadScriptHeaderPrefix(
                 stream,
@@ -66,11 +68,13 @@ internal sealed partial class FileContentLoader
                 allowZshCompdef: true);
             if (language.Status == FileIndexer.FileProbeStatus.Supported)
             {
-                var headerLengthChanged = stream.Length != initialLength;
-                var modifiedAfterHeaderRead = File.GetLastWriteTimeUtc(stream.SafeFileHandle);
-                var headerPathIdentityChanged = ReadPathIdentityChanged(absolutePath, stream);
+                var finalSnapshot = CaptureFileHandleSnapshot(stream);
+                var headerLengthChanged = finalSnapshot.Length != initialLength;
+                var headerPathIdentityChanged = ReadPathIdentityChanged(
+                    absolutePath,
+                    finalSnapshot);
                 if (attempt == 0
-                    && (modifiedAfterHeaderRead != modifiedBeforeRead
+                    && (finalSnapshot.ModifiedUtc != initialSnapshot.ModifiedUtc
                         || headerLengthChanged
                         || headerPathIdentityChanged))
                 {
@@ -141,11 +145,11 @@ internal sealed partial class FileContentLoader
                     ThrowIfReadExceedsMaxFileSize(normalizedRelativePath, total);
                 }
 
-                var lengthChanged = stream.Length != initialLength || total != initialLength;
-                var modifiedAfterRead = File.GetLastWriteTimeUtc(stream.SafeFileHandle);
-                var pathIdentityChanged = ReadPathIdentityChanged(absolutePath, stream);
+                var finalSnapshot = CaptureFileHandleSnapshot(stream);
+                var lengthChanged = finalSnapshot.Length != initialLength || total != initialLength;
+                var pathIdentityChanged = ReadPathIdentityChanged(absolutePath, finalSnapshot);
                 if (attempt == 0
-                    && (modifiedAfterRead != modifiedBeforeRead
+                    && (finalSnapshot.ModifiedUtc != initialSnapshot.ModifiedUtc
                         || lengthChanged
                         || pathIdentityChanged))
                 {

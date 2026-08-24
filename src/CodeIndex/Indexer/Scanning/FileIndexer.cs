@@ -233,7 +233,8 @@ public partial class FileIndexer
         Action<string>? pathAccessValidator = null,
         Func<string, FileStream>? openReadForIndexContent = null,
         bool bindConfigurationReadsToFileSystemIdentity = false,
-        string? internalIndexDatabasePath = null)
+        string? internalIndexDatabasePath = null,
+        Action? fileHandleSnapshotCapturedForTesting = null)
     {
         _projectRoot = Path.GetFullPath(projectRoot);
         _projectRootRelativePrefix = CreateProjectRootRelativePrefix(_projectRoot);
@@ -256,7 +257,8 @@ public partial class FileIndexer
             symlinkPolicy == SymlinkPolicy.None ? null : ResolveFileReadPath,
             bindReadToFileSystemIdentity: symlinkPolicy != SymlinkPolicy.None,
             validateResolvedFileReadPath:
-                symlinkPolicy == SymlinkPolicy.Internal ? ValidateResolvedFileReadPath : null);
+                symlinkPolicy == SymlinkPolicy.Internal ? ValidateResolvedFileReadPath : null,
+            fileHandleSnapshotCapturedForTesting: fileHandleSnapshotCapturedForTesting);
         _pathAccessValidator = pathAccessValidator;
         _bindConfigurationReadsToFileSystemIdentity = bindConfigurationReadsToFileSystemIdentity;
         _maxDanglingFileSystemEntryScanCandidates = Math.Max(

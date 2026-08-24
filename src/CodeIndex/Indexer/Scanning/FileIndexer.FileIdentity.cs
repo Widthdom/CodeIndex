@@ -504,11 +504,32 @@ public partial class FileIndexer
     [StructLayout(LayoutKind.Explicit, Size = 256)]
     private struct LinuxStatx
     {
+        [FieldOffset(0)]
+        public uint Mask;
+
         [FieldOffset(16)]
         public uint LinkCount;
 
         [FieldOffset(20)]
         public uint Uid;
+
+        [FieldOffset(32)]
+        public ulong Inode;
+
+        [FieldOffset(40)]
+        public ulong Size;
+
+        [FieldOffset(112)]
+        public long ModificationTimeSeconds;
+
+        [FieldOffset(120)]
+        public uint ModificationTimeNanoseconds;
+
+        [FieldOffset(136)]
+        public uint DeviceMajor;
+
+        [FieldOffset(140)]
+        public uint DeviceMinor;
     }
 
     [StructLayout(LayoutKind.Sequential)]
