@@ -2815,7 +2815,8 @@ or extractor registration removes the diagnostic on the next full scan. Inspect
 an extension with `cdidx languages --extension <extension> --json`, then add a
 trusted mapping to `.cdidx-langmap.yaml`, register an extractor, or add an ignore
 rule for intentional non-code files. For an extensionless source file, add a
-recognized shebang or rename it with a supported extension.
+recognized shebang or a first-line `#compdef` directive for a zsh completion
+function, or rename it with a supported extension.
 
 Full-scan dry runs report the same workspace-authoritative diagnostics without
 writing. Scoped dry runs use `unknown_extension_diagnostics_scope: "candidate_scope"`;
@@ -6391,8 +6392,9 @@ inventory は読み取り可能な text 系ファイルだけを対象にしま�
 有効な workspace mapping または extractor 登録後の次回全体 scan では診断が消えます。
 `cdidx languages --extension <extension> --json` で拡張子を確認し、信頼済み mapping を
 `.cdidx-langmap.yaml` に追加するか、extractor を登録するか、意図的な非 code ファイルを
-ignore rule に追加してください。拡張子なしの source ファイルには、認識可能な shebang
-を追加するか、対応済み拡張子を持つ名前へ変更してください。
+ignore rule に追加してください。拡張子なしの source ファイルには、認識可能な shebang、
+または zsh 補完関数の先頭行に `#compdef` directive を追加するか、対応済み拡張子を持つ
+名前へ変更してください。
 
 全体 scan の dry-run は書き込みを行わず、同じ workspace-authoritative な診断を返します。
 scoped dry-run は `unknown_extension_diagnostics_scope: "candidate_scope"` を使い、candidate

@@ -33,6 +33,7 @@ public partial class FileIndexer
     internal const string ExactFilenameDetectionSource = "exact_filename";
     internal const string FilenamePrefixPatternDetectionSource = "filename_prefix_pattern";
     internal const string ShebangDetectionSource = "shebang";
+    internal const string ZshCompdefDetectionSource = "zsh_compdef";
     internal const string AmbiguousContentDetectionSource = "content";
     internal const string AmbiguousProjectDetectionSource = "project";
     internal const string AmbiguousFallbackDetectionSource = "ambiguous";

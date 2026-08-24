@@ -2673,6 +2673,58 @@ public partial class FileIndexerTests
     }
 
     [Fact]
+    public void DetectLanguage_ExtensionlessAndUnknownZshCompdefSignaturesHonorEncodingAndLineEndings_Issue5165()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_zsh_compdef_issue5165");
+        var cases = new (string Name, string Content, Encoding Encoding)[]
+        {
+            ("utf8", "#compdef tool\n_tool() {}\n", new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)),
+            ("utf8-crlf", "#compdef tool\r\n_tool() {}\r\n", new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)),
+            ("utf8-bom", "#compdef tool\n_tool() {}\n", new UTF8Encoding(encoderShouldEmitUTF8Identifier: true)),
+            ("utf16-le", "#compdef tool\n_tool() {}\n", new UnicodeEncoding(bigEndian: false, byteOrderMark: true)),
+            ("utf16-be", "#compdef tool\n_tool() {}\n", new UnicodeEncoding(bigEndian: true, byteOrderMark: true)),
+            ("directive-only", "#compdef\n", new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)),
+            ("unknown.zshcompfixture", "#compdef tool\n_tool() {}\n", new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)),
+        };
+
+        foreach (var testCase in cases)
+        {
+            var path = TestProjectHelper.ProjectPath(project.Root, testCase.Name);
+            File.WriteAllText(path, testCase.Content, testCase.Encoding);
+
+            var detection = FileIndexer.TryDetectLanguage(path);
+
+            Assert.Equal(FileIndexer.FileProbeStatus.Supported, detection.Status);
+            Assert.Equal("shell", detection.Language);
+            Assert.Equal(FileIndexer.ZshCompdefDetectionSource, detection.DetectionSource);
+        }
+    }
+
+    [Fact]
+    public void DetectLanguage_ZshCompdefRequiresExactFirstLineDirectiveBoundary_Issue5165()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_zsh_compdef_invalid_issue5165");
+        var invalidFiles = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["lookalike"] = "#compdefinitely tool\n",
+            ["spaced"] = "# compdef tool\n",
+            ["late"] = "# generated completion\n#compdef tool\n",
+            ["ordinary"] = "plain extensionless text\n",
+            ["uppercase"] = "#COMPDEF tool\n",
+            ["over-cap"] = "#compdef " + new string('x', FileIndexer.ShebangProbeByteLimit),
+        };
+
+        foreach (var (name, content) in invalidFiles)
+        {
+            var path = TestProjectHelper.WriteTextFile(project.Root, name, content);
+            Assert.Null(FileIndexer.DetectLanguage(path));
+        }
+
+        var ambiguousPath = TestProjectHelper.WriteTextFile(project.Root, "tool.t", "#compdef tool\n");
+        Assert.Equal("perl", FileIndexer.DetectLanguage(ambiguousPath));
+    }
+
+    [Fact]
     public void DetectLanguage_ExtensionlessUtf16ShebangScript_ReturnsLanguage()
     {
         using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
@@ -6056,6 +6108,7 @@ public partial class FileIndexerTests
                 ["app.cs"] = "class App { }\n",
                 ["Dockerfile.dev"] = "FROM scratch\n",
                 ["script"] = "#!/usr/bin/env python\nprint('hello')\n",
+                ["_cdidx"] = "#compdef cdidx\n_cdidx() {}\n",
                 ["tool"] = "plain text without a shebang\n",
                 ["data.mystery"] = "unknown extension\n",
                 ["ignored.mystery"] = "ignored unknown extension\n",
@@ -6065,6 +6118,7 @@ public partial class FileIndexerTests
             [0x42, 0x00, 0x46]);
         var appPath = TestProjectHelper.ProjectPath(tempDir, "app.cs");
         var scriptPath = TestProjectHelper.ProjectPath(tempDir, "script");
+        var completionPath = TestProjectHelper.ProjectPath(tempDir, "_cdidx");
         var toolPath = TestProjectHelper.ProjectPath(tempDir, "tool");
         var dataPath = TestProjectHelper.ProjectPath(tempDir, "data.mystery");
         var ignoredPath = TestProjectHelper.ProjectPath(tempDir, "ignored.mystery");
@@ -6075,6 +6129,8 @@ public partial class FileIndexerTests
         Assert.Equal(["data.mystery", "tool"], scanResult.UnknownExtensionFiles);
         Assert.Equal("csharp", scanResult.FileLanguages[appPath]);
         Assert.Equal("python", scanResult.FileLanguages[scriptPath]);
+        Assert.Equal("shell", scanResult.FileLanguages[completionPath]);
+        Assert.DoesNotContain("_cdidx", scanResult.UnknownExtensionFiles);
         Assert.DoesNotContain(toolPath, scanResult.FileLanguages.Keys);
         Assert.DoesNotContain(dataPath, scanResult.FileLanguages.Keys);
         Assert.DoesNotContain(ignoredPath, scanResult.FileLanguages.Keys);
