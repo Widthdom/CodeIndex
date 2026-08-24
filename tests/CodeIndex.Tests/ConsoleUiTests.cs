@@ -1196,6 +1196,7 @@ public class ConsoleUiTests
         var bash = ConsoleCompletionRenderer.GetCompletionScript("bash");
         Assert.Contains("for ((i=1; i<COMP_CWORD; i++)); do", bash, StringComparison.Ordinal);
         Assert.Contains("--color|--palette|--metrics|--log-format|--log-retain-count|--log-max-size-mb) skip_next=1", bash, StringComparison.Ordinal);
+        Assert.Contains("case \"$prev\" in", bash, StringComparison.Ordinal);
         Assert.Contains("suggestions\\|update) COMPREPLY=($(compgen -W \"draft open_in_upstream resolved_in_upstream wont_fix duplicate superseded\"", bash, StringComparison.Ordinal);
         Assert.Contains("suggestions\\|*) COMPREPLY=($(compgen -W \"all draft submitted_pending_triage", bash, StringComparison.Ordinal);
         Assert.Contains("[ \"$cmd\" = \"validate-config\" ]", bash, StringComparison.Ordinal);
@@ -1206,6 +1207,7 @@ public class ConsoleUiTests
 
         var zsh = ConsoleCompletionRenderer.GetCompletionScript("zsh");
         Assert.Contains("for (( i = 2; i < CURRENT; i++ )); do", zsh, StringComparison.Ordinal);
+        Assert.Contains("$subcmd == db && -z $nested && $CURRENT -le $(( cmd_index + 2 ))", zsh, StringComparison.Ordinal);
         Assert.Contains("$subcmd == suggestions && $nested == update", zsh, StringComparison.Ordinal);
         var zshUpdate = ExtractBetween(zsh, "$subcmd == suggestions && $nested == update", "elif [[ $subcmd == suggestions ]]");
         Assert.Contains(":value:(draft open_in_upstream resolved_in_upstream wont_fix duplicate superseded)", zshUpdate, StringComparison.Ordinal);
@@ -1244,6 +1246,7 @@ public class ConsoleUiTests
             File.WriteAllText(completionPath, ConsoleCompletionRenderer.GetCompletionScript("bash"));
             var result = RunShellProcess(bashExecutable, root, ["-c", BashCompletionProbe, "bash", completionPath]);
             AssertCompletionProbe(result);
+            Assert.Contains("global-value:never", result.StdOut, StringComparison.Ordinal);
         }
 
         if (ResolveExecutable("zsh") is { } zshExecutable)
@@ -1258,6 +1261,8 @@ public class ConsoleUiTests
             var status = RunShellProcess(zshExecutable, root, ["-f", "-c", ZshStatusProbe, "zsh", completionPath]);
             Assert.Contains("draft open_in_upstream resolved_in_upstream wont_fix duplicate superseded", status.StdOut, StringComparison.Ordinal);
             Assert.DoesNotContain("submitted_pending_triage", status.StdOut, StringComparison.Ordinal);
+            var nested = RunShellProcess(zshExecutable, root, ["-f", "-c", ZshNestedFlagProbe, "zsh", completionPath]);
+            Assert.Contains("--json[", nested.StdOut, StringComparison.Ordinal);
         }
 
         if (ResolveExecutable("fish") is { } fishExecutable)
@@ -1694,6 +1699,10 @@ public class ConsoleUiTests
         COMP_CWORD=2
         _cdidx
         printf 'validate:%s\n' "${COMPREPLY[*]}"
+        COMP_WORDS=(cdidx --color n)
+        COMP_CWORD=2
+        _cdidx
+        printf 'global-value:%s\n' "${COMPREPLY[*]}"
         """;
 
     private const string ZshSearchProbe = """
@@ -1721,6 +1730,17 @@ public class ConsoleUiTests
         typeset -ga words=(cdidx suggestions update id --status submitted_)
         typeset -gi CURRENT=6
         typeset -g PREFIX=submitted_
+        typeset -g state=args
+        typeset -gi calls=0
+        _arguments() { (( calls++ )); if (( calls == 1 )); then state=args; else print -rl -- "$@"; fi }
+        _describe() { print -rl -- "${commands[@]}" }
+        source "$1"
+        """;
+
+    private const string ZshNestedFlagProbe = """
+        typeset -ga words=(cdidx db integrity --j)
+        typeset -gi CURRENT=4
+        typeset -g PREFIX=--j
         typeset -g state=args
         typeset -gi calls=0
         _arguments() { (( calls++ )); if (( calls == 1 )); then state=args; else print -rl -- "$@"; fi }

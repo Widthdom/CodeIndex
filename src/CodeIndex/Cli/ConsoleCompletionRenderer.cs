@@ -117,8 +117,13 @@ internal static class ConsoleCompletionRenderer
         sb.Append($"    commands=\"{cmds}\"\n");
         sb.Append("\n");
         sb.Append("    if [ $cmd_index -eq 0 ]; then\n");
-        sb.Append($"        COMPREPLY=($(compgen -W \"$commands --help --version --license {topLevelFlags}\" -- \"$cur\"))\n");
-        sb.Append("        return\n");
+        sb.Append("        case \"$prev\" in\n");
+        sb.Append($"            {string.Join('|', GetTopLevelValueTakingFlagNames())}) ;;\n");
+        sb.Append("            *)\n");
+        sb.Append($"                COMPREPLY=($(compgen -W \"$commands --help --version --license {topLevelFlags}\" -- \"$cur\"))\n");
+        sb.Append("                return\n");
+        sb.Append("                ;;\n");
+        sb.Append("        esac\n");
         sb.Append("    fi\n");
         sb.Append("\n");
         sb.Append("    case \"$prev\" in\n");
@@ -313,7 +318,7 @@ internal static class ConsoleCompletionRenderer
         {
             var needsSubcommand = command == "hooks"
                 ? "$subcmd == hooks && -z $nested && $PREFIX != -*"
-                : $"$subcmd == {command} && $CURRENT -le $(( cmd_index + 2 ))";
+                : $"$subcmd == {command} && -z $nested && $CURRENT -le $(( cmd_index + 2 ))";
             sb.Append($"            if [[ {needsSubcommand} ]]; then\n");
             sb.Append("                local -a subcommands\n");
             sb.Append("                subcommands=(\n");
