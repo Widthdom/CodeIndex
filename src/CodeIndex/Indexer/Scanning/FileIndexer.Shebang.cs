@@ -80,17 +80,67 @@ public partial class FileIndexer
                 return new LanguageDetectionResult(FileProbeStatus.ProbeFailed, null);
 
             Span<byte> buffer = stackalloc byte[ShebangProbeByteLimit];
-            var bytesRead = stream.Read(buffer);
-            if (bytesRead <= 0)
-                return new LanguageDetectionResult(FileProbeStatus.Unsupported, null);
+            var bytesRead = ReadScriptHeaderPrefix(
+                stream,
+                buffer,
+                CancellationToken.None);
+            return DetectLanguageFromScriptHeaderBytes(
+                buffer[..bytesRead],
+                allowZshCompdef);
+        }
+        catch (FileNotFoundException)
+        {
+            return new LanguageDetectionResult(FileProbeStatus.Missing, null);
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return new LanguageDetectionResult(FileProbeStatus.Missing, null);
+        }
+        catch (IOException)
+        {
+            return new LanguageDetectionResult(FileProbeStatus.ProbeFailed, null);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return new LanguageDetectionResult(FileProbeStatus.ProbeFailed, null);
+        }
+        catch (DecoderFallbackException)
+        {
+            return new LanguageDetectionResult(FileProbeStatus.Unsupported, null);
+        }
+    }
 
-            var bytes = buffer[..bytesRead];
+    internal static int ReadScriptHeaderPrefix(
+        FileStream stream,
+        Span<byte> buffer,
+        CancellationToken cancellationToken)
+    {
+        var limit = Math.Min(buffer.Length, ShebangProbeByteLimit);
+        var total = 0;
+        while (total < limit)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var read = stream.Read(buffer[total..limit]);
+            if (read == 0)
+                break;
+
+            total += read;
+        }
+
+        return total;
+    }
+
+    internal static LanguageDetectionResult DetectLanguageFromScriptHeaderBytes(
+        ReadOnlySpan<byte> bytes,
+        bool allowZshCompdef)
+    {
+        if (bytes.IsEmpty)
+            return new LanguageDetectionResult(FileProbeStatus.Unsupported, null);
+
+        try
+        {
             var scriptHeaderEncoding = DetectScriptHeaderEncoding(bytes);
             if (scriptHeaderEncoding == ScriptHeaderEncoding.Unsupported)
-                return new LanguageDetectionResult(FileProbeStatus.Unsupported, null);
-
-            if ((scriptHeaderEncoding == ScriptHeaderEncoding.Utf8 || scriptHeaderEncoding == ScriptHeaderEncoding.Utf8Bom)
-                && bytes.Contains((byte)0))
                 return new LanguageDetectionResult(FileProbeStatus.Unsupported, null);
 
             var preambleLength = GetScriptHeaderPreambleLength(scriptHeaderEncoding);
@@ -100,9 +150,16 @@ public partial class FileIndexer
             var lineEnd = FindScriptHeaderLineEnd(bytes, scriptHeaderEncoding, preambleLength);
             if (lineEnd < 0)
             {
-                if (bytesRead == ShebangProbeByteLimit)
+                if (bytes.Length == ShebangProbeByteLimit)
                     return new LanguageDetectionResult(FileProbeStatus.Unsupported, null);
-                lineEnd = bytesRead;
+                lineEnd = bytes.Length;
+            }
+
+            if ((scriptHeaderEncoding == ScriptHeaderEncoding.Utf8
+                    || scriptHeaderEncoding == ScriptHeaderEncoding.Utf8Bom)
+                && bytes.Contains((byte)0))
+            {
+                return new LanguageDetectionResult(FileProbeStatus.Unsupported, null);
             }
 
             var firstLineBytes = bytes[preambleLength..lineEnd];
@@ -136,24 +193,11 @@ public partial class FileIndexer
 
             var language = MapShebangInterpreterToLanguage(interpreter);
             return language != null
-                ? new LanguageDetectionResult(FileProbeStatus.Supported, language, DetectionSource: ShebangDetectionSource)
+                ? new LanguageDetectionResult(
+                    FileProbeStatus.Supported,
+                    language,
+                    DetectionSource: ShebangDetectionSource)
                 : new LanguageDetectionResult(FileProbeStatus.Unsupported, null);
-        }
-        catch (FileNotFoundException)
-        {
-            return new LanguageDetectionResult(FileProbeStatus.Missing, null);
-        }
-        catch (DirectoryNotFoundException)
-        {
-            return new LanguageDetectionResult(FileProbeStatus.Missing, null);
-        }
-        catch (IOException)
-        {
-            return new LanguageDetectionResult(FileProbeStatus.ProbeFailed, null);
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return new LanguageDetectionResult(FileProbeStatus.ProbeFailed, null);
         }
         catch (DecoderFallbackException)
         {

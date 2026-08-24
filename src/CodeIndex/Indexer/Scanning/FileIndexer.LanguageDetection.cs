@@ -373,7 +373,8 @@ public partial class FileIndexer
     internal LanguageDetectionResult TryDetectLanguageForIndexing(
         string filePath,
         string? content = null,
-        FileProbeStatus? knownIndexability = null)
+        FileProbeStatus? knownIndexability = null,
+        bool deferUnknownScriptHeader = false)
         => TryDetectLanguage(
             filePath,
             content,
@@ -391,7 +392,8 @@ public partial class FileIndexer
             patternConfigDirectoryExists: _suppressConfigurationInputObservation
                 ? null
                 : ObservePatternConfigurationDirectoryExists,
-            patternConfigInputObserver: ObservePatternConfigurationInput);
+            patternConfigInputObserver: ObservePatternConfigurationInput,
+            deferUnknownScriptHeader: deferUnknownScriptHeader);
 
     private IReadOnlyDictionary<string, string> LoadLanguageMapOverridesForIndexing(string? startDirectory)
     {
@@ -516,7 +518,8 @@ public partial class FileIndexer
         Func<string, IEnumerable<string>>? enumerateFileSystemEntries = null,
         Func<string, Stream>? openPatternConfig = null,
         Func<string, bool, bool>? patternConfigDirectoryExists = null,
-        Action<string, ReadOnlyMemory<byte>?, long?>? patternConfigInputObserver = null)
+        Action<string, ReadOnlyMemory<byte>?, long?>? patternConfigInputObserver = null,
+        bool deferUnknownScriptHeader = false)
     {
         var fileName = Path.GetFileName(filePath);
         var ext = Path.GetExtension(fileName);
@@ -642,6 +645,9 @@ public partial class FileIndexer
             if (ExtractorPluginRegistry.TryGetLanguageForExtension(ext, projectRoot, out pluginLang))
                 return new LanguageDetectionResult(FileProbeStatus.Supported, pluginLang);
 
+            if (deferUnknownScriptHeader)
+                return new LanguageDetectionResult(FileProbeStatus.Unsupported, null);
+
             return TryDetectLanguageFromScriptHeader(
                 filePath,
                 symlinkPolicy,
@@ -651,7 +657,9 @@ public partial class FileIndexer
                 allowZshCompdef: true);
         }
 
-        return TryDetectLanguageFromScriptHeader(
+        return deferUnknownScriptHeader
+            ? new LanguageDetectionResult(FileProbeStatus.Unsupported, null)
+            : TryDetectLanguageFromScriptHeader(
             filePath,
             symlinkPolicy,
             projectRoot,

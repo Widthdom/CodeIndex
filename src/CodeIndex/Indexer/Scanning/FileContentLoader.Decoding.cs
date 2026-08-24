@@ -169,6 +169,17 @@ internal sealed partial class FileContentLoader
         bool allowHeuristic,
         out bool bigEndian,
         out bool hasBom)
+        => TryDetectUtf16Encoding(
+            rawBytes.AsSpan(),
+            allowHeuristic,
+            out bigEndian,
+            out hasBom);
+
+    internal static bool TryDetectUtf16Encoding(
+        ReadOnlySpan<byte> rawBytes,
+        bool allowHeuristic,
+        out bool bigEndian,
+        out bool hasBom)
     {
         bigEndian = false;
         hasBom = false;
@@ -196,7 +207,7 @@ internal sealed partial class FileContentLoader
         if (pairs == 0)
             return false;
 
-        var sample = rawBytes.AsSpan(0, sampleLength);
+        var sample = rawBytes[..sampleLength];
         if (sample.IndexOf((byte)0) < 0)
             return false;
 

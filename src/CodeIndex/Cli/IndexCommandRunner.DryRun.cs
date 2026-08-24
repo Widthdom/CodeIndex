@@ -1013,24 +1013,38 @@ public static partial class IndexCommandRunner
         FileIndexer.LanguageDetectionResult? preLoadDetection = null;
         try
         {
+            DryRunFileIndexabilityValidatedForTesting?.Invoke(absolutePath);
             var isAmbiguousExtension = FileIndexer.TryGetAmbiguousLanguageDescriptor(
                 Path.GetExtension(absolutePath),
                 out _);
             if (reusableLanguage == null || isAmbiguousExtension)
             {
-                var detection = indexer.TryDetectLanguageForIndexing(absolutePath);
+                var detection = indexer.TryDetectLanguageForIndexing(
+                    absolutePath,
+                    knownIndexability: indexability,
+                    deferUnknownScriptHeader: true);
                 if (reusableLanguage == null)
                 {
                     if (detection.Status == FileIndexer.FileProbeStatus.ProbeFailed)
                         return DryRunFileProbe.FromError("Could not probe file for indexability/language.");
                     if (detection.Status != FileIndexer.FileProbeStatus.Supported)
                     {
-                        return indexer.IsUnknownLanguageCoverageCandidate(
+                        var unknownLanguageProbe = indexer.ProbeUnknownLanguageForIndexing(
                             absolutePath,
                             relativePath,
-                            cancellationToken)
+                            cancellationToken);
+                        detection = unknownLanguageProbe.LanguageDetection;
+                        if (detection.Status is FileIndexer.FileProbeStatus.Missing
+                            or FileIndexer.FileProbeStatus.ProbeFailed)
+                        {
+                            return DryRunFileProbe.FromError("Could not probe file for indexability/language.");
+                        }
+                        if (detection.Status != FileIndexer.FileProbeStatus.Supported)
+                        {
+                            return unknownLanguageProbe.IsCoverageCandidate
                                 ? DryRunFileProbe.FromUnknownExtension()
                                 : DryRunFileProbe.FromUnsupported();
+                        }
                     }
 
                     reusableLanguage = FileIndexer.CanReuseDetectedLanguageWithoutContent(absolutePath, detection.Language)

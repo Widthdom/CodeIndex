@@ -1032,6 +1032,117 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_DryRun_WithFiles_PreservesUnknownSuffixScriptHeaderDetection()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "script.cdidxunknown"),
+                "#!/usr/bin/env python\nprint('ok')\n");
+            File.WriteAllText(
+                Path.Combine(projectRoot, "_cdidx.cdidxunknown"),
+                "#compdef cdidx\n_cdidx() {}\n");
+
+            var (exitCode, json) = RunAndCaptureJson([
+                projectRoot,
+                "--files",
+                "script.cdidxunknown",
+                "_cdidx.cdidxunknown",
+                "--dry-run",
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(2, json.GetProperty("files_total").GetInt32());
+            Assert.Equal(1, json.GetProperty("languages").GetProperty("python").GetInt32());
+            Assert.Equal(1, json.GetProperty("languages").GetProperty("shell").GetInt32());
+            Assert.Equal(0, json.GetProperty("unknown_extension_total").GetInt32());
+            Assert.Equal(0, json.GetProperty("unsupported_total").GetInt32());
+            Assert.False(Directory.Exists(Path.Combine(projectRoot, ".cdidx")));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DryRun_WithFiles_UnknownProbeDeletionRaceReportsErrorAndPreservesProjection()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var relativePath = "script.cdidxunknown";
+            var absolutePath = Path.Combine(projectRoot, relativePath);
+            File.WriteAllText(absolutePath, "#!/bin/sh\necho ok\n");
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            Assert.Equal(1, CountRows(dbPath, "files"));
+            IndexCommandRunner.DryRunFileIndexabilityValidatedForTesting = candidate =>
+            {
+                if (string.Equals(candidate, absolutePath, StringComparison.Ordinal))
+                    File.Delete(candidate);
+            };
+
+            var (exitCode, json) = RunAndCaptureJson([
+                projectRoot,
+                "--files",
+                relativePath,
+                "--dry-run",
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(1, json.GetProperty("errors_total").GetInt32());
+            Assert.Equal(1, json.GetProperty("projected_file_deletes").GetInt32());
+            Assert.Equal(0, json.GetProperty("projected_file_purges").GetInt32());
+            Assert.Contains(
+                "Could not probe file for indexability/language.",
+                json.GetProperty("errors")[0].GetProperty("message").GetString(),
+                StringComparison.Ordinal);
+            Assert.Equal(1, CountRows(dbPath, "files"));
+        }
+        finally
+        {
+            IndexCommandRunner.DryRunFileIndexabilityValidatedForTesting = null;
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DryRun_WithIgnoreControlInput_ReusesFullScanUnknownLanguageMetadata()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, ".gitignore"), "# keep scan authoritative\n");
+            File.WriteAllText(Path.Combine(projectRoot, "notes.cdidxunknown"), "plain unknown text\n");
+
+            var (exitCode, json) = RunAndCaptureJson([
+                projectRoot,
+                "--files",
+                ".gitignore",
+                "--dry-run",
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(1, json.GetProperty("unknown_extension_total").GetInt32());
+            Assert.Equal(1, json.GetProperty("unknown_extension_file_count").GetInt32());
+            Assert.Equal("workspace", json.GetProperty("unknown_extension_diagnostics_scope").GetString());
+            Assert.False(json.GetProperty("unknown_extension_file_count_lower_bound").GetBoolean());
+            Assert.False(Directory.Exists(Path.Combine(projectRoot, ".cdidx")));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_DryRun_WithFiles_RejectsUnsupportedLanguageAtomically_Issue5091()
     {
         var projectRoot = CreateTempProject();

@@ -7443,6 +7443,82 @@ public partial class McpServerTests
     }
 
     [Fact]
+    public void ToolsCall_Index_DryRunUnknownLanguageUsesOneAuthorizedContentOpen()
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_unknown_one_open_{Guid.NewGuid():N}");
+        var unknownPath = Path.Combine(fixtureDir, "notes.cdidxunknown");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_unknown_one_open");
+        Directory.CreateDirectory(fixtureDir);
+        try
+        {
+            File.WriteAllText(unknownPath, "plain unknown text\n" + new string('x', 16 * 1024));
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var openCount = 0;
+            McpServer.McpIndexEntryOpenBoundaryForTesting = path =>
+            {
+                if (PathCasing.PathsEqual(path, unknownPath))
+                    openCount++;
+            };
+
+            var response = CallIndex(server, fixtureDir, arguments => arguments["dryRun"] = true);
+
+            Assert.Null(response["result"]!["isError"]);
+            Assert.Equal(1, openCount);
+            var summary = response["result"]!["structuredContent"]!["summary"]!;
+            Assert.Equal(0, summary["files_scanned"]!.GetValue<int>());
+            Assert.Equal(0, summary["scan_errors"]!.GetValue<int>());
+            Assert.Equal(1, summary["unknown_extension_file_count"]!.GetValue<int>());
+        }
+        finally
+        {
+            McpServer.McpIndexEntryOpenBoundaryForTesting = null;
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Index_DryRunUnknownLanguageRejectsReplacementAtAuthorizedOpenBoundary()
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_unknown_swap_{Guid.NewGuid():N}");
+        var unknownPath = Path.Combine(fixtureDir, "notes.cdidxunknown");
+        var originalPath = unknownPath + ".original";
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_unknown_swap");
+        Directory.CreateDirectory(fixtureDir);
+        try
+        {
+            File.WriteAllText(unknownPath, "plain original text\n");
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var swapped = 0;
+            McpServer.McpIndexEntryOpenBoundaryForTesting = path =>
+            {
+                if (!PathCasing.PathsEqual(path, unknownPath)
+                    || Interlocked.Exchange(ref swapped, 1) != 0)
+                {
+                    return;
+                }
+
+                File.Move(unknownPath, originalPath);
+                File.WriteAllText(unknownPath, "plain replacement\n");
+            };
+
+            var response = CallIndex(server, fixtureDir, arguments => arguments["dryRun"] = true);
+
+            Assert.Equal(1, swapped);
+            Assert.True(response["result"]!["isError"]!.GetValue<bool>(), response.ToJsonString());
+            Assert.Equal(
+                "entry_identity_changed",
+                response["result"]!["structuredContent"]!["authorization_failure_reason"]!.GetValue<string>());
+        }
+        finally
+        {
+            McpServer.McpIndexEntryOpenBoundaryForTesting = null;
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
+    [Fact]
     public void ToolsCall_Index_RejectsLanguageMapReplacementAtAuthorizedOpenBoundary_Issue4606()
     {
         var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_langmap_swap_{Guid.NewGuid():N}");

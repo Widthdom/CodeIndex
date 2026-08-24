@@ -104,7 +104,36 @@ public partial class FileIndexer
 
         // Include files with a known extension/filename or a recognized bounded script header.
         // 既知の拡張子・既知ファイル名、または上限付き script header を認識できるファイルを含める
-        var language = TryDetectLanguageForIndexing(file, knownIndexability: indexability);
+        var language = TryDetectLanguageForIndexing(
+            file,
+            knownIndexability: indexability,
+            deferUnknownScriptHeader: true);
+        var isUnknownLanguageCoverageCandidate = false;
+        if (language.Status == FileProbeStatus.Unsupported
+            && HasUnknownLanguageMapping(file))
+        {
+            var relativeFile = ToRelativePath(file);
+            try
+            {
+                var probe = ProbeUnknownLanguageForIndexing(
+                    file,
+                    relativeFile,
+                    cancellationToken);
+                language = probe.LanguageDetection;
+                isUnknownLanguageCoverageCandidate = probe.IsCoverageCandidate;
+            }
+            catch (FileTooLargeSkippedException)
+            {
+                scanState.RecordNonIndexablePath(relativeFile);
+                return false;
+            }
+            catch (BinaryFileSkippedException)
+            {
+                scanState.RecordNonIndexablePath(relativeFile);
+                return false;
+            }
+        }
+
         if (language.Status == FileProbeStatus.Missing)
         {
             var relativeFile = ToRelativePath(file);
@@ -128,54 +157,10 @@ public partial class FileIndexer
         {
             var relativeFile = ToRelativePath(file);
             scanState.RecordNonIndexablePath(relativeFile);
-            if (HasUnknownLanguageMapping(file) && !IsInternalIndexArtifactPath(relativeFile))
+            if (isUnknownLanguageCoverageCandidate
+                && !IsInternalIndexArtifactPath(relativeFile))
             {
-                try
-                {
-                    if (IsUnknownLanguageCoverageCandidate(
-                            file,
-                            relativeFile,
-                            cancellationToken))
-                    {
-                        scanState.RecordUnknownExtensionFile(relativeFile);
-                    }
-                }
-                catch (FileTooLargeSkippedException)
-                {
-                    // Policy-excluded files are not language-support coverage gaps.
-                }
-                catch (BinaryFileSkippedException)
-                {
-                    // Policy-excluded files are not language-support coverage gaps.
-                }
-                catch (FileNotFoundException)
-                {
-                    scanState.Errors.Add(new ScanError(
-                        relativeFile,
-                        "Skipped file because it was deleted during scanning.",
-                        ScanIssueSeverity.Warning));
-                }
-                catch (DirectoryNotFoundException)
-                {
-                    scanState.Errors.Add(new ScanError(
-                        relativeFile,
-                        "Skipped file because it was deleted during scanning.",
-                        ScanIssueSeverity.Warning));
-                }
-                catch (IOException)
-                {
-                    scanState.Errors.Add(new ScanError(
-                        relativeFile,
-                        "Could not probe file for indexability/language."));
-                    scanState.RecordProbeFailedFilePath(relativeFile);
-                }
-                catch (UnauthorizedAccessException)
-                {
-                    scanState.Errors.Add(new ScanError(
-                        relativeFile,
-                        "Could not probe file for indexability/language."));
-                    scanState.RecordProbeFailedFilePath(relativeFile);
-                }
+                scanState.RecordUnknownExtensionFile(relativeFile);
             }
             return false;
         }
