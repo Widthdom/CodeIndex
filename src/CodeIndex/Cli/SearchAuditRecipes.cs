@@ -231,14 +231,14 @@ internal static class SearchAuditRecipes
         "Use the source-scoped auth-token recipe for credential material and the broad-token-audit recipe only when lexical token coverage is intentional.");
     private static readonly SearchRecipeClassifierJsonResult ParserGuardClassifier = new(
         "parser_guard_evidence",
-        "Classifies parser and deserializer hits by payload bounds, streaming/cancellation, and guard evidence.",
+        "Classifies every retained parser and deserializer hit by same-payload bounds, streaming/cancellation, or unbounded-materialization fallback evidence.",
         [
-            new("bounded_payload", "A byte, depth, item, or file-size bound is near the parse operation.", "Review whether the bound covers the actual input consumed by the parser."),
-            new("streaming_or_cancelable", "The parser path is streaming, async, or cancellation-aware.", "Verify item budgets and cancellation are wired to the caller."),
-            new("unbounded_materialization", "DOM or serializer materialization appears without nearby bounds.", "Prioritize size/depth limits, streaming, or bounded readers.")
+            new("bounded_payload", "A byte, depth, item, or file-size bound is tied to the payload consumed by the parse operation.", "Review whether the identified bound covers the complete input consumed by the parser."),
+            new("streaming_or_cancelable", "The parser operation is streaming, asynchronous, or cancellation-aware without a higher-precedence same-payload bound.", "Verify item budgets and cancellation are wired to the caller."),
+            new("unbounded_materialization", "DOM or serializer materialization appears without a related bound, streaming API, or cancellation signal.", "Prioritize size/depth limits, streaming, or bounded readers; absence of nearby evidence is not proof of a vulnerability.")
         ],
-        ["guard_filters", "guard_evidence", "guard_checks", "risk_evidence", "match_origins"],
-        "Parser guard classifiers are triage hints; keep input-size, depth, and cancellation checks close to the parse boundary when possible.");
+        ["audit_classifications.evidence", "enclosing_symbol_start_line", "enclosing_symbol_end_line", "match_lines", "risk_evidence", "match_origins"],
+        "Parser guard classifications are non-authoritative triage hints. A same-payload bound takes precedence over streaming/cancellation for one operation; if one retained row represents multiple operations and any lacks both, the row remains unbounded_materialization. Keep bounds and cancellation wiring close to the parse boundary.");
     private static readonly SearchRecipeClassifierJsonResult JsonTrustBoundaryClassifier = new(
         "json_trust_boundary",
         "Classifies JSON reads and writes by explicit origin, direction, sensitivity, trust, and rationale evidence without suppressing the underlying finding.",
@@ -4876,6 +4876,9 @@ internal sealed record SearchRecipeCompactResultJsonResult(
     [property: JsonPropertyName("lang")] string? Lang,
     [property: JsonPropertyName("visibility")] string? Visibility,
     [property: JsonPropertyName("risk_evidence")] List<string> RiskEvidence,
+    [property: JsonPropertyName("audit_classifications")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    List<SearchAuditClassificationJsonResult>? AuditClassifications,
     [property: JsonPropertyName("chunk_start_line")] int ChunkStartLine,
     [property: JsonPropertyName("chunk_end_line")] int ChunkEndLine,
     [property: JsonPropertyName("match_lines")] List<int> MatchLines,
