@@ -19,6 +19,26 @@ internal static partial class SuggestionsCommandRunner
     internal const int MaxSuggestionExportFileBytes = 16 * 1024 * 1024;
     private const string SuggestionOutputTruncationMarker = "\n[truncated]";
 
+    internal static IReadOnlyList<string> StatusFilterValues { get; } =
+    [
+        "all", "draft", "submitted_pending_triage", "open_in_upstream", "resolved_in_upstream",
+        "wont_fix", "duplicate", "superseded", "submitted", "unsubmitted",
+    ];
+
+    private static readonly IReadOnlyDictionary<string, SuggestionStatus> ManualStatusTransitions =
+        new Dictionary<string, SuggestionStatus>(StringComparer.Ordinal)
+        {
+            ["draft"] = SuggestionStatus.Draft,
+            ["open_in_upstream"] = SuggestionStatus.OpenInUpstream,
+            ["resolved_in_upstream"] = SuggestionStatus.ResolvedInUpstream,
+            ["wont_fix"] = SuggestionStatus.WontFix,
+            ["duplicate"] = SuggestionStatus.Duplicate,
+            ["superseded"] = SuggestionStatus.Superseded,
+        };
+
+    internal static IReadOnlyList<string> ManualStatusTransitionValues { get; } =
+        ManualStatusTransitions.Keys.ToArray();
+
     private static string AddHelp => $$"""
         Usage: cdidx suggestions add <description> [options]
                cdidx suggestions add --description <text> [options]
@@ -879,26 +899,11 @@ internal static partial class SuggestionsCommandRunner
     };
 
     private static bool IsValidStatusFilter(string status) =>
-        status is "all" or "submitted" or "unsubmitted" or "draft" or "submitted_pending_triage" or "open_in_upstream" or "resolved_in_upstream" or "wont_fix" or "duplicate" or "superseded";
+        StatusFilterValues.Contains(status, StringComparer.Ordinal);
 
-    private static bool TryParseLifecycleStatus(string status, out SuggestionStatus parsed)
+    internal static bool TryParseLifecycleStatus(string status, out SuggestionStatus parsed)
     {
-        parsed = status switch
-        {
-            "draft" => SuggestionStatus.Draft,
-            "open_in_upstream" => SuggestionStatus.OpenInUpstream,
-            "resolved_in_upstream" => SuggestionStatus.ResolvedInUpstream,
-            "wont_fix" => SuggestionStatus.WontFix,
-            "duplicate" => SuggestionStatus.Duplicate,
-            "superseded" => SuggestionStatus.Superseded,
-            _ => default,
-        };
-        return status is "draft"
-            or "open_in_upstream"
-            or "resolved_in_upstream"
-            or "wont_fix"
-            or "duplicate"
-            or "superseded";
+        return ManualStatusTransitions.TryGetValue(status, out parsed);
     }
 
     private static string? GetAgent(SuggestionRecord record)

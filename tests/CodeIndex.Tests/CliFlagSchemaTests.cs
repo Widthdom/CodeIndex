@@ -470,6 +470,11 @@ public class CliFlagSchemaTests
                 else
                 {
                     expected.Add((name, command));
+                    if (flag.SubcommandValueDomains.TryGetValue(command, out var subcommandDomains))
+                    {
+                        foreach (var nestedSubcommand in subcommandDomains.Keys)
+                            expected.Add((name, $"{command}:{nestedSubcommand}"));
+                    }
                 }
             }
         }
@@ -542,15 +547,38 @@ public class CliFlagSchemaTests
         Assert.DoesNotContain("--end) COMPREPLY=($(compgen -W \"line eof\"", bash);
 
         var fish = ConsoleCompletionRenderer.GetCompletionScript("fish");
-        Assert.Contains("__fish_seen_subcommand_from audit' -l format -r -a 'text json count compact sarif issue-drafts'", fish);
-        Assert.Contains("__fish_seen_subcommand_from search' -l result-kind -r -a 'call_site declaration identifier code comment string_literal regex_literal help_text schema_description unknown'", fish);
-        Assert.Contains("__fish_seen_subcommand_from excerpt' -l end -r -a 'eof'", fish);
+        Assert.Contains("__fish_cdidx_using_command audit' -l format -r -a 'text json count compact sarif issue-drafts'", fish);
+        Assert.Contains("__fish_cdidx_using_command search' -l result-kind -r -a 'call_site declaration identifier code comment string_literal regex_literal help_text schema_description unknown'", fish);
+        Assert.Contains("__fish_cdidx_using_command excerpt' -l end -r -a 'eof'", fish);
 
         var zsh = ConsoleCompletionRenderer.GetCompletionScript("zsh");
         Assert.Contains("--end[Excerpt end line; eof reads through the indexed end of file]:value:(eof)", zsh);
 
         var powershell = ConsoleCompletionRenderer.GetCompletionScript("powershell");
         Assert.Contains("'--end' = @('eof')", powershell);
+    }
+
+    [Fact]
+    public void NestedValueDomainsAndValidateConfigJsonMatchAcceptedCliContracts_Issue5163()
+    {
+        Assert.Equal(
+            SuggestionsCommandRunner.StatusFilterValues,
+            CliFlagSchema.GetCanonicalValuesForCommand("suggestions", "--status"));
+        Assert.Equal(
+            SuggestionsCommandRunner.ManualStatusTransitionValues,
+            CliFlagSchema.GetCanonicalValuesForCommand("suggestions", "--status", "update"));
+
+        foreach (var status in CliFlagSchema.GetCanonicalValuesForCommand("suggestions", "--status", "update"))
+            Assert.True(SuggestionsCommandRunner.TryParseLifecycleStatus(status, out _), $"Completion advertised rejected update status: {status}");
+        foreach (var rejected in new[] { "all", "submitted_pending_triage", "submitted", "unsubmitted" })
+            Assert.False(SuggestionsCommandRunner.TryParseLifecycleStatus(rejected, out _), $"Update parser unexpectedly accepted {rejected}");
+
+        var validateConfigFlags = CliFlagSchema.GetCompletionFlagsForCommand("validate-config")
+            .Select(flag => flag.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        Assert.Contains("--json", validateConfigFlags);
+        Assert.DoesNotContain("--pretty", validateConfigFlags);
+        Assert.Contains("--json", ConsoleUi.GetUsageLine("validate-config"), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -606,9 +634,9 @@ public class CliFlagSchemaTests
         Assert.Contains("-l open-issues -r -a 'github' -d 'Preflight issue drafts against issue JSON or GitHub issues'", fish, StringComparison.Ordinal);
         Assert.Contains("-l language -r -a '", fish, StringComparison.Ordinal);
         Assert.Contains("-l issue-state -r -a 'open closed all'", fish, StringComparison.Ordinal);
-        Assert.Contains("__fish_seen_subcommand_from search' -l group-by -r -a 'file symbol origin return-type subsystem'", fish, StringComparison.Ordinal);
-        Assert.Contains("__fish_seen_subcommand_from audit' -l group-by -r -a 'file symbol origin return-type subsystem'", fish, StringComparison.Ordinal);
-        Assert.Contains("__fish_seen_subcommand_from hotspots' -l group-by -r -a 'symbol file statement'", fish, StringComparison.Ordinal);
+        Assert.Contains("__fish_cdidx_using_command search' -l group-by -r -a 'file symbol origin return-type subsystem'", fish, StringComparison.Ordinal);
+        Assert.Contains("__fish_cdidx_using_command audit' -l group-by -r -a 'file symbol origin return-type subsystem'", fish, StringComparison.Ordinal);
+        Assert.Contains("__fish_cdidx_using_command hotspots' -l group-by -r -a 'symbol file statement'", fish, StringComparison.Ordinal);
         Assert.DoesNotContain("-l project -r -a 'name path'", fish, StringComparison.Ordinal);
         Assert.DoesNotContain("-l recipe -r -a 'name name/query'", fish, StringComparison.Ordinal);
         Assert.DoesNotContain("-a 'path github github:owner/name'", fish, StringComparison.Ordinal);
@@ -657,7 +685,7 @@ public class CliFlagSchemaTests
         var bash = ConsoleCompletionRenderer.GetCompletionScript("bash");
         Assert.Contains("[ \"$cmd\" = \"hooks\" ] && [ \"$nested\" = \"install\" ]", bash, StringComparison.Ordinal);
         Assert.Contains("[ \"$cmd\" = \"hooks\" ] && [ \"$nested\" = \"uninstall\" ]", bash, StringComparison.Ordinal);
-        Assert.Contains("for ((i=2; i<COMP_CWORD; i++)); do", bash, StringComparison.Ordinal);
+        Assert.Contains("for ((i=cmd_index+1; i<COMP_CWORD; i++)); do", bash, StringComparison.Ordinal);
         Assert.Contains("--project) skip_next=1", bash, StringComparison.Ordinal);
         Assert.DoesNotContain("nested=\"${COMP_WORDS[2]}\"", bash, StringComparison.Ordinal);
         Assert.Contains("--project|--solution|--exclude-path", bash, StringComparison.Ordinal);
@@ -666,18 +694,18 @@ public class CliFlagSchemaTests
         var zsh = ConsoleCompletionRenderer.GetCompletionScript("zsh");
         Assert.Contains("$subcmd == hooks && $nested == install", zsh, StringComparison.Ordinal);
         Assert.Contains("$subcmd == hooks && $nested == uninstall", zsh, StringComparison.Ordinal);
-        Assert.Contains("for (( i = 3; i < CURRENT; i++ )); do", zsh, StringComparison.Ordinal);
+        Assert.Contains("for (( i = cmd_index + 1; i < CURRENT; i++ )); do", zsh, StringComparison.Ordinal);
         Assert.Contains("(--project) skip_next=1", zsh, StringComparison.Ordinal);
         Assert.DoesNotContain("$words[3] == install", zsh, StringComparison.Ordinal);
         Assert.Contains("--project[Repository/worktree directory used to resolve Git metadata for the managed hook]:file:_files", zsh, StringComparison.Ordinal);
 
         var fish = ConsoleCompletionRenderer.GetCompletionScript("fish");
-        Assert.Contains("__fish_seen_subcommand_from hooks; and __fish_seen_subcommand_from install' -l dry-run", fish, StringComparison.Ordinal);
-        Assert.Contains("__fish_seen_subcommand_from hooks; and __fish_seen_subcommand_from install' -l force", fish, StringComparison.Ordinal);
-        Assert.Contains("__fish_seen_subcommand_from hooks; and __fish_seen_subcommand_from uninstall' -l force", fish, StringComparison.Ordinal);
-        Assert.DoesNotContain("__fish_seen_subcommand_from hooks' -l force", fish, StringComparison.Ordinal);
-        Assert.Contains("__fish_seen_subcommand_from hooks' -l project -r -d 'Repository/worktree directory used to resolve Git metadata", fish, StringComparison.Ordinal);
-        Assert.DoesNotContain("__fish_seen_subcommand_from hooks' -l project -r -a 'name path'", fish, StringComparison.Ordinal);
+        Assert.Contains("__fish_cdidx_using_context hooks install' -l dry-run", fish, StringComparison.Ordinal);
+        Assert.Contains("__fish_cdidx_using_context hooks install' -l force", fish, StringComparison.Ordinal);
+        Assert.Contains("__fish_cdidx_using_context hooks uninstall' -l force", fish, StringComparison.Ordinal);
+        Assert.DoesNotContain("__fish_cdidx_using_command hooks' -l force", fish, StringComparison.Ordinal);
+        Assert.Contains("__fish_cdidx_using_command hooks' -l project -r -d 'Repository/worktree directory used to resolve Git metadata", fish, StringComparison.Ordinal);
+        Assert.DoesNotContain("__fish_cdidx_using_command hooks' -l project -r -a 'name path'", fish, StringComparison.Ordinal);
 
         var powershell = ConsoleCompletionRenderer.GetCompletionScript("powershell");
         Assert.Contains("$subcmd -eq 'hooks' -and $nested -eq 'install'", powershell, StringComparison.Ordinal);
@@ -706,7 +734,7 @@ public class CliFlagSchemaTests
     // ConsoleCompletionRenderer 側の EnumeratedCompletionCommands に対応する一覧。
     private static readonly string[] EnumeratedBashBranches =
     [
-        "find", "excerpt", "references", "inspect", "hotspots", "status", "db", "report", "suggestions", "search",
+        "find", "excerpt", "references", "inspect", "hotspots", "status", "validate-config", "db", "report", "suggestions", "search",
     ];
 
     private static HashSet<string> GetProgramRunnerStringSet(string fieldName)
@@ -739,26 +767,24 @@ public class CliFlagSchemaTests
     private static HashSet<(string Flag, string Command)> ExtractFishFlagCommandPairs(string script)
     {
         var result = new HashSet<(string, string)>();
-        var pattern = new Regex(@"__fish_seen_subcommand_from\s+(?<list>[^']+)'(?<rest>.+?)-l\s+(?<flag>[a-z][a-z0-9-]*)\b");
+        var commandPattern = new Regex(@"__fish_cdidx_using_command\s+(?<list>[^;']+)[^']*'(?<rest>.+?)-l\s+(?<flag>[a-z][a-z0-9-]*)\b");
+        var contextPattern = new Regex(@"__fish_cdidx_using_context\s+(?<command>[^\s']+)\s+(?<nested>[^\s']+)'(?<rest>.+?)-l\s+(?<flag>[a-z][a-z0-9-]*)\b");
         foreach (var line in script.Split('\n'))
         {
-            var match = pattern.Match(line);
-            if (!match.Success)
-                continue;
-            var flag = match.Groups["flag"].Value;
-            var predicate = match.Groups["list"].Value;
-            const string nestedSeparator = "; and __fish_seen_subcommand_from ";
-            var nestedSeparatorIndex = predicate.IndexOf(nestedSeparator, StringComparison.Ordinal);
-            if (nestedSeparatorIndex >= 0)
+            var contextMatch = contextPattern.Match(line);
+            if (contextMatch.Success)
             {
-                var command = predicate[..nestedSeparatorIndex].Trim();
-                var nestedSubcommand = predicate[(nestedSeparatorIndex + nestedSeparator.Length)..].Trim();
-                result.Add((flag, $"{command}:{nestedSubcommand}"));
-                continue;
+                result.Add((
+                    contextMatch.Groups["flag"].Value,
+                    $"{contextMatch.Groups["command"].Value}:{contextMatch.Groups["nested"].Value}"));
             }
 
-            foreach (var subcmd in predicate.Split(' ', StringSplitOptions.RemoveEmptyEntries))
-                result.Add((flag, subcmd));
+            var commandMatch = commandPattern.Match(line);
+            if (!commandMatch.Success)
+                continue;
+            var flag = commandMatch.Groups["flag"].Value;
+            foreach (var command in commandMatch.Groups["list"].Value.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+                result.Add((flag, command));
         }
         return result;
     }
