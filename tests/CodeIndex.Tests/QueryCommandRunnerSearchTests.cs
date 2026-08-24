@@ -3691,6 +3691,123 @@ public partial class QueryCommandRunnerTests
                 """);
             TestProjectHelper.InsertIndexedFile(
                 dbPath,
+                "src/null-check-document.cs",
+                "csharp",
+                """
+                using System;
+                using System.Text.Json;
+
+                public static class NullCheckDocument
+                {
+                    public static JsonDocument Parse(byte[] payloadBytes)
+                    {
+                        ArgumentNullException.ThrowIfNull(payloadBytes);
+                        return JsonDocument.Parse(payloadBytes);
+                    }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/lower-bound-document.cs",
+                "csharp",
+                """
+                using System;
+                using System.Text.Json;
+
+                public static class LowerBoundDocument
+                {
+                    public static JsonDocument Parse(string payload)
+                    {
+                        if (payload.Length <= 0)
+                            throw new ArgumentException();
+                        return JsonDocument.Parse(payload);
+                    }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/max-depth-name-document.cs",
+                "csharp",
+                """
+                using System.Text.Json;
+
+                public static class MaxDepthNameDocument
+                {
+                    public static JsonDocument Parse(string payloadWithMaxDepthInName)
+                        => JsonDocument.Parse(payloadWithMaxDepthInName);
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/materialized-stream-document.cs",
+                "csharp",
+                """
+                using System.IO;
+                using System.Text.Json;
+
+                public static class MaterializedStreamDocument
+                {
+                    public static JsonDocument Parse(StreamReader streamReader)
+                        => JsonDocument.Parse(streamReader.ReadToEnd());
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/named-bounded-document.cs",
+                "csharp",
+                """
+                using System.Text.Json;
+
+                public static class NamedBoundedDocument
+                {
+                    public static JsonDocument Parse(string payload, int maxBytes)
+                    {
+                        ValidatePayload(payload, maxBytes);
+                        return JsonDocument.Parse(json: payload);
+                    }
+
+                    private static void ValidatePayload(string payload, int maxBytes) { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/cast-bounded-document.cs",
+                "csharp",
+                """
+                using System;
+                using System.Text.Json;
+
+                public static class CastBoundedDocument
+                {
+                    public static JsonDocument Parse(byte[] payload, int maxBytes)
+                    {
+                        ValidatePayload(payload, maxBytes);
+                        return JsonDocument.Parse((ReadOnlyMemory<byte>)payload);
+                    }
+
+                    private static void ValidatePayload(byte[] payload, int maxBytes) { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/same-line-document.cs",
+                "csharp",
+                """
+                using System.Text.Json;
+
+                public static class SameLineDocument
+                {
+                    public static void Parse(string boundedPayload, string unboundedPayload, int maxBytes)
+                    {
+                        ValidatePayload(boundedPayload, maxBytes);
+                        using var first = JsonDocument.Parse(boundedPayload); using var second = JsonDocument.Parse(unboundedPayload);
+                    }
+
+                    private static void ValidatePayload(string payload, int maxBytes) { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
                 "src/mixed-document-guards.cs",
                 "csharp",
                 """
@@ -3759,6 +3876,20 @@ public partial class QueryCommandRunnerTests
                 """);
             TestProjectHelper.InsertIndexedFile(
                 dbPath,
+                "src/streaming-serializer.fs",
+                "fsharp",
+                """
+                module StreamingSerializer
+
+                open System.IO
+                open System.Text.Json
+                open System.Threading
+
+                let deserialize<'T> (stream: Stream) (cancellationToken: CancellationToken) =
+                    JsonSerializer.DeserializeAsync<'T>(stream, cancellationToken = cancellationToken)
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
                 "src/bounded-streaming-serializer.cs",
                 "csharp",
                 """
@@ -3784,7 +3915,14 @@ public partial class QueryCommandRunnerTests
                 new Dictionary<string, string>(StringComparer.Ordinal)
                 {
                     ["src/BoundedJson.cs"] = "bounded_payload",
+                    ["src/cast-bounded-document.cs"] = "bounded_payload",
+                    ["src/lower-bound-document.cs"] = "unbounded_materialization",
+                    ["src/materialized-stream-document.cs"] = "unbounded_materialization",
+                    ["src/max-depth-name-document.cs"] = "unbounded_materialization",
                     ["src/mixed-document-guards.cs"] = "unbounded_materialization",
+                    ["src/named-bounded-document.cs"] = "bounded_payload",
+                    ["src/null-check-document.cs"] = "unbounded_materialization",
+                    ["src/same-line-document.cs"] = "unbounded_materialization",
                     ["src/streaming-document.cs"] = "streaming_or_cancelable",
                     ["src/unbounded-document.cs"] = "unbounded_materialization",
                     ["src/unrelated-document-guard.cs"] = "unbounded_materialization",
@@ -3796,6 +3934,7 @@ public partial class QueryCommandRunnerTests
                     ["src/bounded-serializer.cs"] = "bounded_payload",
                     ["src/bounded-streaming-serializer.cs"] = "bounded_payload",
                     ["src/streaming-serializer.cs"] = "streaming_or_cancelable",
+                    ["src/streaming-serializer.fs"] = "streaming_or_cancelable",
                     ["src/unbounded-serializer.cs"] = "unbounded_materialization",
                 });
 
@@ -3844,12 +3983,28 @@ public partial class QueryCommandRunnerTests
                 Assert.Contains(
                     boundedClassification.GetProperty("evidence").EnumerateArray(),
                     evidence => evidence.GetString()!.StartsWith("bound:", StringComparison.Ordinal));
-                var streamingPath = expectedCategories.Single(pair => pair.Value == "streaming_or_cancelable").Key;
-                var streamingClassification = GetParserClassification(
-                    Assert.Single(structuredResults, result => result.GetProperty("path").GetString() == streamingPath));
-                Assert.Contains(
-                    streamingClassification.GetProperty("evidence").EnumerateArray(),
-                    evidence => evidence.GetString()!.StartsWith("streaming:", StringComparison.Ordinal));
+                var streamingPaths = expectedCategories
+                    .Where(pair => pair.Value == "streaming_or_cancelable")
+                    .Select(pair => pair.Key)
+                    .ToList();
+                Assert.NotEmpty(streamingPaths);
+                foreach (var streamingPath in streamingPaths)
+                {
+                    var streamingClassification = GetParserClassification(
+                        Assert.Single(structuredResults, result => result.GetProperty("path").GetString() == streamingPath));
+                    Assert.Contains(
+                        streamingClassification.GetProperty("evidence").EnumerateArray(),
+                        evidence => evidence.GetString()!.StartsWith("streaming:", StringComparison.Ordinal));
+                }
+                if (queryName == "json-document-parse")
+                {
+                    var sameLineClassification = GetParserClassification(
+                        Assert.Single(structuredResults, result =>
+                            result.GetProperty("path").GetString() == "src/same-line-document.cs"));
+                    Assert.Contains(
+                        sameLineClassification.GetProperty("evidence").EnumerateArray(),
+                        evidence => evidence.GetString() == "row_precedence:any_unbounded_match_remains_unbounded");
+                }
                 if (queryName == "json-serializer-deserialize")
                 {
                     var boundedStreamingClassification = GetParserClassification(

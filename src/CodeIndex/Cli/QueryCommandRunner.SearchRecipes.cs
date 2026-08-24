@@ -2308,23 +2308,35 @@ public static partial class QueryCommandRunner
                 .ToList()
             : [];
         var jsonTrustLexicalContextCache = new JsonTrustLexicalContextCache();
+        var parserGuardLexicalContextCache = new ParserGuardLexicalContextCache();
         foreach (var fileRows in rows.GroupBy(row => row.Result.Path, StringComparer.Ordinal))
         {
             var groupedRows = fileRows.ToList();
-            var maximumRequiredLine = groupedRows
-                .Select(row => Math.Max(
-                    appliesJsonTrustBoundary ? GetJsonTrustRequiredLine(row) : 0,
-                    parserGuardClassifier != null ? GetParserGuardRequiredLine(row) : 0))
+            var maximumJsonTrustRequiredLine = groupedRows
+                .Select(row => appliesJsonTrustBoundary ? GetJsonTrustRequiredLine(row) : 0)
                 .Where(line => line > 0 && line <= CSharpSemanticTokenClassifier.DefaultExcerptSourceLineLimit)
                 .DefaultIfEmpty()
                 .Max();
-            if (maximumRequiredLine > 0)
+            if (maximumJsonTrustRequiredLine > 0)
             {
                 _ = GetJsonTrustLexicalContext(
                     reader,
                     groupedRows[0],
-                    maximumRequiredLine,
+                    maximumJsonTrustRequiredLine,
                     jsonTrustLexicalContextCache);
+            }
+            var maximumParserGuardRequiredLine = groupedRows
+                .Select(row => parserGuardClassifier != null ? GetParserGuardRequiredLine(row) : 0)
+                .Where(line => line > 0 && line <= CSharpSemanticTokenClassifier.DefaultExcerptSourceLineLimit)
+                .DefaultIfEmpty()
+                .Max();
+            if (maximumParserGuardRequiredLine > 0)
+            {
+                _ = GetParserGuardLexicalContext(
+                    reader,
+                    groupedRows[0],
+                    maximumParserGuardRequiredLine,
+                    parserGuardLexicalContextCache);
             }
             foreach (var row in groupedRows)
             {
@@ -2337,7 +2349,7 @@ public static partial class QueryCommandRunner
                             recipeQuery.Query,
                             row,
                             reader,
-                            jsonTrustLexicalContextCache));
+                            parserGuardLexicalContextCache));
                 }
                 if (appliesJsonTrustBoundary)
                 {

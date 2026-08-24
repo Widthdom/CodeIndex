@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using CodeIndex.Database;
+using CodeIndex.Indexer;
 using CodeIndex.Semantics;
 
 namespace CodeIndex.Cli;
@@ -35,7 +36,7 @@ public static partial class QueryCommandRunner
         string recipeQuery,
         SearchDisplayRow row,
         DbReader reader,
-        JsonTrustLexicalContextCache lexicalContextCache)
+        ParserGuardLexicalContextCache lexicalContextCache)
     {
         var matchLines = GetParserGuardMatchLines(row).ToList();
         if (matchLines.Count == 0)
@@ -44,11 +45,23 @@ public static partial class QueryCommandRunner
         var requiredLine = GetParserGuardRequiredLine(row);
         var lexicalContext = requiredLine > 0
             && requiredLine <= CSharpSemanticTokenClassifier.DefaultExcerptSourceLineLimit
-                ? GetJsonTrustLexicalContext(reader, row, requiredLine, lexicalContextCache)
+                ? GetParserGuardLexicalContext(reader, row, requiredLine, lexicalContextCache)
                 : null;
-        var matchEvidence = matchLines
-            .Select(line => ClassifyParserGuardMatch(recipeQuery, row, line, lexicalContext))
-            .ToList();
+        var matchEvidence = new List<ParserGuardMatchEvidence>();
+        foreach (var line in matchLines)
+        {
+            var queryIndices = lexicalContext != null && line > 0 && line <= lexicalContext.MaskedLines.Length
+                ? GetParserGuardQueryIndices(lexicalContext.MaskedLines[line - 1], recipeQuery)
+                : [];
+            if (queryIndices.Count == 0)
+            {
+                matchEvidence.Add(CreateUnboundedParserGuardEvidence(recipeQuery, line));
+                continue;
+            }
+
+            matchEvidence.AddRange(queryIndices.Select(queryIndex =>
+                ClassifyParserGuardMatch(recipeQuery, row, line, queryIndex, lexicalContext!)));
+        }
 
         // A compact result can represent more than one parser call. Keep that row
         // actionable if any represented operation has no related guard evidence.
@@ -98,25 +111,20 @@ public static partial class QueryCommandRunner
         string recipeQuery,
         SearchDisplayRow row,
         int matchLine,
-        JsonTrustLexicalContext? lexicalContext)
+        int queryIndex,
+        ParserGuardLexicalContext lexicalContext)
     {
-        var operationName = recipeQuery.Trim();
-        if (lexicalContext == null
-            || matchLine <= 0
+        if (matchLine <= 0
             || matchLine > lexicalContext.MaskedLines.Length
             || !TryBuildParserGuardOperation(
                 recipeQuery,
                 row,
                 matchLine,
+                queryIndex,
                 lexicalContext,
                 out var operation))
         {
-            return new ParserGuardMatchEvidence(
-                "unbounded_materialization",
-                operationName,
-                null,
-                matchLine,
-                ["materialization:no_related_bound_or_streaming_signal"]);
+            return CreateUnboundedParserGuardEvidence(recipeQuery, matchLine);
         }
 
         var streamingSignals = GetParserGuardStreamingSignals(operation);
@@ -150,11 +158,50 @@ public static partial class QueryCommandRunner
             ["materialization:no_related_bound_or_streaming_signal"]);
     }
 
+    private static ParserGuardMatchEvidence CreateUnboundedParserGuardEvidence(
+        string recipeQuery,
+        int matchLine)
+        => new(
+            "unbounded_materialization",
+            recipeQuery.Trim(),
+            null,
+            matchLine,
+            ["materialization:no_related_bound_or_streaming_signal"]);
+
+    private static List<int> GetParserGuardQueryIndices(string source, string recipeQuery)
+    {
+        var query = recipeQuery.Trim();
+        if (query.Length == 0)
+            return [];
+
+        var indices = EnumerateParserGuardQueryIndices(source, query, StringComparison.Ordinal).ToList();
+        return indices.Count > 0
+            ? indices
+            : EnumerateParserGuardQueryIndices(source, query, StringComparison.OrdinalIgnoreCase).ToList();
+    }
+
+    private static IEnumerable<int> EnumerateParserGuardQueryIndices(
+        string source,
+        string query,
+        StringComparison comparison)
+    {
+        var startIndex = 0;
+        while (startIndex <= source.Length - query.Length)
+        {
+            var index = source.IndexOf(query, startIndex, comparison);
+            if (index < 0)
+                yield break;
+            yield return index;
+            startIndex = index + query.Length;
+        }
+    }
+
     private static bool TryBuildParserGuardOperation(
         string recipeQuery,
         SearchDisplayRow row,
         int matchLine,
-        JsonTrustLexicalContext lexicalContext,
+        int queryIndex,
+        ParserGuardLexicalContext lexicalContext,
         out ParserGuardOperation operation)
     {
         operation = default!;
@@ -163,10 +210,7 @@ public static partial class QueryCommandRunner
             return false;
 
         var matchText = lexicalContext.MaskedLines[matchLine - 1];
-        var queryIndex = matchText.IndexOf(query, StringComparison.Ordinal);
-        if (queryIndex < 0)
-            queryIndex = matchText.IndexOf(query, StringComparison.OrdinalIgnoreCase);
-        if (queryIndex < 0)
+        if (queryIndex < 0 || queryIndex + query.Length > matchText.Length)
             return false;
 
         var symbolStartLine = GetParserGuardScopeStartLine(
@@ -182,7 +226,7 @@ public static partial class QueryCommandRunner
         var invocation = new StringBuilder();
         var matchInvocation = matchText.AsSpan(queryIndex);
         invocation.Append(matchInvocation[..Math.Min(matchInvocation.Length, ParserGuardInvocationCharacterLimit)]);
-        var invocationComplete = matchInvocation.Contains(';');
+        var invocationComplete = TryTrimParserGuardInvocation(invocation);
         var maximumLine = Math.Min(
             lexicalContext.MaskedLines.Length,
             Math.Min(
@@ -198,17 +242,32 @@ public static partial class QueryCommandRunner
             var continuation = lexicalContext.MaskedLines[line - 1].AsSpan();
             var available = ParserGuardInvocationCharacterLimit - invocation.Length;
             invocation.Append(continuation[..Math.Min(continuation.Length, available)]);
-            invocationComplete = continuation.Contains(';');
+            invocationComplete = TryTrimParserGuardInvocation(invocation);
         }
 
         var invocationText = invocation.ToString();
         var operationName = GetParserGuardOperationName(query, invocationText);
         var firstArgument = TryGetParserGuardFirstArgument(invocationText);
+        var payloadIdentifier = GetParserGuardPayloadIdentifier(firstArgument);
         operation = new ParserGuardOperation(
             operationName,
-            GetParserGuardPayloadIdentifier(firstArgument),
+            payloadIdentifier,
+            IsDirectParserGuardPayloadArgument(firstArgument, payloadIdentifier),
             invocationText,
             sourcePrefix.ToString());
+        return true;
+    }
+
+    private static bool TryTrimParserGuardInvocation(StringBuilder invocation)
+    {
+        var invocationText = invocation.ToString();
+        var openingParenthesis = invocationText.IndexOf('(');
+        if (openingParenthesis < 0)
+            return false;
+        var closingParenthesis = FindParserGuardClosingParenthesis(invocationText, openingParenthesis);
+        if (closingParenthesis < 0)
+            return false;
+        invocation.Length = closingParenthesis + 1;
         return true;
     }
 
@@ -232,11 +291,50 @@ public static partial class QueryCommandRunner
         builder.Append(value);
     }
 
+    private static ParserGuardLexicalContext? GetParserGuardLexicalContext(
+        DbReader reader,
+        SearchDisplayRow row,
+        int requiredLine,
+        ParserGuardLexicalContextCache cache)
+    {
+        if (requiredLine <= 0 || requiredLine > CSharpSemanticTokenClassifier.DefaultExcerptSourceLineLimit)
+            return null;
+
+        var language = row.Result.Lang ?? string.Empty;
+        if (string.Equals(cache.Path, row.Result.Path, StringComparison.Ordinal)
+            && string.Equals(cache.Language, language, StringComparison.OrdinalIgnoreCase))
+        {
+            if (cache.LoadedThroughLine >= requiredLine)
+                return cache.Context;
+            if (cache.SourceLimitReached)
+                return null;
+        }
+
+        var indexedLines = reader.GetIndexedSourceLinesForSemanticTokens(
+            row.Result.Path,
+            requiredLine,
+            CSharpSemanticTokenClassifier.DefaultExcerptSourceCharacterLimit);
+        ParserGuardLexicalContext? context = null;
+        if (indexedLines.Count > 0)
+        {
+            var sourceLines = indexedLines.Select(line => line ?? string.Empty).ToArray();
+            context = new ParserGuardLexicalContext(
+                StructuralLineMasker.MaskLines(language, sourceLines));
+        }
+
+        cache.Path = row.Result.Path;
+        cache.Language = language;
+        cache.LoadedThroughLine = indexedLines.Count;
+        cache.SourceLimitReached = indexedLines.Count < requiredLine;
+        cache.Context = context;
+        return context;
+    }
+
     private static int GetParserGuardScopeStartLine(
         SearchDisplayRow row,
         int matchLine,
         int queryIndex,
-        JsonTrustLexicalContext lexicalContext)
+        ParserGuardLexicalContext lexicalContext)
     {
         var boundedWindowStart = Math.Max(1, matchLine - ParserGuardContextLinesBefore);
         var declaredStart = row.Compact.EnclosingSymbolStartLine.GetValueOrDefault();
@@ -323,6 +421,7 @@ public static partial class QueryCommandRunner
     private static string? GetParserGuardPayloadIdentifier(string firstArgument)
     {
         string? fallback = null;
+        string? payload = null;
         for (var index = 0; index < firstArgument.Length;)
         {
             if (!IsParserGuardIdentifierStart(firstArgument[index]))
@@ -339,15 +438,71 @@ public static partial class QueryCommandRunner
                 continue;
             fallback = identifier;
             if (identifier.Length > 0 && (char.IsLower(identifier[0]) || identifier[0] == '_'))
-                return BoundParserGuardEvidenceIdentifier(identifier);
+                payload = identifier;
         }
-        return fallback == null ? null : BoundParserGuardEvidenceIdentifier(fallback);
+        return payload != null
+            ? BoundParserGuardEvidenceIdentifier(payload)
+            : fallback == null
+                ? null
+                : BoundParserGuardEvidenceIdentifier(fallback);
+    }
+
+    private static bool IsDirectParserGuardPayloadArgument(string firstArgument, string? payloadIdentifier)
+    {
+        if (string.IsNullOrWhiteSpace(payloadIdentifier))
+            return false;
+
+        var expression = firstArgument.AsSpan().Trim();
+        var namedArgumentSeparator = expression.IndexOf(':');
+        if (namedArgumentSeparator > 0
+            && IsSingleParserGuardIdentifier(expression[..namedArgumentSeparator]))
+        {
+            expression = expression[(namedArgumentSeparator + 1)..].Trim();
+        }
+
+        while (expression.Length > 0 && expression[0] == '(')
+        {
+            var closingParenthesis = FindParserGuardClosingParenthesis(expression.ToString(), 0);
+            if (closingParenthesis < 0)
+                break;
+            if (closingParenthesis == expression.Length - 1)
+            {
+                expression = expression[1..^1].Trim();
+                continue;
+            }
+
+            expression = expression[(closingParenthesis + 1)..].Trim();
+        }
+
+        if (expression.StartsWith("ref ", StringComparison.Ordinal)
+            || expression.StartsWith("in ", StringComparison.Ordinal)
+            || expression.StartsWith("out ", StringComparison.Ordinal))
+        {
+            expression = expression[(expression.IndexOf(' ') + 1)..].Trim();
+        }
+
+        return expression.Equals(payloadIdentifier, StringComparison.Ordinal)
+            || (expression.Length == payloadIdentifier.Length + 1
+                && expression[0] == '@'
+                && expression[1..].Equals(payloadIdentifier, StringComparison.Ordinal));
+    }
+
+    private static bool IsSingleParserGuardIdentifier(ReadOnlySpan<char> value)
+    {
+        value = value.Trim();
+        if (value.Length == 0 || !IsParserGuardIdentifierStart(value[0]))
+            return false;
+        for (var index = 1; index < value.Length; index++)
+        {
+            if (!IsParserGuardIdentifierCharacter(value[index]))
+                return false;
+        }
+        return true;
     }
 
     private static bool TryFindParserGuardBound(ParserGuardOperation operation, out string signal)
     {
-        if (ContainsParserGuardBoundTerm(operation.InvocationText, "MaxDepth")
-            || ContainsParserGuardBoundTerm(operation.InvocationText, "maxDepth"))
+        if (HasParserGuardMaxDepthOption(operation.InvocationText))
         {
             signal = "bound:max_depth_option";
             return true;
@@ -380,13 +535,40 @@ public static partial class QueryCommandRunner
         return false;
     }
 
+    private static bool HasParserGuardMaxDepthOption(string invocationText)
+    {
+        var index = IndexOfParserGuardIdentifier(invocationText, "MaxDepth", 0);
+        if (index < 0)
+            index = IndexOfParserGuardIdentifier(invocationText, "maxDepth", 0);
+        while (index >= 0)
+        {
+            var cursor = index + "MaxDepth".Length;
+            while (cursor < invocationText.Length && char.IsWhiteSpace(invocationText[cursor]))
+                cursor++;
+            if (cursor < invocationText.Length && invocationText[cursor] is '=' or ':')
+                return true;
+            index = invocationText.IndexOf("MaxDepth", cursor, StringComparison.OrdinalIgnoreCase);
+            while (index >= 0
+                && ((index > 0 && IsParserGuardIdentifierCharacter(invocationText[index - 1]))
+                    || (index + "MaxDepth".Length < invocationText.Length
+                        && IsParserGuardIdentifierCharacter(invocationText[index + "MaxDepth".Length]))))
+            {
+                index = invocationText.IndexOf(
+                    "MaxDepth",
+                    index + "MaxDepth".Length,
+                    StringComparison.OrdinalIgnoreCase);
+            }
+        }
+        return false;
+    }
+
     private static bool TryFindParserGuardValidationCall(string source, string payload, out string methodName)
     {
         foreach (var call in EnumerateParserGuardCalls(source))
         {
             if (!IsParserGuardValidationMethod(call.Name)
                 || !ContainsParserGuardIdentifier(call.Arguments, payload)
-                || !ContainsParserGuardBoundVocabulary(call.Name + " " + call.Arguments))
+                || !ContainsParserGuardValidationBoundVocabulary(call, payload))
             {
                 continue;
             }
@@ -398,6 +580,14 @@ public static partial class QueryCommandRunner
         methodName = string.Empty;
         return false;
     }
+
+    private static bool ContainsParserGuardValidationBoundVocabulary(
+        ParserGuardCall call,
+        string payload)
+        => ContainsParserGuardBoundVocabulary(call.Name)
+            || EnumerateParserGuardIdentifiers(call.Arguments).Any(identifier =>
+                !string.Equals(identifier, payload, StringComparison.Ordinal)
+                && ContainsParserGuardBoundVocabulary(identifier));
 
     private static bool TryFindParserGuardBoundedAssignment(string source, string payload, out string methodName)
     {
@@ -440,10 +630,11 @@ public static partial class QueryCommandRunner
             if (statementEnd < 0)
                 statementEnd = source.Length - 1;
             var statement = source[(statementStart + 1)..(statementEnd + 1)];
-            if (ContainsParserGuardPayloadMemberComparison(statement, payload, "Length")
-                || ContainsParserGuardPayloadMemberComparison(statement, payload, "LongLength")
-                || ContainsParserGuardPayloadMemberComparison(statement, payload, "Count")
-                || ContainsParserGuardByteCountComparison(statement, payload))
+            if (ContainsParserGuardRejectAction(statement)
+                && (ContainsParserGuardPayloadMemberUpperBound(statement, payload, "Length")
+                    || ContainsParserGuardPayloadMemberUpperBound(statement, payload, "LongLength")
+                    || ContainsParserGuardPayloadMemberUpperBound(statement, payload, "Count")
+                    || ContainsParserGuardByteCountUpperBound(statement, payload)))
             {
                 return true;
             }
@@ -452,7 +643,7 @@ public static partial class QueryCommandRunner
         return false;
     }
 
-    private static bool ContainsParserGuardPayloadMemberComparison(
+    private static bool ContainsParserGuardPayloadMemberUpperBound(
         string statement,
         string payload,
         string member)
@@ -474,7 +665,7 @@ public static partial class QueryCommandRunner
                         || !IsParserGuardIdentifierCharacter(statement[cursor + member.Length])))
                 {
                     var expressionEnd = cursor + member.Length;
-                    if (HasParserGuardAdjacentRelationalComparison(statement, index, expressionEnd))
+                    if (HasParserGuardUpperBoundComparison(statement, index, expressionEnd))
                         return true;
                 }
             }
@@ -483,16 +674,16 @@ public static partial class QueryCommandRunner
         return false;
     }
 
-    private static bool ContainsParserGuardByteCountComparison(string statement, string payload)
+    private static bool ContainsParserGuardByteCountUpperBound(string statement, string payload)
         => EnumerateParserGuardCalls(statement).Any(call =>
             call.Name.Contains("ByteCount", StringComparison.OrdinalIgnoreCase)
             && ContainsParserGuardIdentifier(call.Arguments, payload)
-            && HasParserGuardAdjacentRelationalComparison(
+            && HasParserGuardUpperBoundComparison(
                 statement,
                 call.NameStartIndex,
                 call.ClosingParenthesisIndex + 1));
 
-    private static bool HasParserGuardAdjacentRelationalComparison(
+    private static bool HasParserGuardUpperBoundComparison(
         string statement,
         int expressionStart,
         int expressionEnd)
@@ -501,8 +692,8 @@ public static partial class QueryCommandRunner
         while (after < statement.Length && char.IsWhiteSpace(statement[after]))
             after++;
         if (after < statement.Length
-            && statement[after] is '<' or '>'
-            && (after + 1 >= statement.Length || statement[after + 1] != statement[after]))
+            && statement[after] == '>'
+            && (after + 1 >= statement.Length || statement[after + 1] != '>'))
         {
             return true;
         }
@@ -512,22 +703,25 @@ public static partial class QueryCommandRunner
             before--;
         if (before >= 0 && statement[before] == '=')
             before--;
-        if (before < 0 || statement[before] is not ('<' or '>'))
+        if (before < 0 || statement[before] != '<')
             return false;
-        if (before > 0 && statement[before - 1] == statement[before])
-            return false;
-        if (statement[before] == '>' && before > 0 && statement[before - 1] == '=')
+        if (before > 0 && statement[before - 1] == '<')
             return false;
         return true;
     }
+
+    private static bool ContainsParserGuardRejectAction(string statement)
+        => EnumerateParserGuardIdentifiers(statement).Any(identifier =>
+            identifier is "throw" or "return" or "break" or "continue");
 
     private static List<string> GetParserGuardStreamingSignals(ParserGuardOperation operation)
     {
         var signals = new List<string>();
         if (operation.OperationName.EndsWith("Async", StringComparison.Ordinal))
             signals.Add("streaming:async_parser_api");
-        if (!string.IsNullOrWhiteSpace(operation.PayloadIdentifier)
-            && operation.PayloadIdentifier.Contains("stream", StringComparison.OrdinalIgnoreCase))
+        if (operation.DirectPayloadArgument
+            && !string.IsNullOrWhiteSpace(operation.PayloadIdentifier)
+            && HasParserGuardStreamDeclaration(operation.SourcePrefix, operation.PayloadIdentifier))
         {
             signals.Add("streaming:stream_payload");
         }
@@ -538,6 +732,30 @@ public static partial class QueryCommandRunner
         }
         return signals.Distinct(StringComparer.Ordinal).ToList();
     }
+
+    private static bool HasParserGuardStreamDeclaration(string source, string payload)
+    {
+        var identifiers = EnumerateParserGuardIdentifiers(source).ToList();
+        for (var index = 0; index < identifiers.Count; index++)
+        {
+            if (!string.Equals(identifiers[index], payload, StringComparison.Ordinal))
+                continue;
+            var start = Math.Max(0, index - 3);
+            var end = Math.Min(identifiers.Count - 1, index + 3);
+            for (var candidate = start; candidate <= end; candidate++)
+            {
+                if (IsParserGuardStreamType(identifiers[candidate]))
+                    return true;
+            }
+        }
+        return false;
+    }
+
+    private static bool IsParserGuardStreamType(string identifier)
+        => string.Equals(identifier, "Stream", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(identifier, "MemoryStream", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(identifier, "FileStream", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(identifier, "BufferedStream", StringComparison.OrdinalIgnoreCase);
 
     private static IEnumerable<ParserGuardCall> EnumerateParserGuardCalls(string source)
     {
@@ -608,11 +826,8 @@ public static partial class QueryCommandRunner
             || name.StartsWith("ThrowIf", StringComparison.OrdinalIgnoreCase);
 
     private static bool ContainsParserGuardBoundVocabulary(string value)
-        => new[] { "bound", "byte", "capacity", "count", "depth", "length", "limit", "max", "size" }
+        => new[] { "bound", "budget", "capacity", "count", "depth", "length", "limit", "max", "size" }
             .Any(term => value.Contains(term, StringComparison.OrdinalIgnoreCase));
-
-    private static bool ContainsParserGuardBoundTerm(string value, string term)
-        => value.Contains(term, StringComparison.Ordinal);
 
     private static bool ContainsParserGuardIdentifier(string value, string identifier)
         => IndexOfParserGuardIdentifier(value, identifier, 0) >= 0;
@@ -653,8 +868,20 @@ public static partial class QueryCommandRunner
     private sealed record ParserGuardOperation(
         string OperationName,
         string? PayloadIdentifier,
+        bool DirectPayloadArgument,
         string InvocationText,
         string SourcePrefix);
+
+    private sealed record ParserGuardLexicalContext(string[] MaskedLines);
+
+    private sealed class ParserGuardLexicalContextCache
+    {
+        public string? Path { get; set; }
+        public string? Language { get; set; }
+        public int LoadedThroughLine { get; set; }
+        public bool SourceLimitReached { get; set; }
+        public ParserGuardLexicalContext? Context { get; set; }
+    }
 
     private sealed record ParserGuardCall(
         string Name,
