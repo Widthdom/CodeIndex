@@ -2023,11 +2023,17 @@ public partial class DbWriter
         // aggregate refresh 前に中断した場合は trust bit を残さず raw fallback に降格する。
         var aggregateWasReady = ClearHotspotReferenceAggregateReady();
 
-        int rowsPerStatement = batchesAreAtomicInCaller
-            ? GetRowsPerCallerTransactionInsertStatement(
+        var useAuthoritativeFreshRawInsert = batchesAreAtomicInCaller
+            && referenceLinesAreNew
+            && _authoritativeFreshBulkInsertScope != null;
+        int rowsPerStatement = useAuthoritativeFreshRawInsert
+            ? GetRowsPerAuthoritativeFreshRawInsertStatement(
                 columnCount: ReferenceInsertParameterCountPerRow)
-            : GetRowsPerInsertStatement(
-                columnCount: ReferenceInsertParameterCountPerRow);
+            : batchesAreAtomicInCaller
+                ? GetRowsPerCallerTransactionInsertStatement(
+                    columnCount: ReferenceInsertParameterCountPerRow)
+                : GetRowsPerInsertStatement(
+                    columnCount: ReferenceInsertParameterCountPerRow);
         var foldedNameCache = CreateFoldedNameCache(
             Math.Min(references.Count, rowsPerStatement),
             namesPerRow: 2);
@@ -2035,9 +2041,6 @@ public partial class DbWriter
             ? new Dictionary<(long FileId, int Line, string Context), long>()
             : null;
         int referenceBatchCount = GetReferenceBatchCount(references.Count, rowsPerStatement);
-        var useAuthoritativeFreshRawInsert = batchesAreAtomicInCaller
-            && referenceLinesAreNew
-            && _authoritativeFreshBulkInsertScope != null;
         if (batchesAreAtomicInCaller)
         {
             InsertAtomicReferenceBatches(
@@ -2530,9 +2533,11 @@ public partial class DbWriter
             }
         }
 
-        int rowsPerStatement = useCallerTransactionParameterBudget
-            ? GetRowsPerCallerTransactionInsertStatement(columnCount: 3)
-            : GetRowsPerInsertStatement(columnCount: 3);
+        int rowsPerStatement = useAuthoritativeFreshRawInsert
+            ? GetRowsPerAuthoritativeFreshRawInsertStatement(columnCount: 3)
+            : useCallerTransactionParameterBudget
+                ? GetRowsPerCallerTransactionInsertStatement(columnCount: 3)
+                : GetRowsPerInsertStatement(columnCount: 3);
         for (int i = 0; i < rows.Count; i += rowsPerStatement)
         {
             CheckBatchCancellationAndReportProgress(

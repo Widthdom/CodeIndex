@@ -61,11 +61,11 @@ public partial class DbWriter
         {
             EnsureCanExecute();
             var statementRows = end - start;
-            var maximumRows = GetRowsPerCallerTransactionInsertStatement(columnCount: 3);
+            var maximumRows = GetRowsPerAuthoritativeFreshRawInsertStatement(columnCount: 3);
             if (statementRows <= 0 || statementRows > maximumRows)
             {
                 throw new InvalidOperationException(
-                    "Raw reference-line RETURNING requires the caller-owned parameter budget "
+                    "Raw reference-line RETURNING requires the authoritative fresh parameter budget "
                     + $"(rows={statementRows}, maximum={maximumRows}).");
             }
 

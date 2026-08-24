@@ -814,6 +814,9 @@ public partial class DbWriter
                 var returnedRowCount = 0;
                 var terminalResult = raw.SQLITE_OK;
                 var returningRowTransform = AuthoritativeFreshRawReturningRowForTesting;
+                HashSet<long>? returnedIds = expectedRowCount > 1
+                    ? new HashSet<long>(expectedRowCount)
+                    : null;
                 try
                 {
                     while (true)
@@ -883,13 +886,10 @@ public partial class DbWriter
                                 throw new InvalidDataException(
                                     $"Raw SQLite {operation} RETURNING produced duplicate input ordinal {ordinal}.");
                             }
-                            for (var priorOrdinal = 0; priorOrdinal < idsByInputOrdinal.Length; priorOrdinal++)
+                            if (returnedIds != null && !returnedIds.Add(id))
                             {
-                                if (idsByInputOrdinal[priorOrdinal] == id)
-                                {
-                                    throw new InvalidDataException(
-                                        $"Raw SQLite {operation} RETURNING produced duplicate ID {id}.");
-                                }
+                                throw new InvalidDataException(
+                                    $"Raw SQLite {operation} RETURNING produced duplicate ID {id}.");
                             }
                             idsByInputOrdinal[ordinal] = id;
                             returnedRowCount++;

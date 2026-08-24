@@ -20,9 +20,11 @@ public partial class DbWriter
     {
         if (chunks.Count == 0) return;
 
-        int rowsPerStatement = IsInTransaction()
-            ? GetRowsPerCallerTransactionInsertStatement(columnCount: 5)
-            : GetRowsPerInsertStatement(columnCount: 5);
+        int rowsPerStatement = _authoritativeFreshBulkInsertScope != null
+            ? GetRowsPerAuthoritativeFreshRawInsertStatement(columnCount: 5)
+            : IsInTransaction()
+                ? GetRowsPerCallerTransactionInsertStatement(columnCount: 5)
+                : GetRowsPerInsertStatement(columnCount: 5);
         for (int i = 0; i < chunks.Count; i += rowsPerStatement)
         {
             CheckBatchCancellationAndReportProgress(
@@ -71,9 +73,11 @@ public partial class DbWriter
         TrackReferenceGraphInsertedSymbols(symbols);
         InvalidateReferenceIdentityContractForMutation();
 
-        int rowsPerStatement = IsInTransaction()
-            ? GetRowsPerCallerTransactionInsertStatement(columnCount: 25)
-            : GetRowsPerInsertStatement(columnCount: 25);
+        int rowsPerStatement = _authoritativeFreshBulkInsertScope != null
+            ? GetRowsPerAuthoritativeFreshRawInsertStatement(columnCount: 25)
+            : IsInTransaction()
+                ? GetRowsPerCallerTransactionInsertStatement(columnCount: 25)
+                : GetRowsPerInsertStatement(columnCount: 25);
         var foldedNameCache = CreateFoldedNameCache(
             Math.Min(symbols.Count, rowsPerStatement),
             namesPerRow: 1);
