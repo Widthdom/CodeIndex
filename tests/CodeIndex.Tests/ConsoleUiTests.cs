@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Reflection.Emit;
 using System.Globalization;
+using System.Diagnostics;
 using System.Text;
 using System.Text.RegularExpressions;
 using CodeIndex.Cli;
@@ -124,7 +125,10 @@ public class ConsoleUiTests
     public void CompletionRenderer_FormatValuesAreCommandScoped_Issue4426()
     {
         var bash = ConsoleCompletionRenderer.GetCompletionScript("bash");
-        var formatCase = ExtractBetween(bash, "--format)", "esac ;;");
+        var formatCase = ExtractBetween(
+            bash,
+            "--format)\n            case \"$cmd\" in",
+            "            esac ;;");
         var search = ExtractBetween(formatCase, "search)", "recipes)");
         var deps = ExtractBetween(formatCase, "deps)", "suggestions)");
         Assert.Contains("issue-drafts", search);
@@ -1181,9 +1185,109 @@ public class ConsoleUiTests
         Assert.Contains("[System.Management.Automation.CompletionCompleters]::CompleteFilename($wordToComplete)", output);
         Assert.DoesNotContain("Get-ChildItem -Name \"$wordToComplete*\"", output);
         Assert.Contains("CompletionResult", output);
-        Assert.Contains("[string]::IsNullOrEmpty($wordToComplete) -and $tokens.Count -ge 1", output);
         Assert.Contains("$afterLastToken = $lastElement -and $cursorPosition -gt $lastElement.Extent.EndOffset", output);
-        Assert.Contains("$tokens.Count -le 2 -and -not ([string]::IsNullOrEmpty($wordToComplete)) -and -not $afterLastToken", output);
+        Assert.Contains("$scanLimit = if ($afterLastToken) { $tokens.Count } else { [Math]::Max(1, $tokens.Count - 1) }", output);
+        Assert.Contains("if (-not $subcmd) {", output);
+    }
+
+    [Fact]
+    public void CompletionRenderer_LeadingGlobalsNestedValuesAndValidateConfigStayContextual_Issue5163()
+    {
+        var bash = ConsoleCompletionRenderer.GetCompletionScript("bash");
+        Assert.Contains("for ((i=1; i<COMP_CWORD; i++)); do", bash, StringComparison.Ordinal);
+        Assert.Contains("--color|--palette|--metrics|--log-format|--log-retain-count|--log-max-size-mb) skip_next=1", bash, StringComparison.Ordinal);
+        Assert.Contains("case \"$prev\" in", bash, StringComparison.Ordinal);
+        Assert.Contains("suggestions\\|update) COMPREPLY=($(compgen -W \"draft open_in_upstream resolved_in_upstream wont_fix duplicate superseded\"", bash, StringComparison.Ordinal);
+        Assert.Contains("suggestions\\|*) COMPREPLY=($(compgen -W \"all draft submitted_pending_triage", bash, StringComparison.Ordinal);
+        Assert.Contains("[ \"$cmd\" = \"validate-config\" ]", bash, StringComparison.Ordinal);
+        var bashValidateConfig = ExtractBetween(bash, "[ \"$cmd\" = \"validate-config\" ]", "elif [ \"$cmd\" = \"db\" ]");
+        Assert.Contains("--json", bashValidateConfig, StringComparison.Ordinal);
+        Assert.Contains("--help", bashValidateConfig, StringComparison.Ordinal);
+        Assert.DoesNotContain("--pretty", bashValidateConfig, StringComparison.Ordinal);
+
+        var zsh = ConsoleCompletionRenderer.GetCompletionScript("zsh");
+        Assert.Contains("for (( i = 2; i < CURRENT; i++ )); do", zsh, StringComparison.Ordinal);
+        Assert.Contains("$subcmd == db && -z $nested && $CURRENT -le $(( cmd_index + 2 ))", zsh, StringComparison.Ordinal);
+        Assert.Contains("$subcmd == suggestions && $nested == update", zsh, StringComparison.Ordinal);
+        var zshUpdate = ExtractBetween(zsh, "$subcmd == suggestions && $nested == update", "elif [[ $subcmd == suggestions ]]");
+        Assert.Contains(":value:(draft open_in_upstream resolved_in_upstream wont_fix duplicate superseded)", zshUpdate, StringComparison.Ordinal);
+        Assert.DoesNotContain("submitted_pending_triage", zshUpdate, StringComparison.Ordinal);
+
+        var fish = ConsoleCompletionRenderer.GetCompletionScript("fish");
+        Assert.Contains("function __fish_cdidx_context", fish, StringComparison.Ordinal);
+        Assert.Contains("case '--color' '--palette' '--metrics' '--log-format' '--log-retain-count' '--log-max-size-mb'", fish, StringComparison.Ordinal);
+        Assert.Contains("__fish_cdidx_using_context suggestions update' -l status -r -a 'draft open_in_upstream resolved_in_upstream wont_fix duplicate superseded'", fish, StringComparison.Ordinal);
+        Assert.Contains("__fish_cdidx_using_command suggestions; and not __fish_cdidx_using_context suggestions update' -l status -r -a 'all draft submitted_pending_triage", fish, StringComparison.Ordinal);
+        var fishJson = fish.Split('\n').Single(line => Regex.IsMatch(line, @"\s-l json(?:\s|$)"));
+        var fishPretty = fish.Split('\n').Single(line =>
+            line.Contains("__fish_cdidx_using_command", StringComparison.Ordinal)
+            && Regex.IsMatch(line, @"\s-l pretty(?:\s|$)"));
+        Assert.Contains("validate-config", fishJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("validate-config", fishPretty, StringComparison.Ordinal);
+
+        var powershell = ConsoleCompletionRenderer.GetCompletionScript("powershell");
+        Assert.Contains("$topLevelValueFlags = @('--color', '--palette', '--metrics', '--log-format', '--log-retain-count', '--log-max-size-mb')", powershell, StringComparison.Ordinal);
+        Assert.Contains("'suggestions|update|--status' = @('draft', 'open_in_upstream', 'resolved_in_upstream', 'wont_fix', 'duplicate', 'superseded')", powershell, StringComparison.Ordinal);
+        Assert.Contains("$contextEnumValues.ContainsKey(\"$subcmd|$nested|$_\")", powershell, StringComparison.Ordinal);
+        var powershellValidate = powershell.Split('\n').Single(line => line.Contains("'validate-config' { $flags", StringComparison.Ordinal));
+        Assert.Contains("'--json'", powershellValidate, StringComparison.Ordinal);
+        Assert.DoesNotContain("'--pretty'", powershellValidate, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CompletionRenderer_AvailableShellsExecuteContextContract_Issue5163()
+    {
+        using var fixture = TestProjectHelper.CreateTempProjectScope("cdidx_completion_context");
+        var root = fixture.Root;
+
+        if (ResolveExecutable("bash") is { } bashExecutable)
+        {
+            var completionPath = Path.Combine(root, "cdidx.bash");
+            File.WriteAllText(completionPath, ConsoleCompletionRenderer.GetCompletionScript("bash"));
+            var result = RunShellProcess(bashExecutable, root, ["-c", BashCompletionProbe, "bash", completionPath]);
+            AssertCompletionProbe(result);
+            Assert.Contains("global-value:never", result.StdOut, StringComparison.Ordinal);
+        }
+
+        if (ResolveExecutable("zsh") is { } zshExecutable)
+        {
+            var completionPath = Path.Combine(root, "cdidx.zsh");
+            File.WriteAllText(completionPath, ConsoleCompletionRenderer.GetCompletionScript("zsh"));
+            var prefix = RunShellProcess(zshExecutable, root, ["-f", "-c", ZshSearchProbe, "zsh", completionPath]);
+            Assert.Contains("--first-per-file", prefix.StdOut, StringComparison.Ordinal);
+            Assert.Contains("--fts", prefix.StdOut, StringComparison.Ordinal);
+            var command = RunShellProcess(zshExecutable, root, ["-f", "-c", ZshCommandProbe, "zsh", completionPath]);
+            Assert.Contains("search:search command", command.StdOut, StringComparison.Ordinal);
+            var status = RunShellProcess(zshExecutable, root, ["-f", "-c", ZshStatusProbe, "zsh", completionPath]);
+            Assert.Contains("draft open_in_upstream resolved_in_upstream wont_fix duplicate superseded", status.StdOut, StringComparison.Ordinal);
+            Assert.DoesNotContain("submitted_pending_triage", status.StdOut, StringComparison.Ordinal);
+            var nested = RunShellProcess(zshExecutable, root, ["-f", "-c", ZshNestedFlagProbe, "zsh", completionPath]);
+            Assert.Contains("--json[", nested.StdOut, StringComparison.Ordinal);
+        }
+
+        if (ResolveExecutable("fish") is { } fishExecutable)
+        {
+            var completionPath = Path.Combine(root, "cdidx.fish");
+            File.WriteAllText(completionPath, ConsoleCompletionRenderer.GetCompletionScript("fish"));
+            var probe = RunShellProcess(
+                fishExecutable,
+                root,
+                ["--no-config", "-c", FishCompletionProbe, completionPath]);
+            AssertCompletionProbe(probe);
+        }
+
+        if (ResolveExecutable("pwsh") is { } powerShellExecutable)
+        {
+            var completionPath = Path.Combine(root, "cdidx.ps1");
+            var probePath = Path.Combine(root, "probe.ps1");
+            File.WriteAllText(completionPath, ConsoleCompletionRenderer.GetCompletionScript("powershell"));
+            File.WriteAllText(probePath, PowerShellCompletionProbe);
+            var result = RunShellProcess(
+                powerShellExecutable,
+                root,
+                ["-NoLogo", "-NoProfile", "-File", probePath, completionPath]);
+            AssertCompletionProbe(result);
+        }
     }
 
     [Theory]
@@ -1206,7 +1310,7 @@ public class ConsoleUiTests
                     Assert.Contains($"'{command}:{command} command'", output);
                     break;
                 case "fish":
-                    Assert.Contains($"complete -c cdidx -n '__fish_use_subcommand' -a '{command}' -d '{command} command'", output);
+                    Assert.Contains($"complete -c cdidx -n '__fish_cdidx_needs_command' -a '{command}' -d '{command} command'", output);
                     break;
                 case "powershell":
                     Assert.Contains($"'{command.Replace("'", "''", StringComparison.Ordinal)}'", ExtractBetween(output, "$commands = @(", ")"));
@@ -1229,10 +1333,10 @@ public class ConsoleUiTests
         foreach (var expected in new[] { "'install:install subcommand'", "'list:list subcommand'", "'clear:clear subcommand'", "'deactivate:deactivate subcommand'", "'show:show subcommand'", "'schema:schema subcommand'", "'prune:prune subcommand'" })
             Assert.Contains(expected, zsh);
 
-        Assert.Contains("complete -c cdidx -n '__fish_seen_subcommand_from hooks' -a 'install uninstall status' -d 'hooks subcommand'", fish);
-        Assert.Contains("complete -c cdidx -n '__fish_seen_subcommand_from workspace' -a 'list status use current clear deactivate' -d 'workspace subcommand'", fish);
-        Assert.Contains("complete -c cdidx -n '__fish_seen_subcommand_from config' -a 'show' -d 'config subcommand'", fish);
-        Assert.Contains("complete -c cdidx -n '__fish_seen_subcommand_from db' -a 'integrity schema prune checkpoint checkpoints restore restore-backups' -d 'db subcommand'", fish);
+        Assert.Contains("complete -c cdidx -n '__fish_cdidx_using_context hooks' -a 'install uninstall status' -d 'hooks subcommand'", fish);
+        Assert.Contains("complete -c cdidx -n '__fish_cdidx_using_context workspace' -a 'list status use current clear deactivate' -d 'workspace subcommand'", fish);
+        Assert.Contains("complete -c cdidx -n '__fish_cdidx_using_context config' -a 'show' -d 'config subcommand'", fish);
+        Assert.Contains("complete -c cdidx -n '__fish_cdidx_using_context db' -a 'integrity schema prune checkpoint checkpoints restore restore-backups' -d 'db subcommand'", fish);
 
         Assert.Contains("'hooks' = @('install', 'uninstall', 'status')", powershell);
         Assert.Contains("'workspace' = @('list', 'status', 'use', 'current', 'clear', 'deactivate')", powershell);
@@ -1326,10 +1430,10 @@ public class ConsoleUiTests
             """
             # cdidx fish completions generated for version <version>
             # Regenerate this script after upgrading cdidx.
-            complete -c cdidx -n '__fish_use_subcommand' -a 'index' -d 'index command'
-            complete -c cdidx -n '__fish_use_subcommand' -l license -d 'Show license summary'
-            complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols find inspect' -l exact -d 'Backward-compatible exact shorthand; search mode is incompatible with --fts'
-            complete -c cdidx -n '__fish_seen_subcommand_from search references callers callees find excerpt inspect impact' -l max-line-width -r -d 'Clamp long single-line payloads (0 disables clamping)'
+            complete -c cdidx -n '__fish_cdidx_needs_command' -a 'index' -d 'index command'
+            complete -c cdidx -n '__fish_cdidx_needs_command' -l license -d 'Show license summary'
+            complete -c cdidx -n '__fish_cdidx_using_command search definition references callers callees symbols find inspect' -l exact -d 'Backward-compatible exact shorthand; search mode is incompatible with --fts'
+            complete -c cdidx -n '__fish_cdidx_using_command search references callers callees find excerpt inspect impact' -l max-line-width -r -d 'Clamp long single-line payloads (0 disables clamping)'
             """
         },
         {
@@ -1391,16 +1495,16 @@ public class ConsoleUiTests
         // #1570 によりスキーマ駆動。`__fish_seen_subcommand_from` の並びは `CliFlagSchema.AllCommands`
         // 順、`--exact` の説明は統一表記 (`Backward-compatible exact shorthand; search mode is incompatible with --fts`)。
         var output = ConsoleCompletionRenderer.GetCompletionScript("fish");
-        Assert.Contains("__fish_seen_subcommand_from search recipes definition goto references callers callees symbols files find inspect impact", output);
-        Assert.Contains("__fish_seen_subcommand_from find excerpt", output);
+        Assert.Contains("__fish_cdidx_using_command search recipes definition goto references callers callees symbols files find inspect impact", output);
+        Assert.Contains("__fish_cdidx_using_command find excerpt", output);
         // `--exact` schema membership: search + find + the name-resolution commands.
         // 旧手書きが `search find` だけだった所を、スキーマ準拠の正規列で確認する。
-        Assert.Contains("__fish_seen_subcommand_from search definition references callers callees symbols find inspect' -l exact ", output);
+        Assert.Contains("__fish_cdidx_using_command search definition references callers callees symbols find inspect' -l exact ", output);
         Assert.Contains("-l query -r -d 'Literal query'", output);
         Assert.Contains("-l before -r -d 'Context lines before'", output);
         Assert.Contains("-l after -r -d 'Context lines after'", output);
         Assert.Contains("-l exact -d 'Backward-compatible exact shorthand; search mode is incompatible with --fts'", output);
-        Assert.Contains("__fish_seen_subcommand_from hotspots", output);
+        Assert.Contains("__fish_cdidx_using_command hotspots", output);
         Assert.Contains("-l group-by-name -d 'Collapse same-name rows across files'", output);
     }
 
@@ -1569,6 +1673,176 @@ public class ConsoleUiTests
         }
     }
 
+    private const string BashCompletionProbe = """
+        source "$1"
+        COMP_WORDS=(cdidx --color never search auth --f)
+        COMP_CWORD=5
+        _cdidx
+        printf 'prefix:%s\n' "${COMPREPLY[*]}"
+        COMP_WORDS=(cdidx --color=never se)
+        COMP_CWORD=2
+        _cdidx
+        printf 'inline:%s\n' "${COMPREPLY[*]}"
+        COMP_WORDS=(cdidx --quiet --palette truecolor search auth --f)
+        COMP_CWORD=6
+        _cdidx
+        printf 'multi:%s\n' "${COMPREPLY[*]}"
+        COMP_WORDS=(cdidx suggestions update id --status submitted_)
+        COMP_CWORD=5
+        _cdidx
+        printf 'status:%s\n' "${COMPREPLY[*]}"
+        COMP_WORDS=(cdidx suggestions update id --status d)
+        COMP_CWORD=5
+        _cdidx
+        printf 'status-allowed:%s\n' "${COMPREPLY[*]}"
+        COMP_WORDS=(cdidx validate-config --j)
+        COMP_CWORD=2
+        _cdidx
+        printf 'validate:%s\n' "${COMPREPLY[*]}"
+        COMP_WORDS=(cdidx --color n)
+        COMP_CWORD=2
+        _cdidx
+        printf 'global-value:%s\n' "${COMPREPLY[*]}"
+        """;
+
+    private const string ZshSearchProbe = """
+        typeset -ga words=(cdidx --color never search auth --f)
+        typeset -gi CURRENT=6
+        typeset -g PREFIX=--f
+        typeset -g state=args
+        typeset -gi calls=0
+        _arguments() { (( calls++ )); if (( calls == 1 )); then state=args; else print -rl -- "$@"; fi }
+        _describe() { print -rl -- "${commands[@]}" }
+        source "$1"
+        """;
+
+    private const string ZshCommandProbe = """
+        typeset -ga words=(cdidx --color=never se)
+        typeset -gi CURRENT=3
+        typeset -g PREFIX=se
+        typeset -g state=args
+        _arguments() { state=args }
+        _describe() { print -rl -- "${commands[@]}" }
+        source "$1"
+        """;
+
+    private const string ZshStatusProbe = """
+        typeset -ga words=(cdidx suggestions update id --status submitted_)
+        typeset -gi CURRENT=6
+        typeset -g PREFIX=submitted_
+        typeset -g state=args
+        typeset -gi calls=0
+        _arguments() { (( calls++ )); if (( calls == 1 )); then state=args; else print -rl -- "$@"; fi }
+        _describe() { print -rl -- "${commands[@]}" }
+        source "$1"
+        """;
+
+    private const string ZshNestedFlagProbe = """
+        typeset -ga words=(cdidx db integrity --j)
+        typeset -gi CURRENT=4
+        typeset -g PREFIX=--j
+        typeset -g state=args
+        typeset -gi calls=0
+        _arguments() { (( calls++ )); if (( calls == 1 )); then state=args; else print -rl -- "$@"; fi }
+        _describe() { print -rl -- "${commands[@]}" }
+        source "$1"
+        """;
+
+    private const string FishCompletionProbe = """
+        source $argv[1]
+        function probe --argument-names label line
+            set -l values (complete -C "$line" | string replace -r '\t.*' '')
+            echo "$label:"(string join ' ' $values)
+        end
+        probe prefix 'cdidx --color never search auth --f'
+        probe inline 'cdidx --color=never se'
+        probe multi 'cdidx --quiet --palette truecolor search auth --f'
+        probe status 'cdidx suggestions update id --status submitted_'
+        probe status-allowed 'cdidx suggestions update id --status d'
+        probe validate 'cdidx validate-config --j'
+        """;
+
+    private const string PowerShellCompletionProbe = """
+        . $args[0]
+        function Write-Candidates([string] $label, [string] $line) {
+            $result = TabExpansion2 -inputScript $line -cursorColumn $line.Length
+            $values = @($result.CompletionMatches | ForEach-Object { $_.CompletionText })
+            Write-Output ($label + ':' + ($values -join ' '))
+        }
+        Write-Candidates 'prefix' 'cdidx --color never search auth --f'
+        Write-Candidates 'inline' 'cdidx --color=never se'
+        Write-Candidates 'multi' 'cdidx --quiet --palette truecolor search auth --f'
+        Write-Candidates 'status' 'cdidx suggestions update id --status submitted_'
+        Write-Candidates 'status-allowed' 'cdidx suggestions update id --status d'
+        Write-Candidates 'validate' 'cdidx validate-config --j'
+        """;
+
+    private static string? ResolveExecutable(string name)
+    {
+        var path = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+        var fileNames = OperatingSystem.IsWindows()
+            ? new[] { name + ".exe", name + ".cmd", name + ".bat", name }
+            : new[] { name };
+        foreach (var directory in path.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+        {
+            foreach (var fileName in fileNames)
+            {
+                var candidate = Path.Combine(directory, fileName);
+                if (File.Exists(candidate))
+                    return candidate;
+            }
+        }
+        return null;
+    }
+
+    private static ShellProbeResult RunShellProcess(
+        string executable,
+        string workingDirectory,
+        IReadOnlyList<string> arguments)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = executable,
+            WorkingDirectory = workingDirectory,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        foreach (var argument in arguments)
+            startInfo.ArgumentList.Add(argument);
+
+        using var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException($"Failed to start completion shell: {executable}");
+        var stdout = process.StandardOutput.ReadToEndAsync();
+        var stderr = process.StandardError.ReadToEndAsync();
+        if (!process.WaitForExit(10_000))
+        {
+            process.Kill(entireProcessTree: true);
+            Assert.Fail($"Completion shell timed out: {executable}");
+        }
+        process.WaitForExit();
+        var result = new ShellProbeResult(
+            process.ExitCode,
+            stdout.GetAwaiter().GetResult().ReplaceLineEndings("\n"),
+            stderr.GetAwaiter().GetResult().ReplaceLineEndings("\n"));
+        Assert.True(
+            result.ExitCode == 0,
+            $"Completion shell failed ({executable}, exit {result.ExitCode}): {result.StdErr}");
+        return result;
+    }
+
+    private static void AssertCompletionProbe(ShellProbeResult result)
+    {
+        Assert.Contains("prefix:--format --fields --first-per-file --fts", result.StdOut, StringComparison.Ordinal);
+        Assert.Contains("inline:search", result.StdOut, StringComparison.Ordinal);
+        Assert.Contains("multi:--format --fields --first-per-file --fts", result.StdOut, StringComparison.Ordinal);
+        Assert.DoesNotContain("submitted_pending_triage", result.StdOut, StringComparison.Ordinal);
+        Assert.Contains("status-allowed:draft duplicate", result.StdOut, StringComparison.Ordinal);
+        Assert.Contains("validate:--json", result.StdOut, StringComparison.Ordinal);
+    }
+
+    private sealed record ShellProbeResult(int ExitCode, string StdOut, string StdErr);
+
     private static (SortedSet<string> Bash, SortedSet<string> Zsh, SortedSet<string> Fish, string BashScript, string ZshScript, string FishScript)
         ExtractComparableSubcommandFlagSets(string subcommand, string nextSubcommand)
     {
@@ -1589,10 +1863,10 @@ public class ConsoleUiTests
 
     private static SortedSet<string> ExtractBashSubcommandFlags(string script, string subcommand, string nextSubcommand)
     {
-        var startMarker = $"[ \"$cmd\" = \"{subcommand}\" ]; then";
-        var endMarker = $"[ \"$cmd\" = \"{nextSubcommand}\" ]; then";
-        var branch = ExtractBetween(script, startMarker, endMarker);
-        var quoted = Regex.Match(branch, "compgen -W \"(?<flags>[^\"]*)\"");
+        _ = nextSubcommand;
+        var quoted = Regex.Match(
+            script,
+            @"(?:if|elif)\s*\[\s*""\$cmd""\s*=\s*""" + Regex.Escape(subcommand) + @"""\s*\]\s*;\s*then\s*\n\s*COMPREPLY=\(\$\(compgen\s+-W\s+""(?<flags>[^""]*)""");
         Assert.True(quoted.Success, $"bash branch for {subcommand} did not contain a compgen list");
         var flags = new SortedSet<string>(StringComparer.Ordinal);
         foreach (var token in quoted.Groups["flags"].Value.Split(' ', StringSplitOptions.RemoveEmptyEntries))
@@ -1605,9 +1879,13 @@ public class ConsoleUiTests
 
     private static SortedSet<string> ExtractZshSubcommandFlags(string script, string subcommand, string nextSubcommand)
     {
-        var startMarker = $"[[ $subcmd == {subcommand} ]]; then";
-        var endMarker = $"[[ $subcmd == {nextSubcommand} ]]; then";
-        var branch = ExtractBetween(script, startMarker, endMarker);
+        _ = nextSubcommand;
+        var branchMatch = Regex.Match(
+            script,
+            @"(?:if|elif)\s+\[\[\s+\$subcmd\s+==\s+" + Regex.Escape(subcommand) + @"\s+\]\];\s+then(?<branch>.*?)(?=\n\s+(?:elif|else|fi)\b)",
+            RegexOptions.Singleline);
+        Assert.True(branchMatch.Success, $"zsh branch not found for {subcommand}");
+        var branch = branchMatch.Groups["branch"].Value;
         var flags = new SortedSet<string>(StringComparer.Ordinal);
         foreach (Match match in Regex.Matches(branch, @"'--(?<name>[a-z][a-z0-9-]*)\["))
             flags.Add(match.Groups["name"].Value);
@@ -1617,7 +1895,7 @@ public class ConsoleUiTests
     private static SortedSet<string> ExtractFishSubcommandFlags(string script, string subcommand)
     {
         var flags = new SortedSet<string>(StringComparer.Ordinal);
-        var pattern = new Regex($@"__fish_seen_subcommand_from\s+(?<list>[^']+)'\s+-l\s+(?<flag>[a-z][a-z0-9-]*)\b");
+        var pattern = new Regex($@"__fish_cdidx_using_command\s+(?<list>[^;']+)[^']*'\s+-l\s+(?<flag>[a-z][a-z0-9-]*)\b");
         foreach (var line in script.Split('\n'))
         {
             var match = pattern.Match(line);
@@ -1634,7 +1912,7 @@ public class ConsoleUiTests
     private static SortedSet<string> ExtractLongFlagCatalog(string script, string shell)
     {
         var pattern = shell == "fish"
-            ? @"(?:^|\s)-l\s+(?<name>[a-z][a-z0-9-]*)\b"
+            ? @"^complete\s+-c\s+cdidx\b[^\n]*\s-l\s+(?<name>[a-z][a-z0-9-]*)\b"
             : @"--(?<name>[a-z][a-z0-9-]*)\b";
         var flags = new SortedSet<string>(StringComparer.Ordinal);
         foreach (Match match in Regex.Matches(script, pattern, RegexOptions.Multiline))
@@ -1676,10 +1954,10 @@ public class ConsoleUiTests
                 lines,
                 "# cdidx fish completions generated for version",
                 "# Regenerate this script after upgrading cdidx.",
-                "complete -c cdidx -n '__fish_use_subcommand' -a 'index'",
-                "complete -c cdidx -n '__fish_use_subcommand' -l license",
-                "complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols find inspect' -l exact",
-                "complete -c cdidx -n '__fish_seen_subcommand_from search references callers callees find excerpt inspect impact' -l max-line-width"),
+                "complete -c cdidx -n '__fish_cdidx_needs_command' -a 'index'",
+                "complete -c cdidx -n '__fish_cdidx_needs_command' -l license",
+                "complete -c cdidx -n '__fish_cdidx_using_command search definition references callers callees symbols find inspect' -l exact",
+                "complete -c cdidx -n '__fish_cdidx_using_command search references callers callees find excerpt inspect impact' -l max-line-width"),
             "powershell" => JoinSnapshotLines(
                 lines,
                 "# cdidx PowerShell completions generated for version",
