@@ -677,7 +677,7 @@ public static partial class SymbolExtractor
         {
             FileId = fileId,
             Kind = "function",
-            SubKind = "script_scope",
+            SubKind = SyntheticSymbolIdentity.ScriptScopeSubKind,
             Name = "<script>",
             Line = 1,
             StartLine = 1,

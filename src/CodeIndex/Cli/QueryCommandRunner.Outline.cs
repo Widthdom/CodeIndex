@@ -161,10 +161,13 @@ public static partial class QueryCommandRunner
             }
             else
             {
-                var outlineContent = reader.GetExcerpt(filePath, 1, outline.TotalLines)?.Content;
-
                 Console.WriteLine($"# {outline.Path}  ({outline.Lang ?? "unknown"}, {outline.TotalLines} lines, {filteredSymbols.Count} symbols)");
                 Console.WriteLine();
+                if (outline.TopLevelSymbolSupport == "reindex_required")
+                {
+                    CommandErrorWriter.WriteStderr(
+                        "Note: this index predates C# top-level synthetic symbols; reindex with the current cdidx binary.");
+                }
                 var duplicateNames = filteredSymbols
                     .GroupBy(sym => sym.Name, StringComparer.Ordinal)
                     .Where(group => group.Count() > 1)
@@ -185,23 +188,10 @@ public static partial class QueryCommandRunner
                     var vis = !useDisplayName && sym.Visibility != null && !sig.TrimStart().StartsWith(sym.Visibility, StringComparison.Ordinal)
                         ? $"{sym.Visibility} "
                         : "";
-                    Console.WriteLine($"  {sym.Line,5}  {indent}{vis}{sig} {ret}");
-                }
-
-                // AI-orientation hint for C# files that look like top-level-statements programs:
-                // no class / struct / interface / enum / namespace / record / delegate at all
-                // means the executable body lives between the imports and local functions and
-                // will not appear in outline at all. Emitting a short note on stderr keeps the
-                // main human-readable block clean while giving AI consumers a reason for the gap.
-                // AI向けヒント: C# のトップレベルステートメント想定のファイル
-                // （class / struct / interface / enum / namespace / record / delegate が一切無い）は、
-                // 実行本体が import と local function の間に書かれるため outline に現れない。
-                // 人間向け本体を汚さないよう、理由を短く stderr に出す。
-                if (LooksLikeCsharpTopLevelStatements(outline, outlineContent))
-                {
-                    CommandErrorWriter.WriteStderr();
-                    CommandErrorWriter.WriteStderr("Note: no type/namespace declarations found; this file likely uses C# top-level statements.");
-                    CommandErrorWriter.WriteStderr("      Outline lists imports and local functions only; the executable body is not indexed as symbols.");
+                    var syntheticDetails = sym.IsSynthetic == true
+                        ? $" [synthetic {sym.Kind}/{sym.SubKind}, lines {sym.StartLine}-{sym.EndLine}, selector {sym.Selector}]"
+                        : "";
+                    Console.WriteLine($"  {sym.Line,5}  {indent}{vis}{sig} {ret}{syntheticDetails}");
                 }
             }
             return CommandExitCodes.Success;
@@ -540,6 +530,8 @@ public static partial class QueryCommandRunner
             Lang = outline.Lang,
             TotalLines = outline.TotalLines,
             SymbolCount = symbolCount,
+            TopLevelSymbolSupport = outline.TopLevelSymbolSupport,
+            TopLevelSymbolLimitation = outline.TopLevelSymbolLimitation,
             Symbols = symbols,
         };
 
@@ -598,8 +590,23 @@ public static partial class QueryCommandRunner
         {
             switch (field)
             {
+                case "symbol_id":
+                    payload["symbol_id"] = symbol.SymbolId;
+                    break;
                 case "kind":
                     payload["kind"] = symbol.Kind;
+                    break;
+                case "sub_kind":
+                    payload["sub_kind"] = symbol.SubKind;
+                    break;
+                case "is_synthetic":
+                    payload["is_synthetic"] = symbol.IsSynthetic;
+                    break;
+                case "selector":
+                    payload["selector"] = symbol.Selector;
+                    break;
+                case "qualified_name":
+                    payload["qualified_name"] = symbol.QualifiedName;
                     break;
                 case "name":
                     payload["name"] = symbol.Name;
@@ -666,96 +673,4 @@ public static partial class QueryCommandRunner
         return payload;
     }
 
-    /// <summary>
-    /// Heuristic: hint only when a non-trivial C# file has no type/namespace declarations and
-    /// its reconstructed content still contains uncovered file-scope executable code after
-    /// skipping symbol-covered lines, imports, metadata-only attribute lines, comments, and
-    /// preprocessor directives. This keeps the note off common files such as GlobalUsings.cs,
-    /// AssemblyInfo.cs, and local-function-only files while preserving statement-only Program.cs
-    /// files.
-    /// Tiny files (snippets, partials under ~20 lines) are excluded to avoid noise.
-    /// ヒューリスティック: 20 行以上の C# ファイルで型/名前空間宣言が無く、かつ
-    /// import 行、metadata-only 属性行、コメント、プリプロセッサ行を除いても
-    /// file-scope の実行コードが残る場合だけヒントを出す。これにより GlobalUsings.cs や
-    /// AssemblyInfo.cs の誤検出を避けつつ、
-    /// statement-only の Program.cs は拾い続ける。小さい断片はノイズ回避のため除外。
-    /// </summary>
-    private static bool LooksLikeCsharpTopLevelStatements(OutlineResult outline, string? content)
-    {
-        if (outline.Lang != "csharp") return false;
-        if (outline.TotalLines < 20) return false;
-        foreach (var sym in outline.Symbols)
-        {
-            if (sym.Kind is "class" or "struct" or "interface" or "enum" or "namespace" or "delegate" or "record")
-                return false;
-        }
-
-        if (string.IsNullOrWhiteSpace(content))
-            return false;
-
-        var coveredLines = new bool[Math.Max(outline.TotalLines, 0) + 1];
-        foreach (var sym in outline.Symbols)
-        {
-            var startLine = sym.StartLine > 0 ? sym.StartLine : sym.Line;
-            var endLine = sym.EndLine >= startLine ? sym.EndLine : startLine;
-            startLine = Math.Max(1, startLine);
-            endLine = Math.Min(outline.TotalLines, endLine);
-            for (var lineNumber = startLine; lineNumber <= endLine; lineNumber++)
-                coveredLines[lineNumber] = true;
-        }
-
-        var inBlockComment = false;
-        var currentLineNumber = 0;
-        foreach (var rawLine in content.Split('\n'))
-        {
-            currentLineNumber++;
-            var line = rawLine.Trim();
-            if (line.Length == 0)
-                continue;
-            if (currentLineNumber < coveredLines.Length && coveredLines[currentLineNumber])
-                continue;
-
-            if (inBlockComment)
-            {
-                if (line.Contains("*/", StringComparison.Ordinal))
-                    inBlockComment = false;
-                continue;
-            }
-
-            if (line.StartsWith("/*", StringComparison.Ordinal))
-            {
-                if (!line.Contains("*/", StringComparison.Ordinal))
-                    inBlockComment = true;
-                continue;
-            }
-
-            if (line.StartsWith("using ", StringComparison.Ordinal))
-            {
-                if (line.StartsWith("using var ", StringComparison.Ordinal))
-                    return true;
-                if (line.StartsWith("using (", StringComparison.Ordinal))
-                    return true;
-                continue;
-            }
-            if (line.StartsWith("global using ", StringComparison.Ordinal))
-                continue;
-            if (line.StartsWith("extern alias ", StringComparison.Ordinal))
-                continue;
-            if (line.StartsWith("[assembly:", StringComparison.Ordinal))
-                continue;
-            if (line.StartsWith("[module:", StringComparison.Ordinal))
-                continue;
-            if (line.StartsWith("//", StringComparison.Ordinal))
-                continue;
-            if (line.StartsWith("*", StringComparison.Ordinal))
-                continue;
-            if (line.StartsWith("*/", StringComparison.Ordinal))
-                continue;
-            if (line.StartsWith("#", StringComparison.Ordinal))
-                continue;
-            return true;
-        }
-
-        return false;
-    }
 }

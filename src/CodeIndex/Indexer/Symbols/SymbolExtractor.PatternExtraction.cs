@@ -278,6 +278,7 @@ public static partial class SymbolExtractor
             filePath,
             projectRoot,
             lines,
+            structuralLines,
             symbols,
             extractionState,
             getCSharpLineStartStates,

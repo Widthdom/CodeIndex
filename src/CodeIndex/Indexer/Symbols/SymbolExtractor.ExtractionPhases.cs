@@ -778,6 +778,7 @@ public static partial class SymbolExtractor
         string? filePath,
         string? projectRoot,
         string[] lines,
+        string[] structuralLines,
         SymbolExtractionList symbols,
         SymbolExtractionState extractionState,
         Func<CSharpLexState[]>? getCSharpLineStartStates,
@@ -792,7 +793,10 @@ public static partial class SymbolExtractor
         if (lang is "shell" or "powershell")
             AddScriptScopeSymbol(fileId, lines, symbols);
         if (lang == "csharp")
+        {
+            AddCSharpTopLevelScopeSymbol(fileId, lines, structuralLines, symbols);
             NormalizeCSharpImplicitPartialConstructorReturnTypes(symbols);
+        }
         if (lang == "go")
         {
             AssignGoMethodReceiverContainers(symbols);

@@ -1,3 +1,5 @@
+using CodeIndex.Models;
+
 namespace CodeIndex.Indexer;
 
 public static partial class ReferenceExtractor
@@ -53,6 +55,7 @@ public static partial class ReferenceExtractor
             line.LineNumber,
             sameLineDeclarationStartColumn);
         if (docContainer == null
+            || docContainer.SubKind == SyntheticSymbolIdentity.CSharpTopLevelScopeSubKind
             || (docContainer.StartLine != line.LineNumber
                 && !CanAttachCSharpXmlDocCommentToNextDeclaration(
                     innermostContainer,

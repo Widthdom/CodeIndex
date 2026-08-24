@@ -12,6 +12,96 @@ namespace CodeIndex.Tests;
 public partial class SymbolExtractorTests
 {
     [Fact]
+    public void Extract_CSharpTopLevelProgram_AddsSyntheticScopeAndAttributesCalls_Issue5164()
+    {
+        const string content = """
+            using System.Text;
+            using CodeIndex.Cli;
+
+            // On Windows the console defaults to the OEM code page.
+            // Keep Unicode output deterministic.
+            // 日本語の出力も UTF-8 に揃える。
+            Console.OutputEncoding = Encoding.UTF8;
+            ConsoleUi.EnsureConsoleWritersSynchronized();
+            RuntimeSafety.Configure();
+            return ProgramRunner.Run(args);
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var topLevel = Assert.Single(symbols, symbol =>
+            symbol.Kind == "function"
+            && symbol.SubKind == SyntheticSymbolIdentity.CSharpTopLevelScopeSubKind
+            && symbol.Name == SyntheticSymbolIdentity.CSharpTopLevelScopeName);
+        Assert.Equal(7, topLevel.Line);
+        Assert.Equal(7, topLevel.StartLine);
+        Assert.Equal(10, topLevel.EndLine);
+        Assert.Equal(7, topLevel.BodyStartLine);
+        Assert.Equal(10, topLevel.BodyEndLine);
+
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+        foreach (var callName in new[] { "EnsureConsoleWritersSynchronized", "Configure", "Run" })
+        {
+            var call = Assert.Single(references, reference =>
+                reference.ReferenceKind == "call"
+                && reference.SymbolName == callName);
+            Assert.Equal("function", call.ContainerKind);
+            Assert.Equal(SyntheticSymbolIdentity.CSharpTopLevelScopeName, call.ContainerName);
+        }
+    }
+
+    [Fact]
+    public void Extract_CSharpTopLevelProgram_LocalFunctionKeepsDeclaredScope_Issue5164()
+    {
+        const string content = """
+            using System;
+            Console.WriteLine("before");
+            void Helper() { Console.WriteLine("inside"); }
+            Helper();
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var topLevel = Assert.Single(symbols, symbol =>
+            symbol.SubKind == SyntheticSymbolIdentity.CSharpTopLevelScopeSubKind);
+        Assert.Equal(2, topLevel.StartLine);
+        Assert.Equal(4, topLevel.EndLine);
+
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+        var nestedCall = Assert.Single(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.SymbolName == "WriteLine"
+            && reference.Line == 3);
+        Assert.Equal("Helper", nestedCall.ContainerName);
+        var topLevelCall = Assert.Single(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.SymbolName == "Helper");
+        Assert.Equal(SyntheticSymbolIdentity.CSharpTopLevelScopeName, topLevelCall.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CSharpNonExecutableCompilationUnits_DoNotAddSyntheticScope_Issue5164()
+    {
+        var cases = new Dictionary<string, string>
+        {
+            ["empty"] = string.Empty,
+            ["comments"] = "// comment\n/* block comment */\n",
+            ["directives"] = "#nullable enable\n#define FEATURE\n",
+            ["global-usings"] = "global using System;\nglobal using Text = System.Text;\n",
+            ["assembly-attributes"] = "[assembly:\n    System.CLSCompliant(true)]\n[module: System.Runtime.CompilerServices.SkipLocalsInit]\n",
+            ["type"] = "public sealed class App { public static void Main() { Run(); } }\n",
+            ["attributed-type"] = "[System.Obsolete]\npublic sealed class AttributedApp { }\n",
+            ["file-namespace"] = "namespace Example;\npublic sealed class App { }\n",
+        };
+
+        foreach (var (name, content) in cases)
+        {
+            var symbols = SymbolExtractor.Extract(1, "csharp", content);
+            Assert.DoesNotContain(
+                symbols,
+                symbol => symbol.SubKind == SyntheticSymbolIdentity.CSharpTopLevelScopeSubKind);
+        }
+    }
+
+    [Fact]
     public void SanitizeCSharpLinesForCrossLineScan_PlainLineReusesSourceText()
     {
         var line = new string("public sealed class PlainLine { }".ToCharArray());
