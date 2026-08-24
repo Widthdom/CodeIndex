@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization.Metadata;
 
 namespace CodeIndex.Diagnostics;
 
@@ -71,6 +72,17 @@ internal static class BoundedJson
     {
         ValidateBytePayload(utf8Json.Length, maxUtf8Bytes);
         return JsonSerializer.Deserialize<T>(utf8Json, options);
+    }
+
+    internal static T? Deserialize<T>(
+        string json,
+        int maxUtf8Bytes,
+        int maxDepth,
+        JsonTypeInfo<T> jsonTypeInfo)
+    {
+        ArgumentNullException.ThrowIfNull(jsonTypeInfo);
+        using var document = ParseDocument(json, maxUtf8Bytes, maxDepth);
+        return document.RootElement.Deserialize(jsonTypeInfo);
     }
 
     internal static string FormatExceptionDetail(JsonException ex)

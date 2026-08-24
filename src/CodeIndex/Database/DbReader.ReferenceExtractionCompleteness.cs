@@ -6,7 +6,7 @@ namespace CodeIndex.Database;
 
 public partial class DbReader
 {
-    public const int ReferenceExtractionCapHitFileLimit = 50;
+    public const int ReferenceExtractionCapHitFileLimit = StatusMetadataLimits.MaxReferenceCapHitFiles;
     public const string ReferenceExtractionCapStateUnavailableReason = "reference_extraction_cap_state_unavailable";
 
     private ReferenceExtractionCapHitSummary? _referenceExtractionCapHits;

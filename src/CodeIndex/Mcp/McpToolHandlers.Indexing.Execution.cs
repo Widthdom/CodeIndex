@@ -1081,7 +1081,7 @@ public partial class McpServer
         if (errors > 0)
         {
             var statusFileErrors = failures
-                .Take(50)
+                .Take(StatusMetadataLimits.MaxFileErrors)
                 .Select(failure => new StatusIndexFileError
                 {
                     File = failure.Path,

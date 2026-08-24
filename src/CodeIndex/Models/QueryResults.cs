@@ -1973,6 +1973,9 @@ public class StatusResult
     [JsonPropertyName("last_failed_or_partial_index_run")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public StatusFailedOrPartialIndexRun? LastFailedOrPartialIndexRun { get; set; }
+    [JsonPropertyName("status_metadata_diagnostics")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<StatusMetadataDiagnostic>? StatusMetadataDiagnostics { get; set; }
 }
 
 public sealed class StatusHeadFreshness
@@ -2300,6 +2303,17 @@ public sealed class StatusLastIndexRun
     [JsonPropertyName("rebuild_reclaim")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public StatusRebuildReclaim? RebuildReclaim { get; set; }
+}
+
+public sealed class StatusMetadataDiagnostic
+{
+    public string Field { get; init; } = string.Empty;
+    public string Reason { get; init; } = string.Empty;
+    [JsonPropertyName("max_utf8_bytes")]
+    public int MaxUtf8Bytes { get; init; }
+    [JsonPropertyName("observed_utf8_bytes")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? ObservedUtf8Bytes { get; init; }
 }
 
 /// <summary>
