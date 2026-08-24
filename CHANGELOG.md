@@ -11,6 +11,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.44.0] - 2026-08-24
+
+#### Added
+
+- **C# top-level program bodies are now actionable synthetic symbols (#5164)** — `outline`, coordinate `inspect`, CLI JSON/compact output, and MCP expose a file-qualified `<top-level>` function with an explicit synthetic marker and snapshot selector; passing that selector to CLI or MCP `callees` round-trips the same file-scoped caller identity without colliding across files and fails closed on legacy schemas without source identity, typed using and same-line local-function boundaries remain executable, legal-whitespace directives stay excluded, synthetic entry points stay out of unused-code results, and a normal reindex repairs unstamped legacy C# data.
+- **Extensionless zsh completion functions are now indexed as shell source (#5165)** — the bounded first-line language probe recognizes a token-delimited `#compdef` directive, including supported BOM and line-ending variants, so generated `_cdidx` completions are indexed and omitted from unknown-extension diagnostics without requiring a misleading shebang.
+
+#### Fixed
+
+- **Impact file-hint projections now preserve both endpoint paths (#5156)** — compact `file_impacts` rows retain `source_path`, `target_path`, `reference_count`, and `result_kind`; explicit projections accept the real `FileDependencyResult` fields, while the ambiguous `file_impacts.path` alias is rejected instead of returning an empty object.
+- **C# primary-constructor parameters no longer appear as public properties (#5157)** — ordinary class and struct primary-constructor parameters are excluded from member navigation, while positional `record`, `record class`, and `record struct` components continue to synthesize public properties.
+- **C# references now resolve one logical partial-type family (#5158)** — references whose physical candidates all belong to one partial class, struct, record, interface, or generic family persist a stable logical target as `resolved_group`, retain the physical candidate count and definitions, and feed grouped symbol ranking, hotspots, inspect, dependencies, and impact without merging unrelated same-name families.
+- **Inspect selectors now round-trip exact overload identities (#5159)** — `inspect --selector 'id:<n>@g:<fingerprint>'` reuses emitted generation-bound, database-local symbol IDs with candidate-scoped pagination and stable missing/invalid/stale diagnostics. C# required-parameter overloads narrow conservatively by positional argument count, while optional, `params`, named, generic, and unresolved calls remain explicitly non-identity-scoped instead of duplicating evidence under a false exact label.
+- **Case-sensitivity probes now use bounded, cancelable directory traversal (#5160)** — existing-child probes retain one capped name snapshot, treat truncation as unknown so deterministic fallbacks remain authoritative, and observe available cancellation tokens.
+- **Persisted status diagnostics are now bounded at read and display boundaries (#5161)** — `status` rejects oversized, over-depth, or semantically invalid structured metadata without losing the rest of the response, reports a stable bounded diagnostic, and flattens and truncates persisted first-failure and recovery-hint fields in human output while preserving accepted JSON values.
+- **JSON parser audits now classify every retained result by guard evidence (#5162)** — `json-parse-apis` emits exactly one non-authoritative `parser_guard_evidence` value per retained parser/deserializer row in structured and compact JSON, aggregates the same rows in `classifier_counts`, distinguishes same-payload bounds and streaming/cancellation from unbounded materialization, and preserves raw hit counts, ordering, and snippets.
+- **Shell completions now preserve command context after leading global options (#5163)** — bash, zsh, fish, and PowerShell skip separated or inline global-option values, `suggestions update --status` offers only accepted transition states, and `validate-config` advertises `--json` without suggesting `--pretty`.
+- **`help --help` and `help -h` now show help successfully (#5166)** — The public `help` command now routes its exact conventional help flags through the canonical `help help` renderer, while bare `help` and unknown option-like targets remain usage errors.
+
 ### [1.43.1] - 2026-08-23
 
 #### Changed
@@ -6613,6 +6632,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.44.0] - 2026-08-24
+
+#### 追加
+
+- **C# top-level program body を操作可能な synthetic symbol として公開するようになりました (#5164)** — `outline`、座標指定 `inspect`、CLI JSON/compact 出力、MCP は、明示的な synthetic marker と snapshot selector を持つ file-qualified な `<top-level>` function を公開します。その selector は CLI / MCP の `callees` で file 間の衝突なく同じ file-scoped caller identity を往復でき、source identity のない legacy schema では fail-closed します。typed using と同一行 local-function の境界は実行可能コードとして維持され、正当な whitespace を持つ directive は除外され、synthetic entry point は unused-code 結果から除外され、通常の reindex が stamp のない legacy C# data を修復します。
+- **拡張子なしの zsh 補完関数を shell source として index できるようになりました (#5165)** — 上限付き先頭行言語 probe が token 境界を持つ `#compdef` directive と対応済み BOM・改行バリエーションを認識するため、誤解を招く shebang を追加せずに生成済み `_cdidx` 補完を index し、未知拡張子診断から除外できます。
+
+#### 修正
+
+- **impact の file hint projection が両 endpoint path を保持するようになりました (#5156)** — compact な `file_impacts` row は `source_path`、`target_path`、`reference_count`、`result_kind` を保持し、明示的な projection は実際の `FileDependencyResult` field を受け付けます。曖昧な `file_impacts.path` alias は空 object を返さず拒否します。
+- **C# primary constructor parameter が public property として表示されなくなりました (#5157)** — 通常の class / struct の primary constructor parameter を member navigation から除外しつつ、位置 `record`、`record class`、`record struct` の component は引き続き public property として合成します。
+- **C# reference が単一の論理 partial 型 family へ解決されるようになりました (#5158)** — 物理 candidate がすべて同じ partial class、struct、record、interface、または generic family に属する reference は、安定した論理 target を `resolved_group` として永続化します。物理 candidate 数と定義を保持し、無関係な同名 family を統合せず、grouped symbol ranking、hotspot、inspect、dependency、impact へ参照を反映します。
+- **inspect selector で正確な overload identity を再利用できるようになりました (#5159)** — `inspect --selector 'id:<n>@g:<fingerprint>'` は出力済みの generation-bound かつ database-local な symbol ID を candidate-scoped pagination と安定した missing / invalid / stale diagnostic 付きで再利用します。C# の required-parameter overload は位置引数個数で保守的に絞り込み、optional、`params`、named、generic、未解決 call は、重複 evidence を誤って exact とせず明示的に non-identity-scoped のままにします。
+- **大小文字区別 probe が上限付き・キャンセル可能な directory traversal を使うようになりました (#5160)** — 既存 child の probe は上限付きの name snapshot を1つだけ保持し、truncation を unknown として扱うことで deterministic fallback の authority を維持しつつ、利用可能な cancellation token を監視します。
+- **永続化された status 診断を読み取り境界と表示境界で制限するようになりました (#5161)** — `status` は oversized、over-depth、または意味的に不正な構造化 metadata を、response の残りを失わずに拒否して安定した上限付き診断を返します。また、受理した JSON 値は維持しながら、human 出力の first failure と recovery hint の永続化 field を平坦化・切り詰めします。
+- **JSON parser audit が保持したすべての結果を guard evidence で分類するようになりました (#5162)** — `json-parse-apis` は structured / compact JSON の保持済み parser / deserializer row ごとに、非 authoritative な `parser_guard_evidence` を必ず1つ出力し、同じ row 集合を `classifier_counts` に集計します。同じ payload に対する bound、streaming / cancellation、unbounded materialization を区別しつつ、raw hit の件数・順序・snippet は維持します。
+- **先頭の global option 後も shell completion が command context を維持するようになりました (#5163)** — bash、zsh、fish、PowerShell は分離形式または inline 形式の global-option 値を読み飛ばし、`suggestions update --status` は受理される遷移先だけを候補にし、`validate-config` は `--pretty` を候補に出さずに `--json` を提示します。
+- **`help --help` と `help -h` が正常にヘルプを表示するようになりました (#5166)** — 公開 `help` コマンドの該当する通常ヘルプフラグを canonical な `help help` renderer に通すようにし、引数なしの `help` と未知の option 風 target は従来どおり usage error にします。
+
 ### [1.43.1] - 2026-08-23
 
 #### 変更
@@ -13187,7 +13225,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.43.1...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.44.0...HEAD
+[1.44.0]: https://github.com/Widthdom/CodeIndex/compare/v1.43.1...v1.44.0
 [1.43.1]: https://github.com/Widthdom/CodeIndex/compare/v1.43.0...v1.43.1
 [1.43.0]: https://github.com/Widthdom/CodeIndex/compare/v1.42.0...v1.43.0
 [1.42.0]: https://github.com/Widthdom/CodeIndex/compare/v1.41.2...v1.42.0
