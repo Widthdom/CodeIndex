@@ -102,6 +102,7 @@ public sealed class StatusMetadataOutputIssue5161Tests
                     .Where(line => line.Contains("First failure:", StringComparison.Ordinal)));
             Assert.Equal(4, CountOccurrences(firstFailureLine, TruncationMarker));
             Assert.DoesNotContain('\r', firstFailureLine);
+            Assert.DoesNotContain('\n', firstFailureLine);
             Assert.DoesNotContain('\t', firstFailureLine);
             Assert.DoesNotContain('\u001b', firstFailureLine);
             Assert.DoesNotContain('\u0001', firstFailureLine);
@@ -111,6 +112,7 @@ public sealed class StatusMetadataOutputIssue5161Tests
                     && line.Contains(TruncationMarker, StringComparison.Ordinal)));
             Assert.Contains(TruncationMarker, hintLine, StringComparison.Ordinal);
             Assert.DoesNotContain('\r', hintLine);
+            Assert.DoesNotContain('\n', hintLine);
             Assert.DoesNotContain('\t', hintLine);
             Assert.DoesNotContain('\u001b', hintLine);
             Assert.DoesNotContain('\u0001', hintLine);
