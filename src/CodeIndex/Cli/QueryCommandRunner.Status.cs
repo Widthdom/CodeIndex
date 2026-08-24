@@ -333,10 +333,12 @@ public static partial class QueryCommandRunner
                     var firstFailure = status.LastFailedOrPartialIndexRun?.FileErrors?.FirstOrDefault();
                     var failureSuffix = firstFailure == null
                         ? string.Empty
-                        : $" First failure: {firstFailure.File} ({firstFailure.Category}, {firstFailure.Phase}): {firstFailure.Detail}";
+                        : $" First failure: {ConsoleUi.FormatBoundedValue(firstFailure.File)} ({ConsoleUi.FormatBoundedValue(firstFailure.Category)}, {ConsoleUi.FormatBoundedValue(firstFailure.Phase)}): {ConsoleUi.FormatBoundedValue(firstFailure.Detail)}";
                     Console.WriteLine(ConsoleUi.FormatSummaryLine("WARN", $"index generation is incomplete; successful files and graph edges remain queryable.{failureSuffix}"));
-                    Console.WriteLine(ConsoleUi.FormatSummaryLine("Hint", status.LastFailedOrPartialIndexRun?.RecoveryHint
-                        ?? "fix the reported file/extractor failure, then rerun the same index command; a rebuild is not required."));
+                    var persistedRecoveryHint = status.LastFailedOrPartialIndexRun?.RecoveryHint;
+                    Console.WriteLine(ConsoleUi.FormatSummaryLine("Hint", persistedRecoveryHint == null
+                        ? "fix the reported file/extractor failure, then rerun the same index command; a rebuild is not required."
+                        : ConsoleUi.FormatBoundedValue(persistedRecoveryHint)));
                 }
                 if (!status.ReferenceGraphComplete)
                 {
