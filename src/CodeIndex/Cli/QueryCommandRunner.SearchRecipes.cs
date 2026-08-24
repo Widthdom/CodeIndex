@@ -2279,7 +2279,11 @@ public static partial class QueryCommandRunner
             .FirstOrDefault(classifier => string.Equals(classifier.Name, "task_result_intent", StringComparison.Ordinal));
         var jsonTrustBoundaryClassifier = recipeQuery.Classifiers
             .FirstOrDefault(classifier => string.Equals(classifier.Name, "json_trust_boundary", StringComparison.Ordinal));
-        if (taskResultClassifier == null && jsonTrustBoundaryClassifier == null)
+        var parserGuardClassifier = recipeQuery.Classifiers
+            .FirstOrDefault(classifier => string.Equals(classifier.Name, "parser_guard_evidence", StringComparison.Ordinal));
+        if (taskResultClassifier == null
+            && jsonTrustBoundaryClassifier == null
+            && parserGuardClassifier == null)
             return;
 
         if (taskResultClassifier != null)
@@ -2288,45 +2292,77 @@ public static partial class QueryCommandRunner
                 AddSearchRecipeAuditClassification(row, TryClassifyTaskResultIntent(taskResultClassifier, row));
         }
 
-        if (jsonTrustBoundaryClassifier == null || !recipeQuery.JsonTrustDirection.HasValue)
+        var appliesJsonTrustBoundary = jsonTrustBoundaryClassifier != null
+            && recipeQuery.JsonTrustDirection.HasValue;
+        if (!appliesJsonTrustBoundary && parserGuardClassifier == null)
             return;
 
-        var selectedJsonTrustQueries = selectedQueries
-            .Where(query => query.JsonTrustDirection.HasValue
-                && query.Classifiers.Any(classifier =>
-                    string.Equals(classifier.Name, "json_trust_boundary", StringComparison.Ordinal)))
-            .Select(query => query.Query)
-            .Where(query => !string.IsNullOrWhiteSpace(query))
-            .Distinct(StringComparer.Ordinal)
-            .ToList();
+        var selectedJsonTrustQueries = appliesJsonTrustBoundary
+            ? selectedQueries
+                .Where(query => query.JsonTrustDirection.HasValue
+                    && query.Classifiers.Any(classifier =>
+                        string.Equals(classifier.Name, "json_trust_boundary", StringComparison.Ordinal)))
+                .Select(query => query.Query)
+                .Where(query => !string.IsNullOrWhiteSpace(query))
+                .Distinct(StringComparer.Ordinal)
+                .ToList()
+            : [];
         var jsonTrustLexicalContextCache = new JsonTrustLexicalContextCache();
+        var parserGuardLexicalContextCache = new ParserGuardLexicalContextCache();
         foreach (var fileRows in rows.GroupBy(row => row.Result.Path, StringComparer.Ordinal))
         {
             var groupedRows = fileRows.ToList();
-            var maximumRequiredLine = groupedRows
-                .Select(GetJsonTrustRequiredLine)
+            var maximumJsonTrustRequiredLine = groupedRows
+                .Select(row => appliesJsonTrustBoundary ? GetJsonTrustRequiredLine(row) : 0)
                 .Where(line => line > 0 && line <= CSharpSemanticTokenClassifier.DefaultExcerptSourceLineLimit)
                 .DefaultIfEmpty()
                 .Max();
-            if (maximumRequiredLine > 0)
+            if (maximumJsonTrustRequiredLine > 0)
             {
                 _ = GetJsonTrustLexicalContext(
                     reader,
                     groupedRows[0],
-                    maximumRequiredLine,
+                    maximumJsonTrustRequiredLine,
                     jsonTrustLexicalContextCache);
+            }
+            var maximumParserGuardRequiredLine = groupedRows
+                .Select(row => parserGuardClassifier != null ? GetParserGuardRequiredLine(row) : 0)
+                .Where(line => line > 0 && line <= CSharpSemanticTokenClassifier.DefaultExcerptSourceLineLimit)
+                .DefaultIfEmpty()
+                .Max();
+            if (maximumParserGuardRequiredLine > 0)
+            {
+                _ = GetParserGuardLexicalContext(
+                    reader,
+                    groupedRows[0],
+                    maximumParserGuardRequiredLine,
+                    parserGuardLexicalContextCache);
             }
             foreach (var row in groupedRows)
             {
-                AddSearchRecipeAuditClassification(
-                    row,
-                    ClassifyJsonTrustBoundary(
-                        jsonTrustBoundaryClassifier,
-                        recipeQuery.JsonTrustDirection.Value,
+                if (parserGuardClassifier != null)
+                {
+                    AddSearchRecipeAuditClassification(
                         row,
-                        reader,
-                        jsonTrustLexicalContextCache,
-                        selectedJsonTrustQueries));
+                        ClassifyParserGuardEvidence(
+                            parserGuardClassifier,
+                            recipeQuery.Query,
+                            row,
+                            reader,
+                            parserGuardLexicalContextCache));
+                }
+                if (appliesJsonTrustBoundary)
+                {
+                    AddSearchRecipeAuditClassification(
+                        row,
+                        ClassifyJsonTrustBoundary(
+                            jsonTrustBoundaryClassifier!,
+                            recipeQuery.JsonTrustDirection!.Value,
+                            row,
+                            reader,
+                            jsonTrustLexicalContextCache,
+                            selectedJsonTrustQueries));
+                }
             }
         }
     }
