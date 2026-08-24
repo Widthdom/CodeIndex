@@ -244,11 +244,13 @@ public static partial class ReferenceExtractor
             return false;
         }
 
-        sourceContext = originalLine.Trim();
         if (request.Language
-                is "cmake" or "justfile" or "makefile" or "msbuild"
-            && sourceContext.Length > 0)
+            is "cmake" or "justfile" or "makefile" or "msbuild")
         {
+            sourceContext = originalLine;
+            if (string.IsNullOrWhiteSpace(sourceContext))
+                return false;
+
             BuildAutomationReferenceExtractor.EmitReferences(
                 request.Language,
                 originalLine,
@@ -261,11 +263,15 @@ public static partial class ReferenceExtractor
             return true;
         }
 
-        if (request.Language is not ("graphql" or "html" or "markdown")
-            || sourceContext.Length == 0)
+        if (request.Language is not ("graphql" or "html" or "markdown"))
         {
+            sourceContext = originalLine;
             return false;
         }
+
+        sourceContext = originalLine;
+        if (string.IsNullOrWhiteSpace(sourceContext))
+            return false;
 
         MarkupSchemaReferenceExtractor.EmitReferences(
             request.Language,

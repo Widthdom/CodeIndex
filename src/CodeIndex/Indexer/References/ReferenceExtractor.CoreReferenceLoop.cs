@@ -162,7 +162,12 @@ public static partial class ReferenceExtractor
             if ((lineIndex & 0x3f) == 0)
                 loop.Request.CancellationToken.ThrowIfCancellationRequested();
 
+            var referenceStartIndex = loop.References.Count;
             var flow = ProcessCoreReferenceLine(loop, state, lineIndex);
+            NormalizeRawSourceLineContexts(
+                loop.Preparation.Lines,
+                loop.References,
+                referenceStartIndex);
             if (flow == CoreReferenceLineFlow.StopExtraction)
                 break;
         }

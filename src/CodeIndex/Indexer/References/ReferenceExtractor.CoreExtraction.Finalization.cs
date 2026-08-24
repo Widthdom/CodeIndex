@@ -26,6 +26,7 @@ public static partial class ReferenceExtractor
                 loop.Seen,
                 request.FileId);
 
+            var pendingReferenceStartIndex = references.Count;
             CSharpReferenceExtractor
                 .FlushPendingMultiLineTypePatternReference(
                     ref pendingCSharpMultiLineTypePattern,
@@ -36,6 +37,10 @@ public static partial class ReferenceExtractor
                     references,
                     loop.Seen,
                     request.FileId);
+            NormalizeRawSourceLineContexts(
+                loop.Preparation.Lines,
+                references,
+                pendingReferenceStartIndex);
         }
 
         if (request.Language == "csharp")

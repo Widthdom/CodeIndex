@@ -1195,6 +1195,81 @@ public class PerformanceTests : IDisposable
 #else
     [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
 #endif
+    public void ReferenceExtraction_CallFreePaddedLines_DefersContextMaterialization()
+    {
+        const int lineCount = 4_096;
+        var fixtures = new[]
+        {
+            (
+                Language: "csharp",
+                Content: "class Values\n{\n"
+                    + string.Join(
+                        '\n',
+                        Enumerable.Range(0, lineCount)
+                            .Select(index => $"    private int value_{index};    "))
+                    + "\n}"),
+            (
+                Language: "python",
+                Content: string.Join(
+                    '\n',
+                    Enumerable.Range(0, lineCount)
+                        .Select(index => $"    value_{index} = {index}    "))),
+            (
+                Language: "erlang",
+                Content: string.Join(
+                    '\n',
+                    Enumerable.Range(0, lineCount)
+                        .Select(index => $"    value_{index} = {index}.    "))),
+            (
+                Language: "solidity",
+                Content: "contract Values {\n"
+                    + string.Join(
+                        '\n',
+                        Enumerable.Range(0, lineCount)
+                            .Select(index => $"    uint256 value_{index};    "))
+                    + "\n}"),
+        }
+        .Select(fixture => (
+            fixture.Language,
+            fixture.Content,
+            Symbols: SymbolExtractor.Extract(
+                1,
+                fixture.Language,
+                fixture.Content)))
+        .ToArray();
+
+        foreach (var fixture in fixtures)
+        {
+            var references = ReferenceExtractor.Extract(
+                1,
+                fixture.Language,
+                fixture.Content,
+                fixture.Symbols);
+            Assert.Empty(references);
+        }
+
+        var allocatedBytes = MeasureAllocatedBytes(() =>
+        {
+            foreach (var fixture in fixtures)
+            {
+                _ = ReferenceExtractor.Extract(
+                    1,
+                    fixture.Language,
+                    fixture.Content,
+                    fixture.Symbols);
+            }
+        });
+
+        Assert.True(
+            allocatedBytes < 10_500_000,
+            $"Call-free padded reference extraction allocated {allocatedBytes:N0} bytes");
+    }
+
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
     public void ReferenceExtraction_CSharpNoAliasDenseReferences_StaysWithinAllocationBudget()
     {
         var content = BuildCSharpNoAliasReferenceFixture(referenceCount: 12_000);
