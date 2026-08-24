@@ -1594,8 +1594,13 @@ Recipe and named-query JSON include per-query counts, `top_files`, and
 when a recipe classifier can classify an individual result, and query payloads
 include `classifier_counts` when classified rows are present. For example,
 `phrase-risk-patterns/task-result-property-review` separates DTO/result-wrapper
-`.Result` properties from Task/ValueTask blocking waits. Recipe JSON and
-compact output also return `next_cursor` when a single selected recipe query is
+`.Result` properties from Task/ValueTask blocking waits. Recipe JSON and compact
+output also classify every retained `json-parse-apis` row with exactly
+one `parser_guard_evidence` value. A bound tied to the consumed payload takes
+precedence over streaming/cancellation for the same operation; otherwise the
+classifier reports streaming/cancellation evidence or the non-authoritative
+`unbounded_materialization` triage fallback without removing or reordering hits.
+These output shapes also return `next_cursor` when a single selected recipe query is
 truncated. Recipe run summaries and count summaries include `query_freshness`.
 The compatibility fields `positive_evidence_query_count` and
 `zero_result_query_count` still describe result cardinality, while
@@ -5252,7 +5257,12 @@ query ごとに grouped された 1 つの aggregate JSON payload を出力し�
 recipe JSON row は `audit_classifications` を含むことがあり、分類済み row がある query payload は
 `classifier_counts` を含みます。例えば `phrase-risk-patterns/task-result-property-review` は
 DTO / result-wrapper の `.Result` property と Task / ValueTask の blocking wait を分離します。
-recipe の JSON / compact output は、単一の recipe query が truncated された場合に `next_cursor`
+recipe の JSON / compact output は、保持された `json-parse-apis` row すべてに対しても
+`parser_guard_evidence` を必ず1つ付与します。同じ operation では、消費される payload に結び付く
+bound を streaming / cancellation より優先し、それ以外では streaming / cancellation evidence または
+非 authoritative な triage fallback の `unbounded_materialization` を報告します。hit の削除や並べ替えは
+行いません。
+これらの output は、単一の recipe query が truncated された場合に `next_cursor`
 も返します。`--format compact` は
 summary、query count、query ごとの count、`truncated` flag、該当する場合の `next_cursor`
 を返します。recipe run summary と count summary は `query_freshness` も返します。

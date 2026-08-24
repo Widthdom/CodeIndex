@@ -95,6 +95,8 @@ internal sealed record CliFlag
     public CliOptionValueDomain? ValueDomain { get; init; }
     public IReadOnlyDictionary<string, CliOptionValueDomain> CommandValueDomains { get; init; } =
         new Dictionary<string, CliOptionValueDomain>(StringComparer.Ordinal);
+    public IReadOnlyDictionary<string, IReadOnlyDictionary<string, CliOptionValueDomain>> SubcommandValueDomains { get; init; } =
+        new Dictionary<string, IReadOnlyDictionary<string, CliOptionValueDomain>>(StringComparer.Ordinal);
     public IReadOnlyDictionary<string, string> CommandValuePlaceholders { get; init; } =
         new Dictionary<string, string>(StringComparer.Ordinal);
     public IReadOnlyDictionary<string, CliOptionValueKind> CommandValueKinds { get; init; } =
@@ -132,6 +134,7 @@ internal sealed record CliFlag
         ValuePlaceholder is not null
         || ValueDomain is not null
         || CommandValueDomains.Count > 0
+        || SubcommandValueDomains.Count > 0
         || CommandValuePlaceholders.Count > 0;
     public bool AppliesTo(string command) => PrimaryCommands.Contains(command);
     public bool IsAcceptedBy(string command) => AppliesTo(command) || AlsoAcceptedBy.Contains(command);
@@ -148,27 +151,33 @@ internal sealed record CliFlag
             ? commandDescription
             : Description;
 
-    public CliOptionValueDomain? GetValueDomain(string command)
+    public CliOptionValueDomain? GetValueDomain(string command, string? subcommand = null)
     {
+        if (subcommand is not null
+            && SubcommandValueDomains.TryGetValue(command, out var commandSubcommandDomains)
+            && commandSubcommandDomains.TryGetValue(subcommand, out var subcommandDomain))
+        {
+            return subcommandDomain;
+        }
         if (CommandValueDomains.TryGetValue(command, out var commandDomain))
             return commandDomain;
         return ValueDomain;
     }
 
-    public CliOptionValueKind GetValueKind(string command)
+    public CliOptionValueKind GetValueKind(string command, string? subcommand = null)
     {
         if (CommandValueKinds.TryGetValue(command, out var commandValueKind))
             return commandValueKind;
-        return GetValueDomain(command) is null
+        return GetValueDomain(command, subcommand) is null
             ? ValueKind
             : CliOptionValueKind.Finite;
     }
 
-    public string? GetValuePlaceholder(string command)
+    public string? GetValuePlaceholder(string command, string? subcommand = null)
     {
         if (CommandValuePlaceholders.TryGetValue(command, out var commandPlaceholder))
             return commandPlaceholder;
-        return GetValueDomain(command)?.ValuePlaceholder ?? ValuePlaceholder;
+        return GetValueDomain(command, subcommand)?.ValuePlaceholder ?? ValuePlaceholder;
     }
 }
 
@@ -333,6 +342,13 @@ internal static class CliFlagSchema
     [
         "index", "backfill-fold", "optimize", "vacuum", "search", "recipes", "audit", "definition", "goto", "references", "callers", "callees",
         "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status",
+        "validate", "validate-config", "deps", "impact", "unused", "hotspots", "suggestions", "languages", "db", "report", "upgrade", "doctor", "license",
+    ];
+
+    private static readonly string[] PrettyCommands =
+    [
+        "index", "backfill-fold", "optimize", "vacuum", "search", "recipes", "audit", "definition", "goto", "references", "callers", "callees",
+        "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status",
         "validate", "deps", "impact", "unused", "hotspots", "suggestions", "languages", "db", "report", "upgrade", "doctor", "license",
     ];
 
@@ -418,7 +434,7 @@ internal static class CliFlagSchema
             new() { Name = "--max-input-lines", ValuePlaceholder = "<n>", Description = $"Batch: input-line budget (default {QueryCommandRunner.BatchDefaultInputLines}, max {QueryCommandRunner.BatchMaxInputLines})", PrimaryCommands = Set("batch") },
             new() { Name = "--max-output-chars", ValuePlaceholder = "<n>", Description = $"Batch JSON-summary output budget (default {QueryCommandRunner.BatchDefaultTotalOutputChars}, max {QueryCommandRunner.BatchMaxTotalOutputChars})", PrimaryCommands = Set("batch") },
             new() { Name = "--parallel", ValuePlaceholder = "<n>", Description = $"Batch JSON-summary worker count (default 1, max {QueryCommandRunner.BatchMaxParallelism}); results retain input order", PrimaryCommands = Set("batch") },
-            new() { Name = "--pretty", Description = CliOutputFormatCapabilities.PrettyDescription, PrimaryCommands = Set(JsonCommands), TopLevel = true },
+            new() { Name = "--pretty", Description = CliOutputFormatCapabilities.PrettyDescription, PrimaryCommands = Set(PrettyCommands), TopLevel = true },
             new() { Name = "--compact", Description = "AI-oriented compact JSON with capped list sections and truncation metadata", PrimaryCommands = Set(CompactJsonCommands) },
             new() { Name = "--format", Description = CliOutputFormatCapabilities.FormatDescription, PrimaryCommands = Set(FormatCommands), CommandValueDomains = OutputFormatValueDomains },
             new() { Name = "--quiet", ShortName = "-q", Description = "Suppress informational stderr output; errors still print", PrimaryCommands = Set(AllCommands.ToArray()), TopLevel = true },
@@ -533,7 +549,20 @@ internal static class CliFlagSchema
             new() { Name = "--issue-title", ValuePlaceholder = "<title>", Description = "Search issue-drafts: override the title for an ad hoc search draft", PrimaryCommands = Set("search") },
             new() { Name = "--issue-label", ValuePlaceholder = "<label>", Description = "Search issue-drafts: add a label hint; repeat or comma-separate values", PrimaryCommands = Set("search") },
             new() { Name = "--cursor", ValuePlaceholder = "<cursor>", Description = "Opaque continuation cursor returned as next_cursor (or grouped symbols family_members_next_cursor) and bound to its query, options, family when applicable, and index generation; find cursors resume at match boundaries", PrimaryCommands = Set(CursorCommands) },
-            new() { Name = "--status", ValueDomain = Values(["all", "draft", "submitted_pending_triage", "open_in_upstream", "resolved_in_upstream", "wont_fix", "duplicate", "superseded", "submitted", "unsubmitted"]), Description = "Suggestions: filter by suggestion status", PrimaryCommands = Set("suggestions") },
+            new()
+            {
+                Name = "--status",
+                ValueDomain = Values(SuggestionsCommandRunner.StatusFilterValues),
+                SubcommandValueDomains = new Dictionary<string, IReadOnlyDictionary<string, CliOptionValueDomain>>(StringComparer.Ordinal)
+                {
+                    ["suggestions"] = new Dictionary<string, CliOptionValueDomain>(StringComparer.Ordinal)
+                    {
+                        ["update"] = Values(SuggestionsCommandRunner.ManualStatusTransitionValues),
+                    },
+                },
+                Description = "Suggestions: filter by suggestion status",
+                PrimaryCommands = Set("suggestions"),
+            },
             new() { Name = "--category", ValueDomain = Values(["symbol_extraction", "reference_extraction", "search_ranking", "language_support", "output_format", "crash_report", "unexpected_error", "other"]), Description = "Suggestions: filter by category", PrimaryCommands = Set("suggestions") },
             new() { Name = "--agent", ValuePlaceholder = "<agent>", Description = "Suggestions: filter by agent", PrimaryCommands = Set("suggestions") },
             new() { Name = "--actor", ValuePlaceholder = "<name>", Description = "Suggestions update: actor recorded for a manual status transition", PrimaryCommands = Set("suggestions") },
@@ -751,17 +780,26 @@ internal static class CliFlagSchema
             string.Equals(flag.Name, flagName, StringComparison.Ordinal)
             && flag.IsAcceptedBy(command));
 
-    public static IReadOnlyList<string> GetCanonicalValuesForCommand(string command, string flagName) =>
-        GetFlag(command, flagName)?.GetValueDomain(command)?.CanonicalValues ?? [];
+    public static IReadOnlyList<string> GetCanonicalValuesForCommand(
+        string command,
+        string flagName,
+        string? subcommand = null) =>
+        GetFlag(command, flagName)?.GetValueDomain(command, subcommand)?.CanonicalValues ?? [];
 
-    public static string? GetValuePlaceholderForCommand(string command, string flagName) =>
-        GetFlag(command, flagName)?.GetValuePlaceholder(command);
+    public static string? GetValuePlaceholderForCommand(
+        string command,
+        string flagName,
+        string? subcommand = null) =>
+        GetFlag(command, flagName)?.GetValuePlaceholder(command, subcommand);
 
-    public static CliOptionValueKind? GetValueKindForCommand(string command, string flagName)
+    public static CliOptionValueKind? GetValueKindForCommand(
+        string command,
+        string flagName,
+        string? subcommand = null)
     {
         var flag = GetFlag(command, flagName);
         return flag is { IsValueBearing: true }
-            ? flag.GetValueKind(command)
+            ? flag.GetValueKind(command, subcommand)
             : null;
     }
 
@@ -769,9 +807,10 @@ internal static class CliFlagSchema
         string command,
         string flagName,
         string rawValue,
-        out string normalizedValue)
+        out string normalizedValue,
+        string? subcommand = null)
     {
-        var domain = GetFlag(command, flagName)?.GetValueDomain(command);
+        var domain = GetFlag(command, flagName)?.GetValueDomain(command, subcommand);
         if (domain is not null)
             return domain.TryNormalize(rawValue, out normalizedValue);
 

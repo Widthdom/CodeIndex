@@ -78,31 +78,52 @@ internal static class ConsoleCompletionRenderer
         sb.Append("# Regenerate this script after upgrading cdidx.\n");
         sb.Append("_cdidx() {\n");
         sb.Append("    local cur prev commands\n");
-        sb.Append("    local cmd nested i skip_next\n");
+        sb.Append("    local cmd nested i skip_next cmd_index\n");
         sb.Append("    cur=\"${COMP_WORDS[COMP_CWORD]}\"\n");
         sb.Append("    prev=\"${COMP_WORDS[COMP_CWORD-1]}\"\n");
-        sb.Append("    cmd=\"${COMP_WORDS[1]}\"\n");
+        sb.Append("    cmd=\"\"\n");
+        sb.Append("    cmd_index=0\n");
+        sb.Append("    skip_next=0\n");
+        sb.Append("    for ((i=1; i<COMP_CWORD; i++)); do\n");
+        sb.Append("        if [ $skip_next -eq 1 ]; then skip_next=0; continue; fi\n");
+        sb.Append("        case \"${COMP_WORDS[i]}\" in\n");
+        sb.Append($"            {string.Join('|', GetTopLevelValueTakingFlagNames())}) skip_next=1 ;;\n");
+        sb.Append($"            {string.Join('|', GetTopLevelValueTakingFlagNames().Select(name => $"{name}=*"))}) ;;\n");
+        sb.Append($"            {string.Join('|', GetTopLevelFlagOnlyNames())}) ;;\n");
+        sb.Append("            -*) ;;\n");
+        sb.Append("            *) cmd=\"${COMP_WORDS[i]}\"; cmd_index=$i; break ;;\n");
+        sb.Append("        esac\n");
+        sb.Append("    done\n");
         sb.Append("    nested=\"\"\n");
-        sb.Append("    if [ \"$cmd\" = \"hooks\" ]; then\n");
-        sb.Append("        nested=\"\"\n");
-        sb.Append("        skip_next=0\n");
-        sb.Append("        for ((i=2; i<COMP_CWORD; i++)); do\n");
-        sb.Append("            if [ $skip_next -eq 1 ]; then skip_next=0; continue; fi\n");
-        sb.Append("            case \"${COMP_WORDS[i]}\" in\n");
-        foreach (var flagName in GetValueTakingFlagNamesForNestedCommand("hooks"))
+        sb.Append("    case \"$cmd\" in\n");
+        foreach (var (command, _) in CliCommandMetadata.CommandSubcommands)
         {
-            sb.Append($"                {flagName}) skip_next=1 ;;\n");
-            sb.Append($"                {flagName}=*) ;;\n");
+            sb.Append($"        {command})\n");
+            sb.Append("            skip_next=0\n");
+            sb.Append("            for ((i=cmd_index+1; i<COMP_CWORD; i++)); do\n");
+            sb.Append("                if [ $skip_next -eq 1 ]; then skip_next=0; continue; fi\n");
+            sb.Append("                case \"${COMP_WORDS[i]}\" in\n");
+            foreach (var flagName in GetValueTakingFlagNamesForNestedCommand(command))
+            {
+                sb.Append($"                    {flagName}) skip_next=1 ;;\n");
+                sb.Append($"                    {flagName}=*) ;;\n");
+            }
+            sb.Append($"                    {string.Join('|', GetNestedSubcommandNames(command))}) nested=\"${{COMP_WORDS[i]}}\"; break ;;\n");
+            sb.Append("                esac\n");
+            sb.Append("            done\n");
+            sb.Append("            ;;\n");
         }
-        sb.Append($"                {string.Join('|', GetNestedSubcommandNames("hooks"))}) nested=\"${{COMP_WORDS[i]}}\"; break ;;\n");
-        sb.Append("            esac\n");
-        sb.Append("        done\n");
-        sb.Append("    fi\n");
+        sb.Append("    esac\n");
         sb.Append($"    commands=\"{cmds}\"\n");
         sb.Append("\n");
-        sb.Append("    if [ $COMP_CWORD -eq 1 ]; then\n");
-        sb.Append($"        COMPREPLY=($(compgen -W \"$commands --help --version --license {topLevelFlags}\" -- \"$cur\"))\n");
-        sb.Append("        return\n");
+        sb.Append("    if [ $cmd_index -eq 0 ]; then\n");
+        sb.Append("        case \"$prev\" in\n");
+        sb.Append($"            {string.Join('|', GetTopLevelValueTakingFlagNames())}) ;;\n");
+        sb.Append("            *)\n");
+        sb.Append($"                COMPREPLY=($(compgen -W \"$commands --help --version --license {topLevelFlags}\" -- \"$cur\"))\n");
+        sb.Append("                return\n");
+        sb.Append("                ;;\n");
+        sb.Append("        esac\n");
         sb.Append("    fi\n");
         sb.Append("\n");
         sb.Append("    case \"$prev\" in\n");
@@ -122,12 +143,15 @@ internal static class ConsoleCompletionRenderer
         sb.Append($"        {BuildBashValueFlagPattern(kind => kind == CliOptionValueKind.SymbolKind)}) COMPREPLY=($(compgen -W \"{kinds}\" -- \"$cur\")) ;;\n");
         foreach (var (flag, values) in GetEnumValueCompletions().Where(item => item.Flag != "--format"))
             sb.Append($"        {flag}) COMPREPLY=($(compgen -W \"{string.Join(' ', values)}\" -- \"$cur\")) ;;\n");
-        foreach (var flagGroup in GetCommandEnumValueCompletions().GroupBy(item => item.Flag, StringComparer.Ordinal))
+        foreach (var flagGroup in GetContextEnumValueCompletions().GroupBy(item => item.Flag, StringComparer.Ordinal))
         {
             sb.Append($"        {flagGroup.Key})\n");
-            sb.Append("            case \"$cmd\" in\n");
-            foreach (var (command, _, values) in flagGroup)
-                sb.Append($"                {command}) COMPREPLY=($(compgen -W \"{string.Join(' ', values)}\" -- \"$cur\")) ;;\n");
+            sb.Append("            case \"$cmd|$nested\" in\n");
+            foreach (var (command, subcommand, _, values) in flagGroup.OrderByDescending(item => item.Subcommand is not null))
+            {
+                var contextPattern = subcommand is null ? $"{command}\\|*" : $"{command}\\|{subcommand}";
+                sb.Append($"                {contextPattern}) COMPREPLY=($(compgen -W \"{string.Join(' ', values)}\" -- \"$cur\")) ;;\n");
+            }
             sb.Append("            esac ;;\n");
         }
         sb.Append("        --format)\n");
@@ -252,28 +276,49 @@ internal static class ConsoleCompletionRenderer
         sb.Append("    case $state in\n");
         sb.Append("        cmds) _describe 'command' commands ;;\n");
         sb.Append("        args)\n");
-        sb.Append("            local subcmd nested i skip_next\n");
-        sb.Append("            subcmd=$words[2]\n");
-        sb.Append("            nested=''\n");
-        sb.Append("            if [[ $subcmd == hooks ]]; then\n");
-        sb.Append("                skip_next=0\n");
-        sb.Append("                for (( i = 3; i < CURRENT; i++ )); do\n");
-        sb.Append("                    if (( skip_next )); then skip_next=0; continue; fi\n");
-        sb.Append("                    case $words[i] in\n");
-        foreach (var flagName in GetValueTakingFlagNamesForNestedCommand("hooks"))
-        {
-            sb.Append($"                        ({flagName}) skip_next=1 ;;\n");
-            sb.Append($"                        ({flagName}=*) ;;\n");
-        }
-        sb.Append($"                        ({string.Join('|', GetNestedSubcommandNames("hooks"))}) nested=$words[i]; break ;;\n");
-        sb.Append("                    esac\n");
-        sb.Append("                done\n");
+        sb.Append("            local subcmd nested i skip_next cmd_index\n");
+        sb.Append("            subcmd=''\n");
+        sb.Append("            cmd_index=0\n");
+        sb.Append("            skip_next=0\n");
+        sb.Append("            for (( i = 2; i < CURRENT; i++ )); do\n");
+        sb.Append("                if (( skip_next )); then skip_next=0; continue; fi\n");
+        sb.Append("                case $words[i] in\n");
+        sb.Append($"                    ({string.Join('|', GetTopLevelValueTakingFlagNames())}) skip_next=1 ;;\n");
+        sb.Append($"                    ({string.Join('|', GetTopLevelValueTakingFlagNames().Select(name => $"{name}=*"))}) ;;\n");
+        sb.Append($"                    ({string.Join('|', GetTopLevelFlagOnlyNames())}) ;;\n");
+        sb.Append("                    (-*) ;;\n");
+        sb.Append("                    (*) subcmd=$words[i]; cmd_index=$i; break ;;\n");
+        sb.Append("                esac\n");
+        sb.Append("            done\n");
+        sb.Append("            if [[ -z $subcmd ]]; then\n");
+        sb.Append("                _describe 'command' commands\n");
+        sb.Append("                return\n");
         sb.Append("            fi\n");
+        sb.Append("            nested=''\n");
+        sb.Append("            case $subcmd in\n");
+        foreach (var (command, _) in CliCommandMetadata.CommandSubcommands)
+        {
+            sb.Append($"                ({command})\n");
+            sb.Append("                    skip_next=0\n");
+            sb.Append("                    for (( i = cmd_index + 1; i < CURRENT; i++ )); do\n");
+            sb.Append("                        if (( skip_next )); then skip_next=0; continue; fi\n");
+            sb.Append("                        case $words[i] in\n");
+            foreach (var flagName in GetValueTakingFlagNamesForNestedCommand(command))
+            {
+                sb.Append($"                            ({flagName}) skip_next=1 ;;\n");
+                sb.Append($"                            ({flagName}=*) ;;\n");
+            }
+            sb.Append($"                            ({string.Join('|', GetNestedSubcommandNames(command))}) nested=$words[i]; break ;;\n");
+            sb.Append("                        esac\n");
+            sb.Append("                    done\n");
+            sb.Append("                    ;;\n");
+        }
+        sb.Append("            esac\n");
         foreach (var (command, subcommands) in CliCommandMetadata.CommandSubcommands)
         {
             var needsSubcommand = command == "hooks"
                 ? "$subcmd == hooks && -z $nested && $PREFIX != -*"
-                : $"$subcmd == {command} && $CURRENT -le 3";
+                : $"$subcmd == {command} && -z $nested && $CURRENT -le $(( cmd_index + 2 ))";
             sb.Append($"            if [[ {needsSubcommand} ]]; then\n");
             sb.Append("                local -a subcommands\n");
             sb.Append("                subcommands=(\n");
@@ -285,24 +330,20 @@ internal static class ConsoleCompletionRenderer
             sb.Append("                return\n");
             sb.Append("            fi\n");
         }
-        for (var i = 0; i < EnumeratedCompletionCommands.Length; i++)
+        var zshBranches = new List<(string Condition, string Command, string? Subcommand)>();
+        foreach (var command in EnumeratedCompletionCommands)
         {
-            var command = EnumeratedCompletionCommands[i];
-            var keyword = i == 0 ? "if" : "elif";
-            if (command == "hooks")
+            foreach (var subcommand in GetCompletionContextSubcommands(command))
             {
-                sb.Append($"            {keyword} [[ $subcmd == hooks && $nested == install ]]; then\n");
-                AppendZshArguments(sb, BuildZshArgsForCommand("hooks", langs, kinds, "install"));
-                sb.Append("            elif [[ $subcmd == hooks && $nested == uninstall ]]; then\n");
-                AppendZshArguments(sb, BuildZshArgsForCommand("hooks", langs, kinds, "uninstall"));
-                sb.Append("            elif [[ $subcmd == hooks ]]; then\n");
-                AppendZshArguments(sb, BuildZshArgsForCommand("hooks", langs, kinds, "status"));
+                zshBranches.Add(($"$subcmd == {command} && $nested == {subcommand}", command, subcommand));
             }
-            else
-            {
-                sb.Append($"            {keyword} [[ $subcmd == {command} ]]; then\n");
-                AppendZshArguments(sb, BuildZshArgsForCommand(command, langs, kinds));
-            }
+            zshBranches.Add(($"$subcmd == {command}", command, command == "hooks" ? "status" : null));
+        }
+        for (var i = 0; i < zshBranches.Count; i++)
+        {
+            var (condition, command, subcommand) = zshBranches[i];
+            sb.Append($"            {(i == 0 ? "if" : "elif")} [[ {condition} ]]; then\n");
+            AppendZshArguments(sb, BuildZshArgsForCommand(command, langs, kinds, subcommand));
         }
         sb.Append("            else\n");
         AppendZshArguments(sb, BuildZshGenericArgs(langs, kinds));
@@ -322,7 +363,7 @@ internal static class ConsoleCompletionRenderer
     {
         var args = new List<string>();
         foreach (var flag in CliFlagSchema.GetCompletionFlagsForCommand(command, subcommand))
-            args.AddRange(FormatZshArguments(flag, langs, kinds, command));
+            args.AddRange(FormatZshArguments(flag, langs, kinds, command, subcommand));
         // Append a trailing positional placeholder so zsh suggests path/query completion after
         // the flags - but only for commands that actually accept a positional argument. `status`,
         // `db`, `hotspots`, etc. would reject anything typed there, so emitting no placeholder
@@ -368,21 +409,32 @@ internal static class ConsoleCompletionRenderer
         return args;
     }
 
-    private static IEnumerable<string> FormatZshArguments(CliFlag flag, string langs, string kinds, string? command = null)
+    private static IEnumerable<string> FormatZshArguments(
+        CliFlag flag,
+        string langs,
+        string kinds,
+        string? command = null,
+        string? subcommand = null)
     {
-        yield return FormatZshArgument(flag.Name, flag, langs, kinds, command);
+        yield return FormatZshArgument(flag.Name, flag, langs, kinds, command, subcommand);
         if (flag.ShortName is not null)
-            yield return FormatZshArgument(flag.ShortName, flag, langs, kinds, command);
+            yield return FormatZshArgument(flag.ShortName, flag, langs, kinds, command, subcommand);
     }
 
-    private static string FormatZshArgument(string name, CliFlag flag, string langs, string kinds, string? command)
+    private static string FormatZshArgument(
+        string name,
+        CliFlag flag,
+        string langs,
+        string kinds,
+        string? command,
+        string? subcommand)
     {
         var desc = flag.GetDescription(command ?? string.Empty).Replace("'", "''");
         if (!flag.IsValueBearing)
             return $"'{name}[{desc}]'";
 
-        var valueKind = flag.GetValueKind(command ?? string.Empty);
-        var valuePlaceholder = flag.GetValuePlaceholder(command ?? string.Empty);
+        var valueKind = flag.GetValueKind(command ?? string.Empty, subcommand);
+        var valuePlaceholder = flag.GetValuePlaceholder(command ?? string.Empty, subcommand);
         var valueSpec = valueKind switch
         {
             _ when IsPathCompletionKind(valueKind) && flag.SupplementalCompletionValues.Count > 0 =>
@@ -391,8 +443,8 @@ internal static class ConsoleCompletionRenderer
             CliOptionValueKind.Language => $"language:({langs})",
             CliOptionValueKind.SymbolKind => $"kind:({kinds})",
             _ when flag.Name == "--format" && command is not null && GetFormatValues(command) is { } formats => $"value:({string.Join(' ', formats)})",
-            CliOptionValueKind.Finite when GetEnumValues(flag, command) is { } values =>
-                $"{flag.GetValueDomain(command ?? string.Empty)?.CompletionLabel ?? "value"}:({string.Join(' ', values)})",
+            CliOptionValueKind.Finite when GetEnumValues(flag, command, subcommand) is { } values =>
+                $"{flag.GetValueDomain(command ?? string.Empty, subcommand)?.CompletionLabel ?? "value"}:({string.Join(' ', values)})",
             CliOptionValueKind.Repository => "repository",
             _ when valuePlaceholder is "<n>" or "<line>" => "number",
             _ when valuePlaceholder == "<id>" => "id",
@@ -424,14 +476,68 @@ internal static class ConsoleCompletionRenderer
         {
             $"# cdidx fish completions generated for version {ConsoleUi.LoadVersion()}",
             "# Regenerate this script after upgrading cdidx.",
+            "function __fish_cdidx_context",
+            "    set -l tokens (commandline -opc)",
+            "    set -e tokens[1]",
+            "    set -l cmd ''",
+            "    set -l nested ''",
+            "    set -l skip_next 0",
+            "    for token in $tokens",
+            "        if test $skip_next -eq 1",
+            "            set skip_next 0",
+            "            continue",
+            "        end",
+            "        if test -z \"$cmd\"",
+            "            switch $token",
+            $"                case {FormatFishPatterns(GetTopLevelValueTakingFlagNames())}",
+            "                    set skip_next 1",
+            $"                case {FormatFishPatterns(GetTopLevelValueTakingFlagNames().Select(name => $"{name}=*"))}",
+            $"                case {FormatFishPatterns(GetTopLevelFlagOnlyNames())}",
+            "                case '-*'",
+            "                case '*'",
+            "                    set cmd $token",
+            "            end",
+            "            continue",
+            "        end",
+            "        switch $cmd",
         };
+        foreach (var (command, _) in CliCommandMetadata.CommandSubcommands)
+        {
+            lines.Add($"            case '{command}'");
+            lines.Add("                switch $token");
+            lines.Add($"                    case {FormatFishPatterns(GetValueTakingFlagNamesForNestedCommand(command))}");
+            lines.Add("                        set skip_next 1");
+            lines.Add($"                    case {FormatFishPatterns(GetValueTakingFlagNamesForNestedCommand(command).Select(name => $"{name}=*"))}");
+            lines.Add($"                    case {FormatFishPatterns(GetNestedSubcommandNames(command))}");
+            lines.Add("                        set nested $token");
+            lines.Add("                end");
+        }
+        lines.AddRange(
+        [
+            "        end",
+            "    end",
+            "    echo \"$cmd|$nested\"",
+            "end",
+            "function __fish_cdidx_needs_command",
+            "    set -l context (string split -m 1 '|' (__fish_cdidx_context))",
+            "    test -z \"$context[1]\"",
+            "end",
+            "function __fish_cdidx_using_command",
+            "    set -l context (string split -m 1 '|' (__fish_cdidx_context))",
+            "    contains -- $context[1] $argv",
+            "end",
+            "function __fish_cdidx_using_context --argument-names expected_command expected_nested",
+            "    set -l context (string split -m 1 '|' (__fish_cdidx_context))",
+            "    test \"$context[1]\" = \"$expected_command\"; and test \"$context[2]\" = \"$expected_nested\"",
+            "end",
+        ]);
         foreach (var cmd in ShellCommandNames)
-            lines.Add($"complete -c cdidx -n '__fish_use_subcommand' -a '{cmd}' -d '{cmd} command'");
+            lines.Add($"complete -c cdidx -n '__fish_cdidx_needs_command' -a '{cmd}' -d '{cmd} command'");
         foreach (var (command, subcommands) in CliCommandMetadata.CommandSubcommands)
-            lines.Add($"complete -c cdidx -n '__fish_seen_subcommand_from {command}' -a '{string.Join(' ', subcommands)}' -d '{command} subcommand'");
-        lines.Add("complete -c cdidx -n '__fish_use_subcommand' -l help -d 'Show help'");
-        lines.Add("complete -c cdidx -n '__fish_use_subcommand' -l version -d 'Show version'");
-        lines.Add("complete -c cdidx -n '__fish_use_subcommand' -l license -d 'Show license summary'");
+            lines.Add($"complete -c cdidx -n '__fish_cdidx_using_context {command}' -a '{string.Join(' ', subcommands)}' -d '{command} subcommand'");
+        lines.Add("complete -c cdidx -n '__fish_cdidx_needs_command' -l help -d 'Show help'");
+        lines.Add("complete -c cdidx -n '__fish_cdidx_needs_command' -l version -d 'Show version'");
+        lines.Add("complete -c cdidx -n '__fish_cdidx_needs_command' -l license -d 'Show license summary'");
         foreach (var flag in CliFlagSchema.GetTopLevelCompletionFlags())
         {
             var name = flag.Name.TrimStart('-');
@@ -447,7 +553,7 @@ internal static class ConsoleCompletionRenderer
                 _ => "",
             };
             var description = flag.Description.Replace("'", "\\'");
-            lines.Add($"complete -c cdidx -n '__fish_use_subcommand' -l {name}{shortName}{requiresArg}{argSpec} -d '{description}'");
+            lines.Add($"complete -c cdidx -n '__fish_cdidx_needs_command' -l {name}{shortName}{requiresArg}{argSpec} -d '{description}'");
         }
 
         // Emit one `complete` line per schema flag, joining the applicable command list into the
@@ -465,7 +571,7 @@ internal static class ConsoleCompletionRenderer
                 foreach (var command in flag.PrimaryCommands.OrderBy(c => Array.IndexOf(ShellCommandNames, c)))
                 {
                     var values = GetFormatValues(command) ?? [];
-                    lines.Add($"complete -c cdidx -n '__fish_seen_subcommand_from {command}' -l format -r -a '{string.Join(' ', values)}' -d '{flag.Description.Replace("'", "\\'")}'");
+                    lines.Add($"complete -c cdidx -n '__fish_cdidx_using_command {command}' -l format -r -a '{string.Join(' ', values)}' -d '{flag.Description.Replace("'", "\\'")}'");
                 }
                 continue;
             }
@@ -474,6 +580,7 @@ internal static class ConsoleCompletionRenderer
                 .Concat(flag.CommandValuePlaceholders.Keys)
                 .Concat(flag.CommandValueKinds.Keys)
                 .Concat(flag.CommandValueDomains.Keys)
+                .Concat(flag.SubcommandValueDomains.Keys)
                 .ToHashSet(StringComparer.Ordinal);
             var sharedCommands = flag.PrimaryCommands
                 .Where(command => !contextualCommands.Contains(command))
@@ -483,8 +590,9 @@ internal static class ConsoleCompletionRenderer
             {
                 lines.Add(BuildFishFlagCompletion(
                     flag,
-                    $"__fish_seen_subcommand_from {string.Join(' ', sharedCommands)}",
+                    $"__fish_cdidx_using_command {string.Join(' ', sharedCommands)}",
                     command: string.Empty,
+                    subcommand: null,
                     langs,
                     kinds));
             }
@@ -499,8 +607,34 @@ internal static class ConsoleCompletionRenderer
                     {
                         lines.Add(BuildFishFlagCompletion(
                             flag,
-                            $"__fish_seen_subcommand_from {command}; and __fish_seen_subcommand_from {nestedSubcommand}",
+                            $"__fish_cdidx_using_context {command} {nestedSubcommand}",
                             command,
+                            nestedSubcommand,
+                            langs,
+                            kinds));
+                    }
+                }
+                else if (flag.SubcommandValueDomains.TryGetValue(command, out var subcommandDomains))
+                {
+                    var exclusions = string.Join(
+                        "; and ",
+                        subcommandDomains.Keys
+                            .OrderBy(value => value, StringComparer.Ordinal)
+                            .Select(nestedSubcommand => $"not __fish_cdidx_using_context {command} {nestedSubcommand}"));
+                    lines.Add(BuildFishFlagCompletion(
+                        flag,
+                        $"__fish_cdidx_using_command {command}; and {exclusions}",
+                        command,
+                        subcommand: null,
+                        langs,
+                        kinds));
+                    foreach (var nestedSubcommand in subcommandDomains.Keys.OrderBy(value => value, StringComparer.Ordinal))
+                    {
+                        lines.Add(BuildFishFlagCompletion(
+                            flag,
+                            $"__fish_cdidx_using_context {command} {nestedSubcommand}",
+                            command,
+                            nestedSubcommand,
                             langs,
                             kinds));
                     }
@@ -509,8 +643,9 @@ internal static class ConsoleCompletionRenderer
                 {
                     lines.Add(BuildFishFlagCompletion(
                         flag,
-                        $"__fish_seen_subcommand_from {command}",
+                        $"__fish_cdidx_using_command {command}",
                         command,
+                        subcommand: null,
                         langs,
                         kinds));
                 }
@@ -523,6 +658,7 @@ internal static class ConsoleCompletionRenderer
         CliFlag flag,
         string predicate,
         string command,
+        string? subcommand,
         string langs,
         string kinds)
     {
@@ -534,12 +670,12 @@ internal static class ConsoleCompletionRenderer
             "group-by-name" => "Collapse same-name rows across files",
             _ => flag.GetDescription(command),
         };
-        var valueKind = flag.GetValueKind(command);
+        var valueKind = flag.GetValueKind(command, subcommand);
         var argSpec = valueKind switch
         {
             CliOptionValueKind.Language => $" -a '{langs}'",
             CliOptionValueKind.SymbolKind => $" -a '{kinds}'",
-            CliOptionValueKind.Finite when GetEnumValues(flag, command) is { } values => $" -a '{string.Join(' ', values)}'",
+            CliOptionValueKind.Finite when GetEnumValues(flag, command, subcommand) is { } values => $" -a '{string.Join(' ', values)}'",
             _ when flag.SupplementalCompletionValues.Count > 0 => $" -a '{string.Join(' ', flag.SupplementalCompletionValues)}'",
             _ => "",
         };
@@ -553,6 +689,8 @@ internal static class ConsoleCompletionRenderer
         var langs = FormatPowerShellArray(GetCompletionLangs().Split(' ', StringSplitOptions.RemoveEmptyEntries));
         var kinds = FormatPowerShellArray(GetCompletionKinds().Split(' ', StringSplitOptions.RemoveEmptyEntries));
         var topLevelFlags = FormatPowerShellArray(BuildTopLevelFlagList());
+        var topLevelValueFlags = FormatPowerShellArray(GetTopLevelValueTakingFlagNames());
+        var topLevelFlagOnly = FormatPowerShellArray(GetTopLevelFlagOnlyNames());
         var sb = new StringBuilder();
         sb.AppendLine($"# cdidx PowerShell completions generated for version {ConsoleUi.LoadVersion()}");
         sb.AppendLine("# Regenerate this script after upgrading cdidx.");
@@ -569,11 +707,13 @@ internal static class ConsoleCompletionRenderer
         foreach (var (command, values) in GetFormatValueCompletions())
             sb.AppendLine($"        '{EscapePowerShellSingleQuoted(command)}' = @({FormatPowerShellArray(values)})");
         sb.AppendLine("    }");
-        sb.AppendLine("    $commandEnumValues = @{");
-        foreach (var (command, flag, values) in GetCommandEnumValueCompletions())
-            sb.AppendLine($"        '{EscapePowerShellSingleQuoted($"{command}|{flag}")}' = @({FormatPowerShellArray(values)})");
+        sb.AppendLine("    $contextEnumValues = @{");
+        foreach (var (command, subcommand, flag, values) in GetContextEnumValueCompletions())
+            sb.AppendLine($"        '{EscapePowerShellSingleQuoted($"{command}|{subcommand}|{flag}")}' = @({FormatPowerShellArray(values)})");
         sb.AppendLine("    }");
         sb.AppendLine($"    $topLevelFlags = @({topLevelFlags})");
+        sb.AppendLine($"    $topLevelValueFlags = @({topLevelValueFlags})");
+        sb.AppendLine($"    $topLevelFlagOnly = @({topLevelFlagOnly})");
         sb.AppendLine("    $subcommands = @{");
         foreach (var (command, subcommands) in CliCommandMetadata.CommandSubcommands)
             sb.AppendLine($"        '{EscapePowerShellSingleQuoted(command)}' = @({FormatPowerShellArray(subcommands)})");
@@ -590,7 +730,37 @@ internal static class ConsoleCompletionRenderer
         sb.AppendLine("    $tokens = @($elements | ForEach-Object { $_.Extent.Text })");
         sb.AppendLine("    $lastElement = if ($elements.Count -ge 1) { $elements[$elements.Count - 1] } else { $null }");
         sb.AppendLine("    $afterLastToken = $lastElement -and $cursorPosition -gt $lastElement.Extent.EndOffset");
-        sb.AppendLine("    $subcmd = $tokens | Where-Object { $_ -ne 'cdidx' -and -not $_.StartsWith('-') } | Select-Object -First 1");
+        sb.AppendLine("    $scanLimit = if ($afterLastToken) { $tokens.Count } else { [Math]::Max(1, $tokens.Count - 1) }");
+        sb.AppendLine("    $subcmd = $null");
+        sb.AppendLine("    $subcmdIndex = -1");
+        sb.AppendLine("    $skipCommandValue = $false");
+        sb.AppendLine("    for ($i = 1; $i -lt $scanLimit; $i++) {");
+        sb.AppendLine("        $token = $tokens[$i]");
+        sb.AppendLine("        if ($skipCommandValue) { $skipCommandValue = $false; continue }");
+        sb.AppendLine("        $valueFlag = $topLevelValueFlags | Where-Object { $token -eq $_ -or $token.StartsWith(($_ + '='), [System.StringComparison]::Ordinal) } | Select-Object -First 1");
+        sb.AppendLine("        if ($valueFlag) {");
+        sb.AppendLine("            if ($token -eq $valueFlag) { $skipCommandValue = $true }");
+        sb.AppendLine("            continue");
+        sb.AppendLine("        }");
+        sb.AppendLine("        if ($topLevelFlagOnly -contains $token -or $token.StartsWith('-')) { continue }");
+        sb.AppendLine("        $subcmd = $token");
+        sb.AppendLine("        $subcmdIndex = $i");
+        sb.AppendLine("        break");
+        sb.AppendLine("    }");
+        sb.AppendLine("    $nested = $null");
+        sb.AppendLine("    if ($subcmd -and $subcommands.ContainsKey($subcmd)) {");
+        sb.AppendLine("        $skipNestedValue = $false");
+        sb.AppendLine("        for ($i = $subcmdIndex + 1; $i -lt $scanLimit; $i++) {");
+        sb.AppendLine("            $token = $tokens[$i]");
+        sb.AppendLine("            if ($skipNestedValue) { $skipNestedValue = $false; continue }");
+        sb.AppendLine("            $valueFlag = $nestedValueFlags[$subcmd] | Where-Object { $token -eq $_ -or $token.StartsWith(($_ + '='), [System.StringComparison]::Ordinal) } | Select-Object -First 1");
+        sb.AppendLine("            if ($valueFlag) {");
+        sb.AppendLine("                if ($token -eq $valueFlag) { $skipNestedValue = $true }");
+        sb.AppendLine("                continue");
+        sb.AppendLine("            }");
+        sb.AppendLine("            if ($subcommands[$subcmd] -contains $token) { $nested = $token; break }");
+        sb.AppendLine("        }");
+        sb.AppendLine("    }");
         sb.AppendLine("    $prev = if ([string]::IsNullOrEmpty($wordToComplete) -and $tokens.Count -ge 1) { $tokens[$tokens.Count - 1] } elseif ($tokens.Count -ge 2) { $tokens[$tokens.Count - 2] } else { '' }");
         sb.AppendLine("    function New-CdidxCompletion($value, $kind = 'ParameterValue') {");
         sb.AppendLine("        [System.Management.Automation.CompletionResult]::new($value, $value, $kind, $value)");
@@ -611,28 +781,16 @@ internal static class ConsoleCompletionRenderer
         sb.AppendLine($"        {{ $_ -in @({FormatPowerShellArray(GetValueFlagNames(kind => kind == CliOptionValueKind.Language))}) }} {{ $langs | Where-Object {{ $_.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase) }} | ForEach-Object {{ New-CdidxCompletion $_ }}; return }}");
         sb.AppendLine($"        {{ $_ -in @({FormatPowerShellArray(GetValueFlagNames(kind => kind == CliOptionValueKind.SymbolKind))}) }} {{ $kinds | Where-Object {{ $_.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase) }} | ForEach-Object {{ New-CdidxCompletion $_ }}; return }}");
         sb.AppendLine("        '--format' { if ($formatValues.ContainsKey($subcmd)) { $formatValues[$subcmd] | Where-Object { $_.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { New-CdidxCompletion $_ } }; return }");
-        sb.AppendLine("        { $commandEnumValues.ContainsKey(\"$subcmd|$_\") } { $commandEnumValues[\"$subcmd|$_\"] | Where-Object { $_.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { New-CdidxCompletion $_ }; return }");
+        sb.AppendLine("        { $contextEnumValues.ContainsKey(\"$subcmd|$nested|$_\") } { $contextEnumValues[\"$subcmd|$nested|$_\"] | Where-Object { $_.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { New-CdidxCompletion $_ }; return }");
+        sb.AppendLine("        { $contextEnumValues.ContainsKey(\"$subcmd||$_\") } { $contextEnumValues[\"$subcmd||$_\"] | Where-Object { $_.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { New-CdidxCompletion $_ }; return }");
         sb.AppendLine("        { $enumValues.ContainsKey($_) } { $enumValues[$_] | Where-Object { $_.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { New-CdidxCompletion $_ }; return }");
         sb.AppendLine("    }");
-        sb.AppendLine("    if (-not $subcmd -or ($tokens.Count -le 2 -and -not ([string]::IsNullOrEmpty($wordToComplete)) -and -not $afterLastToken)) {");
+        sb.AppendLine("    if (-not $subcmd) {");
         sb.AppendLine("        $commands + @('--help', '--version', '--license') + $topLevelFlags | Where-Object { $_.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { New-CdidxCompletion $_ 'ParameterName' }");
         sb.AppendLine("        return");
         sb.AppendLine("    }");
         sb.AppendLine("    if ($subcommands.ContainsKey($subcmd)) {");
-        sb.AppendLine("        $subcmdIndex = [Array]::IndexOf($tokens, $subcmd)");
-        sb.AppendLine("        $nested = $null");
-        sb.AppendLine("        $skipNestedValue = $false");
-        sb.AppendLine("        for ($i = $subcmdIndex + 1; $i -lt $tokens.Count; $i++) {");
-        sb.AppendLine("            $token = $tokens[$i]");
-        sb.AppendLine("            if ($skipNestedValue) { $skipNestedValue = $false; continue }");
-        sb.AppendLine("            $valueFlag = $nestedValueFlags[$subcmd] | Where-Object { $token -eq $_ -or $token.StartsWith(($_ + '='), [System.StringComparison]::Ordinal) } | Select-Object -First 1");
-        sb.AppendLine("            if ($valueFlag) {");
-        sb.AppendLine("                if ($token -eq $valueFlag) { $skipNestedValue = $true }");
-        sb.AppendLine("                continue");
-        sb.AppendLine("            }");
-        sb.AppendLine("            if ($subcommands[$subcmd] -contains $token) { $nested = $token; break }");
-        sb.AppendLine("        }");
-        sb.AppendLine("        if (-not $nested -or ($tokens.Count -le ($subcmdIndex + 2) -and -not $afterLastToken)) {");
+        sb.AppendLine("        if (-not $nested) {");
         sb.AppendLine("            $candidates = @($subcommands[$subcmd])");
         sb.AppendLine("            if ($optionalSubcommandFlags.ContainsKey($subcmd)) { $candidates += $optionalSubcommandFlags[$subcmd] }");
         sb.AppendLine("            $candidates | Where-Object { $_.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { New-CdidxCompletion $_ $(if ($_.StartsWith('-')) { 'ParameterName' } else { 'ParameterValue' }) }");
@@ -687,10 +845,48 @@ internal static class ConsoleCompletionRenderer
         return names;
     }
 
+    private static IReadOnlyList<string> GetTopLevelValueTakingFlagNames() =>
+        CliFlagSchema.GetTopLevelCompletionFlags()
+            .Where(flag => flag.IsValueBearing)
+            .SelectMany(GetFlagNames)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
+    private static IReadOnlyList<string> GetTopLevelFlagOnlyNames() =>
+        CliFlagSchema.GetTopLevelCompletionFlags()
+            .Where(flag => !flag.IsValueBearing)
+            .SelectMany(GetFlagNames)
+            .Concat(["--help", "--version", "--license"])
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
+    private static IReadOnlyList<string> GetCompletionContextSubcommands(string command) =>
+        CliFlagSchema.All
+            .SelectMany(flag =>
+            {
+                var subcommands = new List<string>();
+                if (flag.CompletionSubcommands.TryGetValue(command, out var completionSubcommands))
+                    subcommands.AddRange(completionSubcommands);
+                if (flag.SubcommandValueDomains.TryGetValue(command, out var valueDomains))
+                    subcommands.AddRange(valueDomains.Keys);
+                return subcommands;
+            })
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(value => value, StringComparer.Ordinal)
+            .ToArray();
+
     private static IReadOnlyList<string> GetNestedSubcommandNames(string command) =>
         CliCommandMetadata.CommandSubcommands
             .First(entry => string.Equals(entry.Command, command, StringComparison.Ordinal))
             .Subcommands;
+
+    private static string FormatFishPatterns(IEnumerable<string> patterns)
+    {
+        var values = patterns.Distinct(StringComparer.Ordinal).ToArray();
+        return values.Length == 0
+            ? "'__cdidx_no_match__'"
+            : string.Join(' ', values.Select(value => $"'{value.Replace("'", "\\'", StringComparison.Ordinal)}'"));
+    }
 
     private static List<string> BuildTopLevelFlagList()
     {
@@ -735,7 +931,7 @@ internal static class ConsoleCompletionRenderer
                 continue;
 
             var kinds = flag.PrimaryCommands
-                .Select(flag.GetValueKind)
+                .Select(command => flag.GetValueKind(command))
                 .Append(flag.GetValueKind(string.Empty))
                 .Concat(flag.CommandValueKinds.Values);
             if (!kinds.Any(predicate))
@@ -773,15 +969,21 @@ internal static class ConsoleCompletionRenderer
     private static string EscapePowerShellSingleQuoted(string value) =>
         value.Replace("'", "''", StringComparison.Ordinal);
 
-    private static string[]? GetEnumValues(CliFlag flag, string? command = null)
+    private static string[]? GetEnumValues(
+        CliFlag flag,
+        string? command = null,
+        string? subcommand = null)
     {
-        var domain = flag.GetValueDomain(command ?? string.Empty);
+        var domain = flag.GetValueDomain(command ?? string.Empty, subcommand);
         return domain?.CanonicalValues.ToArray();
     }
 
     private static IEnumerable<(string Flag, string[] Values)> GetEnumValueCompletions() =>
         CliFlagSchema.All
-            .Where(flag => flag.Name != "--format" && flag.CommandValueDomains.Count == 0)
+            .Where(flag =>
+                flag.Name != "--format"
+                && flag.CommandValueDomains.Count == 0
+                && flag.SubcommandValueDomains.Count == 0)
             .Select(flag => (
                 Flag: flag.Name,
                 Values: GetEnumValues(flag)))
@@ -789,12 +991,24 @@ internal static class ConsoleCompletionRenderer
             .GroupBy(item => item.Flag, StringComparer.Ordinal)
             .Select(group => (group.Key, group.SelectMany(item => item.Values!).Distinct(StringComparer.Ordinal).ToArray()));
 
-    private static IEnumerable<(string Command, string Flag, string[] Values)> GetCommandEnumValueCompletions()
+    private static IEnumerable<(string Command, string? Subcommand, string Flag, string[] Values)> GetContextEnumValueCompletions()
     {
         foreach (var flag in CliFlagSchema.All.Where(flag => flag.Name != "--format"))
         {
-            foreach (var (command, domain) in flag.CommandValueDomains)
-                yield return (command, flag.Name, domain.CanonicalValues.ToArray());
+            var commands = flag.CommandValueDomains.Keys
+                .Concat(flag.SubcommandValueDomains.Keys)
+                .Distinct(StringComparer.Ordinal);
+            foreach (var command in commands)
+            {
+                if (flag.SubcommandValueDomains.TryGetValue(command, out var subcommandDomains))
+                {
+                    foreach (var (subcommand, domain) in subcommandDomains)
+                        yield return (command, subcommand, flag.Name, domain.CanonicalValues.ToArray());
+                }
+
+                if (GetEnumValues(flag, command) is { } values)
+                    yield return (command, null, flag.Name, values);
+            }
         }
     }
 
