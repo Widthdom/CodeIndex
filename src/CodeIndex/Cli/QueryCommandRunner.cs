@@ -109,6 +109,7 @@ public sealed class QueryCommandOptions
     public List<string> VisibilityFilters { get; init; } = [];
     public List<string> ExcludeVisibilityFilters { get; init; } = [];
     public string? Query { get; init; }
+    public string? Selector { get; init; }
     public bool RawFts { get; init; }
     public bool IncludeBody { get; init; }
     public int? BodyStartLine { get; init; }

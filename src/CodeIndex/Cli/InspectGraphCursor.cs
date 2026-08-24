@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using CodeIndex.Database;
+using CodeIndex.Models;
 
 namespace CodeIndex.Cli;
 
@@ -23,7 +24,7 @@ internal static class InspectGraphCursorCodec
     internal static (string Fingerprint, string? StableAt) BuildGenerationFingerprint(DbReader reader)
     {
         var generation = reader.GetPaginationGeneration();
-        return (BuildValueFingerprint(generation.Identity), generation.StableAt);
+        return (SymbolSelector.BuildGenerationFingerprint(generation.Identity), generation.StableAt);
     }
 
     internal static string Format(

@@ -35,6 +35,7 @@ public static partial class QueryCommandRunner
         private string? minUnusedConfidence;
         private string? severity;
         private string? query;
+        private string? selector;
         private bool rawFts;
         private bool includeBody;
         private int? bodyStartLine;
@@ -432,6 +433,7 @@ public static partial class QueryCommandRunner
                 UnusedActionable = unusedActionable,
                 Severity = severity,
                 Query = query,
+                Selector = selector,
                 RawFts = rawFts,
                 IncludeBody = includeBody || inspectFieldsIncludeBody,
                 BodyStartLine = bodyStartLine,

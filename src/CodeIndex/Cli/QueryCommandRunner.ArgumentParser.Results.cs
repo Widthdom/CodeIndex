@@ -50,6 +50,15 @@ public static partial class QueryCommandRunner
                 case "--group-partials":
                     groupPartials = true;
                     break;
+                case "--selector":
+                    if (TryReadStringOptionValue(args, ref i, "--selector", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var selectorValue, out var selectorError))
+                    {
+                        WarnIfDuplicateSingleValueOption("--selector", selectorValue!);
+                        selector = selectorValue;
+                    }
+                    else
+                        AddParseError(selectorError!);
+                    break;
                 case "--cycles":
                     dependencyCycles = true;
                     break;
