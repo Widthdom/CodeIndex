@@ -19,6 +19,7 @@ public static partial class IndexCommandRunner
 {
     private sealed record FullScanDiscoveryResult(
         FileIndexer.ScanFilesResult ScanResult,
+        FileIndexer.IndexingFileTargetCollection IndexingTargets,
         IReadOnlyList<string> Files,
         List<CliJsonMessage> ErrorList,
         List<CliJsonMessage> WarningList,
@@ -51,16 +52,20 @@ public static partial class IndexCommandRunner
         WriteFullScanJsonLiveness(options, "scanning files...");
         var scanHeartbeat = StartFullScanJsonPhaseHeartbeat(options, "scanning files");
         FileIndexer.ScanFilesResult scanResult;
+        FileIndexer.IndexingFileTargetCollection indexingTargets;
         FileIndexer.ScanInputSnapshot? inputSnapshot = null;
         try
         {
             ThrowIfDiscoveryCancelled();
-            var scanWithSnapshots = indexer.ScanFilesDetailedWithDirectoryListingSnapshots(
+            var scanWithSnapshots = indexer.ScanFilesDetailedWithDirectoryListingSnapshotsAndIndexingTargets(
                 new HashSet<string>(StringComparer.Ordinal),
                 continueOnError: true,
                 initialFileCapacity: initialFileCapacity,
                 cancellationToken: cancellationToken);
             scanResult = scanWithSnapshots.ScanResult;
+            indexingTargets = scanWithSnapshots.IndexingTargets
+                ?? throw new InvalidOperationException(
+                    "Full-scan discovery did not capture indexing targets.");
             inputSnapshot = scanWithSnapshots.InputSnapshot;
             ThrowIfDiscoveryCancelled();
         }
@@ -95,6 +100,7 @@ public static partial class IndexCommandRunner
 
         return new FullScanDiscoveryResult(
             scanResult,
+            indexingTargets,
             files,
             errorList,
             warningList,

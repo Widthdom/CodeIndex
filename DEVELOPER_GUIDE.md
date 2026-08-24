@@ -523,16 +523,34 @@ The workspace qualified-pattern lookup needs only raw non-enum type names for
 enum-shadowing decisions. Build that conflict set directly; do not call the
 per-file type-name builder and discard its normalized and qualified known-type set.
 
-Authoritative full scans collect the C#, VB, F#, and MSBuild project-marker
-fingerprints during the shared source-directory enumeration. The same pass also
-builds a budget-independent directory marker-count snapshot used by
+Full-tree consumers that continue into per-file processing opt in to a single
+`IndexingFileTargetCollection` during source discovery. Its string view is the
+`ScanFilesResult.Files` backing store, while concrete iteration exposes the
+lexical path, native/display/index relative paths, reusable language, and
+path-only generated-code suppression decision without materializing a second
+workspace-sized target array. CLI full scans, real MCP indexing, workspace
+freshness checks, and authoritative CLI dry-runs use this view; public/default
+`ScanFiles` and `ScanFilesDetailed`, scoped updates, and MCP dry-run remain on
+the string-list path. Targets must not retain stat, resolved-symlink,
+authorization, file-identity, checksum, or content-derived generated-code
+state. Consumers still perform their live authorization, secure open, stat,
+and mutation checks. In particular, `.h` and extensionless content/shebang
+detections retain a null reusable language so the authoritative content read
+redetects them. Freshness ordering sorts integer target indexes rather than
+copying the target structs.
+
+Authoritative CLI full scans collect the C#, VB, F#, and MSBuild project-marker
+fingerprints during the shared source-directory enumeration. Real MCP indexing
+reuses the fingerprints produced by its same source scan instead of walking the
+marker tree independently. The CLI pass also builds a budget-independent
+directory marker-count snapshot used by
 `GetFamilyScopeKey`, so per-file family assignment does not enumerate marker
 globs again for every ancestor. Fingerprint budgets and scope completeness stay
 independent: an exhausted fingerprint budget may still leave a complete scope
 snapshot, while an incomplete discovery discards the scope snapshot and falls
-back to the live, fail-closed lookup. Scoped update, MCP, and direct pre-scan
-callers retain that fallback because they do not own an authoritative full-tree
-snapshot.
+back to the live, fail-closed lookup. An incomplete MCP scan fingerprint never
+matches or restamps trust. Scoped updates and direct pre-scan callers retain the
+live fallback because they do not own an authoritative full-tree snapshot.
 
 `FileIssue` rows may include nullable `origin` and `severity` metadata.
 For `replacement_char`, `origin: source_literal` means the file contains a
@@ -4615,14 +4633,29 @@ workspace qualified-pattern lookup が enum shadowing 判定に必要とする�
 nameだけです。このconflict setは直接構築し、per-file type-name builderを呼んでnormalized / qualified
 known-type setを直後に捨てないでください。
 
-authoritative な full scan は、共有 source-directory enumeration 中に C#、VB、F#、
-MSBuild の project-marker fingerprint を収集します。同じ pass で budget 非依存の
+source discovery 後も file ごとの処理を続ける full-tree consumer は、単一の
+`IndexingFileTargetCollection` を opt-in します。string view は `ScanFilesResult.Files` の backing
+store となり、concrete iteration は2つ目の workspace 規模 target array を materialize せずに、
+lexical path、native/display/index relative path、再利用可能 language、path-only の generated-code
+suppression 判定を公開します。CLI full scan、実 MCP indexing、workspace freshness check、authoritative
+な CLI dry-run はこの view を使います。public/default の `ScanFiles` / `ScanFilesDetailed`、scoped
+update、MCP dry-run は string-list 経路のままです。target に stat、resolved symlink、authorization、
+file identity、checksum、content 由来の generated-code state を保持してはいけません。consumer は
+引き続き live authorization、secure open、stat、mutation check を実行します。特に `.h` と
+extensionless の content/shebang 判定は reusable language を null のままにし、authoritative content
+read で再判定します。freshness の順序付けは target struct をコピーせず、整数 target index を sort
+してください。
+
+authoritative な CLI full scan は、共有 source-directory enumeration 中に C#、VB、F#、
+MSBuild の project-marker fingerprint を収集します。実 MCP indexing は独立した marker tree walk
+を行わず、同じ source scan が生成した fingerprint を再利用します。CLI pass は budget 非依存の
 directory marker-count snapshot も構築し、`GetFamilyScopeKey` が file ごとに各 ancestor の
 marker glob を再列挙しないようにします。fingerprint budget と scope completeness は独立です。
 fingerprint budget を使い切っても scope snapshot は complete になり得ますが、discovery 自体が
 不完全なら scope snapshot を破棄し、従来の fail-closed な live lookup へ fallback します。
-authoritative な full-tree snapshot を所有しない scoped update、MCP、scan 前の直接 caller も
-同じ fallback を維持してください。
+不完全な MCP scan fingerprint は trust の一致にも再 stamp にも使いません。authoritative な
+full-tree snapshot を所有しない scoped update と scan 前の直接 caller は同じ live fallback を
+維持してください。
 
 `FileIssue` rows には nullable な `origin` / `severity` metadata が入ることがある。
 `replacement_char` では `origin: source_literal` が正規にエンコードされた U+FFFD

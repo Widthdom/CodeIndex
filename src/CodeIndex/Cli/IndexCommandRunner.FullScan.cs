@@ -136,9 +136,7 @@ public static partial class IndexCommandRunner
         var csharpPrepassCapacity = languageCounts.TryGetValue("csharp", out var csharpFileCount) ? csharpFileCount : 0;
         var targetPreparation = PrepareFullScanTargets(
             indexer,
-            projectRoot,
-            files,
-            scanResult.FileLanguages,
+            discovery.IndexingTargets,
             options.SymbolsOnly,
             csharpPrepassCapacity);
         var fileTargets = targetPreparation.FileTargets;

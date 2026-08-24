@@ -2635,6 +2635,71 @@ public partial class FileIndexerTests
         Assert.Equal("cpp", loaded.Record.Lang);
     }
 
+    [Fact]
+    public void ScanFilesDetailedWithIndexingTargets_SharesPathViewAndPreservesReuseBoundaries()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_scan_targets");
+        var sourceDirectory = Path.Combine(project.Root, "src");
+        var generatedDirectory = Path.Combine(sourceDirectory, "generated");
+        var unicodeDirectory = Path.Combine(sourceDirectory, "日本語");
+        Directory.CreateDirectory(generatedDirectory);
+        Directory.CreateDirectory(unicodeDirectory);
+        var dockerfilePath = Path.Combine(project.Root, "Dockerfile");
+        var generatedPath = Path.Combine(generatedDirectory, "Widget.g.cs");
+        var headerPath = Path.Combine(sourceDirectory, "widget.h");
+        var scriptPath = Path.Combine(sourceDirectory, "tool");
+        var perlPath = Path.Combine(sourceDirectory, "tool.pl");
+        var customScriptPath = Path.Combine(sourceDirectory, "tool.custom");
+        var pythonPath = Path.Combine(sourceDirectory, "helper.py");
+        var typescriptPath = Path.Combine(unicodeDirectory, "Cafe\u0301.ts");
+        File.WriteAllText(dockerfilePath, "FROM scratch\n");
+        File.WriteAllText(generatedPath, "public sealed class Widget { }\n");
+        File.WriteAllText(headerPath, "template <typename T> class WidgetTemplate { };\n");
+        File.WriteAllText(scriptPath, "#!/usr/bin/env python\nprint('ok')\n");
+        File.WriteAllText(perlPath, "#!/usr/bin/env perl\nuse strict;\n");
+        File.WriteAllText(customScriptPath, "#!/bin/sh\necho ok\n");
+        File.WriteAllText(pythonPath, "def run():\n    return True\n");
+        File.WriteAllText(typescriptPath, "export const enabled = true;\n");
+        var indexer = new FileIndexer(
+            project.Root,
+            ignoreCase: false,
+            ignoreRuleRoot: null,
+            generatedCodePatterns: ["src/generated/**"]);
+
+        var captured = indexer.ScanFilesDetailedWithIndexingTargets();
+
+        Assert.Same(captured.IndexingTargets, captured.ScanResult.Files);
+        Assert.Equal(captured.ScanResult.Files.Count, captured.IndexingTargets.Count);
+        var targetsByPath = new Dictionary<string, FileIndexer.IndexingFileTarget>(StringComparer.Ordinal);
+        foreach (var target in captured.IndexingTargets)
+            targetsByPath.Add(target.IndexPath, target);
+        for (var index = 0; index < captured.IndexingTargets.Count; index++)
+        {
+            Assert.Equal(
+                captured.ScanResult.Files[index],
+                captured.IndexingTargets[index].FilePath);
+        }
+        var generatedTarget = targetsByPath["src/generated/Widget.g.cs"];
+        Assert.Equal(Path.Combine("src", "generated", "Widget.g.cs"), generatedTarget.RelativePath);
+        Assert.Equal("src/generated/Widget.g.cs", generatedTarget.DisplayRelativePath);
+        Assert.Equal("csharp", generatedTarget.ReusableLanguage);
+        Assert.True(generatedTarget.GeneratedExtractionSuppressed);
+        Assert.Null(targetsByPath["src/widget.h"].ReusableLanguage);
+        Assert.Null(targetsByPath["src/tool"].ReusableLanguage);
+        Assert.Equal("perl", targetsByPath["src/tool.pl"].ReusableLanguage);
+        Assert.Equal("shell", targetsByPath["src/tool.custom"].ReusableLanguage);
+        Assert.Equal("dockerfile", targetsByPath["Dockerfile"].ReusableLanguage);
+        Assert.Equal("python", targetsByPath["src/helper.py"].ReusableLanguage);
+        Assert.Equal("typescript", targetsByPath["src/日本語/Café.ts"].ReusableLanguage);
+        Assert.Equal("src/日本語/Café.ts", targetsByPath["src/日本語/Café.ts"].IndexPath);
+        Assert.All(
+            ((System.Collections.IEnumerable)captured.ScanResult.Files).Cast<object>(),
+            static value => Assert.IsType<string>(value));
+
+        Assert.IsType<List<string>>(indexer.ScanFiles());
+        Assert.IsType<List<string>>(indexer.ScanFilesDetailed().Files);
+    }
+
     [Theory]
     // Bare trailing-dot forms should not match prefix rules — suffix must be non-empty.
     // 末尾ドットだけの形はプレフィックス規則に一致しない（サフィックス必須）。

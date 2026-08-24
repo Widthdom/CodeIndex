@@ -78,7 +78,10 @@ internal static class IndexFreshnessChecker
             directoryIgnoreCaseProbe: null,
             symlinkPolicy: symlinkPolicy,
             internalIndexDatabasePath: internalIndexDatabasePath);
-        var scan = indexer.ScanFilesDetailed(cancellationToken: cancellationToken);
+        var scanWithTargets = indexer.ScanFilesDetailedWithIndexingTargets(
+            cancellationToken: cancellationToken);
+        var scan = scanWithTargets.ScanResult;
+        var indexingTargets = scanWithTargets.IndexingTargets;
         foreach (var error in scan.Errors)
         {
             if (!error.IsFatal)
@@ -94,19 +97,27 @@ internal static class IndexFreshnessChecker
         HashSet<string>? skipWorktreePaths = knownSkipWorktreePaths;
         var skipWorktreeEvidenceUnavailable = false;
 
-        var workspaceFileTargets = scan.Files
-            .Select(path => WorkspaceFileTarget.Create(projectRoot, path))
-            .OrderBy(target => target.IndexPath, StringComparer.Ordinal);
-        foreach (var target in workspaceFileTargets)
+        var targetOrder = new int[indexingTargets.Count];
+        for (var index = 0; index < targetOrder.Length; index++)
+            targetOrder[index] = index;
+        Array.Sort(targetOrder, (left, right) =>
         {
+            var comparison = string.Compare(
+                indexingTargets[left].IndexPath,
+                indexingTargets[right].IndexPath,
+                StringComparison.Ordinal);
+            return comparison != 0 ? comparison : left.CompareTo(right);
+        });
+        foreach (var targetIndex in targetOrder)
+        {
+            var target = indexingTargets[targetIndex];
             cancellationToken.ThrowIfCancellationRequested();
             try
             {
-                var knownLanguage = FileIndexer.GetReusableDetectedLanguage(target.AbsolutePath, scan.FileLanguages);
                 var loaded = indexer.BuildLoadedRecordWithRawBytes(
-                    target.AbsolutePath,
+                    target.FilePath,
                     target.RelativePath,
-                    knownLanguage,
+                    target.ReusableLanguage,
                     detectGeneratedCode: false,
                     cancellationToken: cancellationToken);
                 var record = loaded.Record;
@@ -246,23 +257,6 @@ internal static class IndexFreshnessChecker
             "all" => FileIndexer.SymlinkPolicy.All,
             _ => FileIndexer.SymlinkPolicy.None,
         };
-    }
-
-    private readonly record struct WorkspaceFileTarget(
-        string AbsolutePath,
-        string RelativePath,
-        string DisplayRelativePath,
-        string IndexPath)
-    {
-        public static WorkspaceFileTarget Create(string projectRoot, string absolutePath)
-        {
-            var relativePath = FileIndexer.GetRelativePathFromProjectRoot(projectRoot, absolutePath);
-            return new WorkspaceFileTarget(
-                absolutePath,
-                relativePath,
-                FileIndexer.NormalizePathSeparators(relativePath),
-                FileIndexer.NormalizeIndexPath(relativePath));
-        }
     }
 
     private static string BuildReason(IndexFreshnessCheckResult result)

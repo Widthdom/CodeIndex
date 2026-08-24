@@ -15,7 +15,7 @@ public static partial class IndexCommandRunner
     private static FullScanPurgePreparation PlanFullScanStaleFiles(
         DbWriter writer,
         FileIndexer.ScanFilesResult scanResult,
-        IReadOnlyList<FullScanFileTarget> fileTargets,
+        FileIndexer.IndexingFileTargetCollection fileTargets,
         bool scanHadErrors,
         bool startedWithNoIndexedFiles,
         bool symbolsOnly,

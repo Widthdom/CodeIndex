@@ -5,7 +5,7 @@ namespace CodeIndex.Mcp;
 
 public partial class McpServer
 {
-    private sealed record McpIndexTargetSet(CSharpStaticInterfacePrepass.FileTarget[] All,
+    private sealed record McpIndexTargetSet(FileIndexer.IndexingFileTargetCollection All,
         List<CSharpStaticInterfacePrepass.FileTarget> CSharp);
 
     private sealed record McpIndexDiscoveryPlan(
@@ -65,37 +65,27 @@ public partial class McpServer
     }
 
     private static McpIndexTargetSet BuildMcpIndexTargetSet(
-        string projectPath,
         FileIndexer indexer,
-        FileIndexer.ScanFilesResult scanResult)
+        FileIndexer.ScanFilesResult scanResult,
+        FileIndexer.IndexingFileTargetCollection indexingTargets)
     {
-        var files = scanResult.Files;
-        var all = new CSharpStaticInterfacePrepass.FileTarget[files.Count];
         var csharp = new List<CSharpStaticInterfacePrepass.FileTarget>(
             scanResult.LanguageCounts.GetValueOrDefault("csharp"));
-        var hasGeneratedSuppressionPatterns =
-            indexer.HasGeneratedCodeExtractionSuppressionPatterns;
-        for (var index = 0; index < files.Count; index++)
+        foreach (var target in indexingTargets)
         {
-            var filePath = files[index];
-            var language = FileIndexer.GetReusableDetectedLanguage(
-                filePath,
-                scanResult.FileLanguages);
-            var target = CSharpStaticInterfacePrepass.FileTarget.Create(
-                projectPath,
-                filePath,
-                language);
-            target = target with
-            {
-                GeneratedExtractionSuppressed = hasGeneratedSuppressionPatterns
-                    && indexer.IsGeneratedCodeExtractionSuppressed(target.IndexPath),
-                ResolveSymlinkTargets = indexer.ResolvesSymlinkTargets,
-            };
-            all[index] = target;
-            if (language == "csharp")
-                csharp.Add(target);
+            if (target.ReusableLanguage != "csharp")
+                continue;
+
+            csharp.Add(new CSharpStaticInterfacePrepass.FileTarget(
+                target.FilePath,
+                target.RelativePath,
+                target.DisplayRelativePath,
+                target.IndexPath,
+                target.ReusableLanguage,
+                target.GeneratedExtractionSuppressed,
+                indexer.ResolvesSymlinkTargets));
         }
-        return new McpIndexTargetSet(all, csharp);
+        return new McpIndexTargetSet(indexingTargets, csharp);
     }
 
     private static McpIndexDiscoveryPlan BuildMcpIndexDiscoveryPlan(
@@ -136,7 +126,7 @@ public partial class McpServer
         var retainedPathsForReuse = SelectMcpIndexRetainedPathsForReuse(
             purgePlan,
             authority,
-            targets.All.LongLength,
+            targets.All.Count,
             startedWithNoIndexedFiles);
         return new McpIndexDiscoveryPlan(
             purgePlan,
@@ -154,7 +144,7 @@ public partial class McpServer
         if (startedWithNoIndexedFiles)
             return new(projectPath, scanResult.FileLanguages, null, null, null, null, scanResult.HadErrors);
 
-        var retainedPaths = new HashSet<string>(targets.All.Length, StringComparer.Ordinal);
+        var retainedPaths = new HashSet<string>(targets.All.Count, StringComparer.Ordinal);
         foreach (var target in targets.All)
             retainedPaths.Add(target.IndexPath);
         if (!scanResult.HadErrors)

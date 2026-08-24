@@ -133,7 +133,7 @@ public partial class McpServer
     private static IndexedFileStatReuseResult? ResolveMcpStatMatch(
         McpIndexFileLoopContext context,
         int targetIndex,
-        in CSharpStaticInterfacePrepass.FileTarget target)
+        in FileIndexer.IndexingFileTarget target)
     {
         if (context.StatPreflightCompleted == null)
             return null;

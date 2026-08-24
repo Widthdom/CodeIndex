@@ -14,35 +14,6 @@ namespace CodeIndex.Cli;
 
 public static partial class IndexCommandRunner
 {
-    private readonly record struct FullScanFileTarget(
-        string FilePath,
-        string RelativePath,
-        string DisplayRelativePath,
-        string IndexPath,
-        string? Language,
-        bool GeneratedExtractionSuppressed)
-    {
-        public static FullScanFileTarget CreateFromPath(string projectRoot, string path)
-        {
-            var filePath = Path.IsPathRooted(path)
-                ? path
-                : Path.Combine(projectRoot, FileIndexer.NormalizeRelativePathForCurrentPlatform(path));
-            return Create(projectRoot, filePath);
-        }
-
-        public static FullScanFileTarget Create(string projectRoot, string filePath, string? language = null)
-        {
-            var relativePath = FileIndexer.GetRelativePathFromProjectRoot(projectRoot, filePath);
-            return new FullScanFileTarget(
-                filePath,
-                relativePath,
-                FileIndexer.NormalizePathSeparators(relativePath),
-                FileIndexer.NormalizeIndexPath(relativePath),
-                language,
-                GeneratedExtractionSuppressed: false);
-        }
-    }
-
     private readonly record struct UpdateFileTarget(
         string FilePath,
         string RelativePath,

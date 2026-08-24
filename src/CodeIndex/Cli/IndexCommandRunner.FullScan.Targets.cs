@@ -5,46 +5,34 @@ namespace CodeIndex.Cli;
 public static partial class IndexCommandRunner
 {
     private sealed record FullScanTargetPreparation(
-        FullScanFileTarget[] FileTargets,
+        FileIndexer.IndexingFileTargetCollection FileTargets,
         List<CSharpStaticInterfacePrepass.FileTarget> CSharpPrepassTargets);
 
     private static FullScanTargetPreparation PrepareFullScanTargets(
         FileIndexer indexer,
-        string projectRoot,
-        IReadOnlyList<string> files,
-        IReadOnlyDictionary<string, string> fileLanguages,
+        FileIndexer.IndexingFileTargetCollection indexingTargets,
         bool symbolsOnly,
         int csharpPrepassCapacity)
     {
-        var fileTargets = new FullScanFileTarget[files.Count];
+        var fileTargets = indexingTargets;
         var csharpPrepassTargets = new List<CSharpStaticInterfacePrepass.FileTarget>(
             symbolsOnly ? 0 : csharpPrepassCapacity);
-        var hasGeneratedCodeExtractionSuppressionPatterns =
-            indexer.HasGeneratedCodeExtractionSuppressionPatterns;
 
-        for (var fileIndex = 0; fileIndex < files.Count; fileIndex++)
+        if (symbolsOnly)
+            return new FullScanTargetPreparation(fileTargets, csharpPrepassTargets);
+
+        foreach (var target in fileTargets)
         {
-            var filePath = files[fileIndex];
-            var language = FileIndexer.GetReusableDetectedLanguage(filePath, fileLanguages);
-            var target = FullScanFileTarget.Create(projectRoot, filePath, language);
-            fileTargets[fileIndex] = hasGeneratedCodeExtractionSuppressionPatterns
-                ? target with
-                {
-                    GeneratedExtractionSuppressed =
-                        indexer.IsGeneratedCodeExtractionSuppressed(target.IndexPath)
-                }
-                : target;
-            if (symbolsOnly || language != "csharp")
+            if (target.ReusableLanguage != "csharp")
                 continue;
 
-            var indexedTarget = fileTargets[fileIndex];
             csharpPrepassTargets.Add(new CSharpStaticInterfacePrepass.FileTarget(
-                indexedTarget.FilePath,
-                indexedTarget.RelativePath,
-                indexedTarget.DisplayRelativePath,
-                indexedTarget.IndexPath,
-                indexedTarget.Language,
-                indexedTarget.GeneratedExtractionSuppressed,
+                target.FilePath,
+                target.RelativePath,
+                target.DisplayRelativePath,
+                target.IndexPath,
+                target.ReusableLanguage,
+                target.GeneratedExtractionSuppressed,
                 indexer.ResolvesSymlinkTargets));
         }
 

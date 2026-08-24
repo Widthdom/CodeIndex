@@ -42,6 +42,7 @@ public static partial class IndexCommandRunner
             generatedCodePatterns: options.GeneratedCodePatterns,
             internalIndexDatabasePath: resolvedDbPath);
         IEnumerable<string> dryCandidates;
+        FileIndexer.IndexingFileTargetCollection? dryIndexingTargets;
         IEnumerable<string> dryDeleteCandidates;
         bool authoritativeFullScan;
         var errorSamples = new List<CliJsonMessage>();
@@ -184,6 +185,7 @@ public static partial class IndexCommandRunner
             cancellationToken,
             RecordDryRunScanErrors,
             out dryCandidates,
+            out dryIndexingTargets,
             out dryDeleteCandidates,
             out authoritativeFullScan,
             out dryScanMetadata,
@@ -218,6 +220,7 @@ public static partial class IndexCommandRunner
             unsupportedTotal = CountUnsupportedNonIndexablePaths(dryScanMetadata);
         }
 
+        var dryIndexingTargetIndex = 0;
         foreach (var f in dryCandidates)
         {
             if (candidatePathsProcessed >= dryRunPathLimit)
@@ -227,21 +230,42 @@ public static partial class IndexCommandRunner
             }
 
             candidatePathsProcessed++;
-            var displayRelativePath = FileIndexer.NormalizePathSeparators(
-                FileIndexer.GetRelativePathFromDirectory(projectPath, f));
-            var dbRelativePath = FileIndexer.NormalizeIndexPath(displayRelativePath);
-            var pathFilter = dryIndexer.EvaluatePathFilter(f);
-            RecordDryRunScanErrors(pathFilter.Errors);
-            if (pathFilter.ShouldSkip)
+            FileIndexer.IndexingFileTarget? capturedTarget = null;
+            if (dryIndexingTargets != null)
             {
-                if (pathFilter.ShouldDeleteExisting && dbSnapshot.Files.ContainsKey(dbRelativePath))
-                    projectedDeletePaths.Add(dbRelativePath);
-                continue;
+                if (dryIndexingTargetIndex >= dryIndexingTargets.Count)
+                {
+                    throw new InvalidOperationException(
+                        "Authoritative dry-run target capture ended before the file path view.");
+                }
+                capturedTarget = dryIndexingTargets[dryIndexingTargetIndex++];
+                if (!string.Equals(capturedTarget.Value.FilePath, f, StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException(
+                        "Authoritative dry-run target capture diverged from the file path view.");
+                }
+            }
+            var displayRelativePath = capturedTarget?.DisplayRelativePath
+                ?? FileIndexer.NormalizePathSeparators(
+                    FileIndexer.GetRelativePathFromDirectory(projectPath, f));
+            var dbRelativePath = capturedTarget?.IndexPath
+                ?? FileIndexer.NormalizeIndexPath(displayRelativePath);
+            if (capturedTarget == null)
+            {
+                var pathFilter = dryIndexer.EvaluatePathFilter(f);
+                RecordDryRunScanErrors(pathFilter.Errors);
+                if (pathFilter.ShouldSkip)
+                {
+                    if (pathFilter.ShouldDeleteExisting
+                        && dbSnapshot.Files.ContainsKey(dbRelativePath))
+                    {
+                        projectedDeletePaths.Add(dbRelativePath);
+                    }
+                    continue;
+                }
             }
 
-            var knownLanguage = authoritativeFullScan
-                ? FileIndexer.GetReusableDetectedLanguage(f, dryScanMetadata.FileLanguages)
-                : null;
+            var knownLanguage = capturedTarget?.ReusableLanguage;
             var probe = ProbeDryRunFile(
                 dryIndexer,
                 f,
@@ -263,7 +287,8 @@ public static partial class IndexCommandRunner
                         probe.Language,
                         probe.Size,
                         probe.Modified,
-                        dryIndexer.IsGeneratedCodeExtractionSuppressed(dbRelativePath),
+                        capturedTarget?.GeneratedExtractionSuppressed
+                            ?? dryIndexer.IsGeneratedCodeExtractionSuppressed(dbRelativePath),
                         authoritativeFullScan,
                         normalizedProjectRoot,
                         forceExtractorRefresh,
@@ -374,7 +399,8 @@ public static partial class IndexCommandRunner
                 dbSnapshot,
                 dbRelativePath,
                 probe.Loaded!.Value.Record,
-                dryIndexer.IsGeneratedCodeExtractionSuppressed(dbRelativePath),
+                capturedTarget?.GeneratedExtractionSuppressed
+                    ?? dryIndexer.IsGeneratedCodeExtractionSuppressed(dbRelativePath),
                 authoritativeFullScan,
                 normalizedProjectRoot,
                 forceExtractorRefresh,
@@ -649,6 +675,7 @@ public static partial class IndexCommandRunner
         CancellationToken cancellationToken,
         Action<IEnumerable<FileIndexer.ScanError>> recordDryRunScanErrors,
         out IEnumerable<string> dryCandidates,
+        out FileIndexer.IndexingFileTargetCollection? dryIndexingTargets,
         out IEnumerable<string> dryDeleteCandidates,
         out bool authoritativeFullScan,
         out DryRunScanMetadata scanMetadata,
@@ -657,6 +684,7 @@ public static partial class IndexCommandRunner
         out int exitCode)
     {
         dryCandidates = [];
+        dryIndexingTargets = null;
         dryDeleteCandidates = [];
         authoritativeFullScan = false;
         scanMetadata = DryRunScanMetadata.Empty;
@@ -684,7 +712,10 @@ public static partial class IndexCommandRunner
                 FileIndexer.ScanFilesResult scanResult;
                 try
                 {
-                    scanResult = dryIndexer.ScanFilesDetailed(cancellationToken: cancellationToken);
+                    var scanWithTargets = dryIndexer.ScanFilesDetailedWithIndexingTargets(
+                        cancellationToken: cancellationToken);
+                    scanResult = scanWithTargets.ScanResult;
+                    dryIndexingTargets = scanWithTargets.IndexingTargets;
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
@@ -799,7 +830,10 @@ public static partial class IndexCommandRunner
                 FileIndexer.ScanFilesResult scanResult;
                 try
                 {
-                    scanResult = dryIndexer.ScanFilesDetailed(cancellationToken: cancellationToken);
+                    var scanWithTargets = dryIndexer.ScanFilesDetailedWithIndexingTargets(
+                        cancellationToken: cancellationToken);
+                    scanResult = scanWithTargets.ScanResult;
+                    dryIndexingTargets = scanWithTargets.IndexingTargets;
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
@@ -827,7 +861,10 @@ public static partial class IndexCommandRunner
             FileIndexer.ScanFilesResult scanResult;
             try
             {
-                scanResult = dryIndexer.ScanFilesDetailed(cancellationToken: cancellationToken);
+                var scanWithTargets = dryIndexer.ScanFilesDetailedWithIndexingTargets(
+                    cancellationToken: cancellationToken);
+                scanResult = scanWithTargets.ScanResult;
+                dryIndexingTargets = scanWithTargets.IndexingTargets;
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -2022,7 +2059,6 @@ public static partial class IndexCommandRunner
         IReadOnlyList<string> ListedDirectories,
         IReadOnlyList<string> AttributePrunedDirectories,
         IReadOnlyList<string> NestedRepositories,
-        IReadOnlyDictionary<string, string> FileLanguages,
         IReadOnlyDictionary<string, FileIndexer.ProjectMarkerFingerprintResult> ProjectMarkerFingerprints)
     {
         public static DryRunScanMetadata Empty { get; } = new(
@@ -2033,7 +2069,6 @@ public static partial class IndexCommandRunner
             [],
             [],
             [],
-            new Dictionary<string, string>(StringComparer.Ordinal),
             new Dictionary<string, FileIndexer.ProjectMarkerFingerprintResult>(StringComparer.Ordinal));
 
         public static DryRunScanMetadata FromScanResult(FileIndexer.ScanFilesResult scanResult)
@@ -2045,7 +2080,6 @@ public static partial class IndexCommandRunner
                 scanResult.ListedDirectories,
                 scanResult.AttributePrunedDirectories,
                 scanResult.NestedRepositories,
-                scanResult.FileLanguages,
                 scanResult.ProjectMarkerFingerprints);
     }
 

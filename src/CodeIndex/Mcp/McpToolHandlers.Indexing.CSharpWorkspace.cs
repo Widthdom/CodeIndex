@@ -191,7 +191,7 @@ public partial class McpServer
         }
 
         internal IndexedFileStatReuseResult? GetStatMatchedFile(
-            in CSharpStaticInterfacePrepass.FileTarget target)
+            in FileIndexer.IndexingFileTarget target)
         {
             return target.Language == "csharp"
                 && _preflight.StatReuse != null
@@ -206,7 +206,7 @@ public partial class McpServer
         }
 
         internal bool LoadedSnapshotMatches(
-            in CSharpStaticInterfacePrepass.FileTarget target,
+            in FileIndexer.IndexingFileTarget target,
             FileRecord record,
             DbWriter writer)
         {
@@ -256,7 +256,7 @@ public partial class McpServer
         }
 
         internal void DeferForStatRevalidation(
-            in CSharpStaticInterfacePrepass.FileTarget target,
+            in FileIndexer.IndexingFileTarget target,
             DbWriter writer)
         {
             PreservePriorPositiveSourceNoOp = false;

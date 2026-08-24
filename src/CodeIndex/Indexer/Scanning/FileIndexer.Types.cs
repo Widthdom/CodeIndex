@@ -70,6 +70,59 @@ public partial class FileIndexer
         DateTime ModifiedUtc,
         FileIdentity? Identity);
 
+    internal readonly record struct IndexingFileTarget(
+        string FilePath,
+        string RelativePath,
+        string DisplayRelativePath,
+        string IndexPath,
+        string? ReusableLanguage,
+        bool GeneratedExtractionSuppressed)
+    {
+        // Keep the full-scan and MCP processing vocabulary compact while the field name
+        // documents that non-reusable detections (.h and extensionless script/content
+        // detection) must still be repeated after the file is securely opened.
+        // full-scan / MCP 側の語彙は簡潔に保ちつつ、再利用不可の検出（.h と extensionless
+        // script/content）はsecure open後に再実行する必要があることをfield名で明示する。
+        internal string? Language => ReusableLanguage;
+    }
+
+    internal sealed class IndexingFileTargetCollection : IReadOnlyList<string>
+    {
+        private readonly List<IndexingFileTarget> _targets;
+
+        internal IndexingFileTargetCollection(int capacity)
+        {
+            _targets = new List<IndexingFileTarget>(capacity);
+        }
+
+        internal IReadOnlyList<string> FilePaths => this;
+
+        public int Count => _targets.Count;
+
+        // Preserve array-style indexed-loop call sites while Count remains the
+        // IReadOnlyCollection<string> contract exposed by the path view.
+        // path view の IReadOnlyCollection<string> 契約は Count のまま保ちつつ、
+        // array 由来の indexed-loop call site には Length を提供する。
+        internal int Length => Count;
+
+        public IndexingFileTarget this[int index] => _targets[index];
+
+        string IReadOnlyList<string>.this[int index] => _targets[index].FilePath;
+
+        internal void Add(IndexingFileTarget target) => _targets.Add(target);
+
+        public List<IndexingFileTarget>.Enumerator GetEnumerator() => _targets.GetEnumerator();
+
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator()
+            => ((IEnumerable<string>)this).GetEnumerator();
+
+        IEnumerator<string> IEnumerable<string>.GetEnumerator()
+        {
+            foreach (var target in _targets)
+                yield return target.FilePath;
+        }
+    }
+
     public readonly record struct ScanFilesResult(
         IReadOnlyList<string> Files,
         IReadOnlyDictionary<string, string> FileLanguages,
@@ -107,7 +160,12 @@ public partial class FileIndexer
 
     internal readonly record struct ScanFilesWithDirectoryListingSnapshotsResult(
         ScanFilesResult ScanResult,
-        ScanInputSnapshot InputSnapshot);
+        ScanInputSnapshot InputSnapshot,
+        IndexingFileTargetCollection? IndexingTargets = null);
+
+    internal readonly record struct ScanFilesWithIndexingTargetsResult(
+        ScanFilesResult ScanResult,
+        IndexingFileTargetCollection IndexingTargets);
 
     internal sealed record ScanInputSnapshot(
         IReadOnlyList<DirectoryListingSnapshot> DirectoryListings,

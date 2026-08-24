@@ -13,7 +13,7 @@ public static partial class IndexCommandRunner
         internal required FileIndexer Indexer { get; init; }
         internal required IndexCommandOptions Options { get; init; }
         internal required string ProjectRoot { get; init; }
-        internal required FullScanFileTarget[] FileTargets { get; init; }
+        internal required FileIndexer.IndexingFileTargetCollection FileTargets { get; init; }
         internal IReadOnlyList<int>? ExtractionFileIndexes { get; init; }
         internal required int ExtractionWorkItemCount { get; init; }
         internal required int ExtractionWorkerCount { get; init; }

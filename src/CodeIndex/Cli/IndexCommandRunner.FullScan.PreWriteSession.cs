@@ -44,7 +44,7 @@ public static partial class IndexCommandRunner
         bool ForceExtractorRefresh);
 
     private readonly record struct FullScanPreWriteRuntime(
-        FullScanFileTarget[] FileTargets,
+        FileIndexer.IndexingFileTargetCollection FileTargets,
         IReadOnlyList<CSharpStaticInterfacePrepass.FileTarget> CSharpPrepassTargets,
         IReadOnlyDictionary<string, string> FileLanguages,
         int CSharpPrepassCapacity,

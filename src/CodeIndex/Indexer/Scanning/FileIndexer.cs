@@ -103,7 +103,8 @@ public partial class FileIndexer
     private sealed class DirectoryScanState
     {
         public DirectoryScanState(
-            List<string> results,
+            List<string>? results,
+            IndexingFileTargetCollection? indexingTargets,
             Dictionary<string, string> fileLanguages,
             Dictionary<string, int> languageCounts,
             List<ScanError> errors,
@@ -117,6 +118,7 @@ public partial class FileIndexer
             bool captureDirectoryListingSnapshots)
         {
             Results = results;
+            IndexingTargets = indexingTargets;
             FileLanguages = fileLanguages;
             LanguageCounts = languageCounts;
             Errors = errors;
@@ -130,7 +132,9 @@ public partial class FileIndexer
             CaptureDirectoryListingSnapshots = captureDirectoryListingSnapshots;
         }
 
-        public List<string> Results { get; }
+        public List<string>? Results { get; }
+        public IndexingFileTargetCollection? IndexingTargets { get; }
+        public IReadOnlyList<string> Files => IndexingTargets?.FilePaths ?? Results!;
         public Dictionary<string, string> FileLanguages { get; }
         public Dictionary<string, int> LanguageCounts { get; }
         public List<ScanError> Errors { get; }

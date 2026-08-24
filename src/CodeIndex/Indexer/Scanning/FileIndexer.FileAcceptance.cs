@@ -25,7 +25,8 @@ public partial class FileIndexer
             return false;
         }
 
-        if (IsInternalIndexArtifactPath(ToRelativePath(file)))
+        var relativePath = ToRelativePath(file);
+        if (IsInternalIndexArtifactPath(relativePath))
             return false;
 
         if (seenFilePaths is not null)
@@ -33,7 +34,6 @@ public partial class FileIndexer
             var seenFilePathKey = GetSeenFilePathKey(file, filePathCameFromDirectoryEnumeration);
             if (!seenFilePaths.Add(seenFilePathKey))
             {
-                var relativePath = ToRelativePath(file);
                 scanState.Errors.Add(new ScanError(
                     relativePath,
                     "Skipped duplicate file path that differs only by case on a case-insensitive directory.",
@@ -57,6 +57,7 @@ public partial class FileIndexer
             : (FileProbeStatus?)null;
         return TryAcceptSupportedScannedFile(
             file,
+            relativePath,
             scanState,
             cancellationToken,
             knownIndexability);
@@ -67,6 +68,7 @@ public partial class FileIndexer
 
     private bool TryAcceptSupportedScannedFile(
         string file,
+        string relativeFile,
         DirectoryScanState scanState,
         CancellationToken cancellationToken,
         FileProbeStatus? knownIndexability = null)
@@ -77,26 +79,24 @@ public partial class FileIndexer
         var indexability = knownIndexability ?? GetFileIndexabilityForIndexing(file);
         if (indexability == FileProbeStatus.Missing)
         {
-            var relativePath = ToRelativePath(file);
             scanState.Errors.Add(new ScanError(
-                relativePath,
+                relativeFile,
                 "Skipped file because it was deleted during scanning.",
                 ScanIssueSeverity.Warning));
-            scanState.RecordNonIndexablePath(relativePath);
+            scanState.RecordNonIndexablePath(relativeFile);
             return false;
         }
 
         if (indexability == FileProbeStatus.ProbeFailed)
         {
-            var relativePath = ToRelativePath(file);
-            scanState.Errors.Add(new ScanError(relativePath, "Could not probe file for indexability/language."));
-            scanState.RecordProbeFailedFilePath(relativePath);
+            scanState.Errors.Add(new ScanError(relativeFile, "Could not probe file for indexability/language."));
+            scanState.RecordProbeFailedFilePath(relativeFile);
             return false;
         }
 
         if (indexability != FileProbeStatus.Supported)
         {
-            scanState.RecordNonIndexablePath(ToRelativePath(file));
+            scanState.RecordNonIndexablePath(relativeFile);
             return false;
         }
 
@@ -112,7 +112,6 @@ public partial class FileIndexer
         if (language.Status == FileProbeStatus.Unsupported
             && HasUnknownLanguageMapping(file))
         {
-            var relativeFile = ToRelativePath(file);
             try
             {
                 var probe = ProbeUnknownLanguageForIndexing(
@@ -136,7 +135,6 @@ public partial class FileIndexer
 
         if (language.Status == FileProbeStatus.Missing)
         {
-            var relativeFile = ToRelativePath(file);
             scanState.Errors.Add(new ScanError(
                 relativeFile,
                 "Skipped file because it was deleted during scanning.",
@@ -147,7 +145,6 @@ public partial class FileIndexer
 
         if (language.Status == FileProbeStatus.ProbeFailed)
         {
-            var relativeFile = ToRelativePath(file);
             scanState.Errors.Add(new ScanError(relativeFile, "Could not probe file for indexability/language."));
             scanState.RecordProbeFailedFilePath(relativeFile);
             return false;
@@ -155,7 +152,6 @@ public partial class FileIndexer
 
         if (language.Status != FileProbeStatus.Supported)
         {
-            var relativeFile = ToRelativePath(file);
             scanState.RecordNonIndexablePath(relativeFile);
             if (isUnknownLanguageCoverageCandidate
                 && !IsInternalIndexArtifactPath(relativeFile))
@@ -169,7 +165,6 @@ public partial class FileIndexer
             && linkCount > 1
             && !scanState.RecordFileIdentity(identity))
         {
-            var relativeFile = ToRelativePath(file);
             scanState.Errors.Add(new ScanError(
                 relativeFile,
                 "Skipped hardlinked file because the same file content was already indexed from another path.",
@@ -186,6 +181,27 @@ public partial class FileIndexer
                 acceptedLanguage,
                 out _);
             count++;
+        }
+
+        if (scanState.IndexingTargets != null)
+        {
+            var relativePath = NormalizeRelativePathForCurrentPlatform(relativeFile);
+            var indexPath = NormalizeIndexPath(relativeFile);
+            var reusableLanguage = CanReuseDetectedLanguageWithoutContent(file, language.Language)
+                ? language.Language
+                : null;
+            scanState.IndexingTargets.Add(new IndexingFileTarget(
+                file,
+                relativePath,
+                relativeFile,
+                indexPath,
+                reusableLanguage,
+                HasGeneratedCodeExtractionSuppressionPatterns
+                    && IsGeneratedCodeExtractionSuppressed(indexPath)));
+        }
+        else
+        {
+            scanState.Results!.Add(file);
         }
         return true;
     }

@@ -49,7 +49,7 @@ public partial class McpServer
     }
 
     private static McpIndexFtsPreflightState BuildMcpIndexFtsPreflight(
-        CSharpStaticInterfacePrepass.FileTarget[] targets,
+        FileIndexer.IndexingFileTargetCollection targets,
         FilePurgePlan purgePlan,
         bool rebuild,
         bool startedWithNoIndexedFiles,
@@ -101,7 +101,7 @@ public partial class McpServer
     }
 
     private static bool TryPreflightMcpIndexTarget(
-        in CSharpStaticInterfacePrepass.FileTarget target,
+        in FileIndexer.IndexingFileTarget target,
         ReusableIndexedFileStatsSnapshot reusableFiles,
         McpPathBoundary.IndexRootAuthorization authorizedRoot,
         McpIndexStatMatchResolver getStatMatch,

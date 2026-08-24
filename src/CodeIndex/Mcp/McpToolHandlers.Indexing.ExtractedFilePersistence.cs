@@ -13,7 +13,7 @@ public partial class McpServer
     private static void PersistExtractedMcpIndexFile(
         McpIndexFileLoopContext context,
         McpIndexFileLoopSession session,
-        in CSharpStaticInterfacePrepass.FileTarget target,
+        in FileIndexer.IndexingFileTarget target,
         FileRecord record,
         in LoadedFileRecord loaded,
         long fileId,
@@ -66,7 +66,7 @@ public partial class McpServer
     private static (List<SymbolRecord> Symbols, FileIssue? TimeoutIssue)
         ExtractMcpIndexSymbols(
             McpIndexFileLoopContext context,
-            in CSharpStaticInterfacePrepass.FileTarget target,
+            in FileIndexer.IndexingFileTarget target,
             FileRecord record,
             in LoadedFileRecord loaded,
             long fileId)

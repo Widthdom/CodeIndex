@@ -129,7 +129,6 @@ public partial class McpServer
             McpIndexPostExtractionHookDiscoveryForTesting?.Invoke();
             return PostExtractionHookRunner.DiscoverDefault(maxFileBytes);
         });
-        var currentHotspotFamilyMarkerFingerprints = GetHotspotFamilyMarkerFingerprints(indexer, requestToken);
         var currentCSharpSymbolNameContractVersion = DbContext.CSharpSymbolNameContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var csharpSymbolNameContractMatchesCurrent = indexSnapshot.CSharpSymbolNameContractVersion == currentCSharpSymbolNameContractVersion;
         var currentMetadataTargetVersion = DbContext.MetadataTargetVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
@@ -138,10 +137,6 @@ public partial class McpServer
         var sqlGraphContractMatchesCurrent = indexSnapshot.SqlGraphContractVersion == currentSqlGraphContractVersion;
         var currentHdlGraphContractVersion = DbContext.HdlGraphContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var hdlGraphContractMatchesCurrent = indexSnapshot.HdlGraphContractVersion == currentHdlGraphContractVersion;
-        var hotspotFamilyTrustMatchesCurrent = GetHotspotFamilyTrustMatchesCurrent(
-            indexSnapshot.HotspotFamilyVersions,
-            indexSnapshot.HotspotFamilyMarkerFingerprints,
-            currentHotspotFamilyMarkerFingerprints);
         var symbolKindFilterMatchesPrior = string.Equals(
             indexSnapshot.SymbolKindFilterSignature,
             symbolKindFilter.Signature,
@@ -336,10 +331,19 @@ public partial class McpServer
             .CreateForFreshBuiltInExtraction(
                 startedWithNoIndexedFilesBeforeRebuild && !rebuild);
         // Scan and index / スキャン・インデックス
-        var scanWithDirectorySnapshots = indexer.ScanFilesDetailedWithDirectoryListingSnapshots(
+        var scanWithDirectorySnapshots = indexer.ScanFilesDetailedWithDirectoryListingSnapshotsAndIndexingTargets(
             cancellationToken: requestToken);
         var scanResult = scanWithDirectorySnapshots.ScanResult;
         var scanInputSnapshot = scanWithDirectorySnapshots.InputSnapshot;
+        var indexingTargets = scanWithDirectorySnapshots.IndexingTargets
+            ?? throw new InvalidOperationException(
+                "MCP index discovery did not capture indexing targets.");
+        var currentHotspotFamilyMarkerFingerprints =
+            scanResult.ProjectMarkerFingerprints;
+        var hotspotFamilyTrustMatchesCurrent = GetHotspotFamilyTrustMatchesCurrent(
+            indexSnapshot.HotspotFamilyVersions,
+            indexSnapshot.HotspotFamilyMarkerFingerprints,
+            currentHotspotFamilyMarkerFingerprints);
         var scanHadErrors = scanResult.HadErrors;
         var initialDeferCSharpMutations = !startedWithNoIndexedFiles
             && scanHadErrors
@@ -347,7 +351,7 @@ public partial class McpServer
         if (memorySamples != null)
             memorySamples.Add(CaptureMcpIndexMemorySample("scan", runStopwatch));
         var files = scanResult.Files;
-        var targets = BuildMcpIndexTargetSet(projectPath, indexer, scanResult);
+        var targets = BuildMcpIndexTargetSet(indexer, scanResult, indexingTargets);
         var fileTargets = targets.All;
         var csharpPrepassTargets = targets.CSharp;
         var languageCounts = scanResult.LanguageCounts;
@@ -484,7 +488,7 @@ public partial class McpServer
                     target.FilePath,
                     target.IndexPath,
                     target.Language,
-                    IsGeneratedExtractionSuppressed(target));
+                    target.GeneratedExtractionSuppressed);
                 prepassStatReuse[target.IndexPath] = existingFile;
                 csharpState.AllPrepassTargetsReusable &= existingFile != null;
             }
@@ -570,7 +574,7 @@ public partial class McpServer
         var freshCountSymbols = 0L;
         var freshCountReferences = 0L;
         IndexedFileStatReuseResult? GetStatMatchedFile(
-            in CSharpStaticInterfacePrepass.FileTarget target)
+            in FileIndexer.IndexingFileTarget target)
         {
             var allowStatReuse = !rebuild
                 && !startedWithNoIndexedFiles
@@ -632,7 +636,7 @@ public partial class McpServer
                     target.FilePath,
                     target.IndexPath,
                     target.Language,
-                    IsGeneratedExtractionSuppressed(target));
+                    target.GeneratedExtractionSuppressed);
                 if (revalidated == null)
                     invalidatedCSharpTargetIndexes.Add(targetIndex);
             }

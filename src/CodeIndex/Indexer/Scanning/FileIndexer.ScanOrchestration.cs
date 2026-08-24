@@ -22,7 +22,27 @@ public partial class FileIndexer
             continueOnError,
             initialFileCapacity,
             captureDirectoryListingSnapshots: false,
+            captureIndexingTargets: false,
             cancellationToken: cancellationToken).ScanResult;
+
+    internal ScanFilesWithIndexingTargetsResult ScanFilesDetailedWithIndexingTargets(
+        IReadOnlySet<string>? checkpointedDirectories = null,
+        bool continueOnError = true,
+        int? initialFileCapacity = null,
+        CancellationToken cancellationToken = default)
+    {
+        var result = ScanFilesDetailedCore(
+            checkpointedDirectories,
+            continueOnError,
+            initialFileCapacity,
+            captureDirectoryListingSnapshots: false,
+            captureIndexingTargets: true,
+            cancellationToken: cancellationToken);
+        return new ScanFilesWithIndexingTargetsResult(
+            result.ScanResult,
+            result.IndexingTargets
+                ?? throw new InvalidOperationException("Indexing targets were not captured."));
+    }
 
     internal ScanFilesWithDirectoryListingSnapshotsResult ScanFilesDetailedWithDirectoryListingSnapshots(
         IReadOnlySet<string>? checkpointedDirectories = null,
@@ -34,6 +54,21 @@ public partial class FileIndexer
             continueOnError,
             initialFileCapacity,
             captureDirectoryListingSnapshots: true,
+            captureIndexingTargets: false,
+            cancellationToken: cancellationToken);
+
+    internal ScanFilesWithDirectoryListingSnapshotsResult
+        ScanFilesDetailedWithDirectoryListingSnapshotsAndIndexingTargets(
+            IReadOnlySet<string>? checkpointedDirectories = null,
+            bool continueOnError = true,
+            int? initialFileCapacity = null,
+            CancellationToken cancellationToken = default)
+        => ScanFilesDetailedCore(
+            checkpointedDirectories,
+            continueOnError,
+            initialFileCapacity,
+            captureDirectoryListingSnapshots: true,
+            captureIndexingTargets: true,
             cancellationToken: cancellationToken);
 
     private ScanFilesWithDirectoryListingSnapshotsResult ScanFilesDetailedCore(
@@ -41,6 +76,7 @@ public partial class FileIndexer
         bool continueOnError,
         int? initialFileCapacity,
         bool captureDirectoryListingSnapshots,
+        bool captureIndexingTargets,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -56,6 +92,7 @@ public partial class FileIndexer
                 continueOnError,
                 initialFileCapacity,
                 captureDirectoryListingSnapshots,
+                captureIndexingTargets,
                 cancellationToken);
         }
         finally
@@ -69,12 +106,18 @@ public partial class FileIndexer
         bool continueOnError,
         int? initialFileCapacity,
         bool captureDirectoryListingSnapshots,
+        bool captureIndexingTargets,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var resolvedFileCapacity = ResolveInitialScanFileCapacity(initialFileCapacity);
         var resolvedDirectoryCapacity = ResolveInitialScanDirectoryCapacity(resolvedFileCapacity);
-        var files = new List<string>(resolvedFileCapacity);
+        var indexingTargets = captureIndexingTargets
+            ? new IndexingFileTargetCollection(resolvedFileCapacity)
+            : null;
+        var files = captureIndexingTargets
+            ? null
+            : new List<string>(resolvedFileCapacity);
         var fileLanguages = new Dictionary<string, string>(resolvedFileCapacity, StringComparer.Ordinal);
         var languageCounts = new Dictionary<string, int>(InitialScanLanguageCapacity, StringComparer.Ordinal);
         var errors = new List<ScanError>(_submoduleLoadWarnings.Count);
@@ -94,6 +137,7 @@ public partial class FileIndexer
         var projectMarkerScopeCollection = new ProjectMarkerScopeCollectionState();
         var scanState = new DirectoryScanState(
             files,
+            indexingTargets,
             fileLanguages,
             languageCounts,
             errors,
@@ -143,7 +187,7 @@ public partial class FileIndexer
         }
 
         var scanResult = new ScanFilesResult(
-            scanState.Results,
+            scanState.Files,
             scanState.FileLanguages,
             scanState.Errors,
             MaterializePathSet(scanState.NonIndexablePaths),
@@ -160,7 +204,10 @@ public partial class FileIndexer
             LanguageCounts = MaterializeLanguageCounts(scanState.LanguageCounts),
             ProjectMarkerFingerprints = MaterializeProjectMarkerFingerprintResults(projectMarkerTraversalStates),
         };
-        return new ScanFilesWithDirectoryListingSnapshotsResult(scanResult, inputSnapshot);
+        return new ScanFilesWithDirectoryListingSnapshotsResult(
+            scanResult,
+            inputSnapshot,
+            scanState.IndexingTargets);
     }
 
     private static IReadOnlyList<string> MaterializePathSet(HashSet<string>? paths)

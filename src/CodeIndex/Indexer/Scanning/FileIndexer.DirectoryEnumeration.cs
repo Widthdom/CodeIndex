@@ -221,15 +221,14 @@ public partial class FileIndexer
             if (passthrough)
                 continue;
 
-            if (TryAcceptScannedFile(
-                    entry,
-                    scanState,
-                    activeIgnoreRules,
-                    seenFilePaths,
-                    cancellationToken,
-                    knownAttributes: attributes,
-                    filePathCameFromDirectoryEnumeration: true))
-                scanState.Results.Add(entry);
+            TryAcceptScannedFile(
+                entry,
+                scanState,
+                activeIgnoreRules,
+                seenFilePaths,
+                cancellationToken,
+                knownAttributes: attributes,
+                filePathCameFromDirectoryEnumeration: true);
         }
 
         // A successful immediate-child listing proves this directory for sibling-file purge.
@@ -304,16 +303,13 @@ public partial class FileIndexer
                     directoryIgnoreCase);
             }
 
-            if (!TryAcceptScannedFile(
-                    file,
-                    scanState,
-                    activeIgnoreRules,
-                    seenFilePaths,
-                    cancellationToken,
-                    knownAttributes))
-                continue;
-
-            scanState.Results.Add(file);
+            TryAcceptScannedFile(
+                file,
+                scanState,
+                activeIgnoreRules,
+                seenFilePaths,
+                cancellationToken,
+                knownAttributes);
         }
     }
 }

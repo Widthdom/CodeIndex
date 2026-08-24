@@ -7853,6 +7853,42 @@ public partial class McpServerTests
     }
 
     [Fact]
+    public void ToolsCall_Index_ReusesIntegratedScanForProjectMarkerFingerprints()
+    {
+        var fixtureDir = Path.Combine(
+            Path.GetFullPath("."),
+            $"mcp_index_integrated_markers_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(fixtureDir);
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_integrated_markers");
+        var previousEnumerator = FileIndexer.EnumerateProjectMarkerDirectoriesForTesting;
+        try
+        {
+            File.WriteAllText(Path.Combine(fixtureDir, "App.csproj"), "<Project />\n");
+            File.WriteAllText(Path.Combine(fixtureDir, "App.cs"), "public sealed class App { }\n");
+            FileIndexer.EnumerateProjectMarkerDirectoriesForTesting =
+                _ => throw new InvalidOperationException(
+                    "MCP indexing must reuse the integrated scan's project-marker fingerprints.");
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+
+            var response = CallIndex(server, fixtureDir);
+
+            Assert.False(
+                response["result"]?["isError"]?.GetValue<bool>() ?? false,
+                response.ToJsonString());
+            Assert.Equal(
+                0,
+                response["result"]!["structuredContent"]!["summary"]!["errors"]!
+                    .GetValue<int>());
+        }
+        finally
+        {
+            FileIndexer.EnumerateProjectMarkerDirectoriesForTesting = previousEnumerator;
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
+    [Fact]
     public void ToolsCall_Index_WithoutCSharpSkipsCSharpPrepass()
     {
         var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_no_csharp_prepass_{Guid.NewGuid():N}");
