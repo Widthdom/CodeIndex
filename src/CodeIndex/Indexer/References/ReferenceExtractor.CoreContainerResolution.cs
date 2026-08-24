@@ -96,6 +96,19 @@ public static partial class ReferenceExtractor
                 if (sameLineContainer != null)
                     return sameLineContainer;
 
+                if (_container is { StartLine: var startLine, EndLine: var endLine }
+                    && startLine == _lineNumber
+                    && endLine == _lineNumber
+                    && _container.SubKind != SyntheticSymbolIdentity.CSharpTopLevelScopeSubKind)
+                {
+                    var topLevelContainer = _loop.ContainerCandidates.FirstOrDefault(candidate =>
+                        candidate.SubKind == SyntheticSymbolIdentity.CSharpTopLevelScopeSubKind
+                        && candidate.BodyStartLine <= _lineNumber
+                        && candidate.BodyEndLine >= _lineNumber);
+                    if (topLevelContainer != null)
+                        return topLevelContainer;
+                }
+
                 if (_csharpLineHasWhereClause
                     && _container?.Kind == "function"
                     && _container.StartLine == _lineNumber

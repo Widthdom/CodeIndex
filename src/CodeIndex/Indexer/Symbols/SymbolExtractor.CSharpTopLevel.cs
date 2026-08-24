@@ -19,7 +19,9 @@ public static partial class SymbolExtractor
         // function の親を synthetic scope に変更しない。
         var declarationCoveredLines = BuildCSharpTopLevelDeclarationCoverage(
             structuralLines.Length,
-            symbols);
+            symbols,
+            out var sameLineDeclarationsByLine,
+            out var nonSameLineDeclarationCoveredLines);
         var firstExecutableLine = 0;
         var lastExecutableLine = 0;
         var inUsingDirective = false;
@@ -27,8 +29,16 @@ public static partial class SymbolExtractor
 
         for (var lineIndex = 0; lineIndex < structuralLines.Length; lineIndex++)
         {
-            if (declarationCoveredLines[lineIndex])
+            if (declarationCoveredLines[lineIndex]
+                && (nonSameLineDeclarationCoveredLines[lineIndex]
+                    || sameLineDeclarationsByLine == null
+                    || !sameLineDeclarationsByLine.TryGetValue(lineIndex + 1, out var sameLineDeclarations)
+                    || !HasCSharpExecutableTextOutsideSameLineDeclarations(
+                        structuralLines[lineIndex],
+                        sameLineDeclarations)))
+            {
                 continue;
+            }
             if (IsCSharpLineCommentOnly(lines[lineIndex]))
                 continue;
 
@@ -87,9 +97,13 @@ public static partial class SymbolExtractor
 
     private static bool[] BuildCSharpTopLevelDeclarationCoverage(
         int lineCount,
-        IReadOnlyList<SymbolRecord> symbols)
+        IReadOnlyList<SymbolRecord> symbols,
+        out Dictionary<int, List<SymbolRecord>>? sameLineDeclarationsByLine,
+        out bool[] nonSameLineDeclarationCoveredLines)
     {
         var covered = new bool[lineCount];
+        nonSameLineDeclarationCoveredLines = new bool[lineCount];
+        sameLineDeclarationsByLine = null;
         foreach (var symbol in symbols)
         {
             if (!IsCSharpFileScopeDeclarationForTopLevelDetection(symbol))
@@ -99,10 +113,82 @@ public static partial class SymbolExtractor
             var endLine = Math.Clamp(symbol.EndLine >= startLine ? symbol.EndLine : startLine, startLine, lineCount);
             for (var lineNumber = startLine; lineNumber <= endLine; lineNumber++)
                 covered[lineNumber - 1] = true;
+
+            if (startLine == endLine && !string.IsNullOrWhiteSpace(symbol.Signature))
+            {
+                sameLineDeclarationsByLine ??= [];
+                if (!sameLineDeclarationsByLine.TryGetValue(startLine, out var declarations))
+                {
+                    declarations = [];
+                    sameLineDeclarationsByLine.Add(startLine, declarations);
+                }
+                declarations.Add(symbol);
+            }
+            else
+            {
+                for (var lineNumber = startLine; lineNumber <= endLine; lineNumber++)
+                    nonSameLineDeclarationCoveredLines[lineNumber - 1] = true;
+            }
         }
 
         return covered;
     }
+
+    private static bool HasCSharpExecutableTextOutsideSameLineDeclarations(
+        string structuralLine,
+        IReadOnlyList<SymbolRecord> declarations)
+    {
+        var uncovered = structuralLine.ToCharArray();
+        foreach (var symbol in declarations)
+        {
+            var signature = symbol.Signature!;
+            var signatureIndex = symbol.StartColumn
+                ?? FindCSharpSameLineSignatureStart(structuralLine, symbol.Name, signature);
+            if (signatureIndex < 0 || signatureIndex + signature.Length > uncovered.Length)
+                return false;
+
+            Array.Fill(uncovered, ' ', signatureIndex, signature.Length);
+        }
+
+        return uncovered.Any(static ch => !char.IsWhiteSpace(ch));
+    }
+
+    private static int FindCSharpSameLineSignatureStart(
+        string structuralLine,
+        string symbolName,
+        string signature)
+    {
+        var exactSignatureIndex = structuralLine.IndexOf(signature, StringComparison.Ordinal);
+        if (exactSignatureIndex >= 0)
+            return exactSignatureIndex;
+
+        var nameOffset = signature.IndexOf(symbolName, StringComparison.Ordinal);
+        if (nameOffset < 0)
+            return -1;
+
+        var searchStart = 0;
+        while (searchStart < structuralLine.Length)
+        {
+            var nameIndex = structuralLine.IndexOf(symbolName, searchStart, StringComparison.Ordinal);
+            if (nameIndex < 0)
+                return -1;
+
+            var beforeIsIdentifier = nameIndex > 0
+                && IsCSharpIdentifierCharacter(structuralLine[nameIndex - 1]);
+            var afterIndex = nameIndex + symbolName.Length;
+            var afterIsIdentifier = afterIndex < structuralLine.Length
+                && IsCSharpIdentifierCharacter(structuralLine[afterIndex]);
+            if (!beforeIsIdentifier && !afterIsIdentifier && nameIndex >= nameOffset)
+                return nameIndex - nameOffset;
+
+            searchStart = nameIndex + symbolName.Length;
+        }
+
+        return -1;
+    }
+
+    private static bool IsCSharpIdentifierCharacter(char value)
+        => value == '_' || value == '@' || value == '\\' || char.IsLetterOrDigit(value);
 
     private static bool IsCSharpFileScopeDeclarationForTopLevelDetection(SymbolRecord symbol)
     {
@@ -133,16 +219,25 @@ public static partial class SymbolExtractor
         startsMultilineUsingDirective = false;
         if (line.StartsWith('#'))
             return true;
-        if (line.StartsWith("extern alias ", StringComparison.Ordinal))
+        var externEnd = GetCSharpLeadingKeywordEnd(line, "extern");
+        if (externEnd >= 0
+            && GetCSharpLeadingKeywordEnd(line[externEnd..].TrimStart(), "alias") >= 0)
+        {
             return true;
-        if (line.StartsWith("global using ", StringComparison.Ordinal))
+        }
+
+        var globalEnd = GetCSharpLeadingKeywordEnd(line, "global");
+        if (globalEnd >= 0
+            && GetCSharpLeadingKeywordEnd(line[globalEnd..].TrimStart(), "using", allowOpeningParen: true) >= 0)
         {
             startsMultilineUsingDirective = !line.Contains(';', StringComparison.Ordinal);
             return true;
         }
-        if (!line.StartsWith("using ", StringComparison.Ordinal))
+
+        var usingEnd = GetCSharpLeadingKeywordEnd(line, "using", allowOpeningParen: true);
+        if (usingEnd < 0)
             return false;
-        if (IsCSharpUsingDeclaration(line))
+        if (IsCSharpUsingDeclaration(line[usingEnd..].TrimStart()))
         {
             return false;
         }
@@ -151,21 +246,22 @@ public static partial class SymbolExtractor
         return true;
     }
 
-    private static bool IsCSharpUsingDeclaration(string line)
+    private static bool IsCSharpUsingDeclaration(string remainder)
     {
-        if (line.StartsWith("using var ", StringComparison.Ordinal)
-            || line.StartsWith("using (", StringComparison.Ordinal))
+        if (remainder.StartsWith('(')
+            || GetCSharpLeadingKeywordEnd(remainder, "var") >= 0)
         {
             return true;
         }
 
-        var equalsIndex = line.IndexOf('=');
+        var equalsIndex = remainder.IndexOf('=');
         if (equalsIndex < 0)
             return false;
 
-        var declarationPrefix = line["using ".Length..equalsIndex].Trim();
-        if (declarationPrefix.StartsWith("unsafe ", StringComparison.Ordinal))
-            declarationPrefix = declarationPrefix["unsafe ".Length..].TrimStart();
+        var declarationPrefix = remainder[..equalsIndex].Trim();
+        var unsafeEnd = GetCSharpLeadingKeywordEnd(declarationPrefix, "unsafe");
+        if (unsafeEnd >= 0)
+            declarationPrefix = declarationPrefix[unsafeEnd..].TrimStart();
 
         // An alias directive has one identifier before '=', while an explicit using
         // declaration has a type and variable name. Structural masking has already
@@ -173,6 +269,22 @@ public static partial class SymbolExtractor
         // alias directive の '=' より前は識別子 1 個だが、明示型 using declaration
         // には型と変数名がある。comment はこの判定前に空白へ mask 済み。
         return declarationPrefix.AsSpan().IndexOfAny(' ', '\t') >= 0;
+    }
+
+    private static int GetCSharpLeadingKeywordEnd(
+        string line,
+        string keyword,
+        bool allowOpeningParen = false)
+    {
+        if (!line.StartsWith(keyword, StringComparison.Ordinal))
+            return -1;
+        if (line.Length == keyword.Length)
+            return keyword.Length;
+
+        var boundary = line[keyword.Length];
+        return char.IsWhiteSpace(boundary) || (allowOpeningParen && boundary == '(')
+            ? keyword.Length
+            : -1;
     }
 
     private static bool IsCSharpFileScopeAttributeStart(string line)

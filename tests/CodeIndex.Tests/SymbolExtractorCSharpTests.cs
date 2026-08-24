@@ -78,6 +78,28 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharpTopLevelProgram_SameLineLocalFunctionKeepsOutsideCallInSyntheticScope_Issue5164Review()
+    {
+        const string content = "void Helper() { Console.WriteLine(\"inside\"); } Helper();\n";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var topLevel = Assert.Single(symbols, symbol =>
+            symbol.SubKind == SyntheticSymbolIdentity.CSharpTopLevelScopeSubKind);
+        Assert.Equal(1, topLevel.StartLine);
+        Assert.Equal(1, topLevel.EndLine);
+
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+        var nestedCall = Assert.Single(
+            references,
+            reference => reference.ReferenceKind == "call" && reference.SymbolName == "WriteLine");
+        Assert.Equal("Helper", nestedCall.ContainerName);
+        var helperCall = Assert.Single(
+            references,
+            reference => reference.ReferenceKind == "call" && reference.SymbolName == "Helper");
+        Assert.Equal(SyntheticSymbolIdentity.CSharpTopLevelScopeName, helperCall.ContainerName);
+    }
+
+    [Fact]
     public void Extract_CSharpTypedUsingDeclaration_IsTopLevelExecutable_Issue5164()
     {
         const string content = "using System.IO;\nusing MemoryStream stream = new();\nstream.WriteByte(1);\n";
@@ -123,6 +145,9 @@ public partial class SymbolExtractorTests
             ["comments"] = "// comment\n/* block comment */\n",
             ["directives"] = "#nullable enable\n#define FEATURE\n",
             ["global-usings"] = "global using System;\nglobal using Text = System.Text;\n",
+            ["tab-usings"] = "using\tSystem;\nglobal\tusing Text = System.Text;\n",
+            ["tab-extern-alias"] = "extern\talias Foo;\n",
+            ["multiline-using"] = "using\n    System;\n",
             ["assembly-attributes"] = "[assembly:\n    System.CLSCompliant(true)]\n[module: System.Runtime.CompilerServices.SkipLocalsInit]\n",
             ["type"] = "public sealed class App { public static void Main() { Run(); } }\n",
             ["attributed-type"] = "[System.Obsolete]\npublic sealed class AttributedApp { }\n",

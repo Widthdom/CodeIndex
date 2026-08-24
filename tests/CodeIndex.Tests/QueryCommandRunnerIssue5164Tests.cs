@@ -9,6 +9,70 @@ namespace CodeIndex.Tests;
 public sealed class QueryCommandRunnerIssue5164Tests
 {
     [Fact]
+    public void CandidateCallees_LegacySchemaWithoutSourceIdentityFailsClosed_Issue5164Review()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_selector_legacy_source_identity_5164");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFiles(
+                dbPath,
+                [
+                    new TestProjectHelper.IndexedFileFixture("a.sh", "shell", "first_cmd\n"),
+                    new TestProjectHelper.IndexedFileFixture("b.sh", "shell", "second_cmd\n"),
+                ]);
+
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            using (var legacySchema = db.Connection.CreateCommand())
+            {
+                legacySchema.CommandText = """
+                    DROP INDEX idx_symbol_refs_unresolved_mutual_folded;
+                    DROP INDEX idx_symbol_refs_resolved_source_target_kind;
+                    DROP INDEX idx_symbol_refs_source_symbol;
+                    ALTER TABLE symbol_references DROP COLUMN source_symbol_id;
+                    INSERT INTO symbol_references(
+                        file_id, symbol_name, reference_kind, line, column_number,
+                        container_kind, container_name, symbol_name_folded, container_name_folded)
+                    SELECT id, 'first_cmd', 'call', 1, 1,
+                           'function', '<script>', 'first_cmd', '<script>'
+                    FROM files WHERE path = 'a.sh';
+                    INSERT INTO symbol_references(
+                        file_id, symbol_name, reference_kind, line, column_number,
+                        container_kind, container_name, symbol_name_folded, container_name_folded)
+                    SELECT id, 'second_cmd', 'call', 1, 1,
+                           'function', '<script>', 'second_cmd', '<script>'
+                    FROM files WHERE path = 'b.sh';
+                    """;
+                legacySchema.ExecuteNonQuery();
+            }
+
+            var reader = new DbReader(db.Connection);
+            var candidate = new DefinitionResult
+            {
+                SymbolId = 1,
+                Name = "<script>",
+                Lang = "shell",
+            };
+
+            Assert.Empty(reader.GetCalleesForCandidate(
+                candidate,
+                limit: 20,
+                pathPatterns: null,
+                excludePathPatterns: null,
+                excludeTests: false));
+            Assert.Equal(0, reader.CountCalleesForCandidate(
+                candidate,
+                pathPatterns: null,
+                excludePathPatterns: null,
+                excludeTests: false).Count);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void ScriptScope_OutlineAndInspectExposeSameFileQualifiedIdentity_Issue5164Review()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_script_scope_identity_5164");

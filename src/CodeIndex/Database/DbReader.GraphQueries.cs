@@ -303,7 +303,11 @@ public partial class DbReader
         ReferenceRankMode rankMode = ReferenceRankMode.Weighted,
         bool includeQualifiedCommonCalls = false,
         bool includeMemberReads = false)
-        => GetCalleesCore(
+    {
+        if (definition.SymbolId is not long symbolId || !_referenceColumns.Contains("source_symbol_id"))
+            return [];
+
+        return GetCalleesCore(
             definition.Name,
             limit,
             definition.Lang,
@@ -317,7 +321,8 @@ public partial class DbReader
             offset,
             includeQualifiedCommonCalls,
             includeMemberReads,
-            sourceSymbolId: definition.SymbolId);
+            sourceSymbolId: symbolId);
+    }
 
     internal QueryCountResult CountCalleesForCandidate(
         DefinitionResult definition,

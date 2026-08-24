@@ -7,6 +7,49 @@ namespace CodeIndex.Tests;
 public partial class IndexCommandRunnerTests
 {
     [Fact]
+    public void Run_FullIndexReextractsUnstampedCSharpBeforeCertifyingTopLevelContract_Issue5164Review()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_top_level_unstamped_upgrade_5164");
+        var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "Program.cs"),
+                "using System;\nConsole.WriteLine(\"upgrade\");\n");
+            AssertSuccessfulTopLevelIndexIssue5164(projectRoot);
+
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            using (var command = db.Connection.CreateCommand())
+            {
+                command.CommandText = """
+                    DELETE FROM symbols WHERE sub_kind = @sub_kind;
+                    DELETE FROM codeindex_meta WHERE key = @extractor_key;
+                    """;
+                command.Parameters.AddWithValue(
+                    "@sub_kind",
+                    SyntheticSymbolIdentity.CSharpTopLevelScopeSubKind);
+                command.Parameters.AddWithValue(
+                    "@extractor_key",
+                    DbContext.GetSymbolExtractorVersionMetaKey("csharp"));
+                Assert.Equal(2, command.ExecuteNonQuery());
+            }
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("files_extracted").GetInt32());
+            Assert.Equal((2, 2), ReadTopLevelFactIssue5164(dbPath, "Program.cs").Span);
+
+            using var verifiedDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            var writer = new DbWriter(verifiedDb.Connection);
+            Assert.True(writer.SymbolExtractorVersionsMatchCurrent(["csharp"]));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_FullAndIncrementalTopLevelAddChangeDeleteRenameAreDeterministic_Issue5164()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_top_level_incremental_5164");

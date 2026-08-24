@@ -309,7 +309,15 @@ public partial class DbWriter
 
         var stored = GetMetaString(DbContext.GetSymbolExtractorVersionMetaKey(lang));
         if (stored == null)
-            return true;
+        {
+            // C# contract v13 added persisted top-level scopes. A legacy database with no
+            // extractor stamp cannot prove that unchanged C# files carry those rows, so a
+            // normal full index must re-extract them before stamping the current contract.
+            // C# contract v13 は top-level scope を永続化する。extractor stamp のない
+            // legacy DB は未変更 C# file にその row があると証明できないため、通常の
+            // full index でも current contract を stamp する前に再抽出する。
+            return !string.Equals(lang, "csharp", StringComparison.Ordinal);
+        }
 
         var current = SymbolExtractor.GetContractVersion(lang).ToString(System.Globalization.CultureInfo.InvariantCulture);
         return stored == current;
