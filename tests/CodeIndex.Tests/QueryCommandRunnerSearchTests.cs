@@ -3909,11 +3909,103 @@ public partial class QueryCommandRunnerTests
                     }
                 }
                 """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/reassigned-unbounded-document.cs",
+                "csharp",
+                """
+                using System.Text.Json;
+
+                public static class ReassignedUnboundedDocument
+                {
+                    public static JsonDocument Parse()
+                    {
+                        var payload = ReadWithinLimit();
+                        payload = ReadAll();
+                        return JsonDocument.Parse(payload);
+                    }
+
+                    private static string ReadWithinLimit() => "{}";
+                    private static string ReadAll() => "{}";
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/reassigned-bounded-document.cs",
+                "csharp",
+                """
+                using System.Text.Json;
+
+                public static class ReassignedBoundedDocument
+                {
+                    public static JsonDocument Parse()
+                    {
+                        var payload = ReadAll();
+                        payload = ReadWithinLimit();
+                        return JsonDocument.Parse(payload);
+                    }
+
+                    private static string ReadWithinLimit() => "{}";
+                    private static string ReadAll() => "{}";
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/unrelated-stream-parameter-document.cs",
+                "csharp",
+                """
+                using System.IO;
+                using System.Text.Json;
+
+                public static class UnrelatedStreamParameterDocument
+                {
+                    public static JsonDocument Parse(Stream unrelated, string payload)
+                        => JsonDocument.Parse(payload);
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/account-validation-document.cs",
+                "csharp",
+                """
+                using System.Text.Json;
+
+                public static class AccountValidationDocument
+                {
+                    public static JsonDocument Parse(string payload)
+                    {
+                        ValidateAccount(payload);
+                        return JsonDocument.Parse(payload);
+                    }
+
+                    private static void ValidateAccount(string payload) { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/non-parser-json.cs",
+                "csharp",
+                """
+                using System.IO;
+                using System.Text.Json;
+
+                public static class NonParserJson
+                {
+                    public static string Write(Stream destination, object value)
+                    {
+                        var options = new JsonSerializerOptions();
+                        var json = JsonSerializer.Serialize(value, options);
+                        using var writer = new Utf8JsonWriter(destination);
+                        return json;
+                    }
+                }
+                """);
 
             AssertRecipe(
                 "json-document-parse",
                 new Dictionary<string, string>(StringComparer.Ordinal)
                 {
+                    ["src/account-validation-document.cs"] = "unbounded_materialization",
                     ["src/BoundedJson.cs"] = "bounded_payload",
                     ["src/cast-bounded-document.cs"] = "bounded_payload",
                     ["src/lower-bound-document.cs"] = "unbounded_materialization",
@@ -3922,10 +4014,13 @@ public partial class QueryCommandRunnerTests
                     ["src/mixed-document-guards.cs"] = "unbounded_materialization",
                     ["src/named-bounded-document.cs"] = "bounded_payload",
                     ["src/null-check-document.cs"] = "unbounded_materialization",
+                    ["src/reassigned-bounded-document.cs"] = "bounded_payload",
+                    ["src/reassigned-unbounded-document.cs"] = "unbounded_materialization",
                     ["src/same-line-document.cs"] = "unbounded_materialization",
                     ["src/streaming-document.cs"] = "streaming_or_cancelable",
                     ["src/unbounded-document.cs"] = "unbounded_materialization",
                     ["src/unrelated-document-guard.cs"] = "unbounded_materialization",
+                    ["src/unrelated-stream-parameter-document.cs"] = "unbounded_materialization",
                 });
             AssertRecipe(
                 "json-serializer-deserialize",
@@ -3937,6 +4032,9 @@ public partial class QueryCommandRunnerTests
                     ["src/streaming-serializer.fs"] = "streaming_or_cancelable",
                     ["src/unbounded-serializer.cs"] = "unbounded_materialization",
                 });
+            AssertNonParserRecipe("json-serializer-options");
+            AssertNonParserRecipe("json-serializer-serialize");
+            AssertNonParserRecipe("utf8-json-writer");
 
             void AssertRecipe(string queryName, IReadOnlyDictionary<string, string> expectedCategories)
             {
@@ -4016,6 +4114,35 @@ public partial class QueryCommandRunnerTests
                         evidence => evidence.GetString()!.StartsWith("coincident_streaming:", StringComparison.Ordinal));
                 }
             }
+
+            void AssertNonParserRecipe(string queryName)
+            {
+                var recipeName = $"json-parse-apis/{queryName}";
+                var (structuredExitCode, structuredStdout, structuredStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                    ["--recipe", recipeName, "--db", dbPath, "--json", "--limit", "20"],
+                    _jsonOptions));
+                var (compactExitCode, compactStdout, compactStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                    ["--recipe", recipeName, "--db", dbPath, "--format", "compact", "--limit", "20"],
+                    _jsonOptions));
+
+                Assert.Equal(CommandExitCodes.Success, structuredExitCode);
+                Assert.Equal(string.Empty, structuredStderr);
+                Assert.Equal(CommandExitCodes.Success, compactExitCode);
+                Assert.Equal(string.Empty, compactStderr);
+                using var structuredDocument = ParseJsonOutput(structuredStdout);
+                using var compactDocument = ParseJsonOutput(compactStdout);
+                var structuredQuery = Assert.Single(structuredDocument.RootElement.GetProperty("queries").EnumerateArray());
+                var compactQuery = Assert.Single(compactDocument.RootElement.GetProperty("queries").EnumerateArray());
+                var structuredResult = Assert.Single(structuredQuery.GetProperty("results").EnumerateArray());
+                var compactResult = Assert.Single(compactQuery.GetProperty("results").EnumerateArray());
+
+                Assert.Equal("src/non-parser-json.cs", structuredResult.GetProperty("path").GetString());
+                Assert.Equal("src/non-parser-json.cs", compactResult.GetProperty("path").GetString());
+                AssertNoParserClassification(structuredResult);
+                AssertNoParserClassification(compactResult);
+                AssertNoParserClassifierCounts(structuredQuery);
+                AssertNoParserClassifierCounts(compactQuery);
+            }
         }
         finally
         {
@@ -4039,6 +4166,24 @@ public partial class QueryCommandRunnerTests
                 classification.GetProperty("evidence").EnumerateArray(),
                 evidence => evidence.GetString() == "authority:triage_hint_not_proof");
             return classification;
+        }
+
+        static void AssertNoParserClassification(JsonElement result)
+        {
+            if (!result.TryGetProperty("audit_classifications", out var classifications))
+                return;
+            Assert.DoesNotContain(
+                classifications.EnumerateArray(),
+                classification => classification.GetProperty("classifier").GetString() == "parser_guard_evidence");
+        }
+
+        static void AssertNoParserClassifierCounts(JsonElement query)
+        {
+            if (!query.TryGetProperty("classifier_counts", out var classifierCounts))
+                return;
+            Assert.DoesNotContain(
+                classifierCounts.EnumerateArray(),
+                counts => counts.GetProperty("classifier").GetString() == "parser_guard_evidence");
         }
 
         static void AssertCategoryMaps(

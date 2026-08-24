@@ -2044,7 +2044,7 @@ internal static class SearchAuditRecipes
                         "risk: JsonDocument.Parse builds a full DOM and should show byte, depth, and item-count limits before user-controlled payloads reach it.",
                         "positive: BoundedJson.ParseDocument or a size-gated structured-data fallback is upstream guard evidence for intentional DOM parsing."
                     ],
-                    Classifiers = [JsonTrustBoundaryClassifier],
+                    Classifiers = [JsonTrustBoundaryClassifier, ParserGuardClassifier],
                     JsonTrustDirection = SearchRecipeJsonTrustDirection.Read,
                 },
                 new(
@@ -2060,7 +2060,7 @@ internal static class SearchAuditRecipes
                         "risk: JsonNode.Parse materializes a mutable DOM and should be paired with payload and depth bounds for API, config, or protocol inputs.",
                         "positive: BoundedJson.ParseNode, bounded frame readers, or fixed-size local metadata files make the materialization auditable."
                     ],
-                    Classifiers = [JsonTrustBoundaryClassifier],
+                    Classifiers = [JsonTrustBoundaryClassifier, ParserGuardClassifier],
                     JsonTrustDirection = SearchRecipeJsonTrustDirection.Read,
                 },
                 new(
@@ -2076,7 +2076,7 @@ internal static class SearchAuditRecipes
                         "risk: JsonSerializer.Deserialize can materialize an entire object graph before callers enforce semantic item limits.",
                         "positive: BoundedJson.Deserialize, MaxDepth options, and fixed protocol frame byte caps show upstream parse bounds."
                     ],
-                    Classifiers = [JsonTrustBoundaryClassifier],
+                    Classifiers = [JsonTrustBoundaryClassifier, ParserGuardClassifier],
                     JsonTrustDirection = SearchRecipeJsonTrustDirection.Read,
                 },
                 new(
@@ -2092,7 +2092,7 @@ internal static class SearchAuditRecipes
                         "risk: streaming deserialization still needs cancellation, per-item limits, and a bounded source stream.",
                         "positive: WithCancellation, explicit record caps, and max-byte snapshot reads show streaming backpressure evidence."
                     ],
-                    Classifiers = [JsonTrustBoundaryClassifier],
+                    Classifiers = [JsonTrustBoundaryClassifier, ParserGuardClassifier],
                     JsonTrustDirection = SearchRecipeJsonTrustDirection.Read,
                 },
                 new(
@@ -2155,7 +2155,7 @@ internal static class SearchAuditRecipes
                     Classifiers = [JsonTrustBoundaryClassifier],
                     JsonTrustDirection = SearchRecipeJsonTrustDirection.Write,
                 }
-            ], ParserGuardClassifier, GuardEvidenceClassifier)),
+            ], GuardEvidenceClassifier)),
         SourceScopedRecipe(
             "text-encoding-boundaries",
             "Audit text encoding, BOM detection, stream reader/writer ownership, and Unicode normalization boundaries.",
