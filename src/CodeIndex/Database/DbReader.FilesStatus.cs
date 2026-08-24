@@ -945,6 +945,12 @@ public partial class DbReader
         return (identity, stableAt);
     }
 
+    internal string GetSymbolSelectorGenerationIdentity()
+        => string.Create(
+            CultureInfo.InvariantCulture,
+            $"{GetPaginationGeneration().Identity}\n"
+            + $"{TryGetMetaStringInternal(DbContext.IndexedProjectRootMetaKey) ?? "no-indexed-project-root"}");
+
     internal string GetFoldPaginationGenerationIdentity()
     {
         var userVersion = ExecuteScalar("PRAGMA user_version");

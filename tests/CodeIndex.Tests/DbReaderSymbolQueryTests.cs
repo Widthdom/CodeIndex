@@ -603,9 +603,11 @@ public partial class DbReaderTests
             includeQualifiedCommonCalls: true);
         Assert.All(overloadReferences, reference =>
         {
-            Assert.Equal("ambiguous", reference.ResolutionState);
-            Assert.Equal(2, reference.ResolutionCandidateCount);
+            Assert.Equal("resolved", reference.ResolutionState);
+            Assert.NotNull(reference.TargetSymbolId);
+            Assert.Equal(1, reference.ResolutionCandidateCount);
         });
+        Assert.Equal(2, overloadReferences.Select(reference => reference.TargetSymbolId).Distinct().Count());
 
         var results = _reader.GetSymbolHotspots(
             limit: 10,

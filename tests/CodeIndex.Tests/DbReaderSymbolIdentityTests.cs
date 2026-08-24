@@ -210,11 +210,12 @@ public partial class DbReaderTests
         Assert.Equal(2, primaryReferences.Count);
         Assert.All(primaryReferences, reference =>
         {
-            Assert.Equal("resolved_group", reference.ResolutionState);
-            Assert.Null(reference.TargetSymbolId);
+            Assert.Equal("resolved", reference.ResolutionState);
+            Assert.NotNull(reference.TargetSymbolId);
             Assert.NotNull(reference.TargetSymbolKey);
-            Assert.Equal(2, reference.ResolutionCandidateCount);
+            Assert.Equal(1, reference.ResolutionCandidateCount);
         });
+        Assert.Equal(2, primaryReferences.Select(reference => reference.TargetSymbolId).Distinct().Count());
 
         var qualifiedCallers = _reader.GetCallers(
             "Primary.Open5084",

@@ -2771,6 +2771,9 @@ public class SymbolCandidateSelector
     [JsonPropertyName("symbol_id")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public long? SymbolId { get; set; }
+    [JsonPropertyName("generation_fingerprint")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? GenerationFingerprint { get; set; }
     [JsonPropertyName("qualified_name")]
     public string QualifiedName { get; set; } = string.Empty;
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -2793,6 +2796,8 @@ public class SymbolCandidateBundle
     public string? GraphSupportReason { get; set; }
     [JsonPropertyName("identity_scoped")]
     public bool IdentityScoped { get; set; }
+    [JsonPropertyName("identity_scope_reason")]
+    public string IdentityScopeReason { get; set; } = string.Empty;
     public List<SymbolResult> NearbySymbols { get; set; } = [];
     public List<ReferenceResult> References { get; set; } = [];
     public List<CallerResult> Callers { get; set; } = [];

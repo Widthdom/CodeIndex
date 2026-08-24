@@ -67,7 +67,8 @@ public partial class DbContext : IDisposable
     public const string SqlGraphContractVersionMetaKey = "sql_graph_contract_version";
     public const int HdlGraphContractVersion = 1;
     public const string HdlGraphContractVersionMetaKey = "hdl_graph_contract_version";
-    // Version 9 (#5158) invalidates references resolved with physical declaration paths
+    // Version 10 (#5159) invalidates C# call candidates written before conservative method
+    // argument-count narrowing. Version 9 (#5158) invalidates references resolved with physical declaration paths
     // instead of authoritative logical C# partial-family identities. Version 8 (#4914)
     // invalidates C# candidates whose partial family identity did not
     // distinguish namespace boundaries from nested-type boundaries. Version 7 (#4914)
@@ -75,6 +76,8 @@ public partial class DbContext : IDisposable
     // identity. Version 6 (#4850) previously separated constructor
     // callables from logical partial-type families; version 5 (#4846) made Markdown fragment
     // resolution document/path-scoped.
+    // バージョン 10 (#5159) では保守的なメソッド引数個数の絞り込みより前に書かれた C# call
+    // candidate を無効化する。
     // バージョン 9 (#5158) では、正式な C# logical partial-family identity ではなく
     // physical declaration path で解決した reference を無効化する。バージョン 8 (#4914) では
     // namespace 境界と nested-type 境界を区別しない partial family
@@ -82,7 +85,7 @@ public partial class DbContext : IDisposable
     // family が source-file identity を持つ前の C# candidate を無効化する。バージョン 6 (#4850) は constructor callable と logical
     // partial type family を分離し、バージョン 5 (#4846) は Markdown fragment 解決を
     // document/path 内に限定した。
-    public const int ReferenceIdentityContractVersion = 9;
+    public const int ReferenceIdentityContractVersion = 10;
     public const string ReferenceIdentityContractVersionMetaKey = "reference_identity_contract_version";
     public static string GetDynamicReferenceGraphContractVersionMetaKey(string lang) =>
         $"dynamic_reference_graph_contract_version_{lang}";

@@ -306,7 +306,8 @@ public partial class DbReaderTests
         Assert.Equal("Run", overloadCaller.CallerName);
         Assert.Equal("Run", overloadCaller.CalleeName);
         Assert.NotNull(overloadCaller.CallerSymbolId);
-        Assert.Null(overloadCaller.CalleeSymbolId);
+        Assert.NotNull(overloadCaller.CalleeSymbolId);
+        Assert.NotEqual(overloadCaller.CallerSymbolId, overloadCaller.CalleeSymbolId);
         Assert.Equal([new List<string> { "Leaf", "Run", "Run" }], overloadCaller.Paths);
         Assert.Equal(
             3,
