@@ -1746,6 +1746,19 @@ language across reference/caller/callee evidence. `graph_language_source`,
 `graph_language_confidence`, `graph_language_candidates`, and `graph_language_conflict`
 distinguish authoritative filter/definition decisions from consistent inference and keep
 mixed-language evidence unresolved.
+CLI `inspect --selector 'id:<n>@g:<fingerprint>'` validates the emitted index generation, resolves
+the persisted ID directly in the active database, and then enters this same candidate-bundle path.
+Keep selector parsing in a typed extensible model,
+reject non-positive/malformed IDs before opening graph state, and report an absent database-local
+ID or a stale/cross-database generation as `E018_QUERY_NOT_FOUND`. The unversioned `id:<n>` form
+remains a same-database compatibility input but cannot prove generation provenance.
+`identity_scoped` must describe evidence precision, not merely schema
+availability: if an inbound reference still has more than one resolution candidate, emit
+`identity_scope_reason: ambiguous_reference_candidates` and keep the candidate rows visible while
+marking the bundle non-identity-scoped. C# call resolution may narrow ordinary required-parameter
+overloads by positional argument count only. Named arguments, optional/default parameters,
+`params`, generic method inference, and incomplete syntax remain ambiguous. Extension receiver
+adjustment and dynamic receiver types are outside this arity helper.
 Path/line resolution must select `symbols.id` and enter the same candidate-bundle builder as
 name resolution; do not hand graph loaders only the display name. Each bounded references,
 callers, and callees section computes its own stable-order page and authoritative total.
@@ -5707,6 +5720,18 @@ reference/caller/callee query は `symbol_reference_candidates` または
 言語を推論します。`graph_language_source`、`graph_language_confidence`、
 `graph_language_candidates`、`graph_language_conflict` により、filter/definition による
 authoritative な判定と一貫した推論を区別し、複数言語の evidence は未確定のままにします。
+CLI `inspect --selector 'id:<n>@g:<fingerprint>'` は出力時の index generation を検証し、active
+database の永続 ID を直接解決してから同じ candidate-bundle 経路へ入ります。selector parser は型付きで拡張可能な model に保ち、正でない
+ID や不正形式は graph state を開く前に拒否し、database-local ID が存在しない場合は
+もちろん、stale / cross-database generation の場合も `E018_QUERY_NOT_FOUND` を返してください。
+generation なしの `id:<n>` は same-database 互換入力として維持しますが、generation provenance
+は証明できません。`identity_scoped` は schema の利用可否だけでなく
+evidence の精度を表します。inbound reference に複数の resolution candidate が残る場合は
+candidate row を維持しつつ bundle を non-identity-scoped とし、
+`identity_scope_reason: ambiguous_reference_candidates` を出力します。C# call は通常の required
+parameter overload を位置引数個数だけで絞り込めます。named argument、optional/default parameter、
+`params`、generic method inference、不完全な構文は曖昧なままにします。extension の receiver
+調整と dynamic receiver の型は、この arity helper の対象外です。
 path/line resolution は `symbols.id` を select し、name resolution と同じ
 candidate-bundle builder に入れてください。graph loader に display name だけを渡しては
 なりません。上限付きの references、callers、callees section は、それぞれ安定順序の page と

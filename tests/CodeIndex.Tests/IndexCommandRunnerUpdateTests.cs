@@ -575,7 +575,7 @@ public partial class IndexCommandRunnerTests
 
             var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
             Assert.Equal(CommandExitCodes.Success, initialExitCode);
-            Assert.Equal(9, DbContext.ReferenceIdentityContractVersion);
+            Assert.Equal(10, DbContext.ReferenceIdentityContractVersion);
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             using (var connection = new SqliteConnection($"Data Source={dbPath}"))

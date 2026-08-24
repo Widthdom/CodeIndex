@@ -117,6 +117,10 @@ public partial class DbContext
                 "csharp_constructor_parameter_count",
                 (string? signature, string? identifier, string? symbolKind) =>
                     CSharpTypeReferenceArity.GetConstructorParameterCount(signature, identifier, symbolKind));
+            connection.CreateFunction(
+                "csharp_callable_parameter_count",
+                (string? signature, string? identifier, string? symbolKind) =>
+                    CSharpTypeReferenceArity.GetUnambiguousCallableParameterCount(signature, identifier, symbolKind));
         }
 
         private static void RegisterCSharpPartialIdentityFunctions(SqliteConnection connection)
@@ -166,6 +170,10 @@ public partial class DbContext
                 "csharp_invocation_argument_count",
                 (string? context, string? identifier, long? columnNumber) =>
                     CSharpTypeReferenceArity.GetInvocationArgumentCount(context, identifier, columnNumber));
+            connection.CreateFunction(
+                "csharp_unambiguous_invocation_argument_count",
+                (string? context, string? identifier, long? columnNumber) =>
+                    CSharpTypeReferenceArity.GetUnambiguousInvocationArgumentCount(context, identifier, columnNumber));
             connection.CreateFunction(
                 "csharp_definition_is_value_type",
                 (string? signature, string? symbolKind) =>

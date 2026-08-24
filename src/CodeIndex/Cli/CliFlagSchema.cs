@@ -515,6 +515,7 @@ internal static class CliFlagSchema
             new() { Name = "--indexed-only", Description = "Languages: list only languages present in the current index", PrimaryCommands = Set(LanguagesFilterCommands) },
             new() { Name = "--capability", ValueDomain = Values(["all", "none", "graph", "references", "symbols", "missing-any", "missing-graph", "missing-references", "missing-symbols", "search-only"]), Description = "Languages: filter by language capability or capability gap", PrimaryCommands = Set(LanguagesFilterCommands) },
             new() { Name = "--query", ValuePlaceholder = "<query>", Description = "Literal query", PrimaryCommands = Set(QueryCommands) },
+            new() { Name = "--selector", ValuePlaceholder = "<id:n[@g:fingerprint]>", Description = "Inspect one exact symbol identity using a selector emitted by inspect", PrimaryCommands = Set("inspect") },
             new() { Name = "--recipe", ValuePlaceholder = "<name|name/query>", ValueKind = CliOptionValueKind.FreeText, Description = "Search: run a built-in audit recipe query set, optionally selecting one child query", PrimaryCommands = Set("search") },
             new() { Name = "--include-query", ValuePlaceholder = "<name>", Description = "Search recipe: include one child query; repeat or comma-separate values", PrimaryCommands = Set("search") },
             new() { Name = "--exclude-query", ValuePlaceholder = "<name>", Description = "Search recipe: exclude one child query; repeat or comma-separate values", PrimaryCommands = Set("search") },
