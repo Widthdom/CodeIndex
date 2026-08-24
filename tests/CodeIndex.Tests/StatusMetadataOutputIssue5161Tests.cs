@@ -98,14 +98,15 @@ public sealed class StatusMetadataOutputIssue5161Tests
             Assert.Equal(CommandExitCodes.Success, human.ExitCode);
             var humanOutput = human.Stdout + human.Stderr;
             var firstFailureLine = Assert.Single(
-                humanOutput.Split('\n').Where(line => line.Contains("First failure:", StringComparison.Ordinal)));
+                humanOutput.Split(Environment.NewLine, StringSplitOptions.None)
+                    .Where(line => line.Contains("First failure:", StringComparison.Ordinal)));
             Assert.Equal(4, CountOccurrences(firstFailureLine, TruncationMarker));
             Assert.DoesNotContain('\r', firstFailureLine);
             Assert.DoesNotContain('\t', firstFailureLine);
             Assert.DoesNotContain('\u001b', firstFailureLine);
             Assert.DoesNotContain('\u0001', firstFailureLine);
             var hintLine = Assert.Single(
-                humanOutput.Split('\n').Where(line =>
+                humanOutput.Split(Environment.NewLine, StringSplitOptions.None).Where(line =>
                     line.TrimStart().StartsWith("Hint", StringComparison.Ordinal)
                     && line.Contains(TruncationMarker, StringComparison.Ordinal)));
             Assert.Contains(TruncationMarker, hintLine, StringComparison.Ordinal);
