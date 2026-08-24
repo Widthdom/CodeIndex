@@ -8,9 +8,9 @@ public static partial class SymbolExtractor
         long fileId,
         string[] lines,
         string[] structuralLines,
-        List<SymbolRecord> symbols)
+        SymbolExtractionList symbols)
     {
-        if (structuralLines.Length == 0)
+        if (structuralLines.Length == 0 || symbols.IsAtCapacity)
             return;
 
         // This runs after AssignContainers. Declaration ranges can therefore be excluded
@@ -142,14 +142,37 @@ public static partial class SymbolExtractor
         }
         if (!line.StartsWith("using ", StringComparison.Ordinal))
             return false;
-        if (line.StartsWith("using var ", StringComparison.Ordinal)
-            || line.StartsWith("using (", StringComparison.Ordinal))
+        if (IsCSharpUsingDeclaration(line))
         {
             return false;
         }
 
         startsMultilineUsingDirective = !line.Contains(';', StringComparison.Ordinal);
         return true;
+    }
+
+    private static bool IsCSharpUsingDeclaration(string line)
+    {
+        if (line.StartsWith("using var ", StringComparison.Ordinal)
+            || line.StartsWith("using (", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        var equalsIndex = line.IndexOf('=');
+        if (equalsIndex < 0)
+            return false;
+
+        var declarationPrefix = line["using ".Length..equalsIndex].Trim();
+        if (declarationPrefix.StartsWith("unsafe ", StringComparison.Ordinal))
+            declarationPrefix = declarationPrefix["unsafe ".Length..].TrimStart();
+
+        // An alias directive has one identifier before '=', while an explicit using
+        // declaration has a type and variable name. Structural masking has already
+        // replaced comments with whitespace before this classification.
+        // alias directive の '=' より前は識別子 1 個だが、明示型 using declaration
+        // には型と変数名がある。comment はこの判定前に空白へ mask 済み。
+        return declarationPrefix.AsSpan().IndexOfAny(' ', '\t') >= 0;
     }
 
     private static bool IsCSharpFileScopeAttributeStart(string line)

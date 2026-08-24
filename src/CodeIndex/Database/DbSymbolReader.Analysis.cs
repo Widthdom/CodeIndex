@@ -732,7 +732,7 @@ public partial class DbReader
     private SymbolCandidateSelector BuildSymbolCandidateSelector(DefinitionResult definition)
     {
         var container = definition.ContainerQualifiedName ?? definition.ContainerName;
-        var qualifiedName = definition.SubKind == SyntheticSymbolIdentity.CSharpTopLevelScopeSubKind
+        var qualifiedName = SyntheticSymbolIdentity.IsSyntheticSubKind(definition.SubKind)
             ? SyntheticSymbolIdentity.BuildFileQualifiedName(definition.Path, definition.Name)
             : string.IsNullOrWhiteSpace(container)
                 ? definition.Name

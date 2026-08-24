@@ -1,4 +1,5 @@
 using System.Text;
+using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Database;
@@ -210,6 +211,12 @@ public partial class DbReader
             FROM symbols s
             JOIN files f ON s.file_id = f.id
             WHERE s.kind NOT IN ('import', 'namespace')");
+        if (_symbolColumns.Contains("sub_kind"))
+        {
+            sql.Append("\n              AND COALESCE(s.sub_kind, '') <> '");
+            sql.Append(SyntheticSymbolIdentity.CSharpTopLevelScopeSubKind);
+            sql.Append('\'');
+        }
         sql.Append(BuildUnusedReferenceAbsenceSql(resolveSqlReferences));
         if (useCSharpPartialUseExclusion || (resolveSqlReferences && hasUsableUnusedChunks))
         {

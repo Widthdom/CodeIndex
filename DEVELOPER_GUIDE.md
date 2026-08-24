@@ -1151,8 +1151,10 @@ resolved by symbol id, so identical top-level programs in different files do
 not share callee identity.
 
 Detection runs after container assignment. It excludes declaration-covered
-ranges, imports, comments, directives, and assembly/module metadata, then uses
-the first and last uncovered executable lines as both source and body bounds.
+ranges, imports, comments, directives, and assembly/module metadata, recognizes
+both `using var` and explicitly typed `using Type value = ...` declarations as
+executable rather than import directives, then uses the first and last uncovered
+executable lines as both source and body bounds.
 A top-level local function remains source-declared and containerless; its own
 narrower span owns references inside the function, while a synthetic range may
 cross it when executable statements occur on both sides. Reference extraction
@@ -1160,7 +1162,10 @@ uses the synthetic symbol's persisted id for otherwise containerless calls in
 that body. The synthetic scope is not a documented declaration, so an XML-doc
 comment before a top-level statement does not attach to it. `outline`,
 coordinate `inspect`, and identity-scoped `callees` must
-therefore navigate the same row. If a stored C# extractor version predates this
+therefore navigate the same row; both CLI and MCP `callees` resolve its selector
+by persisted symbol id. Unused-symbol list and count queries exclude this
+synthetic entry point because it is executable infrastructure, not removable
+dead code. If a stored C# extractor version predates this
 contract or is missing, and no synthetic row is available, outline reports
 `top_level_symbol_support=reindex_required` plus a typed limitation instead of
 claiming support.
@@ -5126,14 +5131,17 @@ index generation だけで有効で、symbol id により解決するため、�
 top-level program が callee identity を共有することはありません。
 
 検出は container assignment の後に実行します。declaration が覆う range、import、comment、
-directive、assembly/module metadata を除外し、残った最初と最後の実行可能行を source/body
-両方の境界にします。top-level local function は container を持たない source-declared symbol
+directive、assembly/module metadata を除外し、`using var` と明示型の
+`using Type value = ...` declaration の両方を import directive ではなく実行可能コードとして認識し、
+残った最初と最後の実行可能行を source/body 両方の境界にします。top-level local function は container を持たない source-declared symbol
 のままで、その function 内の reference はより狭い自身の span が所有します。両側に実行
 statement がある場合、synthetic range は local function をまたぐことがあります。reference
 extraction は、この body 内で従来 container を持たなかった call に synthetic symbol の永続化
 id を使います。synthetic scope は documented declaration ではないため、top-level statement
 直前の XML-doc comment を自身へ結び付けません。そのため `outline`、座標指定 `inspect`、identity-scoped `callees` は同じ row を
-navigate しなければなりません。保存済み C# extractor version がこの契約より古いか欠落しており、
+navigate しなければならず、CLI / MCP の両 `callees` が selector を永続化済み symbol id で解決します。
+unused-symbol の list / count query は、この synthetic entry point が削除可能な dead code ではなく実行基盤なので除外します。
+保存済み C# extractor version がこの契約より古いか欠落しており、
 synthetic row も無い場合、outline は対応済みと見せず、`top_level_symbol_support=reindex_required` と型付きの
 limitation を返します。
 

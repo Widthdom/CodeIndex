@@ -2057,8 +2057,9 @@ C# files with executable top-level statements expose a file-scoped synthetic
 `function` named `<top-level>`. JSON and MCP identify it with
 `sub_kind: "top_level_scope"`, `is_synthetic: true`, a
 `<file>::<top-level>` `qualified_name`, and a snapshot-bound `selector` that can
-be passed directly to `callees` (optionally with `--path`) and is distinct for
-each file. Coordinate `inspect --path <file> --line <line>` selects the same
+be passed directly to CLI `callees` as its positional query or to MCP
+`callees.query` (optionally scoped with CLI `--path` or MCP `path`) and is
+distinct for each file. Coordinate `inspect --path <file> --line <line>` selects the same
 node on executable lines. Its span runs from the first through the last
 executable top-level line while excluding imports, comments, directives, and
 compilation metadata where possible. A top-level local function remains a
@@ -5676,8 +5677,9 @@ cdidx outline src/CodeIndex/Cli/QueryCommandRunner.cs --compact --kind function 
 file-scoped synthetic `function` を公開します。JSON / MCP では
 `sub_kind: "top_level_scope"`、`is_synthetic: true`、
 `<file>::<top-level>` 形式の `qualified_name`、snapshot に束縛された
-`selector` で識別します。selector は file ごとに異なり、`callees` の positional
-値として直接渡せます（必要に応じて `--path` も指定できます）。実行行に対する
+`selector` で識別します。selector は file ごとに異なり、CLI `callees` の positional
+query または MCP `callees.query` として直接渡せます（必要に応じて CLI `--path` または
+MCP `path` で scope を限定できます）。実行行に対する
 `inspect --path <file> --line <line>` も同じ node を選択します。span は import、
 comment、directive、compilation metadata を可能な範囲で除外し、最初から最後の
 実行可能 top-level 行までを覆います。top-level local function は通常の source-declared

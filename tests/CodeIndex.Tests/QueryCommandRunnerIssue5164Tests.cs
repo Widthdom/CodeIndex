@@ -9,6 +9,47 @@ namespace CodeIndex.Tests;
 public sealed class QueryCommandRunnerIssue5164Tests
 {
     [Fact]
+    public void ScriptScope_OutlineAndInspectExposeSameFileQualifiedIdentity_Issue5164Review()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_script_scope_identity_5164");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "scripts/run.sh",
+                "shell",
+                "echo ready\n");
+            MarkCurrentContracts(dbPath);
+
+            using var outline = RunOutline(dbPath, "scripts/run.sh");
+            var scriptScope = Assert.Single(outline.RootElement.GetProperty("symbols").EnumerateArray(), symbol =>
+                symbol.GetProperty("name").GetString() == "<script>");
+            var selector = scriptScope.GetProperty("selector").GetString();
+            Assert.Equal("scripts/run.sh::<script>", scriptScope.GetProperty("qualified_name").GetString());
+
+            var (exitCode, stdout, stderr) = QueryCommandTestSupport.CaptureConsole(() =>
+                QueryCommandRunner.RunInspect(
+                    ["--path", "scripts/run.sh", "--line", "1", "--db", dbPath, "--json"],
+                    QueryCommandTestSupport.JsonOptions));
+            using var inspect = QueryCommandTestSupport.ParseJsonOutput(stdout);
+            var candidateSelector = Assert.Single(inspect.RootElement
+                .GetProperty("candidate_bundles")
+                .EnumerateArray())
+                .GetProperty("selector");
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(selector, candidateSelector.GetProperty("selector").GetString());
+            Assert.Equal("scripts/run.sh::<script>", candidateSelector.GetProperty("qualified_name").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void TopLevelSelectors_RoundTripCoordinateAndCalleeIdentityWithoutCrossFileCollisions_Issue5164()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_top_level_selector_5164");
