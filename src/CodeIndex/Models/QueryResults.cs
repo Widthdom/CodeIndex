@@ -1254,6 +1254,7 @@ public class ImpactAnalysisResult
     public int? PartialFamilyMemberRootOmitted { get; set; }
     [JsonIgnore]
     internal bool CountIsAuthoritative => IdentityRootAvailable
+        && ReferenceGraphComplete
         && !Truncated
         && !IdentityRootResolutionTruncated
         && PartialFamilyMemberRootTruncated != true;
@@ -1288,6 +1289,8 @@ public class ImpactAnalysisResult
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? TruncatedReason { get; set; }
     public bool GraphTableAvailable { get; set; } = true;
+    [JsonIgnore]
+    internal bool ReferenceGraphComplete { get; set; } = true;
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? ZeroResultReason { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

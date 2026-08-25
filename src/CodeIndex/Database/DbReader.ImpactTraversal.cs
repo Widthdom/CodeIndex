@@ -241,6 +241,15 @@ public partial class DbReader
                 UnavailableReason: null,
                 EvidenceConfidence: "language_graph");
         }
+        if (lang == null
+            && resolution.Definitions.Count > 0
+            && resolution.Definitions.All(static definition => definition.Lang != "csharp"))
+        {
+            return new ImpactIdentityRootSignal(
+                Available: true,
+                UnavailableReason: null,
+                EvidenceConfidence: "language_graph");
+        }
         if (!HasCurrentReferenceIdentityContractForRead())
         {
             return new ImpactIdentityRootSignal(
@@ -329,7 +338,9 @@ public partial class DbReader
             ? node.TargetSymbolIds
             : node.SymbolId is long symbolId
                 ? [symbolId]
-                : null;
+                : request.Lang == null && HasCurrentReferenceIdentityContractForRead()
+                    ? []
+                    : null;
         return GetCallersExactCore(
             node.Symbol,
             pageSize,

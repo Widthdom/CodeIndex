@@ -61,6 +61,21 @@ public partial class QueryCommandRunnerTests
                 "no_identity_backed_root",
                 impact.GetProperty("impact_failure_chain").EnumerateArray().Select(item => item.GetString()));
 
+            var (compactExitCode, compactStdout, compactStderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["impact", "MissingLeaf5183", "--db", dbPath, "--format", "compact", "--lang", "csharp"],
+                _jsonOptions,
+                "1.44.3-test"));
+            using var compactDocument = ParseJsonOutput(compactStdout);
+            var compactMetadata = compactDocument.RootElement.GetProperty("metadata");
+            Assert.Equal(CommandExitCodes.Success, compactExitCode);
+            Assert.Equal(string.Empty, compactStderr);
+            Assert.False(compactMetadata.GetProperty("total_count_authoritative").GetBoolean());
+            Assert.False(
+                compactMetadata
+                    .GetProperty("response_context")
+                    .GetProperty("authoritative_count")
+                    .GetBoolean());
+
             var (strictExitCode, _, strictStderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
                 ["MissingLeaf5183", "--db", dbPath, "--json", "--strict", "--lang", "csharp"],
                 _jsonOptions));

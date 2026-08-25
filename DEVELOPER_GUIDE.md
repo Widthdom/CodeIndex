@@ -1721,7 +1721,11 @@ through the stable `no_identity_backed_root` failure code. Legacy or stale ident
 may keep the name-based compatibility path, but must label it `name_fallback`, degraded, and
 non-authoritative.
 Other graph languages retain their existing language-specific exact matching until they expose
-the same persisted target-identity contract.
+the same persisted target-identity contract. When `--lang` is omitted, impact partitions the
+same traversal step: C# rows must match resolved candidate IDs, while non-C# rows retain their
+language-specific exact-name graph. A root inferred only from non-C# definitions reports
+`language_graph`; persisted reference-graph incompleteness makes every impact count
+non-authoritative even when the local traversal and identity resolution are otherwise complete.
 C# callable hotspots likewise count logical target identities instead of leaf-name aggregates.
 Candidate groups contribute only when they collapse to one logical target, name, and kind, and
 unresolved rows do not inflate the confirmed count. The CLI `--include-qualified-common-calls` flag and MCP
@@ -5783,6 +5787,10 @@ cap 到達では `authoritative_count: false` を設定します。impact は ro
 安定した `no_identity_backed_root` failure code で失敗します。legacy または stale な identity contract が
 名前ベースの互換経路を維持する場合も、`name_fallback`、degraded、non-authoritative と明示しなければなりません。
 他の graph 言語は、同等の永続 target-identity contract を公開するまで既存の言語固有 exact matching を維持します。
+`--lang` を省略した場合、impact は同じ traversal step を分割し、C# row には解決済み candidate ID の
+一致を必須とする一方、非 C# row では言語固有の exact-name graph を維持します。非 C# definition だけから
+推論した root は `language_graph` と明示し、永続 reference graph が incomplete なら、局所 traversal と
+identity resolution が完了していてもすべての impact count を non-authoritative とします。
 C# callable hotspot も
 leaf-name aggregate ではなく logical target identity を
 集計し、candidate group は logical target、name、kind が 1 つに収束するときだけ加算し、unresolved

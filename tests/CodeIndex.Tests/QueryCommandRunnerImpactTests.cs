@@ -153,6 +153,28 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void ApplyImpactCountAuthority_IncompleteReferenceGraphIsNonAuthoritative_Issue5183()
+    {
+        var payload = new System.Text.Json.Nodes.JsonObject
+        {
+            ["degraded"] = true,
+            ["authoritative_count"] = true,
+            ["reference_graph_complete"] = false,
+        };
+        var analysis = new ImpactAnalysisResult
+        {
+            IdentityRootAvailable = true,
+            ReferenceGraphComplete = false,
+        };
+
+        QueryCommandRunner.ApplyImpactCountAuthority(payload, analysis);
+
+        Assert.True(payload["degraded"]!.GetValue<bool>());
+        Assert.False(payload["authoritative_count"]!.GetValue<bool>());
+        Assert.False(analysis.CountIsAuthoritative);
+    }
+
+    [Fact]
     public void RunImpact_MissingDepthValueShowsPerFlagHint_Issue1507()
     {
         var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(["QueryCommandRunner", "--depth"], _jsonOptions));

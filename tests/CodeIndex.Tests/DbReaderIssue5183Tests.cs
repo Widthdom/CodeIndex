@@ -92,6 +92,50 @@ public partial class DbReaderTests
             ["CallFirst5183", "CallSecond5183"],
             sameNameImpact.Callers.Select(caller => caller.CallerName).Order().ToArray());
 
+        var multilingualCallers = _reader.GetCallers(
+            "IdentityLeaf5183",
+            exact: true,
+            pathPatterns: ["src/issue5183/*"]);
+        Assert.Equal(
+            ["CallResolved5183", "PythonCallsCSharp5183"],
+            multilingualCallers.Select(caller => caller.CallerName).Order().ToArray());
+
+        var multilingualImpact = _reader.AnalyzeImpact(
+            "IdentityLeaf5183",
+            maxDepth: 5,
+            limit: 20,
+            pathPatterns: ["src/issue5183/*"]);
+        Assert.Equal("identity_backed", multilingualImpact.GraphEvidenceConfidence);
+        Assert.Contains(multilingualImpact.Callers, caller => caller.CallerName == "CallResolved5183");
+        Assert.Contains(multilingualImpact.Callers, caller => caller.CallerName == "PythonCallsCSharp5183");
+        Assert.DoesNotContain(multilingualImpact.Callers, caller => caller.CallerName == "CallUnresolvedSameLeaf5183");
+
+        var pythonOnlyCallers = _reader.GetCallers(
+            "PythonOnlyLeaf5183",
+            exact: true,
+            pathPatterns: ["src/issue5183/*"]);
+        var pythonOnlyCaller = Assert.Single(pythonOnlyCallers);
+        Assert.Equal("PythonCaller5183", pythonOnlyCaller.CallerName);
+        var pythonOnlyCount = _reader.CountCallersTotal(
+            "PythonOnlyLeaf5183",
+            exact: true,
+            pathPatterns: ["src/issue5183/*"]);
+        Assert.True(pythonOnlyCount.IdentityRootAvailable);
+        Assert.Equal("language_graph", pythonOnlyCount.GraphEvidenceConfidence);
+
+        var pythonOnlyImpact = _reader.AnalyzeImpact(
+            "PythonOnlyLeaf5183",
+            maxDepth: 5,
+            limit: 20,
+            pathPatterns: ["src/issue5183/*"]);
+        Assert.Equal("language_graph", pythonOnlyImpact.GraphEvidenceConfidence);
+        Assert.True(pythonOnlyImpact.IdentityRootAvailable);
+        Assert.True(pythonOnlyImpact.CountIsAuthoritative);
+        Assert.Equal(
+            ["PythonCaller5183", "PythonTop5183"],
+            pythonOnlyImpact.Callers.Select(caller => caller.CallerName).Order().ToArray());
+        Assert.DoesNotContain(pythonOnlyImpact.Callers, caller => caller.CallerName == "CallUnresolvedPythonLeaf5183");
+
         _reader.ImpactGraphStateEntryBudgetForTesting = 1;
         try
         {
@@ -116,6 +160,18 @@ public partial class DbReaderTests
         {
             _reader.ImpactGraphStateEntryBudgetForTesting = null;
         }
+
+        _writer.MarkIndexIncomplete(["reference_count_exceeded"]);
+        using var incompleteReader = new global::CodeIndex.Database.DbReader(_db.Connection);
+        var incompleteImpact = incompleteReader.AnalyzeImpact(
+            "IdentityLeaf5183",
+            maxDepth: 5,
+            limit: 20,
+            lang: "csharp",
+            pathPatterns: ["src/issue5183/*"]);
+        Assert.True(incompleteImpact.IdentityRootAvailable);
+        Assert.False(incompleteImpact.ReferenceGraphComplete);
+        Assert.False(incompleteImpact.CountIsAuthoritative);
 
         _writer.ClearReferenceIdentityContractReady();
         using var staleReader = new global::CodeIndex.Database.DbReader(_db.Connection);
@@ -202,12 +258,29 @@ public partial class DbReaderTests
                 public void CallResolved5183(ResolvedTarget5183 target) => target.IdentityLeaf5183();
                 public void AboveResolved5183() => CallResolved5183(new ResolvedTarget5183());
                 public void CallUnresolvedSameLeaf5183() => ExternalApi5183.IdentityLeaf5183();
+                public void CallUnresolvedPythonLeaf5183() => ExternalApi5183.PythonOnlyLeaf5183();
                 public void CallFirst5183(FirstTarget5183 target) => target.CollisionLeaf5183();
                 public void CallSecond5183(SecondTarget5183 target) => target.CollisionLeaf5183();
                 public void CallUnresolvedCollision5183() => ExternalApi5183.CollisionLeaf5183();
                 public void TopMissing5183() => MiddleMissing5183();
                 public void MiddleMissing5183() => ExternalApi5183.MissingLeaf5183();
             }
+            """);
+        InsertIndexedFile(
+            "src/issue5183/callers.py",
+            "python",
+            """
+            def PythonOnlyLeaf5183():
+                pass
+
+            def PythonCaller5183():
+                return PythonOnlyLeaf5183()
+
+            def PythonTop5183():
+                return PythonCaller5183()
+
+            def PythonCallsCSharp5183():
+                return IdentityLeaf5183()
             """);
     }
 }

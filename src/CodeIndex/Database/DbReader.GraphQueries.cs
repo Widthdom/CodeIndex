@@ -300,6 +300,24 @@ public partial class DbReader
             excludeTests: false);
         if (resolution.Definitions.Count == 0)
         {
+            if (lang == null)
+            {
+                var languageResolution = ResolveImpactDefinitions(
+                    query,
+                    DefaultImpactGraphStateEntryBudget,
+                    lang: null,
+                    pathPatterns: null,
+                    excludePathPatterns: null,
+                    excludeTests: false);
+                if (languageResolution.Definitions.Count > 0)
+                {
+                    return new CallerIdentityResolution(
+                        SymbolIds: [],
+                        IdentityRootAvailable: true,
+                        IdentityRootUnavailableReason: null,
+                        GraphEvidenceConfidence: "language_graph");
+                }
+            }
             return new CallerIdentityResolution(
                 SymbolIds: [],
                 IdentityRootAvailable: false,
@@ -596,10 +614,12 @@ public partial class DbReader
         var mutualRecursionSql = _referenceColumns.Contains("is_mutual_recursion") ? "r.is_mutual_recursion" : "0";
         var sourceSymbolIdSql = _referenceColumns.Contains("source_symbol_id") ? "r.source_symbol_id" : "NULL";
         var referenceSpanLengthSql = _referenceColumns.Contains("span_length") ? "r.span_length" : "NULL";
-        var hasIdentityTargetScope = targetSymbolIds is { Count: > 0 }
-                                     && _referenceColumns.Contains("target_symbol_id")
-                                     && _referenceColumns.Contains("resolution_state")
-                                     && HasTable("symbol_reference_candidates");
+        var hasIdentityTargetContract = targetSymbolIds != null
+                                        && _referenceColumns.Contains("target_symbol_id")
+                                        && _referenceColumns.Contains("resolution_state")
+                                        && HasTable("symbol_reference_candidates");
+        var hasIdentityTargetScope = hasIdentityTargetContract
+                                     && targetSymbolIds is { Count: > 0 };
         const string targetSymbolIdsSql = "SELECT CAST(value AS INTEGER) FROM json_each(@targetSymbolIdsJson)";
         var targetSymbolIdSql = hasIdentityTargetScope
             ? $@"CASE
@@ -635,33 +655,39 @@ public partial class DbReader
             : _foldReady
                 ? " OR (f.lang = 'csharp' AND r.symbol_name_folded IN (" + string.Join(", ", polymorphicCSharpSymbolNames.Select((_, i) => $"@polymorphicSymbolNameFolded{i}")) + "))"
                 : " OR (f.lang = 'csharp' AND r.symbol_name COLLATE NOCASE IN (" + string.Join(", ", polymorphicCSharpSymbolNames.Select((_, i) => $"@polymorphicSymbolName{i}")) + "))";
-        var nameCondition = _foldReady
+        var namePredicate = _foldReady
             ? allowSqlLeafFallback
-                ? @"
-              AND (" + BuildPersistedFoldedNameMatchSql("r.symbol_name_folded", "@symbolNameFolded") + " OR (f.lang = 'sql' AND r.symbol_name_folded = @symbolNameLeafFolded)" + polymorphicNameCondition + " OR (f.lang = 'solution' AND r.reference_kind = 'project_reference' AND r.container_name = @symbolName COLLATE NOCASE))"
-                : @"
-              AND (((f.lang = 'sql') AND sql_context_has_name_folded_at(" + contextSql + @", @symbolName, r.column_number) = 1) OR ((f.lang != 'sql') AND " + BuildPersistedFoldedNameMatchSql("r.symbol_name_folded", "@symbolNameFolded") + ") OR " + BuildCSharpQualifiedContextFallbackSql(BuildQualifiedContextMatchSql(contextSql, "r.column_number", folded: true, like: false)) + " OR " + BuildQualifiedLeafFallbackSql("r.symbol_name", "r.symbol_name_folded", folded: true) + polymorphicNameCondition + " OR (f.lang = 'solution' AND r.reference_kind = 'project_reference' AND r.container_name = @symbolName COLLATE NOCASE))"
+                ? "(" + BuildPersistedFoldedNameMatchSql("r.symbol_name_folded", "@symbolNameFolded") + " OR (f.lang = 'sql' AND r.symbol_name_folded = @symbolNameLeafFolded)" + polymorphicNameCondition + " OR (f.lang = 'solution' AND r.reference_kind = 'project_reference' AND r.container_name = @symbolName COLLATE NOCASE))"
+                : "(((f.lang = 'sql') AND sql_context_has_name_folded_at(" + contextSql + @", @symbolName, r.column_number) = 1) OR ((f.lang != 'sql') AND " + BuildPersistedFoldedNameMatchSql("r.symbol_name_folded", "@symbolNameFolded") + ") OR " + BuildCSharpQualifiedContextFallbackSql(BuildQualifiedContextMatchSql(contextSql, "r.column_number", folded: true, like: false)) + " OR " + BuildQualifiedLeafFallbackSql("r.symbol_name", "r.symbol_name_folded", folded: true) + polymorphicNameCondition + " OR (f.lang = 'solution' AND r.reference_kind = 'project_reference' AND r.container_name = @symbolName COLLATE NOCASE))"
             : allowSqlLeafFallback
-                ? @"
-              AND (r.symbol_name = @symbolName COLLATE NOCASE OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@symbolName) COLLATE NOCASE)" + polymorphicNameCondition + " OR (f.lang = 'solution' AND r.reference_kind = 'project_reference' AND r.container_name = @symbolName COLLATE NOCASE))"
-                : @"
-              AND (((f.lang = 'sql') AND sql_context_has_name_at(" + contextSql + @", @symbolName, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name = @symbolName COLLATE NOCASE) OR " + BuildCSharpQualifiedContextFallbackSql(BuildQualifiedContextMatchSql(contextSql, "r.column_number", folded: false, like: false)) + " OR " + BuildQualifiedLeafFallbackSql("r.symbol_name", "r.symbol_name_folded", folded: false) + polymorphicNameCondition + " OR (f.lang = 'solution' AND r.reference_kind = 'project_reference' AND r.container_name = @symbolName COLLATE NOCASE))";
+                ? "(r.symbol_name = @symbolName COLLATE NOCASE OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@symbolName) COLLATE NOCASE)" + polymorphicNameCondition + " OR (f.lang = 'solution' AND r.reference_kind = 'project_reference' AND r.container_name = @symbolName COLLATE NOCASE))"
+                : "(((f.lang = 'sql') AND sql_context_has_name_at(" + contextSql + @", @symbolName, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name = @symbolName COLLATE NOCASE) OR " + BuildCSharpQualifiedContextFallbackSql(BuildQualifiedContextMatchSql(contextSql, "r.column_number", folded: false, like: false)) + " OR " + BuildQualifiedLeafFallbackSql("r.symbol_name", "r.symbol_name_folded", folded: false) + polymorphicNameCondition + " OR (f.lang = 'solution' AND r.reference_kind = 'project_reference' AND r.container_name = @symbolName COLLATE NOCASE))";
+        var nameCondition = "\n              AND " + namePredicate;
         // Identity-scoped traversal admits only references whose candidate set contains the
         // requested canonical target. Unresolved/ambiguous same-leaf rows remain available to
         // broad reference discovery, but they are not confirmed call-graph edges.
         // identity scope の traversal は candidate set が要求 target を含む参照だけを採用する。
         // unresolved/ambiguous な同名 leaf は広い reference 探索には残すが、確定 call graph edge
         // としては扱わない。
-        var targetCondition = hasIdentityTargetScope
-            ? $@"
-              AND EXISTS (
+        var identityTargetPredicate = $@"EXISTS (
                   SELECT 1
                   FROM symbol_reference_candidates identity_candidate
                   WHERE identity_candidate.reference_id = r.id
                     AND identity_candidate.symbol_id IN ({targetSymbolIdsSql})
                     AND r.resolution_state IN ('resolved', 'resolved_group')
-              )"
-            : nameCondition;
+              )";
+        var targetCondition = !hasIdentityTargetContract
+            ? nameCondition
+            : targetSymbolIds!.Count == 0
+                ? lang == null
+                    ? "\n              AND f.lang != 'csharp'" + nameCondition
+                    : "\n              AND 1 = 0"
+                : lang == null
+                    ? $@"
+              AND ((f.lang = 'csharp' AND {identityTargetPredicate})
+                   OR (f.lang != 'csharp' AND {namePredicate}))"
+                    : $@"
+              AND {identityTargetPredicate}";
         // impact BFS must share the call-graph contract with `callers`/`callees`/`hotspots`,
         // so event subscriptions (`Click += OnClick`) also participate in the transitive
         // caller chain. Metadata edges (`attribute`, `annotation`) stay excluded.
@@ -875,6 +901,7 @@ public partial class DbReader
         var partialFamilyMemberRootOmitted = logicalPartialFamilyDefinition != null
             ? Math.Max(0, definitionResolution.PhysicalCount - definitionResolution.PhysicalSymbolIds.Count)
             : (int?)null;
+        var referenceGraphComplete = IsReferenceGraphComplete(GetReferenceExtractionCapHits());
 
         if (maxDepth <= 0)
         {
@@ -912,6 +939,7 @@ public partial class DbReader
                 CycleDetected = false,
                 Cycles = null,
                 GraphTableAvailable = _hasReferencesTable,
+                ReferenceGraphComplete = referenceGraphComplete,
                 ZeroResultReason = definitionResolution.PhysicalCount == 0 ? "no_matching_definition" : "depth_requested_zero",
                 ImpactFailureChain = definitionResolution.PhysicalCount == 0
                     ? identityRootSignal.UnavailableReason == "no_identity_backed_root"
@@ -1098,6 +1126,7 @@ public partial class DbReader
             CycleDetected = cycles.Count > 0,
             Cycles = cycles.Count > 0 ? cycles : null,
             GraphTableAvailable = _hasReferencesTable,
+            ReferenceGraphComplete = referenceGraphComplete,
             ZeroResultReason = zeroResultReason,
             ImpactFailureChain = impactFailureChain is { Count: > 0 } ? impactFailureChain : null,
             SuggestionType = suggestionType,
