@@ -403,7 +403,7 @@ internal static class GlobalToolLog
                 }
                 boundary.PrepareMutation("write_probe_delete", probePath);
                 if (OperatingSystem.IsWindows())
-                    File.Delete(LongPath.EnsureWindowsPrefix(probePath));
+                    boundary.DeleteFileWindows(probePath);
                 else
                     boundary.DeleteFileUnix(probePath);
                 boundary.CompleteMutation(probePath);

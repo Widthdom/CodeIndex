@@ -18,9 +18,11 @@ internal static class PrivateLogFile
         RejectUnsafeTarget(path);
 
         Stream stream;
-        if (boundary is not null && !OperatingSystem.IsWindows())
+        if (boundary is not null)
         {
-            stream = boundary.OpenAppendUnix(path);
+            stream = OperatingSystem.IsWindows()
+                ? boundary.OpenAppendWindows(path, share)
+                : boundary.OpenAppendUnix(path);
         }
         else if (OperatingSystem.IsWindows())
         {
@@ -73,7 +75,7 @@ internal static class PrivateLogFile
             boundary.PrepareMutation("write_private_text_stage", stagedPath);
             RejectUnsafeTarget(stagedPath);
             using (var stream = OperatingSystem.IsWindows()
-                ? new FileStream(stagedPath, FileMode.CreateNew, FileAccess.Write, FileShare.None)
+                ? boundary.OpenReplacingWindows(stagedPath, createNew: true)
                 : boundary.OpenReplacingUnix(stagedPath))
             {
                 var encoded = Encoding.UTF8.GetBytes(contents);
@@ -86,7 +88,7 @@ internal static class PrivateLogFile
             boundary.PrepareMutation("write_private_text_publish_source", stagedPath);
             boundary.PrepareMutation("write_private_text_publish_destination", path);
             if (OperatingSystem.IsWindows())
-                AtomicFileWriter.MoveReplacing(stagedPath, path);
+                boundary.MoveReplacingWindows(stagedPath, path);
             else
                 boundary.MoveReplacingUnix(stagedPath, path);
             boundary.CompleteMutation(path);
@@ -103,7 +105,7 @@ internal static class PrivateLogFile
         {
             boundary.PrepareMutation("write_private_text_cleanup", path);
             if (OperatingSystem.IsWindows())
-                File.Delete(path);
+                boundary.DeleteFileWindows(path);
             else
                 boundary.DeleteFileUnix(path);
             boundary.CompleteMutation(path);
@@ -228,9 +230,12 @@ internal static class PrivateLogFile
                 if (ShouldPruneFile(file, retainedPaths, retainedFiles, retainedFileCount))
                 {
                     boundary?.PrepareMutation("prune_old_file", file.FullName);
-                    if (boundary is not null && !OperatingSystem.IsWindows())
+                    if (boundary is not null)
                     {
-                        boundary.DeleteFileUnix(file.FullName);
+                        if (OperatingSystem.IsWindows())
+                            boundary.DeleteFileWindows(file.FullName);
+                        else
+                            boundary.DeleteFileUnix(file.FullName);
                     }
                     else
                     {
@@ -313,8 +318,13 @@ internal static class PrivateLogFile
         {
             var lastSlot = SlotPath(path, retainedFileCount - 1);
             boundary?.PrepareMutation("rotate_delete", lastSlot);
-            if (boundary is not null && !OperatingSystem.IsWindows())
-                boundary.DeleteFileUnix(lastSlot);
+            if (boundary is not null)
+            {
+                if (OperatingSystem.IsWindows())
+                    boundary.DeleteFileWindows(lastSlot);
+                else
+                    boundary.DeleteFileUnix(lastSlot);
+            }
             else
                 AtomicFileWriter.TryDeleteFile(lastSlot, onCleanupFailure);
             boundary?.CompleteMutation(lastSlot);
@@ -327,8 +337,13 @@ internal static class PrivateLogFile
                     continue;
                 boundary?.PrepareMutation("rotate_source", current);
                 boundary?.PrepareMutation("rotate_destination", next);
-                if (boundary is not null && !OperatingSystem.IsWindows())
-                    boundary.MoveReplacingUnix(current, next);
+                if (boundary is not null)
+                {
+                    if (OperatingSystem.IsWindows())
+                        boundary.MoveReplacingWindows(current, next);
+                    else
+                        boundary.MoveReplacingUnix(current, next);
+                }
                 else
                     AtomicFileWriter.MoveReplacing(current, next);
                 boundary?.CompleteMutation(current);
@@ -341,8 +356,13 @@ internal static class PrivateLogFile
                 var first = SlotPath(path, 1);
                 boundary?.PrepareMutation("rotate_source", path);
                 boundary?.PrepareMutation("rotate_destination", first);
-                if (boundary is not null && !OperatingSystem.IsWindows())
-                    boundary.MoveReplacingUnix(path, first);
+                if (boundary is not null)
+                {
+                    if (OperatingSystem.IsWindows())
+                        boundary.MoveReplacingWindows(path, first);
+                    else
+                        boundary.MoveReplacingUnix(path, first);
+                }
                 else
                     AtomicFileWriter.MoveReplacing(path, first);
                 boundary?.CompleteMutation(path);

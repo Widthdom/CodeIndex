@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Text;
 using CodeIndex.Indexer;
 using Microsoft.Win32.SafeHandles;
 
@@ -20,6 +21,7 @@ internal static class RepositoryOutputPathBoundary
     private static readonly AsyncLocal<Func<string, ulong?>?> UnixMountId = new();
     private static readonly AsyncLocal<Func<int, ulong?>?> UnixHandleMountId = new();
     private static readonly AsyncLocal<Func<int, int>?> UnixDirectoryFsync = new();
+    private static readonly AsyncLocal<Action<string, string>?> BeforeWindowsNativeMutation = new();
 
     internal static Action<string, string>? BeforeMutationForTesting
     {
@@ -49,6 +51,12 @@ internal static class RepositoryOutputPathBoundary
     {
         get => UnixDirectoryFsync.Value;
         set => UnixDirectoryFsync.Value = value;
+    }
+
+    internal static Action<string, string>? BeforeWindowsNativeMutationForTesting
+    {
+        get => BeforeWindowsNativeMutation.Value;
+        set => BeforeWindowsNativeMutation.Value = value;
     }
 
     internal static bool TryResolveConfiguredPath(
@@ -163,7 +171,16 @@ internal static class RepositoryOutputPathBoundary
             throw CreateException("output path", UnsafeReason);
         }
 
-        var rootDevice = TryGetUnixDevice(normalizedRoot, out var device) ? device : (long?)null;
+        long? rootDevice = null;
+        if (!OperatingSystem.IsWindows())
+        {
+            if (!TryGetUnixStatus(normalizedRoot, out var rootStatus)
+                || (rootStatus.Mode & UnixFileTypeMask) != UnixDirectoryType)
+            {
+                throw CreateException("output path", UnsafeReason);
+            }
+            rootDevice = rootStatus.Device;
+        }
         ulong? rootMountId = null;
         if (RequiresUnixMountIdentity)
         {
@@ -208,8 +225,10 @@ internal static class RepositoryOutputPathBoundary
                 throw CreateException("output path", UnsafeReason);
 
             if (rootDevice.HasValue
-                && TryGetUnixDevice(current, out var currentDevice)
-                && currentDevice != rootDevice.Value)
+                && (!TryGetUnixStatus(current, out var currentStatus)
+                    || currentStatus.Device != rootDevice.Value
+                    || (currentStatus.Mode & UnixFileTypeMask)
+                        != (isDirectory ? UnixDirectoryType : UnixRegularFileType)))
             {
                 throw CreateException("output path", UnsafeReason);
             }
@@ -251,18 +270,15 @@ internal static class RepositoryOutputPathBoundary
         }
     }
 
-    private static bool TryGetUnixDevice(string path, out long device)
+    private static bool TryGetUnixStatus(string path, out UnixFileStatus status)
     {
-        device = 0;
+        status = default;
         if (OperatingSystem.IsWindows())
             return false;
 
         try
         {
-            if (UnixStat(LongPath.EnsureWindowsPrefix(path), out var status) != 0)
-                return false;
-            device = status.Device;
-            return true;
+            return UnixStat(LongPath.EnsureWindowsPrefix(path), out status) == 0;
         }
         catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException)
         {
@@ -404,6 +420,9 @@ internal static class RepositoryOutputPathBoundary
     private const int UnixAtSymlinkNoFollow = 0x100;
     private const int UnixAtEmptyPath = 0x1000;
     private const uint UnixStatXMountId = 0x1000;
+    private const int UnixFileTypeMask = 0xF000;
+    private const int UnixDirectoryType = 0x4000;
+    private const int UnixRegularFileType = 0x8000;
 
     [StructLayout(LayoutKind.Explicit, Size = 256)]
     private struct UnixStatXStatus
@@ -497,6 +516,29 @@ internal sealed class RepositoryOutputPathGuard
         }
     }
 
+    internal Stream OpenAppendWindows(string path, FileShare share)
+    {
+        if (!OperatingSystem.IsWindows())
+            throw new PlatformNotSupportedException();
+
+        var handle = OpenWindowsPath(
+            path,
+            WindowsFileAppendData | WindowsFileReadAttributes | WindowsFileWriteAttributes | WindowsSynchronize,
+            (uint)share,
+            WindowsFileOpenIf,
+            WindowsFileNormal,
+            WindowsFileNonDirectory | WindowsFileSynchronousIoNonAlert);
+        try
+        {
+            return new FileStream(handle, FileAccess.Write, bufferSize: 4096, isAsync: false);
+        }
+        catch
+        {
+            handle.Dispose();
+            throw;
+        }
+    }
+
     internal FileStream OpenReplacingUnix(string path)
     {
         if (OperatingSystem.IsWindows())
@@ -506,6 +548,29 @@ internal sealed class RepositoryOutputPathGuard
         try
         {
             return new FileStream(handle, FileAccess.Write);
+        }
+        catch
+        {
+            handle.Dispose();
+            throw;
+        }
+    }
+
+    internal FileStream OpenReplacingWindows(string path, bool createNew)
+    {
+        if (!OperatingSystem.IsWindows())
+            throw new PlatformNotSupportedException();
+
+        var handle = OpenWindowsPath(
+            path,
+            WindowsFileWriteData | WindowsFileReadAttributes | WindowsFileWriteAttributes | WindowsSynchronize,
+            shareAccess: 0,
+            createNew ? WindowsFileCreate : WindowsFileOverwriteIf,
+            WindowsFileNormal,
+            WindowsFileNonDirectory | WindowsFileSynchronousIoNonAlert);
+        try
+        {
+            return new FileStream(handle, FileAccess.Write, bufferSize: 4096, isAsync: false);
         }
         catch
         {
@@ -538,6 +603,23 @@ internal sealed class RepositoryOutputPathGuard
         throw CreateNativeIOException();
     }
 
+    internal bool DeleteFileWindows(string path)
+    {
+        if (!OperatingSystem.IsWindows())
+            return false;
+
+        using var root = OpenWindowsRootDirectory();
+        var relativePath = GetWindowsRelativePath(path);
+        using var objectName = new WindowsObjectName(root, relativePath);
+        RepositoryOutputPathBoundary.BeforeWindowsNativeMutationForTesting?.Invoke("delete", path);
+        var status = WindowsNtDeleteFile(ref objectName.Attributes);
+        if (status >= 0)
+            return true;
+        if (status is WindowsStatusObjectNameNotFound or WindowsStatusObjectPathNotFound)
+            return false;
+        throw CreateNativeIOException();
+    }
+
     internal void MoveReplacingUnix(string source, string destination)
     {
         if (OperatingSystem.IsWindows())
@@ -561,6 +643,65 @@ internal sealed class RepositoryOutputPathGuard
         }
     }
 
+    internal void MoveReplacingWindows(string source, string destination)
+    {
+        if (!OperatingSystem.IsWindows())
+            throw new PlatformNotSupportedException();
+
+        using var sourceHandle = OpenWindowsPath(
+            source,
+            WindowsDelete | WindowsFileReadAttributes | WindowsSynchronize,
+            WindowsShareRead | WindowsShareWrite | WindowsShareDelete,
+            WindowsFileOpen,
+            WindowsFileNormal,
+            WindowsFileNonDirectory | WindowsFileSynchronousIoNonAlert);
+        var destinationParentPath = Path.GetDirectoryName(Path.GetFullPath(destination))
+            ?? throw RepositoryOutputPathBoundary.CreateException(FieldName, "invalid_path");
+        using var destinationParent = PathCasing.PathsEqualByDirectoryNamespace(
+            WorkspaceRoot,
+            destinationParentPath)
+            ? OpenWindowsRootDirectory()
+            : OpenWindowsPath(
+                destinationParentPath,
+                WindowsFileListDirectory | WindowsFileReadAttributes | WindowsSynchronize,
+                WindowsShareRead | WindowsShareWrite | WindowsShareDelete,
+                WindowsFileOpen,
+                WindowsFileDirectory,
+                WindowsFileDirectoryOption | WindowsFileSynchronousIoNonAlert);
+
+        var destinationName = Path.GetFileName(destination);
+        var encodedName = Encoding.Unicode.GetBytes(destinationName);
+        var rootOffset = IntPtr.Size;
+        var lengthOffset = rootOffset + IntPtr.Size;
+        var nameOffset = lengthOffset + sizeof(uint);
+        var buffer = Marshal.AllocHGlobal(nameOffset + encodedName.Length);
+        try
+        {
+            for (var index = 0; index < nameOffset; index++)
+                Marshal.WriteByte(buffer, index, 0);
+            Marshal.WriteByte(buffer, 0, 1);
+            Marshal.WriteIntPtr(buffer, rootOffset, destinationParent.DangerousGetHandle());
+            Marshal.WriteInt32(buffer, lengthOffset, encodedName.Length);
+            Marshal.Copy(encodedName, 0, IntPtr.Add(buffer, nameOffset), encodedName.Length);
+            RepositoryOutputPathBoundary.BeforeWindowsNativeMutationForTesting?.Invoke("rename", source);
+            using var verificationRoot = OpenWindowsRootDirectory();
+            EnsureWindowsHandleUnderRoot(verificationRoot, sourceHandle);
+            EnsureWindowsHandleUnderRoot(verificationRoot, destinationParent);
+            var status = WindowsNtSetInformationFile(
+                sourceHandle,
+                out _,
+                buffer,
+                (uint)(nameOffset + encodedName.Length),
+                WindowsFileRenameInformation);
+            if (status < 0)
+                throw CreateNativeIOException();
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(buffer);
+        }
+    }
+
     internal void ValidateRelatedPath(string path, bool expectsDirectory = false)
     {
         var fullPath = Path.GetFullPath(path);
@@ -577,47 +718,38 @@ internal sealed class RepositoryOutputPathGuard
 
     private void CreateSensitiveDirectories(string directory)
     {
-        if (!OperatingSystem.IsWindows())
+        if (OperatingSystem.IsWindows())
         {
-            CreateSensitiveDirectoriesUnix(directory);
+            CreateSensitiveDirectoriesWindows(directory);
             return;
         }
 
+        CreateSensitiveDirectoriesUnix(directory);
+    }
+
+    private void CreateSensitiveDirectoriesWindows(string directory)
+    {
         var normalizedDirectory = PathCasing.NormalizeBoundaryPath(directory);
-        var relative = Path.GetRelativePath(WorkspaceRoot, normalizedDirectory);
-        if (relative == ".")
+        var components = GetRelativeComponents(normalizedDirectory);
+        if (components.Length == 0)
             return;
 
-        var components = relative.Split(
-            [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
-            StringSplitOptions.RemoveEmptyEntries);
-        var current = WorkspaceRoot;
-        foreach (var component in components)
+        for (var index = 0; index < components.Length; index++)
         {
-            current = Path.Combine(current, component);
-            RepositoryOutputPathBoundary.ValidatePathComponents(WorkspaceRoot, current, destinationIsDirectory: true);
-            var created = false;
-            if (!Directory.Exists(LongPath.EnsureWindowsPrefix(current)))
-            {
-                PrepareMutation("create_directory", current, expectsDirectory: true);
-                if (OperatingSystem.IsWindows())
-                    Directory.CreateDirectory(LongPath.EnsureWindowsPrefix(current));
-                else
-                    Directory.CreateDirectory(LongPath.EnsureWindowsPrefix(current), DataDirectorySecurity.PrivateDirectoryMode);
-                CompleteMutation(current, expectsDirectory: true);
-                created = true;
-            }
-
-            if (!OperatingSystem.IsWindows()
-                && (created || string.Equals(
-                    PathCasing.NormalizeBoundaryPath(current),
-                    normalizedDirectory,
-                    PathCasing.ComparisonFor(normalizedDirectory))))
-            {
-                PrepareMutation("set_directory_permissions", current, expectsDirectory: true);
-                File.SetUnixFileMode(LongPath.EnsureWindowsPrefix(current), DataDirectorySecurity.PrivateDirectoryMode);
-                CompleteMutation(current, expectsDirectory: true);
-            }
+            var currentPath = Path.Combine(WorkspaceRoot, Path.Combine(components[..(index + 1)]));
+            PrepareMutation("create_directory", currentPath, expectsDirectory: true);
+            using var handle = OpenWindowsPath(
+                currentPath,
+                WindowsFileListDirectory
+                    | WindowsFileAddSubdirectory
+                    | WindowsFileReadAttributes
+                    | WindowsFileWriteAttributes
+                    | WindowsSynchronize,
+                WindowsShareRead | WindowsShareWrite | WindowsShareDelete,
+                WindowsFileOpenIf,
+                WindowsFileDirectory,
+                WindowsFileDirectoryOption | WindowsFileSynchronousIoNonAlert);
+            CompleteMutation(currentPath, expectsDirectory: true);
         }
     }
 
@@ -641,15 +773,21 @@ internal sealed class RepositoryOutputPathGuard
                     if (next is null)
                     {
                         PrepareMutation("create_directory", currentPath, expectsDirectory: true);
+                        var parentPath = index == 0
+                            ? WorkspaceRoot
+                            : Path.Combine(WorkspaceRoot, Path.Combine(components[..index]));
+                        using var reboundParent = OpenUnixDirectory(parentPath, out var reboundIdentity);
+                        if (reboundIdentity != rootIdentity)
+                            throw CreateNativeIOException();
                         if (UnixMkdirAt(
-                                current.DangerousGetHandle().ToInt32(),
+                                reboundParent.DangerousGetHandle().ToInt32(),
                                 component,
                                 (uint)DataDirectorySecurity.PrivateDirectoryMode) != 0
                             && Marshal.GetLastWin32Error() != 17)
                         {
                             throw CreateNativeIOException();
                         }
-                        next = TryOpenUnixDirectoryAt(current, component) ?? throw CreateNativeIOException();
+                        next = TryOpenUnixDirectoryAt(reboundParent, component) ?? throw CreateNativeIOException();
                         CompleteMutation(currentPath, expectsDirectory: true);
                         created = true;
                     }
@@ -658,6 +796,10 @@ internal sealed class RepositoryOutputPathGuard
                     if (created || index == components.Length - 1)
                     {
                         PrepareMutation("set_directory_permissions", currentPath, expectsDirectory: true);
+                        next.Dispose();
+                        next = OpenUnixDirectory(currentPath, out var reboundIdentity);
+                        if (reboundIdentity != rootIdentity)
+                            throw CreateNativeIOException();
                         if (UnixFChmod(
                                 next.DangerousGetHandle().ToInt32(),
                                 (uint)DataDirectorySecurity.PrivateDirectoryMode) != 0)
@@ -885,6 +1027,109 @@ internal sealed class RepositoryOutputPathGuard
             out _);
     }
 
+    private SafeFileHandle OpenWindowsPath(
+        string path,
+        uint desiredAccess,
+        uint shareAccess,
+        uint disposition,
+        uint attributes,
+        uint options)
+    {
+        using var root = OpenWindowsRootDirectory();
+        var relativePath = GetWindowsRelativePath(path);
+        using var objectName = new WindowsObjectName(root, relativePath);
+        RepositoryOutputPathBoundary.BeforeWindowsNativeMutationForTesting?.Invoke("open", path);
+        var status = WindowsNtCreateFile(
+            out var handle,
+            desiredAccess,
+            ref objectName.Attributes,
+            out _,
+            IntPtr.Zero,
+            attributes,
+            shareAccess,
+            disposition,
+            options,
+            IntPtr.Zero,
+            0);
+        if (status < 0)
+        {
+            handle?.Dispose();
+            throw CreateNativeIOException();
+        }
+
+        try
+        {
+            EnsureWindowsHandleUnderRoot(root, handle);
+            return handle;
+        }
+        catch
+        {
+            handle.Dispose();
+            throw;
+        }
+    }
+
+    private SafeFileHandle OpenWindowsRootDirectory()
+    {
+        var handle = WindowsCreateFile(
+            LongPath.EnsureWindowsPrefix(CanonicalWorkspaceRoot),
+            WindowsFileListDirectory | WindowsFileReadAttributes | WindowsSynchronize,
+            WindowsShareRead | WindowsShareWrite | WindowsShareDelete,
+            IntPtr.Zero,
+            WindowsOpenExisting,
+            WindowsFileFlagBackupSemantics,
+            IntPtr.Zero);
+        if (handle.IsInvalid)
+        {
+            handle.Dispose();
+            throw CreateNativeIOException();
+        }
+        return handle;
+    }
+
+    private string GetWindowsRelativePath(string path)
+    {
+        var components = GetRelativeComponents(PathCasing.NormalizeBoundaryPath(path));
+        if (components.Length == 0)
+            throw RepositoryOutputPathBoundary.CreateException(FieldName, "invalid_path");
+        return string.Join('\\', components);
+    }
+
+    private static void EnsureWindowsHandleUnderRoot(SafeFileHandle root, SafeFileHandle handle)
+    {
+        var rootPath = GetWindowsFinalPath(root);
+        var handlePath = GetWindowsFinalPath(handle);
+        if (!RepositoryOutputPathBoundary.IsPathEqualOrParent(rootPath, handlePath))
+            throw CreateNativeIOException();
+    }
+
+    private static string GetWindowsFinalPath(SafeFileHandle handle)
+    {
+        var capacity = 512;
+        while (capacity <= short.MaxValue)
+        {
+            var buffer = new StringBuilder(capacity);
+            var length = WindowsGetFinalPathNameByHandle(handle, buffer, (uint)buffer.Capacity, flags: 0);
+            if (length == 0)
+                throw CreateNativeIOException();
+            if (length < buffer.Capacity)
+                return NormalizeWindowsFinalPath(buffer.ToString());
+            capacity = checked((int)length + 1);
+        }
+        throw CreateNativeIOException();
+    }
+
+    private static string NormalizeWindowsFinalPath(string path)
+    {
+        const string extendedUncPrefix = @"\\?\UNC\";
+        const string extendedPrefix = @"\\?\";
+        if (path.StartsWith(extendedUncPrefix, StringComparison.OrdinalIgnoreCase))
+            return @"\\" + path[extendedUncPrefix.Length..];
+        if (path.StartsWith(extendedPrefix, StringComparison.OrdinalIgnoreCase))
+            return path[extendedPrefix.Length..];
+        return path;
+    }
+
     private const int UnixReadOnly = 0;
     private const int UnixWriteOnly = 1;
     private const int UnixFileTypeMask = 0xF000;
@@ -899,6 +1144,34 @@ internal sealed class RepositoryOutputPathGuard
     private static int UnixCreate => OperatingSystem.IsMacOS() ? 0x00000200 : 0x00000040;
     private static int UnixAppend => OperatingSystem.IsMacOS() ? 0x00000008 : 0x00000400;
     private static int UnixTruncate => OperatingSystem.IsMacOS() ? 0x00000400 : 0x00000200;
+
+    private const uint WindowsFileListDirectory = 0x00000001;
+    private const uint WindowsFileWriteData = 0x00000002;
+    private const uint WindowsFileAddSubdirectory = 0x00000004;
+    private const uint WindowsFileAppendData = 0x00000004;
+    private const uint WindowsFileReadAttributes = 0x00000080;
+    private const uint WindowsFileWriteAttributes = 0x00000100;
+    private const uint WindowsDelete = 0x00010000;
+    private const uint WindowsSynchronize = 0x00100000;
+    private const uint WindowsShareRead = 0x00000001;
+    private const uint WindowsShareWrite = 0x00000002;
+    private const uint WindowsShareDelete = 0x00000004;
+    private const uint WindowsFileDirectory = 0x00000010;
+    private const uint WindowsFileNormal = 0x00000080;
+    private const uint WindowsFileOpen = 0x00000001;
+    private const uint WindowsFileCreate = 0x00000002;
+    private const uint WindowsFileOpenIf = 0x00000003;
+    private const uint WindowsFileOverwriteIf = 0x00000005;
+    private const uint WindowsFileDirectoryOption = 0x00000001;
+    private const uint WindowsFileSynchronousIoNonAlert = 0x00000020;
+    private const uint WindowsFileNonDirectory = 0x00000040;
+    private const uint WindowsOpenExisting = 3;
+    private const uint WindowsFileFlagBackupSemantics = 0x02000000;
+    private const uint WindowsObjectCaseInsensitive = 0x00000040;
+    private const uint WindowsObjectDontReparse = 0x00001000;
+    private const int WindowsFileRenameInformation = 10;
+    private const int WindowsStatusObjectNameNotFound = unchecked((int)0xC0000034);
+    private const int WindowsStatusObjectPathNotFound = unchecked((int)0xC000003A);
 
     [DllImport("libc", EntryPoint = "open", SetLastError = true)]
     private static extern int UnixOpen(string path, int flags);
@@ -924,6 +1197,114 @@ internal sealed class RepositoryOutputPathGuard
 
     [DllImport("libSystem.Native", EntryPoint = "SystemNative_FStat", SetLastError = true)]
     private static extern int UnixFStat(IntPtr descriptor, out UnixFileStatus status);
+
+    [DllImport("kernel32.dll", EntryPoint = "CreateFileW", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern SafeFileHandle WindowsCreateFile(
+        string path,
+        uint desiredAccess,
+        uint shareMode,
+        IntPtr securityAttributes,
+        uint creationDisposition,
+        uint flagsAndAttributes,
+        IntPtr templateFile);
+
+    [DllImport("kernel32.dll", EntryPoint = "GetFinalPathNameByHandleW", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern uint WindowsGetFinalPathNameByHandle(
+        SafeFileHandle handle,
+        StringBuilder path,
+        uint pathLength,
+        uint flags);
+
+    [DllImport("ntdll.dll", EntryPoint = "NtCreateFile")]
+    private static extern int WindowsNtCreateFile(
+        out SafeFileHandle fileHandle,
+        uint desiredAccess,
+        ref WindowsObjectAttributes objectAttributes,
+        out WindowsIoStatusBlock ioStatusBlock,
+        IntPtr allocationSize,
+        uint fileAttributes,
+        uint shareAccess,
+        uint createDisposition,
+        uint createOptions,
+        IntPtr extendedAttributes,
+        uint extendedAttributesLength);
+
+    [DllImport("ntdll.dll", EntryPoint = "NtDeleteFile")]
+    private static extern int WindowsNtDeleteFile(ref WindowsObjectAttributes objectAttributes);
+
+    [DllImport("ntdll.dll", EntryPoint = "NtSetInformationFile")]
+    private static extern int WindowsNtSetInformationFile(
+        SafeFileHandle fileHandle,
+        out WindowsIoStatusBlock ioStatusBlock,
+        IntPtr fileInformation,
+        uint length,
+        int fileInformationClass);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct WindowsUnicodeString
+    {
+        internal ushort Length;
+        internal ushort MaximumLength;
+        internal IntPtr Buffer;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct WindowsObjectAttributes
+    {
+        internal uint Length;
+        internal IntPtr RootDirectory;
+        internal IntPtr ObjectName;
+        internal uint Attributes;
+        internal IntPtr SecurityDescriptor;
+        internal IntPtr SecurityQualityOfService;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct WindowsIoStatusBlock
+    {
+        internal IntPtr Status;
+        internal UIntPtr Information;
+    }
+
+    private sealed class WindowsObjectName : IDisposable
+    {
+        private readonly IntPtr _nameBuffer;
+        private readonly IntPtr _unicodeString;
+
+        internal WindowsObjectName(SafeFileHandle root, string relativePath)
+        {
+            var byteLength = checked(relativePath.Length * sizeof(char));
+            if (byteLength > ushort.MaxValue - sizeof(char))
+                throw RepositoryOutputPathBoundary.CreateException("output path", "invalid_path");
+
+            _nameBuffer = Marshal.StringToHGlobalUni(relativePath);
+            _unicodeString = Marshal.AllocHGlobal(Marshal.SizeOf<WindowsUnicodeString>());
+            Marshal.StructureToPtr(
+                new WindowsUnicodeString
+                {
+                    Length = (ushort)byteLength,
+                    MaximumLength = (ushort)(byteLength + sizeof(char)),
+                    Buffer = _nameBuffer,
+                },
+                _unicodeString,
+                fDeleteOld: false);
+            Attributes = new WindowsObjectAttributes
+            {
+                Length = (uint)Marshal.SizeOf<WindowsObjectAttributes>(),
+                RootDirectory = root.DangerousGetHandle(),
+                ObjectName = _unicodeString,
+                Attributes = WindowsObjectCaseInsensitive | WindowsObjectDontReparse,
+            };
+        }
+
+        internal WindowsObjectAttributes Attributes;
+
+        public void Dispose()
+        {
+            Marshal.FreeHGlobal(_unicodeString);
+            Marshal.FreeHGlobal(_nameBuffer);
+        }
+    }
 
     [StructLayout(LayoutKind.Sequential)]
     private struct UnixFileStatus

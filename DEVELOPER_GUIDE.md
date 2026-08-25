@@ -2956,8 +2956,12 @@ cross-device mount point, reparse point, device, or dangling link. The boundary
 is revalidated before each mutation; on Linux, path and opened-handle mount IDs
 also reject same-device bind mounts. On POSIX, directory creation, append,
 permission changes, rotation, replacement, and deletion are additionally anchored
-to the workspace directory handle with no-follow relative operations, and guarded
-renames fsync their already-open destination parent before reporting success. The same
+to the workspace directory handle with no-follow relative operations. Directory
+parents are rebound from that root after mutation-time validation so a
+moved ancestor is not reused. Guarded renames fsync their already-open destination
+parent before reporting success. On Windows, root-handle-relative native opens reject
+reparse points during name resolution, and guarded replacement and deletion remain
+handle/root relative. The same
 `global_tool_log_dir` guard covers lifecycle logs, file query traces, and the
 bounded `last-failure.json` diagnostic. An unsafe value fails config validation
 with the bounded `unsafe_output_path` diagnostic and does not create, append,
@@ -6973,8 +6977,11 @@ reparse point、device、dangling link のいずれかであれば拒否し、�
 直前にも境界を再検証します。Linux では path と open 済み handle の mount ID も
 比較して同一 device の bind mount を拒否します。POSIX ではさらに directory 作成、
 append、permission 変更、rotation、置換、delete を workspace directory handle 起点の
-no-follow relative operation へ固定し、guarded rename は成功を返す前に open 済みの
-destination parent を fsync します。同じ `global_tool_log_dir` guard を lifecycle log、file
+no-follow relative operation へ固定し、mutation 時の検証後に directory parent を root
+から再取得するため、外部へ移動済みの ancestor handle を再利用しません。guarded rename は
+成功を返す前に open 済みの destination parent を fsync します。Windows では root handle
+相対の native open が name resolution 中の reparse point を拒否し、guarded replacement /
+delete も handle / root 相対で実行します。同じ `global_tool_log_dir` guard を lifecycle log、file
 query trace、上限付きの `last-failure.json` 診断にも適用します。安全でない値は
 上限付きの `unsafe_output_path` 診断で config validation に失敗し、外部 target の
 作成、追記、rotation、置換、削除、chmod は行いません。明示的な CLI と process
