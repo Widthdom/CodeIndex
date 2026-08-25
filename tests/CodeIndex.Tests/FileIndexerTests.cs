@@ -2458,6 +2458,7 @@ public partial class FileIndexerTests
         File.SetLastWriteTimeUtc(replacementPath, DateTime.UtcNow.AddSeconds(5));
         var openCount = 0;
         var authorizationCount = 0;
+        var snapshotCount = 0;
         var indexer = new FileIndexer(
             project.Root,
             ignoreCase: false,
@@ -2478,12 +2479,14 @@ public partial class FileIndexerTests
                 if (openCount == 1)
                     File.Replace(replacementPath, path, destinationBackupFileName: null);
                 return stream;
-            });
+            },
+            fileHandleSnapshotCapturedForTesting: () => snapshotCount++);
 
         var candidateContent = indexer.LoadCSharpStaticInterfaceCandidateContentForPrepass(path, "Fixture.cs");
 
         Assert.Equal(2, openCount);
         Assert.Equal(2, authorizationCount);
+        Assert.Equal(4, snapshotCount);
         Assert.Equal(replacementSource, candidateContent);
         Assert.True(CSharpStaticInterfacePrepass.MayContainCSharpStaticInterfaceContract(candidateContent!));
     }
@@ -2630,6 +2633,71 @@ public partial class FileIndexerTests
         Assert.Equal("c", scanResult.FileLanguages[path]);
         Assert.Null(knownLanguage);
         Assert.Equal("cpp", loaded.Record.Lang);
+    }
+
+    [Fact]
+    public void ScanFilesDetailedWithIndexingTargets_SharesPathViewAndPreservesReuseBoundaries()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_scan_targets");
+        var sourceDirectory = Path.Combine(project.Root, "src");
+        var generatedDirectory = Path.Combine(sourceDirectory, "generated");
+        var unicodeDirectory = Path.Combine(sourceDirectory, "日本語");
+        Directory.CreateDirectory(generatedDirectory);
+        Directory.CreateDirectory(unicodeDirectory);
+        var dockerfilePath = Path.Combine(project.Root, "Dockerfile");
+        var generatedPath = Path.Combine(generatedDirectory, "Widget.g.cs");
+        var headerPath = Path.Combine(sourceDirectory, "widget.h");
+        var scriptPath = Path.Combine(sourceDirectory, "tool");
+        var perlPath = Path.Combine(sourceDirectory, "tool.pl");
+        var customScriptPath = Path.Combine(sourceDirectory, "tool.custom");
+        var pythonPath = Path.Combine(sourceDirectory, "helper.py");
+        var typescriptPath = Path.Combine(unicodeDirectory, "Cafe\u0301.ts");
+        File.WriteAllText(dockerfilePath, "FROM scratch\n");
+        File.WriteAllText(generatedPath, "public sealed class Widget { }\n");
+        File.WriteAllText(headerPath, "template <typename T> class WidgetTemplate { };\n");
+        File.WriteAllText(scriptPath, "#!/usr/bin/env python\nprint('ok')\n");
+        File.WriteAllText(perlPath, "#!/usr/bin/env perl\nuse strict;\n");
+        File.WriteAllText(customScriptPath, "#!/bin/sh\necho ok\n");
+        File.WriteAllText(pythonPath, "def run():\n    return True\n");
+        File.WriteAllText(typescriptPath, "export const enabled = true;\n");
+        var indexer = new FileIndexer(
+            project.Root,
+            ignoreCase: false,
+            ignoreRuleRoot: null,
+            generatedCodePatterns: ["src/generated/**"]);
+
+        var captured = indexer.ScanFilesDetailedWithIndexingTargets();
+
+        Assert.Same(captured.IndexingTargets, captured.ScanResult.Files);
+        Assert.Equal(captured.ScanResult.Files.Count, captured.IndexingTargets.Count);
+        var targetsByPath = new Dictionary<string, FileIndexer.IndexingFileTarget>(StringComparer.Ordinal);
+        foreach (var target in captured.IndexingTargets)
+            targetsByPath.Add(target.IndexPath, target);
+        for (var index = 0; index < captured.IndexingTargets.Count; index++)
+        {
+            Assert.Equal(
+                captured.ScanResult.Files[index],
+                captured.IndexingTargets[index].FilePath);
+        }
+        var generatedTarget = targetsByPath["src/generated/Widget.g.cs"];
+        Assert.Equal(Path.Combine("src", "generated", "Widget.g.cs"), generatedTarget.RelativePath);
+        Assert.Equal("src/generated/Widget.g.cs", generatedTarget.DisplayRelativePath);
+        Assert.Equal("csharp", generatedTarget.ReusableLanguage);
+        Assert.True(generatedTarget.GeneratedExtractionSuppressed);
+        Assert.Null(targetsByPath["src/widget.h"].ReusableLanguage);
+        Assert.Null(targetsByPath["src/tool"].ReusableLanguage);
+        Assert.Equal("perl", targetsByPath["src/tool.pl"].ReusableLanguage);
+        Assert.Equal("shell", targetsByPath["src/tool.custom"].ReusableLanguage);
+        Assert.Equal("dockerfile", targetsByPath["Dockerfile"].ReusableLanguage);
+        Assert.Equal("python", targetsByPath["src/helper.py"].ReusableLanguage);
+        Assert.Equal("typescript", targetsByPath["src/日本語/Café.ts"].ReusableLanguage);
+        Assert.Equal("src/日本語/Café.ts", targetsByPath["src/日本語/Café.ts"].IndexPath);
+        Assert.All(
+            ((System.Collections.IEnumerable)captured.ScanResult.Files).Cast<object>(),
+            static value => Assert.IsType<string>(value));
+
+        Assert.IsType<List<string>>(indexer.ScanFiles());
+        Assert.IsType<List<string>>(indexer.ScanFilesDetailed().Files);
     }
 
     [Theory]
@@ -6142,6 +6210,438 @@ public partial class FileIndexerTests
         Assert.DoesNotContain("ignored.mystery", scanResult.UnknownExtensionFiles);
     }
 
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    public void ScanFilesDetailed_UnknownLanguageProbe_UsesOneShortReadHandle(int maxReadBytes)
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_unknown_probe_short_read");
+        var scriptPath = TestProjectHelper.WriteBinaryFile(
+            project.Root,
+            "script.mystery",
+            new UTF8Encoding(encoderShouldEmitUTF8Identifier: true)
+                .GetPreamble()
+                .Concat(Encoding.UTF8.GetBytes("#!/usr/bin/env python\nprint('ok')\n"))
+                .ToArray());
+        var completionEncoding = new UnicodeEncoding(bigEndian: false, byteOrderMark: true);
+        var completionPath = TestProjectHelper.WriteBinaryFile(
+            project.Root,
+            "_cdidx.unknown",
+            completionEncoding
+                .GetPreamble()
+                .Concat(completionEncoding.GetBytes("#compdef cdidx\n_cdidx() {}\n"))
+                .ToArray());
+        TestProjectHelper.WriteTextFile(
+            project.Root,
+            "plain.opaque",
+            "plain unknown-language coverage text\n" + new string('x', 8 * 1024));
+        var openedPaths = new List<string>();
+        var indexer = new FileIndexer(
+            project.Root,
+            ignoreCase: false,
+            ignoreRuleRoot: null,
+            maxFileSizeBytes: FileIndexer.DefaultMaxFileSizeBytes,
+            directoryIgnoreCaseProbe: null,
+            openReadForIndexContent: candidate =>
+            {
+                openedPaths.Add(candidate);
+                return new CountingCSharpPrepassFileStream(candidate, maxReadBytes);
+            });
+
+        var result = indexer.ScanFilesDetailed();
+
+        Assert.Equal(1, openedPaths.Count(path => string.Equals(path, scriptPath, StringComparison.Ordinal)));
+        Assert.Equal(1, openedPaths.Count(path => string.Equals(path, completionPath, StringComparison.Ordinal)));
+        Assert.Equal(
+            1,
+            openedPaths.Count(path => string.Equals(
+                path,
+                Path.Combine(project.Root, "plain.opaque"),
+                StringComparison.Ordinal)));
+        Assert.Equal("python", result.FileLanguages[scriptPath]);
+        Assert.Equal("shell", result.FileLanguages[completionPath]);
+        Assert.Equal(["plain.opaque"], result.UnknownExtensionFiles);
+        Assert.Contains(scriptPath, result.Files);
+        Assert.Contains(completionPath, result.Files);
+    }
+
+    [Fact]
+    public void ScanFilesDetailed_RecognizedUnknownHeader_RemainsBoundedAndPreservesPrefixNullPolicy()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_unknown_probe_bounded_header");
+        var acceptedBytes = Enumerable.Repeat((byte)'x', 2 * 1024).ToArray();
+        Encoding.ASCII.GetBytes("#!/bin/sh\n").CopyTo(acceptedBytes, 0);
+        acceptedBytes[FileIndexer.ShebangProbeByteLimit] = 0;
+        var acceptedPath = TestProjectHelper.WriteBinaryFile(
+            project.Root,
+            "accepted.scriptx",
+            acceptedBytes);
+
+        var rejectedBytes = Enumerable.Repeat((byte)'x', 64).ToArray();
+        Encoding.ASCII.GetBytes("#!/bin/sh\n").CopyTo(rejectedBytes, 0);
+        rejectedBytes[32] = 0;
+        TestProjectHelper.WriteBinaryFile(
+            project.Root,
+            "rejected.scriptx",
+            rejectedBytes);
+        var rejectedPath = Path.Combine(project.Root, "rejected.scriptx");
+        var openedPaths = new List<string>();
+        var indexer = new FileIndexer(
+            project.Root,
+            ignoreCase: false,
+            ignoreRuleRoot: null,
+            maxFileSizeBytes: 128,
+            directoryIgnoreCaseProbe: null,
+            openReadForIndexContent: candidate =>
+            {
+                openedPaths.Add(candidate);
+                return new CountingCSharpPrepassFileStream(candidate, maxReadBytes: 3);
+            });
+
+        var result = indexer.ScanFilesDetailed();
+
+        Assert.Equal(1, openedPaths.Count(path => string.Equals(path, acceptedPath, StringComparison.Ordinal)));
+        Assert.Equal(1, openedPaths.Count(path => string.Equals(path, rejectedPath, StringComparison.Ordinal)));
+        Assert.Contains(acceptedPath, result.Files);
+        Assert.Equal("shell", result.FileLanguages[acceptedPath]);
+        Assert.DoesNotContain("accepted.scriptx", result.UnknownExtensionFiles);
+        Assert.DoesNotContain("rejected.scriptx", result.UnknownExtensionFiles);
+        Assert.Contains("rejected.scriptx", result.NonIndexablePaths);
+    }
+
+    [Fact]
+    public void ScanFilesDetailed_UnknownLanguageProbe_PreservesCoveragePolicyBoundaries()
+    {
+        const int maxFileBytes = 8 * 1024;
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_unknown_probe_policy");
+        TestProjectHelper.WriteTextFile(
+            project.Root,
+            "valid-lfs.cdidxunknown",
+            GitLfsPointerText(new string('a', 64)));
+
+        const string pointerPrefix =
+            "version https://git-lfs.github.com/spec/v1\n"
+            + "oid sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
+            + "size ";
+        var pointerBoundary = pointerPrefix
+            + new string('7', 1024 - Encoding.ASCII.GetByteCount(pointerPrefix));
+        Assert.Equal(1024, Encoding.ASCII.GetByteCount(pointerBoundary));
+        TestProjectHelper.WriteBinaryFile(
+            project.Root,
+            "boundary-lfs.cdidxunknown",
+            Encoding.ASCII.GetBytes(pointerBoundary));
+
+        var utf16Text = string.Concat(Enumerable.Repeat("plain text coverage\n", 64));
+        foreach (var (name, encoding) in new (string, Encoding)[]
+                 {
+                     ("utf16-le-bom", new UnicodeEncoding(bigEndian: false, byteOrderMark: true)),
+                     ("utf16-be-bom", new UnicodeEncoding(bigEndian: true, byteOrderMark: true)),
+                     ("utf16-le-parity", new UnicodeEncoding(bigEndian: false, byteOrderMark: false)),
+                     ("utf16-be-parity", new UnicodeEncoding(bigEndian: true, byteOrderMark: false)),
+                 })
+        {
+            TestProjectHelper.WriteBinaryFile(
+                project.Root,
+                $"{name}.cdidxunknown",
+                encoding.GetPreamble().Concat(encoding.GetBytes(utf16Text)).ToArray());
+        }
+
+        var utf32Encoding = new UTF32Encoding(bigEndian: false, byteOrderMark: true);
+        TestProjectHelper.WriteBinaryFile(
+            project.Root,
+            "utf32.cdidxunknown",
+            utf32Encoding.GetPreamble().Concat(utf32Encoding.GetBytes("plain text\n")).ToArray());
+
+        var lateNull = Enumerable.Repeat((byte)'a', 5 * 1024).ToArray();
+        lateNull[4096] = 0;
+        TestProjectHelper.WriteBinaryFile(
+            project.Root,
+            "late-null.cdidxunknown",
+            lateNull);
+        TestProjectHelper.WriteBinaryFile(
+            project.Root,
+            "exact-max.cdidxunknown",
+            Enumerable.Repeat((byte)'a', maxFileBytes).ToArray());
+        TestProjectHelper.WriteBinaryFile(
+            project.Root,
+            "over-max.cdidxunknown",
+            Enumerable.Repeat((byte)'a', maxFileBytes + 1).ToArray());
+
+        var result = new FileIndexer(
+            project.Root,
+            ignoreCase: false,
+            ignoreRuleRoot: null,
+            maxFileSizeBytes: maxFileBytes).ScanFilesDetailed();
+
+        Assert.Contains("boundary-lfs.cdidxunknown", result.UnknownExtensionFiles);
+        Assert.Contains("utf16-le-bom.cdidxunknown", result.UnknownExtensionFiles);
+        Assert.Contains("utf16-be-bom.cdidxunknown", result.UnknownExtensionFiles);
+        Assert.Contains("utf16-le-parity.cdidxunknown", result.UnknownExtensionFiles);
+        Assert.Contains("utf16-be-parity.cdidxunknown", result.UnknownExtensionFiles);
+        Assert.Contains("exact-max.cdidxunknown", result.UnknownExtensionFiles);
+        Assert.DoesNotContain("valid-lfs.cdidxunknown", result.UnknownExtensionFiles);
+        Assert.DoesNotContain("utf32.cdidxunknown", result.UnknownExtensionFiles);
+        Assert.DoesNotContain("late-null.cdidxunknown", result.UnknownExtensionFiles);
+        Assert.DoesNotContain("over-max.cdidxunknown", result.UnknownExtensionFiles);
+        Assert.Contains("valid-lfs.cdidxunknown", result.NonIndexablePaths);
+        Assert.Contains("utf32.cdidxunknown", result.NonIndexablePaths);
+        Assert.Contains("late-null.cdidxunknown", result.NonIndexablePaths);
+        Assert.Contains("over-max.cdidxunknown", result.NonIndexablePaths);
+        Assert.DoesNotContain(
+            result.Errors,
+            error => error.Path is "late-null.cdidxunknown" or "over-max.cdidxunknown");
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void ProbeUnknownLanguageForIndexing_SameMetadataAtomicReplacementRetriesCurrentPath(
+        bool recognizedHeaderFirst)
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_unknown_probe_atomic");
+        var recognizedBytes = CreateFixedUnknownProbePayload("#!/bin/sh\necho ok\n", 4 * 1024);
+        var plainBytes = CreateFixedUnknownProbePayload("plain unknown text\n", 4 * 1024);
+        var originalBytes = recognizedHeaderFirst ? recognizedBytes : plainBytes;
+        var replacementBytes = recognizedHeaderFirst ? plainBytes : recognizedBytes;
+        var path = TestProjectHelper.WriteBinaryFile(
+            project.Root,
+            "subject.cdidxunknown",
+            originalBytes);
+        var replacementPath = TestProjectHelper.WriteBinaryFile(
+            project.Root,
+            "replacement.tmp",
+            replacementBytes);
+        var sharedModifiedUtc = DateTime.UtcNow.AddMinutes(-2);
+        File.SetLastWriteTimeUtc(path, sharedModifiedUtc);
+        File.SetLastWriteTimeUtc(replacementPath, sharedModifiedUtc);
+        var openCount = 0;
+        var snapshotCount = 0;
+        var indexer = new FileIndexer(
+            project.Root,
+            ignoreCase: false,
+            ignoreRuleRoot: null,
+            maxFileSizeBytes: FileIndexer.DefaultMaxFileSizeBytes,
+            directoryIgnoreCaseProbe: null,
+            openReadForIndexContent: candidate =>
+            {
+                openCount++;
+                var stream = new CountingCSharpPrepassFileStream(candidate, maxReadBytes: 3);
+                if (openCount == 1)
+                {
+                    File.Replace(replacementPath, path, destinationBackupFileName: null);
+                    File.SetLastWriteTimeUtc(path, sharedModifiedUtc);
+                }
+                return stream;
+            },
+            fileHandleSnapshotCapturedForTesting: () => snapshotCount++);
+
+        var result = indexer.ProbeUnknownLanguageForIndexing(
+            path,
+            "subject.cdidxunknown",
+            CancellationToken.None);
+
+        Assert.Equal(2, openCount);
+        Assert.Equal(4, snapshotCount);
+        Assert.Equal(
+            recognizedHeaderFirst
+                ? FileIndexer.FileProbeStatus.Unsupported
+                : FileIndexer.FileProbeStatus.Supported,
+            result.LanguageDetection.Status);
+        Assert.Equal(!recognizedHeaderFirst, result.LanguageDetection.Language == "shell");
+        Assert.Equal(recognizedHeaderFirst, result.IsCoverageCandidate);
+    }
+
+    [Fact]
+    public void ProbeUnknownLanguageForIndexing_SecondMutationStopsAfterBoundedRetry()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_unknown_probe_retry_bound");
+        var path = TestProjectHelper.WriteTextFile(
+            project.Root,
+            "subject.cdidxunknown",
+            "plain unknown text\n" + new string('x', 1024));
+        var openCount = 0;
+        var indexer = new FileIndexer(
+            project.Root,
+            ignoreCase: false,
+            ignoreRuleRoot: null,
+            maxFileSizeBytes: FileIndexer.DefaultMaxFileSizeBytes,
+            directoryIgnoreCaseProbe: null,
+            openReadForIndexContent: candidate =>
+            {
+                openCount++;
+                return new CountingCSharpPrepassFileStream(
+                    candidate,
+                    maxReadBytes: 64,
+                    afterFirstRead: () => File.AppendAllText(path, "y"));
+            });
+
+        var result = indexer.ProbeUnknownLanguageForIndexing(
+            path,
+            "subject.cdidxunknown",
+            CancellationToken.None);
+
+        Assert.Equal(2, openCount);
+        Assert.Equal(FileIndexer.FileProbeStatus.Unsupported, result.LanguageDetection.Status);
+        Assert.True(result.IsCoverageCandidate);
+    }
+
+    [Fact]
+    public void ProbeUnknownLanguageForIndexing_GrowthBeyondLimitIsRejectedOnSameHandle()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_unknown_probe_growth");
+        var path = TestProjectHelper.WriteTextFile(
+            project.Root,
+            "subject.cdidxunknown",
+            "plain unknown text\n" + new string('x', 1024));
+        var initialLength = new FileInfo(path).Length;
+        var openCount = 0;
+        var indexer = new FileIndexer(
+            project.Root,
+            ignoreCase: false,
+            ignoreRuleRoot: null,
+            maxFileSizeBytes: initialLength + 8,
+            directoryIgnoreCaseProbe: null,
+            openReadForIndexContent: candidate =>
+            {
+                openCount++;
+                return new CountingCSharpPrepassFileStream(
+                    candidate,
+                    maxReadBytes: 64,
+                    afterFirstRead: () => File.AppendAllText(path, new string('y', 32)));
+            });
+
+        var exception = Assert.Throws<FileIndexer.FileTooLargeSkippedException>(() =>
+            indexer.ProbeUnknownLanguageForIndexing(
+                path,
+                "subject.cdidxunknown",
+                CancellationToken.None));
+
+        Assert.Equal(1, openCount);
+        Assert.Contains("grew during read", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ProbeUnknownLanguageForIndexing_CancellationDoesNotReopen()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_unknown_probe_cancel");
+        var path = TestProjectHelper.WriteTextFile(
+            project.Root,
+            "subject.cdidxunknown",
+            "plain unknown text\n" + new string('x', 16 * 1024));
+        using var cancellation = new CancellationTokenSource();
+        var openCount = 0;
+        var indexer = new FileIndexer(
+            project.Root,
+            ignoreCase: false,
+            ignoreRuleRoot: null,
+            maxFileSizeBytes: FileIndexer.DefaultMaxFileSizeBytes,
+            directoryIgnoreCaseProbe: null,
+            openReadForIndexContent: candidate =>
+            {
+                openCount++;
+                return new CountingCSharpPrepassFileStream(
+                    candidate,
+                    maxReadBytes: 64,
+                    afterFirstRead: cancellation.Cancel);
+            });
+
+        Assert.ThrowsAny<OperationCanceledException>(() =>
+            indexer.ProbeUnknownLanguageForIndexing(
+                path,
+                "subject.cdidxunknown",
+                cancellation.Token));
+        Assert.Equal(1, openCount);
+    }
+
+    [Fact]
+    public void ProbeUnknownLanguageForIndexing_FourMiBPayloadDoesNotAllocatePayloadSizedBuffer()
+    {
+        const int payloadBytes = 4 * 1024 * 1024;
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_unknown_probe_allocation");
+        var path = TestProjectHelper.WriteTextFile(
+            project.Root,
+            "subject.cdidxunknown",
+            new string('a', payloadBytes));
+        var indexer = new FileIndexer(
+            project.Root,
+            ignoreCase: false,
+            ignoreRuleRoot: null,
+            maxFileSizeBytes: payloadBytes + 1);
+        var before = GC.GetAllocatedBytesForCurrentThread();
+
+        var result = indexer.ProbeUnknownLanguageForIndexing(
+            path,
+            "subject.cdidxunknown",
+            CancellationToken.None);
+
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.Equal(FileIndexer.FileProbeStatus.Unsupported, result.LanguageDetection.Status);
+        Assert.True(result.IsCoverageCandidate);
+        Assert.True(
+            allocated < 1024 * 1024,
+            $"Expected a bounded pooled probe allocation, saw {allocated} bytes allocated.");
+    }
+
+    [Fact]
+    public void ProbeUnknownLanguageForIndexing_InternalSymlinkRetargetOutsideScopeFailsClosed()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_unknown_probe_internal_link");
+        using var external = TestProjectHelper.CreateTempProjectScope("cdidx_unknown_probe_external_link");
+        var internalTarget = TestProjectHelper.WriteTextFile(
+            project.Root,
+            "inside-target",
+            "plain unknown text\n");
+        var externalTarget = TestProjectHelper.WriteTextFile(
+            external.Root,
+            "outside-target",
+            "#!/bin/sh\necho outside\n");
+        var linkPath = Path.Combine(project.Root, "subject.cdidxunknown");
+        try
+        {
+            File.CreateSymbolicLink(linkPath, internalTarget);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
+        {
+            return;
+        }
+
+        var retargeted = false;
+        var openCount = 0;
+        var indexer = new FileIndexer(
+            project.Root,
+            ignoreCase: false,
+            ignoreRuleRoot: null,
+            maxFileSizeBytes: FileIndexer.DefaultMaxFileSizeBytes,
+            directoryIgnoreCaseProbe: null,
+            symlinkPolicy: FileIndexer.SymlinkPolicy.Internal,
+            openReadForIndexContent: candidate =>
+            {
+                openCount++;
+                var stream = BoundedFile.OpenReadForIndexContent(candidate);
+                if (!retargeted)
+                {
+                    File.Delete(linkPath);
+                    File.CreateSymbolicLink(linkPath, externalTarget);
+                    retargeted = true;
+                }
+                return stream;
+            });
+
+        var result = indexer.ProbeUnknownLanguageForIndexing(
+            linkPath,
+            "subject.cdidxunknown",
+            CancellationToken.None);
+
+        Assert.True(retargeted);
+        Assert.Equal(1, openCount);
+        Assert.Equal(FileIndexer.FileProbeStatus.ProbeFailed, result.LanguageDetection.Status);
+        Assert.False(result.IsCoverageCandidate);
+    }
+
     [Fact]
     public void ScanFilesDetailed_TreatsSolutionAndManifestAsKnownStructuralFiles_Issue3662()
     {
@@ -8512,6 +9012,15 @@ public partial class FileIndexerTests
         string longPath,
         StringBuilder shortPath,
         uint bufferLength);
+
+    private static byte[] CreateFixedUnknownProbePayload(string prefix, int length)
+    {
+        var prefixBytes = Encoding.UTF8.GetBytes(prefix);
+        Assert.True(prefixBytes.Length <= length);
+        var bytes = Enumerable.Repeat((byte)'x', length).ToArray();
+        prefixBytes.CopyTo(bytes, 0);
+        return bytes;
+    }
 
     private sealed class CountingCSharpPrepassFileStream : FileStream
     {

@@ -85,6 +85,8 @@ public static partial class IndexCommandRunner
     internal static Action? FullScanExtractionWorkersStoppedForTesting { get; set; }
     internal static Action<string>? FullScanFileContentLoadForTesting { get; set; }
     internal static Action<string, string>? FullScanFilePhaseForTesting { get; set; }
+    internal static Action<string>? FullScanFamilyScopeResolvedForTesting { get; set; }
+    internal static Action<string>? FullScanCSharpSourceObservedForTesting { get; set; }
     internal static Action<int>? FullScanExtractionQueueCapacityForTesting { get; set; }
     internal static Action? FullScanFtsOptimizeForTesting { get; set; }
     internal static Action? FullScanFtsMergeForTesting { get; set; }
@@ -111,6 +113,7 @@ public static partial class IndexCommandRunner
     internal static Action<int, int>? UpdateFileCommittedForTesting { get; set; }
     internal static Func<TimeSpan>? IndexExtractionStallTimeoutForTesting { get; set; }
     internal static Func<string, Exception?>? DryRunParseEstimateFailureForTesting { get; set; }
+    internal static Action<string>? DryRunFileIndexabilityValidatedForTesting { get; set; }
     internal static Action? HotspotFamilyUpdateRestampReadyForCommitForTesting { get; set; }
     internal static Action<string>? WriteScanCheckpointForTesting { get; set; }
     internal static Action<string>? DeleteScanCheckpointForTesting { get; set; }

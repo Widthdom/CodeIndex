@@ -5,8 +5,8 @@ public static partial class ReferenceExtractor
     private static void EmitRDocumentationReferences(
         in CoreDocumentationLineContext line)
     {
-        var context = line.OriginalLine.Trim();
-        if (context.Length == 0)
+        var context = line.OriginalLine;
+        if (string.IsNullOrWhiteSpace(context))
             return;
 
         RReferenceExtractor.EmitRoxygenImportFromReferences(

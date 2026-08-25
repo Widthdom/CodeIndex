@@ -237,7 +237,8 @@ public static partial class ReferenceExtractor
             var typeDefinition = FindFunctionalTypeDefinition(lineNumber, symbolsByLine);
             PrepareFunctionalCallableState(request.Language, maskedLine, definition, state);
             var container = state.ActiveCallable ?? containerResolver.Find(lineNumber);
-            var context = originalLine.Trim();
+            var context = originalLine;
+            var referenceStartIndex = references.Count;
 
             switch (request.Language)
             {
@@ -259,6 +260,10 @@ public static partial class ReferenceExtractor
                     break;
             }
 
+            NormalizeRawSourceLineContexts(
+                preparedInput.Lines,
+                references,
+                referenceStartIndex);
             AdvanceFunctionalCallableState(request.Language, maskedLine, state);
         }
 

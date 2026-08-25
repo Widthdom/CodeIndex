@@ -10,11 +10,14 @@ internal sealed partial class FileContentLoader
     private static ReadOnlySpan<byte> GitLfsSizePrefix => "size "u8;
 
     internal static bool IsGitLfsPointer(byte[] rawBytes)
+        => IsGitLfsPointer(rawBytes.AsSpan());
+
+    internal static bool IsGitLfsPointer(ReadOnlySpan<byte> rawBytes)
     {
         if (rawBytes.Length == 0 || rawBytes.Length >= GitLfsPointerMaxBytes)
             return false;
 
-        ReadOnlySpan<byte> remaining = rawBytes;
+        var remaining = rawBytes;
         if (!remaining.StartsWith(GitLfsPointerPrefix))
             return false;
 

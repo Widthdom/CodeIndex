@@ -63,9 +63,11 @@ public partial class DbWriter
             return;
         }
 
-        int rowsPerStatement = IsInTransaction()
-            ? GetRowsPerCallerTransactionInsertStatement(columnCount: 6)
-            : GetRowsPerInsertStatement(columnCount: 6);
+        int rowsPerStatement = rawInsert != null
+            ? GetRowsPerAuthoritativeFreshRawInsertStatement(columnCount: 6)
+            : IsInTransaction()
+                ? GetRowsPerCallerTransactionInsertStatement(columnCount: 6)
+                : GetRowsPerInsertStatement(columnCount: 6);
         for (int i = 0; i < issues.Count; i += rowsPerStatement)
         {
             int end = Math.Min(i + rowsPerStatement, issues.Count);

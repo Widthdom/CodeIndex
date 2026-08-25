@@ -122,6 +122,15 @@ public partial class DbWriter
                 $"The raw statement cache capacity must be between 1 and {AuthoritativeFreshRawStatementCacheCapacity}.");
         }
 
+        // The outer transaction makes the trigger suspension invisible to readers and
+        // rolls the DDL back with the file rows on every exceptional production path.
+        // outer transactionにより停止中のtriggerはreaderから見えず、例外時はfile rowと
+        // DDLを一括rollbackする。
+        Execute(
+            DbContext.DropResourceListGenerationTriggersSql,
+            _activeTransaction);
+        cancellationToken.ThrowIfCancellationRequested();
+
         var scope = new AuthoritativeFreshBulkInsertScope(
             this,
             database,
@@ -417,10 +426,18 @@ public partial class DbWriter
                 try
                 {
                     _cancellationToken.ThrowIfCancellationRequested();
+                    // Restore only after every cached native statement is finalized so
+                    // the schema change cannot invalidate a statement still in the LRU.
+                    // native statementを全てfinalizeしてからtriggerを戻し、LRU内statementの
+                    // schema invalidationを避ける。
+                    _writer.Execute(
+                        DbContext.RestoreResourceListGenerationTriggersAndAdvanceSql,
+                        _writer._activeTransaction);
+                    _cancellationToken.ThrowIfCancellationRequested();
                 }
-                catch (Exception cancellationException)
+                catch (Exception completionException)
                 {
-                    failure = cancellationException;
+                    failure = completionException;
                 }
             }
 
@@ -439,6 +456,8 @@ public partial class DbWriter
             _ = FinalizeAll(existingFailure: null);
             Detach();
             // Disposal is the exceptional-path cleanup for the outer transaction;
+            // trigger DDL and generation changes deliberately remain in that transaction
+            // so its rollback restores the pre-scope schema and counter atomically.
             // test hooks must not replace the original indexing failure.
             try
             {
@@ -814,6 +833,9 @@ public partial class DbWriter
                 var returnedRowCount = 0;
                 var terminalResult = raw.SQLITE_OK;
                 var returningRowTransform = AuthoritativeFreshRawReturningRowForTesting;
+                HashSet<long>? returnedIds = expectedRowCount > 1
+                    ? new HashSet<long>(expectedRowCount)
+                    : null;
                 try
                 {
                     while (true)
@@ -883,13 +905,10 @@ public partial class DbWriter
                                 throw new InvalidDataException(
                                     $"Raw SQLite {operation} RETURNING produced duplicate input ordinal {ordinal}.");
                             }
-                            for (var priorOrdinal = 0; priorOrdinal < idsByInputOrdinal.Length; priorOrdinal++)
+                            if (returnedIds != null && !returnedIds.Add(id))
                             {
-                                if (idsByInputOrdinal[priorOrdinal] == id)
-                                {
-                                    throw new InvalidDataException(
-                                        $"Raw SQLite {operation} RETURNING produced duplicate ID {id}.");
-                                }
+                                throw new InvalidDataException(
+                                    $"Raw SQLite {operation} RETURNING produced duplicate ID {id}.");
                             }
                             idsByInputOrdinal[ordinal] = id;
                             returnedRowCount++;

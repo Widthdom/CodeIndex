@@ -10,6 +10,14 @@ public partial class DbWriter
     // each execution. Caller-owned transactions let us split dense writes without
     // adding transaction scopes, so keep those statements below this binding budget.
     private const int MaxCallerTransactionBatchParameters = 32;
+    // The authoritative fresh path binds positional values directly through SQLite's
+    // native API, so it does not pay Microsoft.Data.Sqlite's repeated named-parameter
+    // lookup cost. Keep a separate bounded budget large enough to amortize prepare and
+    // step overhead without creating maximum-variable statements for every tail shape.
+    // authoritative fresh path は native API で positional bind するため provider の
+    // named-parameter lookup 制約を受けない。tail shape ごとの最大長SQLを避けつつ
+    // prepare/step overhead を十分に償却する専用上限を使う。
+    private const int MaxAuthoritativeFreshRawBatchParameters = 512;
     private const int MaxFoldedNameCacheEntries = 4096;
 
     private static string? FoldedNameValue(string? name, Dictionary<string, string?> cache)
@@ -94,5 +102,15 @@ public partial class DbWriter
         return Math.Max(1, Math.Min(
             GetRowsPerInsertStatement(columnCount),
             MaxCallerTransactionBatchParameters / columnCount));
+    }
+
+    private static int GetRowsPerAuthoritativeFreshRawInsertStatement(int columnCount)
+    {
+        if (columnCount <= 0)
+            throw new ArgumentOutOfRangeException(nameof(columnCount));
+
+        return Math.Max(1, Math.Min(
+            GetRowsPerInsertStatement(columnCount),
+            MaxAuthoritativeFreshRawBatchParameters / columnCount));
     }
 }

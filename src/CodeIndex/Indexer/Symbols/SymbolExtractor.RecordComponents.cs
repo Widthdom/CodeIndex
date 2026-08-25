@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using Regex = CodeIndex.Indexer.BoundedRegex;
@@ -7,6 +8,28 @@ namespace CodeIndex.Indexer;
 
 public static partial class SymbolExtractor
 {
+    private const string RecordDeclarationNameCapture = @"(?<record_name>[^\s(<:{]+)";
+    private static readonly Regex CSharpRecordStructDeclarationRegex = new(
+        @"^\s*(?:(?:public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?(?:(?:static|partial|readonly|file|new|ref|unsafe)\s+)*record\s+struct\s+"
+        + RecordDeclarationNameCapture + @"\b",
+        RegexOptions.CultureInvariant);
+    private static readonly Regex CSharpRecordClassDeclarationRegex = new(
+        @"^\s*(?:(?:public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?(?:(?:static|partial|abstract|sealed|readonly|file|new|unsafe)\s+)*record(?:\s+class)?\s+"
+        + RecordDeclarationNameCapture + @"\b",
+        RegexOptions.CultureInvariant);
+    private static readonly Regex KotlinEnumClassDeclarationRegex = new(
+        @"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:abstract|data|sealed|open|inner|value|annotation|expect|actual)\s+)*enum\s+class\s+"
+        + RecordDeclarationNameCapture + @"\b",
+        RegexOptions.CultureInvariant);
+    private static readonly Regex KotlinClassDeclarationRegex = new(
+        @"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:abstract|data|sealed|open|inner|value|annotation|expect|actual)\s+)*(?:class|object)\s+"
+        + RecordDeclarationNameCapture + @"\b",
+        RegexOptions.CultureInvariant);
+    private static readonly Regex JavaRecordDeclarationRegex = new(
+        @"^\s*(?:public|private|protected)?\s*(?:(?:static|final|abstract|sealed|non-sealed|strictfp)\s+)*record\s+"
+        + RecordDeclarationNameCapture + @"\b",
+        RegexOptions.CultureInvariant);
+
     private static void CollectRecordPrimaryComponentSymbols(
         long fileId,
         string lang,
@@ -200,14 +223,14 @@ public static partial class SymbolExtractor
         if (string.IsNullOrWhiteSpace(declaration))
             return false;
 
-        var recordRegex = GetCurrentDeclarationRecordRegex(lang, kind, recordName);
+        var recordRegex = GetCurrentDeclarationRecordRegex(lang, kind);
         var javaLeadingAnnotationOffset = 0;
         var recordMatch = lang is "java" or "kotlin"
             ? (TryMatchJavaDeclarationSegment(recordRegex, declaration, lang == "kotlin", out var javaRecordMatch, out javaLeadingAnnotationOffset)
                 ? javaRecordMatch
                 : recordRegex.Match(declaration))
             : recordRegex.Match(declaration);
-        if (!recordMatch.Success)
+        if (!recordMatch.Success || !RecordDeclarationNameMatches(recordMatch, recordName))
             return false;
 
         var parameterOpenIndex = lang == "csharp"
@@ -268,14 +291,11 @@ public static partial class SymbolExtractor
 
     private static string CollectRecordDeclarationText(string[] lines, int declarationLineIndex, int declarationStartColumn)
     {
-        var builder = new StringBuilder();
+        var declarationBuffer = new List<char>();
         var parameterOpenIndex = -1;
         var parameterCloseIndex = -1;
         for (int i = declarationLineIndex; i < lines.Length; i++)
         {
-            if (builder.Length > 0)
-                builder.Append('\n');
-
             // Content was split on '\n', so CRLF lines carry a trailing '\r'. Strip it before
             // appending so intermediate separators stay '\n' and the collected declaration
             // text is stable across OS line endings (#405 follow-up to #382).
@@ -286,16 +306,19 @@ public static partial class SymbolExtractor
             var lineText = i == declarationLineIndex
                 ? line[Math.Min(declarationStartColumn, line.Length)..]
                 : line;
-            builder.Append(StripTrailingCr(lineText));
+            AppendRecordDeclarationText(
+                declarationBuffer,
+                appendNewline: declarationBuffer.Count > 0,
+                StripTrailingCr(lineText));
 
-            var declaration = builder.ToString();
+            var declaration = CollectionsMarshal.AsSpan(declarationBuffer);
             if (parameterOpenIndex < 0)
             {
                 parameterOpenIndex = FindRecordPrimaryComponentListStart(declaration, 0);
                 if (parameterOpenIndex < 0)
                 {
                     if (FindRecordDeclarationTerminatorIndex(declaration, 0) >= 0)
-                        return declaration;
+                        return new string(declaration);
                     continue;
                 }
             }
@@ -308,24 +331,21 @@ public static partial class SymbolExtractor
             }
 
             if (FindRecordDeclarationTerminatorIndex(declaration, parameterCloseIndex + 1) >= 0)
-                return declaration;
+                return new string(declaration);
         }
 
-        return builder.ToString();
+        return new string(CollectionsMarshal.AsSpan(declarationBuffer));
     }
 
     private static string CollectKotlinPrimaryConstructorDeclarationText(string[] lines, int declarationLineIndex, int declarationStartColumn)
     {
         const int KotlinPrimaryConstructorDeclarationLookaheadLineLimit = 32;
 
-        var builder = new StringBuilder();
+        var declarationBuffer = new List<char>();
         var parameterOpenIndex = -1;
         var parameterCloseIndex = -1;
         for (int i = declarationLineIndex; i < lines.Length && i < declarationLineIndex + KotlinPrimaryConstructorDeclarationLookaheadLineLimit; i++)
         {
-            if (builder.Length > 0)
-                builder.Append('\n');
-
             // Kotlin class headers may split across a few physical lines. Keep the collected
             // declaration stable across line endings while bounding the scan so a class without
             // a primary constructor does not cause a whole-file read.
@@ -336,16 +356,19 @@ public static partial class SymbolExtractor
             var lineText = i == declarationLineIndex
                 ? line[Math.Min(declarationStartColumn, line.Length)..]
                 : line;
-            builder.Append(StripTrailingCr(lineText));
+            AppendRecordDeclarationText(
+                declarationBuffer,
+                appendNewline: declarationBuffer.Count > 0,
+                StripTrailingCr(lineText));
 
-            var declaration = builder.ToString();
+            var declaration = CollectionsMarshal.AsSpan(declarationBuffer);
             if (parameterOpenIndex < 0)
             {
                 parameterOpenIndex = FindRecordPrimaryComponentListStart(declaration, 0);
                 if (parameterOpenIndex < 0)
                 {
                     if (FindRecordDeclarationTerminatorIndex(declaration, 0) >= 0)
-                        return declaration;
+                        return new string(declaration);
 
                     continue;
                 }
@@ -358,30 +381,43 @@ public static partial class SymbolExtractor
                     continue;
             }
 
-            return declaration[..(parameterCloseIndex + 1)];
+            return new string(declaration[..(parameterCloseIndex + 1)]);
         }
 
-        return builder.ToString();
+        return new string(CollectionsMarshal.AsSpan(declarationBuffer));
     }
 
-    private static Regex GetCurrentDeclarationRecordRegex(string lang, string kind, string recordName)
+    private static void AppendRecordDeclarationText(
+        List<char> buffer,
+        bool appendNewline,
+        ReadOnlySpan<char> text)
     {
-        if (lang == "csharp")
+        var start = buffer.Count;
+        var additionalLength = checked(text.Length + (appendNewline ? 1 : 0));
+        buffer.EnsureCapacity(checked(start + additionalLength));
+        CollectionsMarshal.SetCount(buffer, start + additionalLength);
+        var destination = CollectionsMarshal.AsSpan(buffer)[start..];
+        if (appendNewline)
         {
-            return kind == "struct"
-                ? new Regex(@"^\s*(?:(?:public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?(?:(?:static|partial|readonly|file|new|ref|unsafe)\s+)*record\s+struct\s+" + Regex.Escape(recordName) + @"\b", RegexOptions.CultureInvariant)
-                : new Regex(@"^\s*(?:(?:public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?(?:(?:static|partial|abstract|sealed|readonly|file|new|unsafe)\s+)*record(?:\s+class)?\s+" + Regex.Escape(recordName) + @"\b", RegexOptions.CultureInvariant);
+            destination[0] = '\n';
+            destination = destination[1..];
         }
-
-        if (lang == "kotlin")
-        {
-            return kind == "enum"
-                ? new Regex(@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:abstract|data|sealed|open|inner|value|annotation|expect|actual)\s+)*enum\s+class\s+" + Regex.Escape(recordName) + @"\b", RegexOptions.CultureInvariant)
-                : new Regex(@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:abstract|data|sealed|open|inner|value|annotation|expect|actual)\s+)*(?:class|object)\s+" + Regex.Escape(recordName) + @"\b", RegexOptions.CultureInvariant);
-        }
-
-        return new Regex(@"^\s*(?:public|private|protected)?\s*(?:(?:static|final|abstract|sealed|non-sealed|strictfp)\s+)*record\s+" + Regex.Escape(recordName) + @"\b", RegexOptions.CultureInvariant);
+        text.CopyTo(destination);
     }
+
+    private static Regex GetCurrentDeclarationRecordRegex(string lang, string kind)
+        => lang switch
+        {
+            "csharp" when kind == "struct" => CSharpRecordStructDeclarationRegex,
+            "csharp" => CSharpRecordClassDeclarationRegex,
+            "kotlin" when kind == "enum" => KotlinEnumClassDeclarationRegex,
+            "kotlin" => KotlinClassDeclarationRegex,
+            _ => JavaRecordDeclarationRegex,
+        };
+
+    private static bool RecordDeclarationNameMatches(Match match, string recordName)
+        => match.Groups["record_name"] is { Success: true } name
+           && name.ValueSpan.Equals(recordName.AsSpan(), StringComparison.Ordinal);
 
     private static int FindCSharpPrimaryConstructorParameterListStart(string declaration, int startIndex)
     {
@@ -422,7 +458,7 @@ public static partial class SymbolExtractor
         return false;
     }
 
-    private static int FindRecordPrimaryComponentListStart(string declaration, int startIndex)
+    private static int FindRecordPrimaryComponentListStart(ReadOnlySpan<char> declaration, int startIndex)
     {
         var angleDepth = 0;
         for (int i = Math.Max(0, startIndex); i < declaration.Length; i++)
@@ -448,7 +484,7 @@ public static partial class SymbolExtractor
         return -1;
     }
 
-    private static int FindMatchingRecordPrimaryComponentListEnd(string declaration, int openIndex)
+    private static int FindMatchingRecordPrimaryComponentListEnd(ReadOnlySpan<char> declaration, int openIndex)
     {
         var parenDepth = 0;
         var angleDepth = 0;
@@ -558,7 +594,7 @@ public static partial class SymbolExtractor
         return -1;
     }
 
-    private static int FindRecordDeclarationTerminatorIndex(string declaration, int startIndex)
+    private static int FindRecordDeclarationTerminatorIndex(ReadOnlySpan<char> declaration, int startIndex)
     {
         var parenDepth = 0;
         var angleDepth = 0;
@@ -1144,7 +1180,7 @@ public static partial class SymbolExtractor
         return new(trimmed, consumedNewlines);
     }
 
-    private static bool LooksLikeRecordGenericAngleStart(string text, int index)
+    private static bool LooksLikeRecordGenericAngleStart(ReadOnlySpan<char> text, int index)
     {
         if (index < 0 || index >= text.Length || text[index] != '<')
             return false;
@@ -1176,7 +1212,7 @@ public static partial class SymbolExtractor
         char.IsLetter(ch)
         || ch is '_' or '$' or '@' or '?' or '(';
 
-    private static int FindPreviousNonWhitespaceIndex(string text, int index)
+    private static int FindPreviousNonWhitespaceIndex(ReadOnlySpan<char> text, int index)
     {
         for (int i = Math.Min(index, text.Length - 1); i >= 0; i--)
         {
@@ -1187,7 +1223,7 @@ public static partial class SymbolExtractor
         return -1;
     }
 
-    private static int FindNextNonWhitespaceIndex(string text, int index)
+    private static int FindNextNonWhitespaceIndex(ReadOnlySpan<char> text, int index)
     {
         for (int i = Math.Max(0, index); i < text.Length; i++)
         {
@@ -1198,7 +1234,7 @@ public static partial class SymbolExtractor
         return -1;
     }
 
-    private static bool TryFindRecordGenericAngleEnd(string text, int openIndex, out int closeIndex)
+    private static bool TryFindRecordGenericAngleEnd(ReadOnlySpan<char> text, int openIndex, out int closeIndex)
     {
         closeIndex = -1;
 
@@ -1306,7 +1342,7 @@ public static partial class SymbolExtractor
                     angleDepth--;
                     if (angleDepth == 0)
                     {
-                        if (!IsRecordGenericAnglePayloadTypeLike(text.AsSpan(openIndex + 1, i - openIndex - 1)))
+                        if (!IsRecordGenericAnglePayloadTypeLike(text.Slice(openIndex + 1, i - openIndex - 1)))
                             return false;
 
                         closeIndex = i;
@@ -1320,7 +1356,7 @@ public static partial class SymbolExtractor
         return false;
     }
 
-    private static bool LooksLikeRecordGenericAngleCandidate(string text, int index)
+    private static bool LooksLikeRecordGenericAngleCandidate(ReadOnlySpan<char> text, int index)
     {
         if (index < 0 || index >= text.Length || text[index] != '<')
             return false;

@@ -15,7 +15,7 @@ public static partial class IndexCommandRunner
         FileIndexer Indexer,
         IndexCommandOptions Options,
         string ProjectRoot,
-        FullScanFileTarget[] FileTargets,
+        FileIndexer.IndexingFileTargetCollection FileTargets,
         ReadableFileByteTracker ReadableFileBytes,
         IndexProgressReporter IndexProgress,
         FullScanProgressSession FullScanProgress);
@@ -112,7 +112,7 @@ public static partial class IndexCommandRunner
         internal FileIndexer Indexer => Core.Indexer;
         internal IndexCommandOptions Options => Core.Options;
         internal string ProjectRoot => Core.ProjectRoot;
-        internal FullScanFileTarget[] FileTargets => Core.FileTargets;
+        internal FileIndexer.IndexingFileTargetCollection FileTargets => Core.FileTargets;
         internal ReadableFileByteTracker ReadableFileBytes => Core.ReadableFileBytes;
         internal IndexProgressReporter IndexProgress => Core.IndexProgress;
         internal FullScanProgressSession FullScanProgress => Core.FullScanProgress;

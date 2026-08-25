@@ -13,7 +13,7 @@ public static partial class IndexCommandRunner
         internal required FileIndexer Indexer { get; init; }
         internal required IndexCommandOptions Options { get; init; }
         internal required string ProjectRoot { get; init; }
-        internal required FullScanFileTarget[] FileTargets { get; init; }
+        internal required FileIndexer.IndexingFileTargetCollection FileTargets { get; init; }
         internal IReadOnlyList<int>? ExtractionFileIndexes { get; init; }
         internal required int ExtractionWorkItemCount { get; init; }
         internal required int ExtractionWorkerCount { get; init; }
@@ -122,6 +122,7 @@ public static partial class IndexCommandRunner
                         IReadOnlyList<SymbolRecord>? symbols = null;
                         IReadOnlyList<ReferenceRecord>? references = null;
                         IReadOnlyList<FileIssue>? issues = null;
+                        var symbolPreparation = FullScanSymbolPreparation.None;
                         var generatedSuppressionIssue = target.GeneratedExtractionSuppressed
                             ? indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path)
                             : null;
@@ -146,6 +147,7 @@ public static partial class IndexCommandRunner
                                         warning,
                                         chunks,
                                         symbols,
+                                        symbolPreparation,
                                         references,
                                         issues,
                                         generatedSuppressionIssue,
@@ -196,6 +198,11 @@ public static partial class IndexCommandRunner
                                 postExtractionHooks.ObserveCSharpStaticInterfaceSourceSymbols(
                                     sourceFileContext,
                                     symbols);
+                                FullScanCSharpSourceObservedForTesting?.Invoke(record.Path);
+                                symbolPreparation = symbolPreparation with
+                                {
+                                    CSharpSourceObservationCompleted = true,
+                                };
                             }
                             if (symbols.Count > options.MaxSymbolsPerFile)
                             {
@@ -204,14 +211,31 @@ public static partial class IndexCommandRunner
                                     ? [issue]
                                     : AppendIssue([symbolRegexTimeoutIssue], issue);
                                 extractionResults.Add(
-                                    FullScanFileWorkItem.Precomputed(fileIndex, filePath, displayRelativePath, record, issue.Message, [], [], [], capIssues),
+                                    FullScanFileWorkItem.Precomputed(
+                                        fileIndex,
+                                        filePath,
+                                        displayRelativePath,
+                                        record,
+                                        issue.Message,
+                                        [],
+                                        [],
+                                        symbolPreparation,
+                                        [],
+                                        capIssues),
                                     extractionCancellationToken);
                                 continue;
                             }
+                            var familyScopeKey = indexer.GetFamilyScopeKey(filePath, record.Lang);
+                            FullScanFamilyScopeResolvedForTesting?.Invoke(record.Path);
                             SymbolExtractor.ApplyFamilyScope(
                                 symbols,
-                                indexer.GetFamilyScopeKey(filePath, record.Lang),
+                                familyScopeKey,
                                 record.Lang);
+                            symbolPreparation = symbolPreparation with
+                            {
+                                AppliedFamilyScopeKey = familyScopeKey,
+                                FamilyScopeApplied = true,
+                            };
                             FileIssue? referenceRegexTimeoutIssue = null;
                             ReferenceExtractionResult? referenceExtraction = null;
                             if (options.SymbolsOnly)
@@ -270,6 +294,7 @@ public static partial class IndexCommandRunner
                                     warning,
                                     chunks!,
                                     symbols!,
+                                    symbolPreparation,
                                     references!,
                                     issues!,
                                     generatedSuppressionIssue,
@@ -328,7 +353,17 @@ public static partial class IndexCommandRunner
                         var issue = BuildNullByteIssue(ex);
                         var sanitizedMessage = CommandErrorWriter.FormatSanitizedExceptionMessage(ex);
                         extractionResults.Add(
-                            FullScanFileWorkItem.Precomputed(fileIndex, filePath, displayRelativePath, record, sanitizedMessage, [], [], [], [issue]),
+                            FullScanFileWorkItem.Precomputed(
+                                fileIndex,
+                                filePath,
+                                displayRelativePath,
+                                record,
+                                sanitizedMessage,
+                                [],
+                                [],
+                                FullScanSymbolPreparation.None,
+                                [],
+                                [issue]),
                             extractionCancellationToken);
                     }
                     catch (FileIndexer.FileTooLargeSkippedException ex)
@@ -367,7 +402,17 @@ public static partial class IndexCommandRunner
                             Message = sanitizedMessage,
                         };
                         extractionResults.Add(
-                            FullScanFileWorkItem.Precomputed(fileIndex, filePath, displayRelativePath, record, sanitizedMessage, [], [], [], [issue]),
+                            FullScanFileWorkItem.Precomputed(
+                                fileIndex,
+                                filePath,
+                                displayRelativePath,
+                                record,
+                                sanitizedMessage,
+                                [],
+                                [],
+                                FullScanSymbolPreparation.None,
+                                [],
+                                [issue]),
                             extractionCancellationToken);
                     }
                     catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)

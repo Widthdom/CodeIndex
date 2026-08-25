@@ -10,14 +10,14 @@ namespace CodeIndex.Mcp;
 public partial class McpServer
 {
     private delegate IndexedFileStatReuseResult? McpIndexStatMatchResolver(
-        in CSharpStaticInterfacePrepass.FileTarget target);
+        in FileIndexer.IndexingFileTarget target);
 
     private sealed class McpIndexFileLoopContext
     {
         internal required DbWriter Writer { get; init; }
         internal required FileIndexer Indexer { get; init; }
         internal required McpPathBoundary.IndexRootAuthorization AuthorizedRoot { get; init; }
-        internal required CSharpStaticInterfacePrepass.FileTarget[] Targets { get; init; }
+        internal required FileIndexer.IndexingFileTargetCollection Targets { get; init; }
         internal required string ProjectPath { get; init; }
         internal required int TotalFileCount { get; init; }
         internal JsonNode? ProgressToken { get; init; }
@@ -88,11 +88,13 @@ public partial class McpServer
             }
             catch (FileIndexer.BinaryFileSkippedException ex)
             {
-                HandleMcpSkippedFile(context, session, in context.Targets[targetIndex], ex);
+                var target = context.Targets[targetIndex];
+                HandleMcpSkippedFile(context, session, in target, ex);
             }
             catch (FileIndexer.FileTooLargeSkippedException ex)
             {
-                HandleMcpSkippedFile(context, session, in context.Targets[targetIndex], ex);
+                var target = context.Targets[targetIndex];
+                HandleMcpSkippedFile(context, session, in target, ex);
             }
             catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
             {

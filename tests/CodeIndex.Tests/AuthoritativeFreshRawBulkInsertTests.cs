@@ -113,6 +113,74 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
     }
 
     [Fact]
+    public void Scope_CoalescesResourceGenerationAndRestoresTriggersAcrossCommitAndRollback()
+    {
+        var initialGeneration = ResourceListGeneration();
+        Assert.Equal(3L, ResourceListGenerationTriggerCount());
+
+        using (var freshGraph = _writer.BeginReferenceGraphRefreshScope(
+                   forceFullRefresh: true,
+                   useFreshReferenceResolutionDefaults: true))
+        using (var transaction = _writer.BeginTransaction())
+        using (var raw = _writer.BeginAuthoritativeFreshBulkInsertScope(
+                   enabled: true,
+                   CancellationToken.None)!)
+        {
+            _ = InsertNewFile("src/generation-rolled-back.cs");
+        }
+
+        Assert.Equal(initialGeneration, ResourceListGeneration());
+        Assert.Equal(3L, ResourceListGenerationTriggerCount());
+        Assert.Equal(
+            0L,
+            ScalarLong("SELECT COUNT(*) FROM files WHERE path = 'src/generation-rolled-back.cs'"));
+
+        using (var freshGraph = _writer.BeginReferenceGraphRefreshScope(
+                   forceFullRefresh: true,
+                   useFreshReferenceResolutionDefaults: true))
+        using (var transaction = _writer.BeginTransaction())
+        using (var raw = _writer.BeginAuthoritativeFreshBulkInsertScope(
+                   enabled: true,
+                   CancellationToken.None)!)
+        {
+            raw.Complete();
+            transaction.Commit();
+        }
+
+        Assert.Equal(initialGeneration, ResourceListGeneration());
+        Assert.Equal(3L, ResourceListGenerationTriggerCount());
+
+        using (var freshGraph = _writer.BeginReferenceGraphRefreshScope(
+                   forceFullRefresh: true,
+                   useFreshReferenceResolutionDefaults: true))
+        using (var transaction = _writer.BeginTransaction())
+        using (var raw = _writer.BeginAuthoritativeFreshBulkInsertScope(
+                   enabled: true,
+                   CancellationToken.None)!)
+        {
+            _ = InsertNewFile("src/generation-a.cs");
+            _ = InsertNewFile("src/generation-b.cs");
+            _ = InsertNewFile("src/generation-c.cs");
+            raw.Complete();
+            transaction.Commit();
+        }
+
+        Assert.Equal(initialGeneration + 1, ResourceListGeneration());
+        Assert.Equal(3L, ResourceListGenerationTriggerCount());
+
+        _ = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/generation-provider.cs",
+            Lang = "csharp",
+            Size = 100,
+            Lines = 10,
+            Checksum = "generation-provider",
+            Modified = new DateTime(2026, 8, 23, 0, 0, 0, DateTimeKind.Utc),
+        });
+        Assert.Equal(initialGeneration + 2, ResourceListGeneration());
+    }
+
+    [Fact]
     public void BatchStatements_PreserveShapesUnicodeNullsInt64AndProviderExclusions()
     {
         PrimeSequencesForInt64Returning();
@@ -160,7 +228,7 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
             });
             Assert.Equal(ExpectedLargeFileId, fileId);
 
-            var chunks = Enumerable.Range(0, 13)
+            var chunks = Enumerable.Range(0, 205)
                 .Select(index => new ChunkRecord
                 {
                     FileId = fileId,
@@ -170,7 +238,7 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
                     Content = index == 0 ? "雪😀a\0β" : $"chunk_{index}",
                 })
                 .ToArray();
-            var symbols = Enumerable.Range(0, 3)
+            var symbols = Enumerable.Range(0, 41)
                 .Select(index => new SymbolRecord
                 {
                     FileId = fileId,
@@ -185,10 +253,10 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
                     IsMetadataTarget = index == 0 ? null : false,
                 })
                 .ToArray();
-            var issues = Enumerable.Range(0, 11)
+            var issues = Enumerable.Range(0, 171)
                 .Select(index => CreateIssue(index + 1))
                 .ToArray();
-            var references = Enumerable.Range(0, 5)
+            var references = Enumerable.Range(0, 73)
                 .Select(index => new ReferenceRecord
                 {
                     FileId = fileId,
@@ -251,14 +319,14 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
         }
 
         Assert.Equal([(1, 7)], RowsAndParameters("insert_files"));
-        Assert.Equal([(6, 30), (6, 30), (1, 5)], RowsAndParameters("insert_chunks"));
-        Assert.Equal([(1, 25), (1, 25), (1, 25)], RowsAndParameters("insert_symbols"));
-        Assert.Equal([(5, 30), (5, 30), (1, 6)], RowsAndParameters("insert_issues"));
-        Assert.Equal([(5, 15)], RowsAndParameters("insert_reference_lines"));
-        Assert.Equal([(2, 28), (2, 28), (1, 14)], RowsAndParameters("insert_references"));
+        Assert.Equal([(102, 510), (102, 510), (1, 5)], RowsAndParameters("insert_chunks"));
+        Assert.Equal([(20, 500), (20, 500), (1, 25)], RowsAndParameters("insert_symbols"));
+        Assert.Equal([(85, 510), (85, 510), (1, 6)], RowsAndParameters("insert_issues"));
+        Assert.Equal([(73, 219)], RowsAndParameters("insert_reference_lines"));
+        Assert.Equal([(36, 504), (36, 504), (1, 14)], RowsAndParameters("insert_references"));
         Assert.Contains(
             batchWork,
-            work => work.Operation == "insert_reference_lines" && work.StatementRows == 5);
+            work => work.Operation == "insert_reference_lines" && work.StatementRows == 73);
         Assert.DoesNotContain(
             batchWork,
             work => work.Operation == "insert_files");
@@ -266,13 +334,13 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
         Assert.NotNull(observedStats);
         Assert.True(observedStats.Completed);
         Assert.Equal(32, observedStats.Capacity);
-        Assert.Equal(9, observedStats.PeakCachedStatementCount);
+        Assert.Equal(10, observedStats.PeakCachedStatementCount);
         Assert.Equal(14, observedStats.StatementExecutionCount);
-        Assert.Equal(9, observedStats.PrepareCount);
-        Assert.Equal(5, observedStats.CacheHitCount);
+        Assert.Equal(10, observedStats.PrepareCount);
+        Assert.Equal(4, observedStats.CacheHitCount);
         Assert.Equal(0, observedStats.EvictionCount);
         Assert.Equal(0, observedStats.DiscardCount);
-        Assert.Equal(9, observedStats.FinalizeCount);
+        Assert.Equal(10, observedStats.FinalizeCount);
 
         Assert.Equal(1L, ScalarLong("SELECT COUNT(*) FROM files WHERE lang IS NULL"));
         Assert.Equal(5_000_000_123L, ScalarLong("SELECT size FROM files WHERE path = 'src/raw-shapes.cs'"));
@@ -280,13 +348,13 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
         Assert.Equal("E99BAAF09F98806100CEB2", ScalarString("SELECT hex(CAST(checksum AS BLOB)) FROM files WHERE path = 'src/raw-shapes.cs'"));
         Assert.Equal("E99BAAF09F98806100CEB2", ScalarString("SELECT hex(CAST(content AS BLOB)) FROM chunks WHERE chunk_index = 0"));
         Assert.Equal(11L, ScalarLong("SELECT length(CAST(content AS BLOB)) FROM chunks WHERE chunk_index = 0"));
-        Assert.Equal(3L, ScalarLong($"SELECT COUNT(*) FROM symbols WHERE file_id = {ExpectedLargeFileId.ToString(CultureInfo.InvariantCulture)}"));
+        Assert.Equal(41L, ScalarLong($"SELECT COUNT(*) FROM symbols WHERE file_id = {ExpectedLargeFileId.ToString(CultureInfo.InvariantCulture)}"));
         Assert.Equal(1L, ScalarLong("SELECT COUNT(*) FROM symbols WHERE sub_kind IS NULL AND signature IS NULL AND start_column IS NULL"));
-        Assert.Equal(11L, ScalarLong($"SELECT COUNT(*) FROM file_issues WHERE file_id = {ExpectedLargeFileId.ToString(CultureInfo.InvariantCulture)}"));
+        Assert.Equal(171L, ScalarLong($"SELECT COUNT(*) FROM file_issues WHERE file_id = {ExpectedLargeFileId.ToString(CultureInfo.InvariantCulture)}"));
         Assert.Equal(ExpectedLargeFileId, ScalarLong("SELECT MIN(id) FROM reference_lines"));
         Assert.Equal("E99BAAF09F98806100CEB2", ScalarString("SELECT hex(CAST(context AS BLOB)) FROM reference_lines WHERE line = 1"));
-        Assert.Equal(5L, ScalarLong($"SELECT COUNT(*) FROM symbol_references WHERE file_id = {ExpectedLargeFileId.ToString(CultureInfo.InvariantCulture)}"));
-        Assert.Equal(5L, ScalarLong($"SELECT COUNT(*) FROM symbol_references WHERE file_id = {ExpectedLargeFileId.ToString(CultureInfo.InvariantCulture)} AND context IS NULL AND is_self_reference = 0 AND is_mutual_recursion = 0"));
+        Assert.Equal(73L, ScalarLong($"SELECT COUNT(*) FROM symbol_references WHERE file_id = {ExpectedLargeFileId.ToString(CultureInfo.InvariantCulture)}"));
+        Assert.Equal(73L, ScalarLong($"SELECT COUNT(*) FROM symbol_references WHERE file_id = {ExpectedLargeFileId.ToString(CultureInfo.InvariantCulture)} AND context IS NULL AND is_self_reference = 0 AND is_mutual_recursion = 0"));
 
         (int Rows, int Parameters)[] RowsAndParameters(string operation) =>
             rawWork
@@ -953,6 +1021,24 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
         command.CommandText = sql;
         return Convert.ToInt64(command.ExecuteScalar(), CultureInfo.InvariantCulture);
     }
+
+    private long ResourceListGeneration()
+        => ScalarLong("""
+            SELECT CAST(value AS INTEGER)
+            FROM codeindex_meta
+            WHERE key = 'resource_list_generation'
+            """);
+
+    private long ResourceListGenerationTriggerCount()
+        => ScalarLong("""
+            SELECT COUNT(*)
+            FROM sqlite_master
+            WHERE type = 'trigger'
+              AND name IN (
+                  'files_resource_generation_ai',
+                  'files_resource_generation_ad',
+                  'files_resource_generation_au')
+            """);
 
     private string? ScalarString(string sql)
     {

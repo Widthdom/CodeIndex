@@ -5,7 +5,8 @@ internal sealed partial class FileContentLoader(
     Func<string, FileStream>? openReadForIndexContent = null,
     Func<string, string>? resolveFileReadPath = null,
     bool bindReadToFileSystemIdentity = false,
-    Action<string>? validateResolvedFileReadPath = null)
+    Action<string>? validateResolvedFileReadPath = null,
+    Action? fileHandleSnapshotCapturedForTesting = null)
 {
     private readonly Func<string, FileStream> _openReadForIndexContent =
         openReadForIndexContent ?? BoundedFile.OpenReadForIndexContent;
@@ -15,6 +16,8 @@ internal sealed partial class FileContentLoader(
         bindReadToFileSystemIdentity;
     private readonly Action<string>? _validateResolvedFileReadPath =
         validateResolvedFileReadPath;
+    private readonly Action? _fileHandleSnapshotCapturedForTesting =
+        fileHandleSnapshotCapturedForTesting;
 
     internal readonly record struct CSharpPrepassCandidateContent(
         string Content,
@@ -38,30 +41,6 @@ internal sealed partial class FileContentLoader(
             decoded.Content,
             discardReplacementLinesWhenNonUtf8Likely: decoded.HadInvalidUtf8Replacement);
         return BuildLoadedFileContent(rawFile, decoded, normalized);
-    }
-
-    internal bool IsUnknownLanguageCoverageCandidate(
-        string absolutePath,
-        string normalizedRelativePath,
-        string relativePath,
-        CancellationToken cancellationToken)
-    {
-        var rawFile = ReadRawBytesWithSizeLimit(
-            absolutePath,
-            normalizedRelativePath,
-            cancellationToken);
-        if (IsGitLfsPointer(rawFile.Bytes))
-            return false;
-
-        if (TryFindIndexBlockingNullByte(rawFile.Bytes, out var nullByteOffset))
-        {
-            throw new FileIndexer.BinaryFileSkippedException(
-                relativePath,
-                nullByteOffset,
-                $"{relativePath}: binary file skipped because it contains NULL byte at byte offset {nullByteOffset}");
-        }
-
-        return true;
     }
 
     internal static bool CanReuseRawBytesForNormalizedChecksum(
@@ -110,12 +89,14 @@ internal sealed partial class FileContentLoader(
         byte[]? bytes = null;
         bool lengthChanged;
         bool pathIdentityChanged;
-        DateTime modifiedBeforeRead;
-        DateTime modifiedAfterRead;
-        using (var stream = OpenValidatedReadStream(absolutePath, readPath))
+        FileIndexer.FileHandleSnapshot initialSnapshot;
+        FileIndexer.FileHandleSnapshot finalSnapshot;
+        using (var stream = OpenValidatedReadStream(
+                   absolutePath,
+                   readPath,
+                   out initialSnapshot))
         {
-            modifiedBeforeRead = File.GetLastWriteTimeUtc(stream.SafeFileHandle);
-            var initialLength = stream.Length;
+            var initialLength = initialSnapshot.Length;
             ThrowIfInitialLengthExceedsMaxFileSize(
                 normalizedRelativePath,
                 initialLength);
@@ -141,13 +122,15 @@ internal sealed partial class FileContentLoader(
                     cancellationToken);
             }
 
-            lengthChanged = stream.Length != initialLength;
-            modifiedAfterRead = File.GetLastWriteTimeUtc(stream.SafeFileHandle);
-            pathIdentityChanged = ReadPathIdentityChanged(absolutePath, stream);
+            finalSnapshot = CaptureFileHandleSnapshot(stream);
+            lengthChanged = finalSnapshot.Length != initialLength;
+            pathIdentityChanged = ReadPathIdentityChanged(absolutePath, finalSnapshot);
         }
 
         if (retryOnMutation
-            && (modifiedAfterRead != modifiedBeforeRead || lengthChanged || pathIdentityChanged))
+            && (finalSnapshot.ModifiedUtc != initialSnapshot.ModifiedUtc
+                || lengthChanged
+                || pathIdentityChanged))
         {
             return (null, RequiresRetry: true);
         }

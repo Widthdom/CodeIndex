@@ -136,9 +136,7 @@ public static partial class IndexCommandRunner
         var csharpPrepassCapacity = languageCounts.TryGetValue("csharp", out var csharpFileCount) ? csharpFileCount : 0;
         var targetPreparation = PrepareFullScanTargets(
             indexer,
-            projectRoot,
-            files,
-            scanResult.FileLanguages,
+            discovery.IndexingTargets,
             options.SymbolsOnly,
             csharpPrepassCapacity);
         var fileTargets = targetPreparation.FileTargets;
@@ -517,6 +515,9 @@ public static partial class IndexCommandRunner
             referenceGraphRefresh.FreshReferenceResolutionDefaultsPending
             && !options.SymbolsOnly
             && useFtsBulkLoad;
+        var deferAuthoritativeFreshCoreIndexes =
+            referenceGraphRefresh.FreshReferenceResolutionDefaultsPending
+            && useFtsBulkLoad;
         fullScanWritePhaseStarted = true;
         writer.SetMeta(
             DbContext.WorkspaceVerificationPendingPathsCompleteMetaKey,
@@ -558,6 +559,11 @@ public static partial class IndexCommandRunner
                     deferAuthoritativeFreshPersistenceIndexes,
                 deferAuthoritativeFreshPersistenceIndexes:
                     deferAuthoritativeFreshPersistenceIndexes);
+        using var coreSecondaryIndexBulkLoad =
+            CoreSecondaryIndexBulkLoadGuard.StartTransactional(
+                writer,
+                enabled: deferAuthoritativeFreshCoreIndexes,
+                cancellationToken);
         using var ftsBulkLoad = FtsBulkLoadTriggerGuard.Start(writer, useFtsBulkLoad);
 
         if (staleFilePurgePlan.Count > 0)
@@ -665,6 +671,11 @@ public static partial class IndexCommandRunner
                 cancellationToken);
         var postExtractionHooks = RunFullScanExtractionPipeline(extractionSession);
         authoritativeFreshBulkInsert?.Complete();
+        // Native INSERT statements must be finalized before CREATE INDEX invalidates the
+        // connection schema. Every graph/readiness consumer below sees the restored set.
+        // native INSERT statementをfinalizeした後にCREATE INDEXを行い、以降の
+        // graph/readiness consumerからは復元済みschemaだけを見せる。
+        coreSecondaryIndexBulkLoad?.Complete(cancellationToken);
         preWriteState.CSharp.PrepassSymbolArtifacts = null;
         deferCSharpMutationsForIncompleteScan =
             preWriteState.Scan.DeferCSharpMutationsForIncompleteScan;

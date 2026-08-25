@@ -48,16 +48,27 @@ public static partial class ReferenceExtractor
         {
             var lineNumber = i + 1;
             var line = matchLines[i];
-            var context = rawLines[i].Trim();
+            var context = rawLines[i];
+            var referenceStartIndex = references?.Count ?? 0;
 
             AddSolidityInheritanceReferences(ref references, ref seen, fileId, line, context, lineNumber, containerResolver);
             AddSolidityLibraryReferences(ref references, ref seen, fileId, line, context, lineNumber, containerResolver);
             AddSolidityModifierReferences(ref references, ref seen, fileId, line, context, lineNumber, containerResolver);
             AddSolidityEventReferences(ref references, ref seen, fileId, line, context, lineNumber, containerResolver);
             AddSolidityInterfaceCallReferences(ref references, ref seen, fileId, line, context, lineNumber, containerResolver);
+            if (references is not null)
+            {
+                NormalizeRawSourceLineContexts(
+                    rawLines,
+                    references,
+                    referenceStartIndex);
+            }
         }
 
-        return references ?? [];
+        if (references is null)
+            return [];
+
+        return references;
     }
 
     private static void AddSolidityInheritanceReferences(

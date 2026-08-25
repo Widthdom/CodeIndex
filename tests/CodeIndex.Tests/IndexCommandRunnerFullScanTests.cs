@@ -1901,8 +1901,14 @@ public partial class IndexCommandRunnerTests
     public void Run_FullScanWithSequentialExtraction_PersistsValidationIssues()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_fullscan_sequential_validation");
+        var previousFamilyScopeHook =
+            IndexCommandRunner.FullScanFamilyScopeResolvedForTesting;
+        var previousCSharpSourceHook =
+            IndexCommandRunner.FullScanCSharpSourceObservedForTesting;
         bool? parallelized = null;
         int? queueCapacity = null;
+        var familyScopeResolutionCount = 0;
+        var csharpSourceObservationCount = 0;
         try
         {
             File.WriteAllText(
@@ -1911,6 +1917,16 @@ public partial class IndexCommandRunnerTests
 
             IndexCommandRunner.FullScanExtractionSchedulingForTesting = (enabled, _) => parallelized = enabled;
             IndexCommandRunner.FullScanExtractionQueueCapacityForTesting = capacity => queueCapacity = capacity;
+            IndexCommandRunner.FullScanFamilyScopeResolvedForTesting = path =>
+            {
+                Interlocked.Increment(ref familyScopeResolutionCount);
+                previousFamilyScopeHook?.Invoke(path);
+            };
+            IndexCommandRunner.FullScanCSharpSourceObservedForTesting = path =>
+            {
+                Interlocked.Increment(ref csharpSourceObservationCount);
+                previousCSharpSourceHook?.Invoke(path);
+            };
 
             var (exitCode, json) = RunAndCaptureJson([projectRoot, "--exclude-symbol-kind", "test.method", "--json"]);
 
@@ -1918,6 +1934,8 @@ public partial class IndexCommandRunnerTests
             Assert.Equal("success", json.GetProperty("status").GetString());
             Assert.False(parallelized);
             Assert.Equal(1, queueCapacity);
+            Assert.Equal(1, familyScopeResolutionCount);
+            Assert.Equal(1, csharpSourceObservationCount);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var issue = Assert.Single(ReadFileIssues(dbPath, "mixed_line_endings"));
             Assert.Equal("app.cs", issue.Path);
@@ -1926,6 +1944,10 @@ public partial class IndexCommandRunnerTests
         {
             IndexCommandRunner.FullScanExtractionSchedulingForTesting = null;
             IndexCommandRunner.FullScanExtractionQueueCapacityForTesting = null;
+            IndexCommandRunner.FullScanFamilyScopeResolvedForTesting =
+                previousFamilyScopeHook;
+            IndexCommandRunner.FullScanCSharpSourceObservedForTesting =
+                previousCSharpSourceHook;
             DeleteDirectory(projectRoot);
         }
     }
@@ -4540,10 +4562,16 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void Run_FullScan_ConfiguredGeneratedCodePatternsKeepChunksButSkipExtraction()
+    public void Run_FullScan_ConfiguredGeneratedCodePatternsSkipAllSymbolPreparation()
     {
         using var env = EnvironmentVariableScope.Capture(IndexCommandRunner.GeneratedCodePatternsEnvironmentVariable);
         var projectRoot = CreateTempProject();
+        var previousFamilyScopeHook =
+            IndexCommandRunner.FullScanFamilyScopeResolvedForTesting;
+        var previousCSharpSourceHook =
+            IndexCommandRunner.FullScanCSharpSourceObservedForTesting;
+        var familyScopeResolutionCounts = new ConcurrentDictionary<string, int>(StringComparer.Ordinal);
+        var csharpSourceObservationCounts = new ConcurrentDictionary<string, int>(StringComparer.Ordinal);
         try
         {
             env.Set(IndexCommandRunner.GeneratedCodePatternsEnvironmentVariable, "src/generated/**");
@@ -4565,8 +4593,23 @@ public partial class IndexCommandRunnerTests
                 }
                 """);
 
+            IndexCommandRunner.FullScanFamilyScopeResolvedForTesting = path =>
+            {
+                familyScopeResolutionCounts.AddOrUpdate(path, 1, static (_, count) => count + 1);
+                previousFamilyScopeHook?.Invoke(path);
+            };
+            IndexCommandRunner.FullScanCSharpSourceObservedForTesting = path =>
+            {
+                csharpSourceObservationCounts.AddOrUpdate(path, 1, static (_, count) => count + 1);
+                previousCSharpSourceHook?.Invoke(path);
+            };
+
             var exitCode = IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions);
             Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.False(familyScopeResolutionCounts.ContainsKey("src/generated/GeneratedClient.cs"));
+            Assert.False(csharpSourceObservationCounts.ContainsKey("src/generated/GeneratedClient.cs"));
+            Assert.Equal(1, familyScopeResolutionCounts["NormalClient.cs"]);
+            Assert.Equal(1, csharpSourceObservationCounts["NormalClient.cs"]);
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             using (var conn = OpenNonPoolingConnection(dbPath))
@@ -4605,6 +4648,10 @@ public partial class IndexCommandRunnerTests
                 Assert.Equal(1L, (long)normalCmd.ExecuteScalar()!);
             }
 
+            IndexCommandRunner.FullScanFamilyScopeResolvedForTesting =
+                previousFamilyScopeHook;
+            IndexCommandRunner.FullScanCSharpSourceObservedForTesting =
+                previousCSharpSourceHook;
             env.Set(IndexCommandRunner.GeneratedCodePatternsEnvironmentVariable, null);
             var updateExitCode = IndexCommandRunner.Run([projectRoot, "--files", "src/generated/GeneratedClient.cs", "--json", "--quiet"], _jsonOptions);
             Assert.Equal(CommandExitCodes.Success, updateExitCode);
@@ -4631,6 +4678,10 @@ public partial class IndexCommandRunnerTests
         }
         finally
         {
+            IndexCommandRunner.FullScanFamilyScopeResolvedForTesting =
+                previousFamilyScopeHook;
+            IndexCommandRunner.FullScanCSharpSourceObservedForTesting =
+                previousCSharpSourceHook;
             DeleteDirectory(projectRoot);
             SqliteConnection.ClearAllPools();
         }

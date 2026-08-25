@@ -524,6 +524,68 @@ public class PerformanceTests : IDisposable
 #else
     [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
 #endif
+    public void SymbolExtraction_RecordPrimaryComponentsAcrossLanguages_StayWithinAllocationBudget()
+    {
+        const int denseTypeCount = 1_024;
+        const int wideJvmComponentCount = 256;
+        const int wideKotlinComponentCount = 24;
+
+        var csharpContent = string.Join('\n',
+            string.Join('\n', Enumerable.Range(0, denseTypeCount).Select(index =>
+                $"public record CSharpItem{index}(int Value{index});")),
+            "public record WideCSharp(",
+            string.Join('\n', Enumerable.Range(0, wideJvmComponentCount).Select(index =>
+                $"    int WideValue{index},")),
+            "    int WideTail);");
+        var javaContent = string.Join('\n',
+            string.Join('\n', Enumerable.Range(0, denseTypeCount).Select(index =>
+                $"public record JavaItem{index}(int value{index}) {{ }}")),
+            "public record WideJava(",
+            string.Join('\n', Enumerable.Range(0, wideJvmComponentCount).Select(index =>
+                $"    int wideValue{index},")),
+            "    int wideTail) { }");
+        var kotlinContent = string.Join('\n',
+            string.Join('\n', Enumerable.Range(0, denseTypeCount).Select(index =>
+                $"data class KotlinItem{index}(val value{index}: Int)")),
+            "data class WideKotlin(",
+            string.Join('\n', Enumerable.Range(0, wideKotlinComponentCount).Select(index =>
+                $"    val wideValue{index}: Int,")),
+            "    val wideTail: Int)");
+
+        var csharpSymbols = SymbolExtractor.Extract(1, "csharp", csharpContent);
+        var javaSymbols = SymbolExtractor.Extract(1, "java", javaContent);
+        var kotlinSymbols = SymbolExtractor.Extract(1, "kotlin", kotlinContent);
+        Assert.Equal(denseTypeCount + wideJvmComponentCount + 1, csharpSymbols.Count(symbol => symbol.Kind == "property"));
+        Assert.Equal(denseTypeCount + wideJvmComponentCount + 1, javaSymbols.Count(symbol => symbol.Kind == "property"));
+        Assert.Equal(denseTypeCount, kotlinSymbols.Count(symbol =>
+            symbol.Kind == "property"
+            && symbol.ContainerName?.StartsWith("KotlinItem", StringComparison.Ordinal) == true));
+        var wideKotlinPropertyNames = kotlinSymbols
+            .Where(symbol => symbol.Kind == "property" && symbol.ContainerName == "WideKotlin")
+            .Select(symbol => symbol.Name)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        Assert.Equal(wideKotlinComponentCount + 1, wideKotlinPropertyNames.Length);
+        Assert.Contains("wideValue0", wideKotlinPropertyNames);
+        Assert.Contains($"wideValue{wideKotlinComponentCount - 1}", wideKotlinPropertyNames);
+        Assert.Contains("wideTail", wideKotlinPropertyNames);
+
+        var csharpAllocatedBytes = MeasureAllocatedBytes(() => SymbolExtractor.Extract(1, "csharp", csharpContent));
+        var javaAllocatedBytes = MeasureAllocatedBytes(() => SymbolExtractor.Extract(1, "java", javaContent));
+        var kotlinAllocatedBytes = MeasureAllocatedBytes(() => SymbolExtractor.Extract(1, "kotlin", kotlinContent));
+
+        Assert.True(
+            csharpAllocatedBytes < 12_000_000
+                && javaAllocatedBytes < 6_600_000
+                && kotlinAllocatedBytes < 5_700_000,
+            $"Record-component extraction allocated C#={csharpAllocatedBytes:N0}, Java={javaAllocatedBytes:N0}, Kotlin={kotlinAllocatedBytes:N0} bytes");
+    }
+
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
     public void CSharpStaticInterfacePrepass_LargeSemanticProbeStaysWithinAllocationBudget()
     {
         const int repeats = 12;
@@ -1126,6 +1188,81 @@ public class PerformanceTests : IDisposable
         Assert.True(
             allocatedBytes < 14_000_000,
             $"Call-free functional extraction allocated {allocatedBytes:N0} bytes");
+    }
+
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
+    public void ReferenceExtraction_CallFreePaddedLines_DefersContextMaterialization()
+    {
+        const int lineCount = 4_096;
+        var fixtures = new[]
+        {
+            (
+                Language: "csharp",
+                Content: "class Values\n{\n"
+                    + string.Join(
+                        '\n',
+                        Enumerable.Range(0, lineCount)
+                            .Select(index => $"    private int value_{index};    "))
+                    + "\n}"),
+            (
+                Language: "python",
+                Content: string.Join(
+                    '\n',
+                    Enumerable.Range(0, lineCount)
+                        .Select(index => $"    value_{index} = {index}    "))),
+            (
+                Language: "erlang",
+                Content: string.Join(
+                    '\n',
+                    Enumerable.Range(0, lineCount)
+                        .Select(index => $"    value_{index} = {index}.    "))),
+            (
+                Language: "solidity",
+                Content: "contract Values {\n"
+                    + string.Join(
+                        '\n',
+                        Enumerable.Range(0, lineCount)
+                            .Select(index => $"    uint256 value_{index};    "))
+                    + "\n}"),
+        }
+        .Select(fixture => (
+            fixture.Language,
+            fixture.Content,
+            Symbols: SymbolExtractor.Extract(
+                1,
+                fixture.Language,
+                fixture.Content)))
+        .ToArray();
+
+        foreach (var fixture in fixtures)
+        {
+            var references = ReferenceExtractor.Extract(
+                1,
+                fixture.Language,
+                fixture.Content,
+                fixture.Symbols);
+            Assert.Empty(references);
+        }
+
+        var allocatedBytes = MeasureAllocatedBytes(() =>
+        {
+            foreach (var fixture in fixtures)
+            {
+                _ = ReferenceExtractor.Extract(
+                    1,
+                    fixture.Language,
+                    fixture.Content,
+                    fixture.Symbols);
+            }
+        });
+
+        Assert.True(
+            allocatedBytes < 10_500_000,
+            $"Call-free padded reference extraction allocated {allocatedBytes:N0} bytes");
     }
 
 #if NET8_0

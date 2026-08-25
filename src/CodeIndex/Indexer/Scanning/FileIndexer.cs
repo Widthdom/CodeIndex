@@ -103,7 +103,8 @@ public partial class FileIndexer
     private sealed class DirectoryScanState
     {
         public DirectoryScanState(
-            List<string> results,
+            List<string>? results,
+            IndexingFileTargetCollection? indexingTargets,
             Dictionary<string, string> fileLanguages,
             Dictionary<string, int> languageCounts,
             List<ScanError> errors,
@@ -117,6 +118,7 @@ public partial class FileIndexer
             bool captureDirectoryListingSnapshots)
         {
             Results = results;
+            IndexingTargets = indexingTargets;
             FileLanguages = fileLanguages;
             LanguageCounts = languageCounts;
             Errors = errors;
@@ -130,7 +132,9 @@ public partial class FileIndexer
             CaptureDirectoryListingSnapshots = captureDirectoryListingSnapshots;
         }
 
-        public List<string> Results { get; }
+        public List<string>? Results { get; }
+        public IndexingFileTargetCollection? IndexingTargets { get; }
+        public IReadOnlyList<string> Files => IndexingTargets?.FilePaths ?? Results!;
         public Dictionary<string, string> FileLanguages { get; }
         public Dictionary<string, int> LanguageCounts { get; }
         public List<ScanError> Errors { get; }
@@ -233,7 +237,8 @@ public partial class FileIndexer
         Action<string>? pathAccessValidator = null,
         Func<string, FileStream>? openReadForIndexContent = null,
         bool bindConfigurationReadsToFileSystemIdentity = false,
-        string? internalIndexDatabasePath = null)
+        string? internalIndexDatabasePath = null,
+        Action? fileHandleSnapshotCapturedForTesting = null)
     {
         _projectRoot = Path.GetFullPath(projectRoot);
         _projectRootRelativePrefix = CreateProjectRootRelativePrefix(_projectRoot);
@@ -256,7 +261,8 @@ public partial class FileIndexer
             symlinkPolicy == SymlinkPolicy.None ? null : ResolveFileReadPath,
             bindReadToFileSystemIdentity: symlinkPolicy != SymlinkPolicy.None,
             validateResolvedFileReadPath:
-                symlinkPolicy == SymlinkPolicy.Internal ? ValidateResolvedFileReadPath : null);
+                symlinkPolicy == SymlinkPolicy.Internal ? ValidateResolvedFileReadPath : null,
+            fileHandleSnapshotCapturedForTesting: fileHandleSnapshotCapturedForTesting);
         _pathAccessValidator = pathAccessValidator;
         _bindConfigurationReadsToFileSystemIdentity = bindConfigurationReadsToFileSystemIdentity;
         _maxDanglingFileSystemEntryScanCandidates = Math.Max(

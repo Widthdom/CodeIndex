@@ -23,11 +23,11 @@ public static partial class IndexCommandRunner
             if (!options.Rebuild
                 && !baseline.StartedWithNoIndexedFiles
                 && scan.StaleFilePurgePlan.RemainingFileCount
-                    - runtime.FileTargets.LongLength
-                    > runtime.FileTargets.LongLength)
+                    - runtime.FileTargets.Count
+                    > runtime.FileTargets.Count)
             {
                 retainedPathsForReuse = new HashSet<string>(
-                    runtime.FileTargets.Length,
+                    runtime.FileTargets.Count,
                     StringComparer.Ordinal);
                 foreach (var target in runtime.FileTargets)
                     retainedPathsForReuse.Add(target.IndexPath);

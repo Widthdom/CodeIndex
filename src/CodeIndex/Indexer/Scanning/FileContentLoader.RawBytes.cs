@@ -36,12 +36,14 @@ internal sealed partial class FileContentLoader
         for (var attempt = 0; ; attempt++)
         {
             var readPath = _resolveFileReadPath(absolutePath);
-            DateTime modifiedBeforeRead;
+            FileIndexer.FileHandleSnapshot initialSnapshot;
             bool pathIdentityChanged;
-            using (var stream = OpenValidatedReadStream(absolutePath, readPath))
+            using (var stream = OpenValidatedReadStream(
+                       absolutePath,
+                       readPath,
+                       out initialSnapshot))
             {
-                modifiedBeforeRead = File.GetLastWriteTimeUtc(stream.SafeFileHandle);
-                var initialLength = stream.Length;
+                var initialLength = initialSnapshot.Length;
                 ThrowIfInitialLengthExceedsMaxFileSize(
                     normalizedRelativePath,
                     initialLength);
@@ -51,10 +53,11 @@ internal sealed partial class FileContentLoader
                     initialLength,
                     normalizedRelativePath,
                     cancellationToken);
-                modifiedUtc = File.GetLastWriteTimeUtc(stream.SafeFileHandle);
-                pathIdentityChanged = ReadPathIdentityChanged(absolutePath, stream);
+                var finalSnapshot = CaptureFileHandleSnapshot(stream);
+                modifiedUtc = finalSnapshot.ModifiedUtc;
+                pathIdentityChanged = ReadPathIdentityChanged(absolutePath, finalSnapshot);
             }
-            if ((modifiedUtc == modifiedBeforeRead && !pathIdentityChanged) || attempt > 0)
+            if ((modifiedUtc == initialSnapshot.ModifiedUtc && !pathIdentityChanged) || attempt > 0)
                 break;
         }
 
@@ -70,14 +73,16 @@ internal sealed partial class FileContentLoader
         for (var attempt = 0; ; attempt++)
         {
             var readPath = _resolveFileReadPath(absolutePath);
-            DateTime modifiedBeforeRead;
-            DateTime modifiedUtc;
+            FileIndexer.FileHandleSnapshot initialSnapshot;
+            FileIndexer.FileHandleSnapshot finalSnapshot;
             bool pathIdentityChanged;
             bool matched;
-            using (var stream = OpenValidatedReadStream(absolutePath, readPath))
+            using (var stream = OpenValidatedReadStream(
+                       absolutePath,
+                       readPath,
+                       out initialSnapshot))
             {
-                modifiedBeforeRead = File.GetLastWriteTimeUtc(stream.SafeFileHandle);
-                var initialLength = stream.Length;
+                var initialLength = initialSnapshot.Length;
                 ThrowIfInitialLengthExceedsMaxFileSize(
                     normalizedRelativePath,
                     initialLength);
@@ -88,20 +93,26 @@ internal sealed partial class FileContentLoader
                     normalizedRelativePath,
                     chunkPredicate,
                     cancellationToken);
-                modifiedUtc = File.GetLastWriteTimeUtc(stream.SafeFileHandle);
-                pathIdentityChanged = ReadPathIdentityChanged(absolutePath, stream);
+                finalSnapshot = CaptureFileHandleSnapshot(stream);
+                pathIdentityChanged = ReadPathIdentityChanged(absolutePath, finalSnapshot);
             }
 
             if (matched)
                 return true;
 
-            if ((modifiedUtc == modifiedBeforeRead && !pathIdentityChanged) || attempt > 0)
+            if ((finalSnapshot.ModifiedUtc == initialSnapshot.ModifiedUtc
+                 && !pathIdentityChanged)
+                || attempt > 0)
                 return false;
         }
     }
 
-    private FileStream OpenValidatedReadStream(string absolutePath, string expectedReadPath)
+    private FileStream OpenValidatedReadStream(
+        string absolutePath,
+        string expectedReadPath,
+        out FileIndexer.FileHandleSnapshot initialSnapshot)
     {
+        initialSnapshot = default;
         _validateResolvedFileReadPath?.Invoke(expectedReadPath);
         FileIndexer.FileIdentity expectedIdentity = default;
         if (_bindReadToFileSystemIdentity
@@ -114,10 +125,11 @@ internal sealed partial class FileContentLoader
         var stream = _openReadForIndexContent(absolutePath);
         try
         {
+            initialSnapshot = CaptureFileHandleSnapshot(stream);
             if (!_bindReadToFileSystemIdentity)
                 return stream;
 
-            if (!FileIndexer.TryGetFileIdentity(stream.SafeFileHandle, out var openedIdentity)
+            if (initialSnapshot.Identity is not { } openedIdentity
                 || openedIdentity != expectedIdentity)
             {
                 throw new IOException(
@@ -133,9 +145,11 @@ internal sealed partial class FileContentLoader
         }
     }
 
-    private static bool ReadPathIdentityChanged(string absolutePath, FileStream stream)
+    private static bool ReadPathIdentityChanged(
+        string absolutePath,
+        FileIndexer.FileHandleSnapshot snapshot)
     {
-        if (!FileIndexer.TryGetFileIdentity(stream.SafeFileHandle, out var openedIdentity))
+        if (snapshot.Identity is not { } openedIdentity)
             return false;
 
         return !FileIndexer.TryGetFileIdentity(absolutePath, out var currentIdentity)

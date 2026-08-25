@@ -57,6 +57,7 @@ public partial class IndexCommandRunnerTests
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_reference_index_bulk_load");
         var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+        var previousCoreIndexHook = DbWriter.CoreSecondaryIndexBulkLoadStateForTesting;
         var previousStateHook = DbWriter.ReferenceSecondaryIndexBulkLoadStateForTesting;
         var previousStatisticsHook = DbWriter.FreshBulkLoadPlannerStatisticsStateForTesting;
         var previousStatementHook = DbWriter.BatchStatementExecutingForTesting;
@@ -70,6 +71,7 @@ public partial class IndexCommandRunnerTests
         var rawWork = new ConcurrentQueue<DbWriter.AuthoritativeFreshRawInsertWork>();
         var rawScopeSnapshots = new ConcurrentQueue<DbWriter.AuthoritativeFreshRawInsertScopeStats>();
         var lifecycle = new ConcurrentQueue<string>();
+        var coreIndexPhases = new ConcurrentQueue<string>();
         var statisticsPhases = new ConcurrentQueue<string>();
         SqliteConnection? activeConnection = null;
         string[]? hotspotIndexNamesDuringRefresh = null;
@@ -115,10 +117,25 @@ public partial class IndexCommandRunnerTests
                 previousRawScopeHook?.Invoke(stats);
             };
 
+            DbWriter.CoreSecondaryIndexBulkLoadStateForTesting = (connection, phase) =>
+            {
+                coreIndexPhases.Enqueue(phase);
+                Assert.True(IndexExists(connection, "idx_symbols_file"));
+                Assert.Equal(
+                    phase == "dropped" ? [] : GetCoreSecondaryIndexNames(),
+                    ReadCoreSecondaryIndexNames(connection));
+                if (string.Equals(phase, "restored", StringComparison.Ordinal))
+                    Assert.Single(rawScopeSnapshots);
+                previousCoreIndexHook?.Invoke(connection, phase);
+            };
+
             DbWriter.ReferenceSecondaryIndexBulkLoadStateForTesting = (connection, phase) =>
             {
                 if (!rebuild && phase is "deferred_graph_prepared" or "identity_started")
+                {
                     Assert.Single(rawScopeSnapshots);
+                    Assert.Equal(["dropped", "restored"], coreIndexPhases);
+                }
                 Volatile.Write(ref activeConnection, connection);
                 snapshots.Enqueue(CaptureReferenceIndexSnapshot(phase, connection));
                 lifecycle.Enqueue(phase);
@@ -204,6 +221,9 @@ public partial class IndexCommandRunnerTests
                     : ["post_load_statistics_started", "post_load_statistics_completed"],
                 statisticsPhases);
             Assert.Equal(
+                rebuild ? [] : ["dropped", "restored"],
+                coreIndexPhases);
+            Assert.Equal(
                 rebuild
                     ? ["dropped", "deferred_graph_prepared", "candidate_deferred", "identity_started", "graph_required_restored", "mutual_started", "readiness_completed", "restored", "full_scan_committed"]
                     : ["dropped", "deferred_graph_prepared", "candidate_deferred", "post_load_statistics_started", "post_load_statistics_completed", "identity_started", "graph_required_restored", "mutual_started", "readiness_completed", "restored", "full_scan_committed"],
@@ -236,6 +256,9 @@ public partial class IndexCommandRunnerTests
             using (var completedConnection = new SqliteConnection($"Data Source={dbPath}"))
             {
                 completedConnection.Open();
+                Assert.Equal(
+                    GetCoreSecondaryIndexNames(),
+                    ReadCoreSecondaryIndexNames(completedConnection));
                 Assert.Equal(
                     GetHotspotReferenceIndexNames(),
                     ReadHotspotReferenceIndexNames(completedConnection));
@@ -280,6 +303,7 @@ public partial class IndexCommandRunnerTests
         }
         finally
         {
+            DbWriter.CoreSecondaryIndexBulkLoadStateForTesting = previousCoreIndexHook;
             DbWriter.ReferenceSecondaryIndexBulkLoadStateForTesting = previousStateHook;
             DbWriter.FreshBulkLoadPlannerStatisticsStateForTesting = previousStatisticsHook;
             DbWriter.BatchStatementExecutingForTesting = previousStatementHook;
@@ -1042,6 +1066,49 @@ public partial class IndexCommandRunnerTests
             .Select(static index => index.Name)
             .Order(StringComparer.Ordinal)
             .ToArray();
+
+    private static string[] GetCoreSecondaryIndexNames()
+        => CoreSecondaryIndexBulkLoadGuard.IndexNames
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+    private static string[] ReadCoreSecondaryIndexNames(SqliteConnection connection)
+    {
+        var knownNames = CoreSecondaryIndexBulkLoadGuard.IndexNames
+            .ToHashSet(StringComparer.Ordinal);
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT name
+            FROM sqlite_schema
+            WHERE type = 'index'
+              AND name NOT LIKE 'sqlite_autoindex_%'
+            ORDER BY name
+            """;
+        using var reader = command.ExecuteReader();
+        var names = new List<string>();
+        while (reader.Read())
+        {
+            var name = reader.GetString(0);
+            if (knownNames.Contains(name))
+                names.Add(name);
+        }
+
+        return names.ToArray();
+    }
+
+    private static bool IndexExists(SqliteConnection connection, string indexName)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT EXISTS(
+                SELECT 1
+                FROM sqlite_schema
+                WHERE type = 'index'
+                  AND name = @name)
+            """;
+        command.Parameters.AddWithValue("@name", indexName);
+        return (long)command.ExecuteScalar()! == 1;
+    }
 
     private static string[] ReadHotspotReferenceIndexNames(SqliteConnection connection)
     {

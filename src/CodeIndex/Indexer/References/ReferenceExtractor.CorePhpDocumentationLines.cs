@@ -56,8 +56,8 @@ public static partial class ReferenceExtractor
         EmitPhpAttributeDocumentationReferences(in line, ref containerCache);
         BeginPhpDocblockIfNeeded(in line, ref state, ref containerCache);
 
-        var context = line.OriginalLine.Trim();
-        if (context.Length > 0)
+        var context = line.OriginalLine;
+        if (!string.IsNullOrWhiteSpace(context))
         {
             EmitPhpDocblockSignatureReferences(in line, context, ref state, ref containerCache);
             EmitPhpDocblockInheritanceReferences(in line, context, ref state, ref containerCache);
@@ -76,8 +76,8 @@ public static partial class ReferenceExtractor
         if (!line.OriginalLine.Contains("#[", StringComparison.Ordinal))
             return;
 
-        var context = line.OriginalLine.Trim();
-        if (context.Length == 0)
+        var context = line.OriginalLine;
+        if (string.IsNullOrWhiteSpace(context))
             return;
 
         PhpReferenceExtractor.EmitAttributeReferences(

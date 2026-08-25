@@ -574,11 +574,12 @@ public static partial class SymbolExtractor
             return false;
 
         return TryMatchJavaDeclarationSegment(
-            GetCurrentDeclarationRecordRegex("java", symbol.Kind, symbol.Name),
+            GetCurrentDeclarationRecordRegex("java", symbol.Kind),
             rawLines[declarationLineIndex],
             false,
-            out _,
-            out _);
+            out var match,
+            out _)
+            && RecordDeclarationNameMatches(match, symbol.Name);
     }
 
     private static bool TryFindJavaSymbolBodyBounds(

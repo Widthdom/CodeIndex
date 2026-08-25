@@ -3561,10 +3561,19 @@ public partial class QueryCommandRunnerTests
     }
 
     [ProductionRuntimeFact]
-    public void PartialCanonicalRepresentative_IndexPersistsHookRebuiltFamilyScope_Issue4914()
+    public void PartialCanonicalRepresentative_SerialPreparationRunsOnceAndPersistsHookRebuiltFamilyScope_Issue4914()
     {
         var projectRoot = TestProjectHelper.CreateExecutableExtensionTestProject(
             "cdidx_partial_hook_family_scope_issue4914");
+        var previousSchedulingHook =
+            IndexCommandRunner.FullScanExtractionSchedulingForTesting;
+        var previousFamilyScopeHook =
+            IndexCommandRunner.FullScanFamilyScopeResolvedForTesting;
+        var previousCSharpSourceHook =
+            IndexCommandRunner.FullScanCSharpSourceObservedForTesting;
+        bool? parallelized = null;
+        var familyScopeResolutionCount = 0;
+        var csharpSourceObservationCount = 0;
         lock (TestConsoleLock.Gate)
         {
             using var env = EnvironmentVariableScope.Capture(
@@ -3601,11 +3610,36 @@ public partial class QueryCommandRunnerTests
                     }
                     """);
 
+                IndexCommandRunner.FullScanExtractionSchedulingForTesting = (enabled, reason) =>
+                {
+                    parallelized = enabled;
+                    previousSchedulingHook?.Invoke(enabled, reason);
+                };
+                IndexCommandRunner.FullScanFamilyScopeResolvedForTesting = path =>
+                {
+                    Interlocked.Increment(ref familyScopeResolutionCount);
+                    previousFamilyScopeHook?.Invoke(path);
+                };
+                IndexCommandRunner.FullScanCSharpSourceObservedForTesting = path =>
+                {
+                    Interlocked.Increment(ref csharpSourceObservationCount);
+                    previousCSharpSourceHook?.Invoke(path);
+                };
+
                 Assert.Equal(
                     CommandExitCodes.Success,
                     IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions));
+                Assert.False(parallelized);
+                Assert.Equal(1, familyScopeResolutionCount);
+                Assert.Equal(1, csharpSourceObservationCount);
                 AssertPersistedFamily();
 
+                IndexCommandRunner.FullScanExtractionSchedulingForTesting =
+                    previousSchedulingHook;
+                IndexCommandRunner.FullScanFamilyScopeResolvedForTesting =
+                    previousFamilyScopeHook;
+                IndexCommandRunner.FullScanCSharpSourceObservedForTesting =
+                    previousCSharpSourceHook;
                 File.AppendAllText(sourcePath, "\n// update\n");
                 File.SetLastWriteTimeUtc(sourcePath, DateTime.UtcNow.AddSeconds(2));
                 Assert.Equal(
@@ -3647,6 +3681,12 @@ public partial class QueryCommandRunnerTests
             }
             finally
             {
+                IndexCommandRunner.FullScanExtractionSchedulingForTesting =
+                    previousSchedulingHook;
+                IndexCommandRunner.FullScanFamilyScopeResolvedForTesting =
+                    previousFamilyScopeHook;
+                IndexCommandRunner.FullScanCSharpSourceObservedForTesting =
+                    previousCSharpSourceHook;
                 SqliteConnection.ClearAllPools();
                 TestProjectHelper.DeleteDirectory(projectRoot);
             }

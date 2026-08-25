@@ -15,7 +15,7 @@ public partial class McpServer
     private void HandleMcpSkippedFile(
         McpIndexFileLoopContext context,
         McpIndexFileLoopSession session,
-        in CSharpStaticInterfacePrepass.FileTarget target,
+        in FileIndexer.IndexingFileTarget target,
         FileIndexer.BinaryFileSkippedException exception)
     {
         PersistMcpSkippedFile(
@@ -29,7 +29,7 @@ public partial class McpServer
     private void HandleMcpSkippedFile(
         McpIndexFileLoopContext context,
         McpIndexFileLoopSession session,
-        in CSharpStaticInterfacePrepass.FileTarget target,
+        in FileIndexer.IndexingFileTarget target,
         FileIndexer.FileTooLargeSkippedException exception)
     {
         PersistMcpSkippedFile(
@@ -43,7 +43,7 @@ public partial class McpServer
     private void PersistMcpSkippedFile(
         McpIndexFileLoopContext context,
         McpIndexFileLoopSession session,
-        in CSharpStaticInterfacePrepass.FileTarget target,
+        in FileIndexer.IndexingFileTarget target,
         McpSkippedFileKind kind,
         Exception exception)
     {

@@ -57,10 +57,20 @@ public partial class DbWriter
             {
                 // Nested: use SAVEPOINT instead of BEGIN TRANSACTION
                 // ネスト: BEGIN TRANSACTIONの代わりにSAVEPOINTを使用
-                var name = $"sp_{_transactionDepth}";
-                Execute($"SAVEPOINT {name}");
+                var savepointDepth = _transactionDepth;
+                var name = $"sp_{savepointDepth}";
+                var reuseControlStatements = savepointDepth == 1;
+                if (reuseControlStatements)
+                    ExecuteReusableControlStatement(FirstNestedSavepointSql);
+                else
+                    Execute($"SAVEPOINT {name}");
                 IncrementTransactionDepth();
-                return new TransactionScope(name, _conn, this, gateLease);
+                return new TransactionScope(
+                    name,
+                    _conn,
+                    this,
+                    gateLease,
+                    reuseControlStatements);
             }
         }
         catch
@@ -257,6 +267,7 @@ public partial class DbWriter
         private readonly DbWriter _writer;
         private readonly DeferredHotspotReferenceTransactionFrame? _deferredHotspotReferenceFrame;
         private readonly TransactionGateLease _transactionGateLease;
+        private readonly bool _reuseControlStatements;
         private readonly object _stateWaitLock = new();
         private const int StateActive = 0;
         private const int StateCommitting = 1;
@@ -286,13 +297,19 @@ public partial class DbWriter
         {
         }
 
-        internal TransactionScope(string savepointName, SqliteConnection conn, DbWriter writer, TransactionGateLease transactionGateLease = default)
+        internal TransactionScope(
+            string savepointName,
+            SqliteConnection conn,
+            DbWriter writer,
+            TransactionGateLease transactionGateLease = default,
+            bool reuseControlStatements = false)
         {
             _savepointName = savepointName;
             _conn = conn;
             _writer = writer;
             _deferredHotspotReferenceFrame = writer.BeginDeferredHotspotReferenceTransactionFrame();
             _transactionGateLease = transactionGateLease;
+            _reuseControlStatements = reuseControlStatements;
         }
 
         public void Commit()
@@ -344,7 +361,7 @@ public partial class DbWriter
                 }
                 else
                 {
-                    ExecuteSql($"RELEASE SAVEPOINT {_savepointName}");
+                    ExecuteSavepointControlStatement(SavepointControlOperation.Release);
                     commitBoundaryCompleted = true;
                     _writer.EndDeferredHotspotReferenceTransactionFrame(
                         _deferredHotspotReferenceFrame,
@@ -407,7 +424,7 @@ public partial class DbWriter
                 }
                 else
                 {
-                    ExecuteSql($"ROLLBACK TO SAVEPOINT {_savepointName}");
+                    ExecuteSavepointControlStatement(SavepointControlOperation.Rollback);
                     rollbackBoundaryCompleted = true;
                 }
                 _writer.EndDeferredHotspotReferenceTransactionFrame(
@@ -459,7 +476,7 @@ public partial class DbWriter
                         if (_transaction != null)
                             _transaction.Rollback();
                         else
-                            ExecuteSql($"ROLLBACK TO SAVEPOINT {_savepointName}");
+                            ExecuteSavepointControlStatement(SavepointControlOperation.Rollback);
                         SetState(StateRolledBack);
                     }
                     catch (Exception ex)
@@ -550,15 +567,38 @@ public partial class DbWriter
                 _ => "unknown",
             };
 
-        private void ExecuteSql(string sql)
+        private void ExecuteSavepointControlStatement(SavepointControlOperation operation)
         {
             if (_conn is null)
                 throw new InvalidOperationException("Savepoint transaction scope is missing its SQLite connection.");
 
-            using var cmd = _conn.CreateCommand();
-            cmd.CommandText = sql;
-            cmd.ExecuteNonQuery();
+            if (_reuseControlStatements)
+            {
+                _writer.ExecuteReusableControlStatement(operation switch
+                {
+                    SavepointControlOperation.Release => ReleaseFirstNestedSavepointSql,
+                    SavepointControlOperation.Rollback => RollbackFirstNestedSavepointSql,
+                    _ => throw new ArgumentOutOfRangeException(nameof(operation)),
+                });
+            }
+            else
+            {
+                using var cmd = _conn.CreateCommand();
+                cmd.CommandText = operation switch
+                {
+                    SavepointControlOperation.Release => $"RELEASE SAVEPOINT {_savepointName}",
+                    SavepointControlOperation.Rollback => $"ROLLBACK TO SAVEPOINT {_savepointName}",
+                    _ => throw new ArgumentOutOfRangeException(nameof(operation)),
+                };
+                cmd.ExecuteNonQuery();
+            }
             _writer._markWriteWork?.Invoke();
+        }
+
+        private enum SavepointControlOperation
+        {
+            Release,
+            Rollback,
         }
     }
 }
