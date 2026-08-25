@@ -73,9 +73,15 @@ internal static class LastFailureEventStore
             if (Encoding.UTF8.GetByteCount(json) > MaxEventBytes)
                 return false;
 
-            var logDirectory = GlobalToolLog.ResolveLogDirectoryForReport();
-            DataDirectorySecurity.CreateSensitiveDirectory(logDirectory);
-            DataDirectorySecurity.WritePrivateText(Path.Combine(logDirectory, FileName), json + "\n");
+            var selection = GlobalToolLog.ResolveLogDirectorySelectionForRepositoryWrite();
+            if (selection.Boundary is null)
+                DataDirectorySecurity.CreateSensitiveDirectory(selection.Path);
+            else
+                selection.Boundary.CreateSensitiveDestinationDirectory();
+            PrivateLogFile.WritePrivateTextReplacing(
+                Path.Combine(selection.Path, FileName),
+                json + "\n",
+                selection.Boundary);
             return true;
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)

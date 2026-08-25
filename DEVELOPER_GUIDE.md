@@ -2955,9 +2955,11 @@ the config workspace is rejected when it is a symbolic link, junction,
 cross-device mount point, reparse point, device, or dangling link. The boundary
 is revalidated before each mutation; on POSIX, directory creation, append,
 permission changes, rotation, and deletion are additionally anchored to the
-workspace directory handle with no-follow relative operations. An unsafe value fails config
-validation with the bounded `unsafe_output_path` diagnostic and does not create,
-append, rotate, delete, or chmod the external target. Explicit CLI and process
+workspace directory handle with no-follow relative operations. The same
+`global_tool_log_dir` guard covers lifecycle logs, file query traces, and the
+bounded `last-failure.json` diagnostic. An unsafe value fails config validation
+with the bounded `unsafe_output_path` diagnostic and does not create, append,
+rotate, replace, delete, or chmod the external target. Explicit CLI and process
 environment destinations retain their existing operator-controlled behavior.
 The file name is
 `stderr-YYYYMMDD.log`, timestamps inside the file are ISO-8601 UTC
@@ -6968,9 +6970,11 @@ read-only な state/cache/runtime mount は最初の log write を失うので�
 reparse point、device、dangling link のいずれかであれば拒否し、各 mutation の
 直前にも境界を再検証します。POSIX ではさらに directory 作成、append、permission
 変更、rotation、delete を workspace directory handle 起点の no-follow relative
-operation へ固定します。安全でない値は上限付きの `unsafe_output_path` 診断で config validation
-に失敗し、外部 target の作成、追記、rotation、削除、chmod は行いません。明示的な
-CLI と process environment の保存先は、operator が制御する従来の挙動を維持します。
+operation へ固定します。同じ `global_tool_log_dir` guard を lifecycle log、file
+query trace、上限付きの `last-failure.json` 診断にも適用します。安全でない値は
+上限付きの `unsafe_output_path` 診断で config validation に失敗し、外部 target の
+作成、追記、rotation、置換、削除、chmod は行いません。明示的な CLI と process
+environment の保存先は、operator が制御する従来の挙動を維持します。
 ファイル名は
 `stderr-YYYYMMDD.log`、ファイル内 timestamp は invariant culture の
 ISO-8601 UTC（`yyyy-MM-ddTHH:mm:ss.fffZ`）で、logger は新しい 30 日次

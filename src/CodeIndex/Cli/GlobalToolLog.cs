@@ -32,7 +32,7 @@ internal static class GlobalToolLog
     private const int PrivateLogDiagnosticEmitLimit = 16;
     internal static TimeProvider TimeProvider { get; set; } = TimeProvider.System;
     private static readonly AsyncLocal<Session?> CurrentSession = new();
-    private sealed record LogDirectorySelection(string Path, RepositoryOutputPathGuard? Boundary);
+    internal sealed record LogDirectorySelection(string Path, RepositoryOutputPathGuard? Boundary);
 
     internal static IDisposable? TryStart(string[] args, string appVersion)
         => TryStart(args, appVersion, createWriter: null, afterWriterCreated: null);
@@ -289,6 +289,9 @@ internal static class GlobalToolLog
     internal static string ResolveLogDirectoryForReport() => ResolveLogDirectory();
 
     internal static string ResolveLogDirectoryForStatus() => ResolveLogDirectory();
+
+    internal static LogDirectorySelection ResolveLogDirectorySelectionForRepositoryWrite()
+        => ResolveLogDirectorySelection(requireWritableCandidate: true);
 
     private static string ResolveLogDirectory() => ResolveLogDirectorySelection(requireWritableCandidate: true).Path;
 

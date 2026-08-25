@@ -1,4 +1,5 @@
 using CodeIndex.Cli;
+using CodeIndex.Indexer;
 using CodeIndex.Mcp;
 using System.Text;
 using System.Text.Json;
@@ -427,6 +428,58 @@ public class CdidxConfigFileTests
         {
             DeleteLinkEntry(workspaceAlias);
             TestProjectHelper.DeleteDirectory(container);
+        }
+    }
+
+    [Fact]
+    public void OutputBoundary_RejectsCaseOnlySiblingInDistinctParentNamespace_Issue5181Review()
+    {
+        var root = CreateTempDir();
+        var upperWorkspace = Path.Combine(root, "Workspace");
+        var lowerWorkspace = Path.Combine(root, "workspace");
+        var configuredPath = Path.Combine(lowerWorkspace, "logs", "metrics.jsonl");
+        var rootIdentity = new FileIndexer.FileIdentity(1, 1);
+        var upperIdentity = new FileIndexer.FileIdentity(2, 2);
+        var lowerIdentity = new FileIndexer.FileIdentity(3, 3);
+        try
+        {
+            Directory.CreateDirectory(upperWorkspace);
+            FileIndexer.FileIdentity? Identity(string path)
+            {
+                var fullPath = Path.GetFullPath(path);
+                if (string.Equals(fullPath, root, StringComparison.Ordinal))
+                    return rootIdentity;
+                if (string.Equals(fullPath, upperWorkspace, StringComparison.Ordinal))
+                    return upperIdentity;
+                if (string.Equals(fullPath, lowerWorkspace, StringComparison.Ordinal))
+                    return lowerIdentity;
+                return null;
+            }
+
+            bool IgnoreCase(string path)
+                => !string.Equals(Path.GetFullPath(path), root, StringComparison.Ordinal);
+
+            RepositoryOutputPathBoundary.ContainsPathForTesting = (parent, child) =>
+                PathCasing.IsPathEqualOrParentByDirectoryNamespaceForTesting(
+                    parent,
+                    child,
+                    IgnoreCase,
+                    Identity);
+
+            var accepted = RepositoryOutputPathBoundary.TryResolveConfiguredPath(
+                configuredPath,
+                upperWorkspace,
+                destinationIsDirectory: false,
+                out _,
+                out var failureReason);
+
+            Assert.False(accepted);
+            Assert.Equal("outside_workspace", failureReason);
+        }
+        finally
+        {
+            RepositoryOutputPathBoundary.ContainsPathForTesting = null;
+            TestProjectHelper.DeleteDirectory(root);
         }
     }
 

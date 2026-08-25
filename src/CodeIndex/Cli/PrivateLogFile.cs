@@ -55,6 +55,65 @@ internal static class PrivateLogFile
             AutoFlush = true,
         };
 
+    internal static void WritePrivateTextReplacing(
+        string path,
+        string contents,
+        RepositoryOutputPathGuard? boundary = null)
+    {
+        if (boundary is null)
+        {
+            DataDirectorySecurity.WritePrivateText(path, contents);
+            return;
+        }
+
+        boundary.PrepareMutation("write_private_text", path);
+        var stagedPath = path + $".{Guid.NewGuid():N}.tmp";
+        try
+        {
+            boundary.PrepareMutation("write_private_text_stage", stagedPath);
+            RejectUnsafeTarget(stagedPath);
+            using (var stream = OperatingSystem.IsWindows()
+                ? new FileStream(stagedPath, FileMode.CreateNew, FileAccess.Write, FileShare.None)
+                : boundary.OpenReplacingUnix(stagedPath))
+            {
+                var encoded = Encoding.UTF8.GetBytes(contents);
+                stream.Write(encoded, 0, encoded.Length);
+                stream.Flush(flushToDisk: true);
+            }
+            boundary.CompleteMutation(stagedPath);
+            TrySetPrivatePermissions(stagedPath, boundary: boundary);
+
+            boundary.PrepareMutation("write_private_text_publish_source", stagedPath);
+            boundary.PrepareMutation("write_private_text_publish_destination", path);
+            if (OperatingSystem.IsWindows())
+                AtomicFileWriter.MoveReplacing(stagedPath, path);
+            else
+                boundary.MoveReplacingUnix(stagedPath, path);
+            boundary.CompleteMutation(path);
+        }
+        finally
+        {
+            TryDeleteStagedFile(stagedPath, boundary);
+        }
+    }
+
+    private static void TryDeleteStagedFile(string path, RepositoryOutputPathGuard boundary)
+    {
+        try
+        {
+            boundary.PrepareMutation("write_private_text_cleanup", path);
+            if (OperatingSystem.IsWindows())
+                File.Delete(path);
+            else
+                boundary.DeleteFileUnix(path);
+            boundary.CompleteMutation(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            // Best-effort cleanup only / cleanup はベストエフォートのみ
+        }
+    }
+
     internal static void TrySetPrivatePermissions(
         string path,
         Action<PrivateLogFileDiagnostic>? diagnosticSink = null,

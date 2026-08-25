@@ -172,6 +172,117 @@ public class GlobalToolLogTests
     }
 
     [Fact]
+    public void QueryTrace_RepositoryConfiguredAncestorSwapDoesNotWriteOutsideWorkspace_Issue5181()
+    {
+        var workspace = TestProjectHelper.CreateTempProject("cdidx_query_trace_race_5181");
+        var outside = TestProjectHelper.CreateTempProject("cdidx_query_trace_outside_5181");
+        var safeDirectory = Path.Combine(workspace, "safe");
+        var originalDirectory = Path.Combine(workspace, "safe-original");
+        var logDirectory = Path.Combine(safeDirectory, "logs");
+        var sourceVariable = CdidxConfigFile.ConfigSourceEnvironmentVariablePrefix + "CDIDX_GLOBAL_TOOL_LOG_DIR";
+        using var environment = EnvironmentVariableScope.Capture("CDIDX_GLOBAL_TOOL_LOG_DIR", sourceVariable);
+        environment.Set("CDIDX_GLOBAL_TOOL_LOG_DIR", null);
+        environment.Set(sourceVariable, null);
+        try
+        {
+            Directory.CreateDirectory(logDirectory);
+            File.WriteAllText(
+                Path.Combine(workspace, CdidxConfigFile.FileName),
+                """{ "global_tool_log_dir": "safe/logs" }""");
+            var config = CdidxConfigFile.Load(workspace);
+            Assert.True(config.Loaded);
+            var swapped = false;
+            RepositoryOutputPathBoundary.BeforeMutationForTesting = (operation, path) =>
+            {
+                if (swapped
+                    || operation != "open_append"
+                    || !Path.GetFileName(path).StartsWith("query-trace-", StringComparison.Ordinal))
+                {
+                    return;
+                }
+
+                swapped = true;
+                Directory.Move(safeDirectory, originalDirectory);
+                Directory.CreateSymbolicLink(safeDirectory, outside);
+            };
+
+            using var scopedConfig = CdidxEnvironment.Push(config.Settings, config.Sources);
+            ProgramRunner.EmitQueryTrace(
+                "file",
+                "search",
+                ["needle"],
+                DateTimeOffset.UtcNow,
+                System.Diagnostics.Stopwatch.StartNew(),
+                CommandExitCodes.Success,
+                resultCount: 0);
+
+            Assert.True(swapped);
+            Assert.Empty(Directory.GetFiles(outside, "query-trace-*.jsonl", SearchOption.AllDirectories));
+        }
+        finally
+        {
+            RepositoryOutputPathBoundary.BeforeMutationForTesting = null;
+            DeleteDirectoryLink(safeDirectory);
+            TestProjectHelper.DeleteDirectory(workspace);
+            TestProjectHelper.DeleteDirectory(outside);
+        }
+    }
+
+    [Fact]
+    public void LastFailure_RepositoryConfiguredAncestorSwapDoesNotWriteOutsideWorkspace_Issue5181()
+    {
+        var workspace = TestProjectHelper.CreateTempProject("cdidx_last_failure_race_5181");
+        var outside = TestProjectHelper.CreateTempProject("cdidx_last_failure_outside_5181");
+        var safeDirectory = Path.Combine(workspace, "safe");
+        var originalDirectory = Path.Combine(workspace, "safe-original");
+        var logDirectory = Path.Combine(safeDirectory, "logs");
+        var sourceVariable = CdidxConfigFile.ConfigSourceEnvironmentVariablePrefix + "CDIDX_GLOBAL_TOOL_LOG_DIR";
+        using var environment = EnvironmentVariableScope.Capture("CDIDX_GLOBAL_TOOL_LOG_DIR", sourceVariable);
+        environment.Set("CDIDX_GLOBAL_TOOL_LOG_DIR", null);
+        environment.Set(sourceVariable, null);
+        try
+        {
+            Directory.CreateDirectory(logDirectory);
+            File.WriteAllText(
+                Path.Combine(workspace, CdidxConfigFile.FileName),
+                """{ "global_tool_log_dir": "safe/logs" }""");
+            var config = CdidxConfigFile.Load(workspace);
+            Assert.True(config.Loaded);
+            var swapped = false;
+            RepositoryOutputPathBoundary.BeforeMutationForTesting = (operation, _) =>
+            {
+                if (swapped || operation != "write_private_text")
+                    return;
+
+                swapped = true;
+                Directory.Move(safeDirectory, originalDirectory);
+                Directory.CreateSymbolicLink(safeDirectory, outside);
+            };
+
+            using var scopedConfig = CdidxEnvironment.Push(config.Settings, config.Sources);
+            var persisted = LastFailureEventStore.TryPersist(
+                ["search"],
+                "test",
+                CommandExitCodes.UnhandledException,
+                new InvalidOperationException("test failure"),
+                DateTimeOffset.UtcNow,
+                dbPathForTesting: Path.Combine(workspace, ".cdidx", "codeindex.db"),
+                workspacePathForTesting: workspace);
+
+            Assert.False(persisted);
+            Assert.True(swapped);
+            Assert.False(File.Exists(Path.Combine(outside, LastFailureEventStore.FileName)));
+        }
+        finally
+        {
+            RepositoryOutputPathBoundary.BeforeMutationForTesting = null;
+            DeleteDirectoryLink(safeDirectory);
+            TestProjectHelper.DeleteDirectory(workspace);
+            TestProjectHelper.DeleteDirectory(outside);
+        }
+    }
+
+    [Fact]
     public void PrivateLogFile_HardenExisting_CapsBestEffortWork_Issue3027()
     {
         if (OperatingSystem.IsWindows())

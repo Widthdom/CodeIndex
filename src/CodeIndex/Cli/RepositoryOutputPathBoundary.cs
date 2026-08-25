@@ -16,11 +16,18 @@ internal static class RepositoryOutputPathBoundary
     private const string UnsafeMessage =
         "symbolic links, junctions, cross-device mount points, reparse points, devices, and dangling links are not allowed below the config workspace root";
     private static readonly AsyncLocal<Action<string, string>?> BeforeMutation = new();
+    private static readonly AsyncLocal<Func<string, string, bool>?> ContainsPath = new();
 
     internal static Action<string, string>? BeforeMutationForTesting
     {
         get => BeforeMutation.Value;
         set => BeforeMutation.Value = value;
+    }
+
+    internal static Func<string, string, bool>? ContainsPathForTesting
+    {
+        get => ContainsPath.Value;
+        set => ContainsPath.Value = value;
     }
 
     internal static bool TryResolveConfiguredPath(
@@ -39,7 +46,7 @@ internal static class RepositoryOutputPathBoundary
                 ? Path.GetFullPath(rawPath)
                 : Path.GetFullPath(Path.Combine(normalizedRoot, rawPath));
             var normalizedPath = PathCasing.NormalizeBoundaryPath(fullPath);
-            if (!PathCasing.IsPathEqualOrParent(normalizedRoot, normalizedPath))
+            if (!IsPathEqualOrParent(normalizedRoot, normalizedPath))
             {
                 failureReason = "outside_workspace";
                 return false;
@@ -124,7 +131,7 @@ internal static class RepositoryOutputPathBoundary
     {
         var normalizedRoot = PathCasing.NormalizeBoundaryPath(workspaceRoot);
         var normalizedPath = PathCasing.NormalizeBoundaryPath(path);
-        if (!PathCasing.IsPathEqualOrParent(normalizedRoot, normalizedPath))
+        if (!IsPathEqualOrParent(normalizedRoot, normalizedPath))
             throw CreateException("output path", "outside_workspace");
 
         var rootAttributesStatus = FileSystemBoundary.TryGetAttributes(normalizedRoot, out var rootAttributes);
@@ -235,6 +242,10 @@ internal static class RepositoryOutputPathBoundary
             or PathTooLongException
             or UnauthorizedAccessException;
 
+    internal static bool IsPathEqualOrParent(string parent, string child)
+        => ContainsPathForTesting?.Invoke(parent, child)
+            ?? PathCasing.IsPathEqualOrParentByDirectoryNamespace(parent, child);
+
     [DllImport("libSystem.Native", EntryPoint = "SystemNative_Stat", CharSet = CharSet.Ansi)]
     private static extern int UnixStat(string path, out UnixFileStatus status);
 
@@ -318,6 +329,23 @@ internal sealed class RepositoryOutputPathGuard
         try
         {
             return new UnixAppendStream(handle);
+        }
+        catch
+        {
+            handle.Dispose();
+            throw;
+        }
+    }
+
+    internal FileStream OpenReplacingUnix(string path)
+    {
+        if (OperatingSystem.IsWindows())
+            throw new PlatformNotSupportedException();
+
+        var handle = OpenUnixFile(path, create: true, append: false, truncate: true);
+        try
+        {
+            return new FileStream(handle, FileAccess.Write);
         }
         catch
         {
@@ -491,7 +519,7 @@ internal sealed class RepositoryOutputPathGuard
         }
     }
 
-    private SafeFileHandle OpenUnixFile(string path, bool create, bool append)
+    private SafeFileHandle OpenUnixFile(string path, bool create, bool append, bool truncate = false)
     {
         using var parent = OpenUnixParentDirectory(path, out var rootDevice);
         var flags = UnixWriteOnly | UnixCloseOnExec | UnixNoFollow;
@@ -499,6 +527,8 @@ internal sealed class RepositoryOutputPathGuard
             flags |= UnixAppend;
         if (create)
             flags |= UnixCreate;
+        if (truncate)
+            flags |= UnixTruncate;
         var descriptor = UnixOpenAt(
             parent.DangerousGetHandle().ToInt32(),
             Path.GetFileName(path),
@@ -617,7 +647,7 @@ internal sealed class RepositoryOutputPathGuard
 
     private string[] GetRelativeComponents(string path)
     {
-        if (!PathCasing.IsPathEqualOrParent(WorkspaceRoot, path))
+        if (!RepositoryOutputPathBoundary.IsPathEqualOrParent(WorkspaceRoot, path))
             throw RepositoryOutputPathBoundary.CreateException(FieldName, "outside_workspace");
         var relative = Path.GetRelativePath(WorkspaceRoot, path);
         if (relative == ".")
@@ -637,31 +667,30 @@ internal sealed class RepositoryOutputPathGuard
     {
         if (DestinationIsDirectory)
         {
-            return PathCasing.IsPathEqualOrParent(DestinationPath, path)
+            return RepositoryOutputPathBoundary.IsPathEqualOrParent(DestinationPath, path)
                 || (expectsDirectory
-                    && PathCasing.IsPathEqualOrParent(path, DestinationPath)
-                    && PathCasing.IsPathEqualOrParent(WorkspaceRoot, path));
+                    && RepositoryOutputPathBoundary.IsPathEqualOrParent(path, DestinationPath)
+                    && RepositoryOutputPathBoundary.IsPathEqualOrParent(WorkspaceRoot, path));
         }
 
-        if (expectsDirectory && PathCasing.IsPathEqualOrParent(path, DestinationPath))
-            return PathCasing.IsPathEqualOrParent(WorkspaceRoot, path);
+        if (expectsDirectory && RepositoryOutputPathBoundary.IsPathEqualOrParent(path, DestinationPath))
+            return RepositoryOutputPathBoundary.IsPathEqualOrParent(WorkspaceRoot, path);
 
-        var comparison = PathCasing.ComparisonFor(DestinationPath);
-        if (string.Equals(DestinationPath, path, comparison))
+        if (PathCasing.PathsEqualByDirectoryNamespace(DestinationPath, path))
             return true;
 
         var destinationDirectory = Path.GetDirectoryName(DestinationPath);
         var pathDirectory = Path.GetDirectoryName(path);
         if (string.IsNullOrEmpty(destinationDirectory)
             || string.IsNullOrEmpty(pathDirectory)
-            || !string.Equals(
+            || !PathCasing.PathsEqualByDirectoryNamespace(
                 PathCasing.NormalizeBoundaryPath(destinationDirectory),
-                PathCasing.NormalizeBoundaryPath(pathDirectory),
-                comparison))
+                PathCasing.NormalizeBoundaryPath(pathDirectory)))
         {
             return false;
         }
 
+        var comparison = PathCasing.ComparisonFor(destinationDirectory);
         var destinationName = Path.GetFileName(DestinationPath);
         var candidateName = Path.GetFileName(path);
         if (!candidateName.StartsWith(destinationName + ".", comparison))
@@ -685,6 +714,7 @@ internal sealed class RepositoryOutputPathGuard
     private static int UnixDirectory => OperatingSystem.IsMacOS() ? 0x00100000 : 0x00010000;
     private static int UnixCreate => OperatingSystem.IsMacOS() ? 0x00000200 : 0x00000040;
     private static int UnixAppend => OperatingSystem.IsMacOS() ? 0x00000008 : 0x00000400;
+    private static int UnixTruncate => OperatingSystem.IsMacOS() ? 0x00000400 : 0x00000200;
 
     [DllImport("libc", EntryPoint = "open", SetLastError = true)]
     private static extern int UnixOpen(string path, int flags);
