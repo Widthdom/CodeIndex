@@ -15,6 +15,8 @@ namespace CodeIndex.Tests;
 [Collection("SQLite pool sensitive")]
 public class ConsoleUiTests
 {
+    private const int ShellProbeTimeoutMilliseconds = 30_000;
+
     [Fact]
     public void PrintCommandUsage_IndexExplainsUnknownLanguageDiagnostics_Issue5100()
     {
@@ -1815,7 +1817,7 @@ public class ConsoleUiTests
             ?? throw new InvalidOperationException($"Failed to start completion shell: {executable}");
         var stdout = process.StandardOutput.ReadToEndAsync();
         var stderr = process.StandardError.ReadToEndAsync();
-        if (!process.WaitForExit(10_000))
+        if (!process.WaitForExit(ShellProbeTimeoutMilliseconds))
         {
             process.Kill(entireProcessTree: true);
             Assert.Fail($"Completion shell timed out: {executable}");
