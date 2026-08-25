@@ -255,6 +255,51 @@ public static partial class QueryCommandRunner
         Console.WriteLine(payload.ToJsonString(EnsureJsonNodeSerializerOptions(jsonOptions)));
     }
 
+    private static void AddCallerIdentityRootJsonFields(
+        JsonObject payload,
+        QueryCountResult counts)
+    {
+        if (counts.IdentityRootAvailable == null
+            && counts.GraphEvidenceConfidence == null)
+            return;
+
+        payload["graph_evidence_confidence"] = counts.GraphEvidenceConfidence;
+        if (counts.IdentityRootAvailable == null)
+            return;
+
+        payload["identity_root_available"] = counts.IdentityRootAvailable.Value;
+        payload["identity_root_resolution_truncated"] = counts.IdentityRootResolutionTruncated;
+        if (counts.IdentityRootUnavailableReason != null)
+            payload["identity_root_unavailable_reason"] = counts.IdentityRootUnavailableReason;
+        if (counts.IdentityRootAvailable == false || counts.IdentityRootResolutionTruncated)
+        {
+            payload["degraded"] = true;
+            payload["authoritative_count"] = false;
+        }
+    }
+
+    private static void WriteCallerIdentityRootWarningIfNeeded(QueryCountResult counts)
+    {
+        if (counts.IdentityRootResolutionTruncated)
+        {
+            CommandErrorWriter.WriteStderr(
+                "WARN: exact caller identity resolution hit its safety cap; the count is partial and not authoritative.");
+            return;
+        }
+        if (counts.IdentityRootAvailable != false)
+            return;
+
+        if (counts.GraphEvidenceConfidence == "name_fallback")
+        {
+            CommandErrorWriter.WriteStderr(
+                "WARN: exact callers are using the lower-confidence name fallback; the count is not authoritative.");
+            return;
+        }
+
+        CommandErrorWriter.WriteStderr(
+            "WARN: no identity-backed exact caller root was found; use a broad callers query only for same-name discovery evidence.");
+    }
+
     private static void WriteGraphZeroJsonResult(DbReader reader, string resultsKey, JsonSerializerOptions jsonOptions, bool graphAvailable,
         ExactQuerySignal? exactSignal, ExactZeroHintResult? exactZeroHint = null, GraphSupportOverride? graphSupportOverride = null, QueryCommandOptions? queryOptions = null, Action<JsonObject>? extraFields = null)
     {

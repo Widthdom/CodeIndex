@@ -46,6 +46,12 @@ public partial class DbReader
         string NodeKey,
         ImpactPathNode? PathNode);
 
+    private sealed record ImpactIdentityRootSignal(
+        bool Available,
+        string? UnavailableReason,
+        string EvidenceConfidence,
+        bool ResolutionTruncated = false);
+
     private readonly record struct ImpactTraversalFrontierNode(
         string Symbol,
         long? SymbolId,
@@ -113,15 +119,19 @@ public partial class DbReader
     {
         var resolvedName = ResolveSymbolName(request.SymbolName, request.Lang);
         var hasResolvedIdentityGraph = HasCurrentReferenceIdentityContractForRead();
-        var canResolveQualifiedCSharpIdentity =
-            hasResolvedIdentityGraph
-            && SqlNameResolver.HasQualifier(request.SymbolName)
+        var canResolveCSharpIdentity = hasResolvedIdentityGraph
             && request.Lang is null or "csharp";
-        var rootDefinitionLimit = canResolveQualifiedCSharpIdentity
+        var rootDefinitionLimit = canResolveCSharpIdentity
             ? DefaultImpactGraphStateEntryBudget
             : request.Limit;
         var resolution = ResolveImpactRootDefinitions(request, resolvedName, rootDefinitionLimit);
         var definitions = resolution.Definitions;
+        var useCSharpIdentity = canResolveCSharpIdentity
+            && (definitions.Count == 0
+                || definitions.All(static definition => definition.Lang == "csharp"));
+        if (useCSharpIdentity && definitions.Count == 0)
+            return null;
+
         var definitionPaths = definitions
             .Select(static definition => definition.Path)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -129,38 +139,40 @@ public partial class DbReader
             hasResolvedIdentityGraph,
             resolution,
             definitions);
-        var qualifiedCSharpIds = ResolveQualifiedCSharpRootIds(
-            canResolveQualifiedCSharpIdentity,
-            isLogicalPartialFamily,
-            resolution,
-            definitions);
-        var traversalCSharpIds = qualifiedCSharpIds.ToHashSet();
+        var identityIds = useCSharpIdentity
+            ? resolution.PhysicalSymbolIds.ToHashSet()
+            : [];
+        if (useCSharpIdentity && identityIds.Count == 0)
+            return null;
+
+        var traversalIds = identityIds.ToHashSet();
         var dispatchIdsTruncated = false;
-        if (canResolveQualifiedCSharpIdentity && qualifiedCSharpIds.Count > 0)
+        if (useCSharpIdentity)
         {
-            traversalCSharpIds = ExpandCSharpPolymorphicDispatchSymbolIds(
+            traversalIds = ExpandCSharpPolymorphicDispatchSymbolIds(
                 request.SymbolName,
-                traversalCSharpIds,
+                traversalIds,
                 request.PathPatterns,
                 request.ExcludePathPatterns,
                 request.ExcludeTests,
                 out dispatchIdsTruncated);
         }
 
-        if (hasResolvedIdentityGraph && definitionPaths.Count > 1 && qualifiedCSharpIds.Count == 0)
+        // Preserve the pre-existing ambiguity boundary for cross-language and other
+        // non-identity roots. Same-language C# definitions are safely unioned by ID.
+        // cross-language および identity 非対応 root の従来 ambiguity 境界を維持する。
+        // 同一言語の C# definition 群だけは ID の和集合として安全に辿れる。
+        if (hasResolvedIdentityGraph && definitionPaths.Count > 1 && !useCSharpIdentity)
             return null;
 
         var ambiguousMRootId = ResolveAmbiguousMRootId(
             hasResolvedIdentityGraph,
             request.Lang,
             definitions);
-        var identityIds = qualifiedCSharpIds.Count > 0
-            ? qualifiedCSharpIds
-            : ambiguousMRootId is long ambiguousId
-                ? new HashSet<long> { ambiguousId }
-                : [];
-        var initialTargetSymbolIds = traversalCSharpIds.Count > qualifiedCSharpIds.Count
-            ? traversalCSharpIds.Order().ToArray()
+        if (ambiguousMRootId is long ambiguousId)
+            identityIds.Add(ambiguousId);
+        var initialTargetSymbolIds = traversalIds.Count > 0
+            ? traversalIds.Order().ToArray()
             : null;
         var singleIdentityId = identityIds.Count == 1 ? identityIds.Single() : (long?)null;
         var rootNodeKey = identityIds.Count > 1
@@ -183,9 +195,11 @@ public partial class DbReader
             identityIds,
             initialTargetSymbolIds,
             ambiguousMRootId != null,
-            !isLogicalPartialFamily
-                && qualifiedCSharpIds.Count > 0
-                && (resolution.PhysicalSymbolIdsTruncated || dispatchIdsTruncated),
+            InitiallyTruncated: useCSharpIdentity
+                && !isLogicalPartialFamily
+                && (resolution.PhysicalSymbolIdsTruncated
+                    || resolution.LogicalCount > definitions.Count
+                    || dispatchIdsTruncated),
             rootNodeKey,
             pathNode);
     }
@@ -216,6 +230,42 @@ public partial class DbReader
         return resolution;
     }
 
+    private ImpactIdentityRootSignal ResolveImpactIdentityRootSignal(
+        ImpactDefinitionResolution resolution,
+        string? lang)
+    {
+        if (lang is not (null or "csharp"))
+        {
+            return new ImpactIdentityRootSignal(
+                Available: true,
+                UnavailableReason: null,
+                EvidenceConfidence: "language_graph");
+        }
+        if (!HasCurrentReferenceIdentityContractForRead())
+        {
+            return new ImpactIdentityRootSignal(
+                Available: false,
+                UnavailableReason: "reference_identity_unavailable",
+                EvidenceConfidence: "name_fallback");
+        }
+        if (resolution.PhysicalCount == 0)
+        {
+            return new ImpactIdentityRootSignal(
+                Available: false,
+                UnavailableReason: "no_identity_backed_root",
+                EvidenceConfidence: "no_identity_root");
+        }
+        var resolutionTruncated = resolution.PhysicalSymbolIdsTruncated;
+
+        return new ImpactIdentityRootSignal(
+            Available: true,
+            UnavailableReason: null,
+            EvidenceConfidence: resolutionTruncated
+                ? "identity_backed_partial"
+                : "identity_backed",
+            ResolutionTruncated: resolutionTruncated);
+    }
+
     private static bool IsLogicalPartialFamilyRoot(
         bool hasResolvedIdentityGraph,
         ImpactDefinitionResolution resolution,
@@ -226,19 +276,6 @@ public partial class DbReader
            && definitions[0].Lang == "csharp"
            && definitions[0].PartialFamilyId != null
            && resolution.PhysicalSymbolIds.Count > 0;
-
-    private static HashSet<long> ResolveQualifiedCSharpRootIds(
-        bool canResolveQualifiedCSharpIdentity,
-        bool isLogicalPartialFamily,
-        ImpactDefinitionResolution resolution,
-        IReadOnlyList<SymbolResult> definitions)
-        => (canResolveQualifiedCSharpIdentity || isLogicalPartialFamily)
-           && definitions.Count > 0
-           && definitions.All(static definition => definition.Lang == "csharp")
-           && definitions.All(static definition => definition.SymbolId != null)
-           && (isLogicalPartialFamily || resolution.LogicalCount == definitions.Count)
-            ? resolution.PhysicalSymbolIds.ToHashSet()
-            : [];
 
     private static long? ResolveAmbiguousMRootId(
         bool hasResolvedIdentityGraph,

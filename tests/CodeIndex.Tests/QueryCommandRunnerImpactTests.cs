@@ -195,6 +195,18 @@ public partial class QueryCommandRunnerTests
                 Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
             });
 
+            writer.InsertSymbols([
+                new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "function",
+                    Name = "Root",
+                    Line = 1,
+                    StartLine = 1,
+                    EndLine = 1,
+                },
+            ]);
+
             var references = new List<ReferenceRecord>();
             for (var i = 0; i < 3; i++)
             {

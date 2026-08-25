@@ -782,7 +782,7 @@ public partial class QueryCommandRunnerTests
                 using var referencesDocument = ParseJsonOutput(referencesStdout);
 
                 var (callersExitCode, callersStdout, callersStderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
-                    [query, "--db", dbPath, "--kind", kind, "--lang", lang, "--exact", "--json"],
+                    [query, "--db", dbPath, "--kind", kind, "--lang", lang, "--json"],
                     _jsonOptions));
                 using var callersDocument = ParseJsonOutput(callersStdout);
 
@@ -1275,10 +1275,20 @@ public partial class QueryCommandRunnerTests
                 string path,
                 string callerKind,
                 string callerName,
-                int? firstLine = null)
+                int? firstLine = null,
+                bool exact = true)
             {
+                var args = new List<string>
+                {
+                    query,
+                    "--db", Path.Combine(projectRoot, ".cdidx", "codeindex.db"),
+                    "--json",
+                    "--lang", "csharp",
+                };
+                if (exact)
+                    args.Add("--exact-name");
                 var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
-                    [query, "--db", Path.Combine(projectRoot, ".cdidx", "codeindex.db"), "--json", "--exact-name", "--lang", "csharp"],
+                    [.. args],
                     _jsonOptions));
                 using var document = ParseJsonOutput(stdout);
                 var json = document.RootElement;
@@ -1290,7 +1300,10 @@ public partial class QueryCommandRunnerTests
                 Assert.Equal(callerName, json.GetProperty("caller_name").GetString());
                 Assert.Equal(query, json.GetProperty("callee_name").GetString());
                 Assert.Equal(1, json.GetProperty("reference_count").GetInt32());
-                Assert.True(json.GetProperty("exact_index_available").GetBoolean());
+                if (exact)
+                    Assert.True(json.GetProperty("exact_index_available").GetBoolean());
+                else
+                    Assert.Equal("name_discovery", json.GetProperty("graph_evidence_confidence").GetString());
                 if (firstLine is not null)
                 {
                     Assert.Equal(firstLine.Value, json.GetProperty("first_line").GetInt32());
@@ -1307,7 +1320,7 @@ public partial class QueryCommandRunnerTests
             AssertCaller("ComputeBrace", "src/same-line-brace-property.cs", "property", "WrapBrace");
             AssertCaller("ComputeCommentBlock", "src/allman-comment-property.cs", "property", "WrapCommentBlock");
             AssertCaller("ComputeCommentExpression", "src/expression-comment-property.cs", "property", "WrapCommentExpression");
-            AssertCaller("Trim", "src/multiline-switch-arm.cs", "function", "Read");
+            AssertCaller("Trim", "src/multiline-switch-arm.cs", "function", "Read", exact: false);
         }
         finally
         {
@@ -2050,7 +2063,7 @@ public partial class QueryCommandRunnerTests
             MarkGraphAndFoldReady(dbPath);
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
-                ["BaseWidget", "--db", dbPath, "--lang", "csharp", "--exact"],
+                ["BaseWidget", "--db", dbPath, "--lang", "csharp"],
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, exitCode);

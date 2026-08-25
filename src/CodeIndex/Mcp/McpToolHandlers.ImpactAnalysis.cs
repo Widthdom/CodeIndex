@@ -200,6 +200,16 @@ public partial class McpServer
     private static void AddImpactTraversalRootFields(JsonObject payload, ImpactAnalysisResult analysis)
     {
         payload["traversal_root_scope"] = analysis.TraversalRootScope;
+        payload["identity_root_available"] = analysis.IdentityRootAvailable;
+        payload["graph_evidence_confidence"] = analysis.GraphEvidenceConfidence;
+        payload["identity_root_resolution_truncated"] = analysis.IdentityRootResolutionTruncated;
+        if (analysis.IdentityRootUnavailableReason != null)
+            payload["identity_root_unavailable_reason"] = analysis.IdentityRootUnavailableReason;
+        payload["authoritative_count"] = analysis.CountIsAuthoritative;
+        if (!analysis.CountIsAuthoritative)
+        {
+            payload["degraded"] = true;
+        }
         if (analysis.TraversalPartialFamilyId == null)
             return;
 

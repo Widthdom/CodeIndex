@@ -201,15 +201,34 @@ public static partial class QueryCommandRunner
                 WriteHdlGraphContractWarningIfNeeded(options.Json, hdlGraphSignal);
                 if (counts.Count == 0)
                 {
-                    WriteGraphCountResult(reader, 0, 0, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount, exactZeroHintForCount, extraFields: payload => AddGraphContractJsonFields(payload, reader, jsonOptions, effectiveSqlGraphSignal, hdlGraphSignal));
+                    WriteGraphCountResult(reader, 0, 0, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount, exactZeroHintForCount, extraFields: payload =>
+                    {
+                        AddGraphContractJsonFields(payload, reader, jsonOptions, effectiveSqlGraphSignal, hdlGraphSignal);
+                        AddCallerIdentityRootJsonFields(payload, counts);
+                        if (!exact)
+                            payload["graph_evidence_confidence"] = "name_discovery";
+                    });
+                    if (!options.Json)
+                        WriteCallerIdentityRootWarningIfNeeded(counts);
                     return CommandExitCodes.Success;
                 }
 
-                WriteGraphCountResult(reader, counts.Count, counts.FileCount, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount, extraFields: payload => AddGraphContractJsonFields(payload, reader, jsonOptions, effectiveSqlGraphSignal, hdlGraphSignal));
+                WriteGraphCountResult(reader, counts.Count, counts.FileCount, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount, extraFields: payload =>
+                {
+                    AddGraphContractJsonFields(payload, reader, jsonOptions, effectiveSqlGraphSignal, hdlGraphSignal);
+                    AddCallerIdentityRootJsonFields(payload, counts);
+                    if (!exact)
+                        payload["graph_evidence_confidence"] = "name_discovery";
+                });
+                if (!options.Json)
+                    WriteCallerIdentityRootWarningIfNeeded(counts);
                 return CommandExitCodes.Success;
             }
 
             var results = reader.GetCallers(query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact, options.RawKinds, options.RankMode, offset: JsonEnvelopeWrapper.GetBoundedResponseOffset("callers"), includeQualifiedCommonCalls: options.IncludeQualifiedCommonCalls, includeMemberReads: options.IncludeMemberReads);
+            var callerIdentityCounts = exact
+                ? reader.CountCallersTotal(query, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: true, options.RawKinds, options.IncludeQualifiedCommonCalls, options.IncludeMemberReads)
+                : (QueryCountResult?)null;
             if (options.IncludeBody && JsonEnvelopeWrapper.ShouldMaterializeBody("callers"))
                 AttachBodyExcerpts(reader, results, options.SnippetLines, options.MaxLineWidth);
             ApplyBodyRecoveryCommands(results, options.DbPath, options.RedactPaths ?? true);
@@ -224,12 +243,21 @@ public static partial class QueryCommandRunner
             WriteExactGraphWarningIfNeeded(exact, options.Json, exactSignal, reader, options);
             WriteSqlGraphContractWarningIfNeeded(options.Json, sqlGraphSignal, reader, options);
             WriteHdlGraphContractWarningIfNeeded(options.Json, hdlGraphSignal);
+            if (!options.Json && callerIdentityCounts is { } humanCounts)
+                WriteCallerIdentityRootWarningIfNeeded(humanCounts);
             if (results.Count == 0)
             {
                 if (options.Json && TryWriteEmptyFormattedResult(options, jsonOptions))
                     return ZeroResultExitCode(options);
                 if (options.Json)
-                    WriteGraphZeroJsonResult(reader, "callers", jsonOptions, graphAvailable: reader._hasReferencesTable, exact ? exactSignal : (ExactQuerySignal?)null, exactZeroHint, queryOptions: options, extraFields: payload => AddGraphContractJsonFields(payload, reader, jsonOptions, sqlGraphSignal, hdlGraphSignal));
+                    WriteGraphZeroJsonResult(reader, "callers", jsonOptions, graphAvailable: reader._hasReferencesTable, exact ? exactSignal : (ExactQuerySignal?)null, exactZeroHint, queryOptions: options, extraFields: payload =>
+                    {
+                        AddGraphContractJsonFields(payload, reader, jsonOptions, sqlGraphSignal, hdlGraphSignal);
+                        if (callerIdentityCounts is { } counts)
+                            AddCallerIdentityRootJsonFields(payload, counts);
+                        else
+                            payload["graph_evidence_confidence"] = "name_discovery";
+                    });
                 else if (!options.Json)
                 {
                     CommandErrorWriter.WriteStderr(BuildZeroResultLine("No callers found", options));
@@ -269,12 +297,15 @@ public static partial class QueryCommandRunner
                         WriteGraphJsonResult(r, CliJsonSerializerContextFactory.Create(jsonOptions).CallerResult, exactSignal, jsonOptions, extraFields: payload =>
                         {
                             AddGraphContractJsonFields(payload, reader, jsonOptions, sqlGraphSignal, hdlGraphSignal);
+                            if (callerIdentityCounts is { } counts)
+                                AddCallerIdentityRootJsonFields(payload, counts);
                             AddReferenceRankingQueryContextJson(payload, options, jsonOptions);
                         });
                     else
                         WriteJsonResult(r, CliJsonSerializerContextFactory.Create(jsonOptions).CallerResult, jsonOptions, extraFields: payload =>
                         {
                             AddGraphContractJsonFields(payload, reader, jsonOptions, sqlGraphSignal, hdlGraphSignal);
+                            payload["graph_evidence_confidence"] = "name_discovery";
                             AddReferenceRankingQueryContextJson(payload, options, jsonOptions);
                         });
                 }

@@ -608,37 +608,16 @@ public partial class DbReaderTests
         // #1533: AnalyzeImpact は GetTransitiveCallers の truncated_reason を
         // そのまま伝搬して CLI/MCP 側で適切な再試行ガイダンスを出せるようにする。
         const int callerCount = 6;
+        InsertIndexedFile(
+            "src/impact_limit_target.py",
+            "python",
+            "def widget_op():\n    return True\n");
         for (int i = 0; i < callerCount; i++)
         {
-            var callerFileId = _writer.UpsertFile(new FileRecord
-            {
-                Path = $"src/impact_limit_caller_{i:D2}.py",
-                Lang = "python",
-                Size = 96,
-                Lines = 2,
-                Modified = new DateTime(2026, 5, 15, 0, 0, 0, DateTimeKind.Utc),
-            });
-            _writer.InsertChunks([new ChunkRecord
-            {
-                FileId = callerFileId,
-                ChunkIndex = 0,
-                StartLine = 1,
-                EndLine = 2,
-                Content = $"def impact_caller_{i:D2}():\n    return widget_op()\n",
-            }]);
-            _writer.InsertReferences([
-                new ReferenceRecord
-                {
-                    FileId = callerFileId,
-                    SymbolName = "widget_op",
-                    ReferenceKind = "call",
-                    Line = 2,
-                    Column = 12,
-                    Context = "return widget_op()",
-                    ContainerKind = "function",
-                    ContainerName = $"impact_caller_{i:D2}",
-                },
-            ]);
+            InsertIndexedFile(
+                $"src/impact_limit_caller_{i:D2}.py",
+                "python",
+                $"def impact_caller_{i:D2}():\n    return widget_op()\n");
         }
 
         var analysis = _reader.AnalyzeImpact("widget_op", maxDepth: 1, limit: 2);

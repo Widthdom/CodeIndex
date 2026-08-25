@@ -6,6 +6,13 @@ namespace CodeIndex.Database;
 
 public partial class DbReader
 {
+    private sealed record CallerIdentityResolution(
+        IReadOnlyList<long>? SymbolIds,
+        bool? IdentityRootAvailable,
+        string? IdentityRootUnavailableReason,
+        string? GraphEvidenceConfidence,
+        bool ResolutionTruncated = false);
+
     private static readonly string CSharpCommonQualifiedMemberCallNamesSql = string.Join(
         ", ",
         CSharpReferenceExtractor.CommonQualifiedMemberCallNames
@@ -87,15 +94,13 @@ public partial class DbReader
         query = NormalizeSymbolSearchQuery(query, lang, exact) ?? query ?? string.Empty;
         if (!_hasReferencesTable)
             return new List<CallerResult>();
-        var callerIdentitySymbolIds = ResolveCallerIdentitySymbolIds(
+        var callerIdentity = ResolveCallerIdentity(
             query,
             lang,
-            pathPatterns,
-            excludePathPatterns,
-            excludeTests,
             exact,
-            includeQualifiedCommonCalls,
             targetSymbolId);
+        if (callerIdentity.SymbolIds is { Count: 0 } && lang != null)
+            return [];
 
         var request = CreateGraphReferenceQueryRequest(
             query,
@@ -110,7 +115,7 @@ public partial class DbReader
             includeQualifiedCommonCalls,
             includeMemberReads,
             identitySymbolId: targetSymbolId,
-            callerIdentitySymbolIds,
+            callerIdentity.SymbolIds,
             excludeSelfReferences,
             offset);
         var plan = BuildGraphReferenceQueryPlan(
@@ -129,15 +134,13 @@ public partial class DbReader
         query = NormalizeSymbolSearchQuery(query, lang, exact) ?? query ?? string.Empty;
         if (!_hasReferencesTable)
             return 0;
-        var callerIdentitySymbolIds = ResolveCallerIdentitySymbolIds(
+        var callerIdentity = ResolveCallerIdentity(
             query,
             lang,
-            pathPatterns,
-            excludePathPatterns,
-            excludeTests,
             exact,
-            includeQualifiedCommonCalls,
             targetSymbolId: null);
+        if (callerIdentity.SymbolIds is { Count: 0 } && lang != null)
+            return 0;
 
         var request = CreateGraphReferenceQueryRequest(
             query,
@@ -151,7 +154,7 @@ public partial class DbReader
             rawKinds,
             includeQualifiedCommonCalls,
             includeMemberReads,
-            callerIdentitySymbolIds: callerIdentitySymbolIds);
+            callerIdentitySymbolIds: callerIdentity.SymbolIds);
         var plan = BuildGraphReferenceQueryPlan(
             CallerGraphReferenceDirection,
             request,
@@ -190,15 +193,21 @@ public partial class DbReader
             return new QueryCountResult(0, 0);
         lang = NormalizeQueryLanguage(lang);
         query = NormalizeSymbolSearchQuery(query, lang, exact) ?? query ?? string.Empty;
-        var callerIdentitySymbolIds = ResolveCallerIdentitySymbolIds(
+        var callerIdentity = ResolveCallerIdentity(
             query,
             lang,
-            pathPatterns,
-            excludePathPatterns,
-            excludeTests,
             exact,
-            includeQualifiedCommonCalls,
             targetSymbolId);
+        if (callerIdentity.SymbolIds is { Count: 0 } && lang != null)
+        {
+            return new QueryCountResult(0, 0)
+            {
+                IdentityRootAvailable = callerIdentity.IdentityRootAvailable,
+                IdentityRootUnavailableReason = callerIdentity.IdentityRootUnavailableReason,
+                GraphEvidenceConfidence = callerIdentity.GraphEvidenceConfidence,
+                IdentityRootResolutionTruncated = callerIdentity.ResolutionTruncated,
+            };
+        }
 
         var request = CreateGraphReferenceQueryRequest(
             query,
@@ -213,32 +222,73 @@ public partial class DbReader
             includeQualifiedCommonCalls,
             includeMemberReads,
             identitySymbolId: targetSymbolId,
-            callerIdentitySymbolIds: callerIdentitySymbolIds);
+            callerIdentitySymbolIds: callerIdentity.SymbolIds);
         var plan = BuildGraphReferenceQueryPlan(
             CallerGraphReferenceDirection,
             request,
             GraphReferenceQueryShape.TotalCount);
-        return ExecuteGraphReferenceTotalCount(plan);
+        var result = ExecuteGraphReferenceTotalCount(plan);
+        return result with
+        {
+            IdentityRootAvailable = callerIdentity.IdentityRootAvailable,
+            IdentityRootUnavailableReason = callerIdentity.IdentityRootUnavailableReason,
+            GraphEvidenceConfidence = callerIdentity.GraphEvidenceConfidence,
+            IdentityRootResolutionTruncated = callerIdentity.ResolutionTruncated,
+        };
     }
 
-    private IReadOnlyList<long>? ResolveCallerIdentitySymbolIds(
+    private CallerIdentityResolution ResolveCallerIdentity(
         string query,
         string? lang,
-        IReadOnlyList<string>? pathPatterns,
-        IReadOnlyList<string>? excludePathPatterns,
-        bool excludeTests,
         bool exact,
-        bool includeQualifiedCommonCalls,
         long? targetSymbolId)
     {
         if (targetSymbolId is long candidateTargetSymbolId)
-            return [candidateTargetSymbolId];
-        if (!HasCurrentReferenceIdentityContractForRead()
-            || !exact
-            || !SqlNameResolver.HasQualifier(query)
-            || lang is not (null or "csharp"))
         {
-            return null;
+            return new CallerIdentityResolution(
+                [candidateTargetSymbolId],
+                IdentityRootAvailable: true,
+                IdentityRootUnavailableReason: null,
+                GraphEvidenceConfidence: "identity_backed");
+        }
+        if (!exact)
+        {
+            return new CallerIdentityResolution(
+                SymbolIds: null,
+                IdentityRootAvailable: null,
+                IdentityRootUnavailableReason: null,
+                GraphEvidenceConfidence: null);
+        }
+        // The persisted target-identity contract currently covers C# caller edges.
+        // Other graph languages retain their existing language-specific exact matching;
+        // treating their lack of C#-style candidates as an unresolved symbol would erase
+        // SQL, solution/MSBuild, stylesheet, and script graph semantics.
+        // 永続化された target identity 契約の対象は現時点では C# caller edge。
+        // 他言語で C# 型 candidate が無いことを未解決扱いすると、SQL、solution/MSBuild、
+        // stylesheet、script 固有の exact graph 意味論を消してしまうため従来経路を維持する。
+        if (lang is not (null or "csharp"))
+        {
+            return new CallerIdentityResolution(
+                SymbolIds: null,
+                IdentityRootAvailable: null,
+                IdentityRootUnavailableReason: null,
+                GraphEvidenceConfidence: null);
+        }
+        if (lang == null && ComputeCssScssVariableAlias(query) != null)
+        {
+            return new CallerIdentityResolution(
+                SymbolIds: null,
+                IdentityRootAvailable: null,
+                IdentityRootUnavailableReason: null,
+                GraphEvidenceConfidence: null);
+        }
+        if (!HasCurrentReferenceIdentityContractForRead())
+        {
+            return new CallerIdentityResolution(
+                SymbolIds: null,
+                IdentityRootAvailable: false,
+                IdentityRootUnavailableReason: "reference_identity_unavailable",
+                GraphEvidenceConfidence: "name_fallback");
         }
 
         var resolution = ResolveImpactDefinitions(
@@ -250,38 +300,42 @@ public partial class DbReader
             excludeTests: false);
         if (resolution.Definitions.Count == 0)
         {
-            var leafName = SqlNameResolver.GetLeafName(query);
-            return includeQualifiedCommonCalls
-                && CSharpReferenceExtractor.CommonQualifiedMemberCallNames.Contains(leafName)
-                    ? null
-                    : [];
+            return new CallerIdentityResolution(
+                SymbolIds: [],
+                IdentityRootAvailable: false,
+                IdentityRootUnavailableReason: "no_identity_backed_root",
+                GraphEvidenceConfidence: "no_identity_root");
         }
 
         var isLogicalPartialFamily = IsLogicalPartialFamilyRoot(
             hasResolvedIdentityGraph: true,
             resolution,
             resolution.Definitions);
-        var symbolIds = ResolveQualifiedCSharpRootIds(
-            canResolveQualifiedCSharpIdentity: true,
-            isLogicalPartialFamily,
-            resolution,
-            resolution.Definitions);
-        // A safety-budget hit means identity resolution is incomplete, not that the
-        // qualified target has no callers. Preserve the legacy name fallback instead
-        // of returning an authoritative empty identity set.
-        // safety budget 到達は解決途中を意味するため、0 件と断定せず旧 name fallback を維持する。
-        if (resolution.PhysicalSymbolIdsTruncated)
-            return null;
-        symbolIds = ExpandCSharpPolymorphicDispatchSymbolIds(
-            query,
-            symbolIds,
-            pathPatterns: null,
-            excludePathPatterns: null,
-            excludeTests: false,
-            out var dispatchIdsTruncated);
-        if (dispatchIdsTruncated)
-            return null;
-        return symbolIds.Order().ToArray();
+        var resolutionTruncated = resolution.PhysicalSymbolIdsTruncated
+            || (!isLogicalPartialFamily && resolution.LogicalCount > resolution.Definitions.Count);
+
+        var symbolIds = resolution.PhysicalSymbolIds.ToHashSet();
+        if (resolution.Definitions.All(static definition => definition.Lang == "csharp"))
+        {
+            symbolIds = ExpandCSharpPolymorphicDispatchSymbolIds(
+                query,
+                symbolIds,
+                pathPatterns: null,
+                excludePathPatterns: null,
+                excludeTests: false,
+                out var dispatchIdsTruncated);
+            if (dispatchIdsTruncated)
+                resolutionTruncated = true;
+        }
+
+        return new CallerIdentityResolution(
+            symbolIds.Order().ToArray(),
+            IdentityRootAvailable: true,
+            IdentityRootUnavailableReason: null,
+            GraphEvidenceConfidence: resolutionTruncated
+                ? "identity_backed_partial"
+                : "identity_backed",
+            ResolutionTruncated: resolutionTruncated);
     }
 
     /// <summary>
@@ -800,7 +854,10 @@ public partial class DbReader
                                              && definitions[0].PartialFamilyId != null
             ? definitions[0]
             : null;
-        var traversalRootScope = logicalPartialFamilyDefinition != null
+        var identityRootSignal = ResolveImpactIdentityRootSignal(definitionResolution, lang);
+        var traversalRootScope = identityRootSignal.UnavailableReason == "no_identity_backed_root"
+            ? "name_only"
+            : logicalPartialFamilyDefinition != null
             ? "logical_partial_family"
             : "symbol";
         var partialFamilyMemberCount = logicalPartialFamilyDefinition != null
@@ -826,7 +883,7 @@ public partial class DbReader
                 Query = symbolName,
                 ResolvedName = resolvedName,
                 ImpactMode = "none",
-                Heuristic = false,
+                Heuristic = !identityRootSignal.Available,
                 MaxDepth = maxDepth,
                 DefinitionCount = definitionResolution.PhysicalCount,
                 DefinitionFileCount = definitionResolution.PhysicalFileCount,
@@ -836,6 +893,10 @@ public partial class DbReader
                 HasMultipleDefinitions = hasMultipleDefinitions,
                 HasMultipleDefinitionFiles = definitionResolution.PhysicalFileCount > 1,
                 TraversalRootScope = traversalRootScope,
+                IdentityRootAvailable = identityRootSignal.Available,
+                IdentityRootUnavailableReason = identityRootSignal.UnavailableReason,
+                GraphEvidenceConfidence = identityRootSignal.EvidenceConfidence,
+                IdentityRootResolutionTruncated = identityRootSignal.ResolutionTruncated,
                 TraversalPartialFamilyId = logicalPartialFamilyDefinition?.PartialFamilyId,
                 PartialFamilyMemberCount = partialFamilyMemberCount,
                 PartialFamilyMemberRootCount = partialFamilyMemberRootCount,
@@ -853,7 +914,9 @@ public partial class DbReader
                 GraphTableAvailable = _hasReferencesTable,
                 ZeroResultReason = definitionResolution.PhysicalCount == 0 ? "no_matching_definition" : "depth_requested_zero",
                 ImpactFailureChain = definitionResolution.PhysicalCount == 0
-                    ? ["definition_not_found", "depth_requested_zero"]
+                    ? identityRootSignal.UnavailableReason == "no_identity_backed_root"
+                        ? ["no_identity_backed_root", "definition_not_found", "depth_requested_zero"]
+                        : ["definition_not_found", "depth_requested_zero"]
                     : ["depth_requested_zero"],
                 SuggestionType = definitionResolution.PhysicalCount == 0 ? "resolution" : "precondition",
                 Suggestion = definitionResolution.PhysicalCount == 0
@@ -879,12 +942,16 @@ public partial class DbReader
         List<string>? impactFailureChain = null;
         string? suggestionType = null;
         string? suggestion = null;
-        var heuristic = false;
+        var heuristic = !identityRootSignal.Available;
 
         if (callers.Count == 0 && !callerExistsBeforeOffset)
         {
             impactMode = "none";
             impactFailureChain = [];
+            if (identityRootSignal.UnavailableReason == "no_identity_backed_root")
+            {
+                impactFailureChain.Add(identityRootSignal.UnavailableReason);
+            }
 
             if (!_hasReferencesTable)
             {
@@ -1012,6 +1079,10 @@ public partial class DbReader
             HasMultipleDefinitions = hasMultipleDefinitions,
             HasMultipleDefinitionFiles = definitionResolution.PhysicalFileCount > 1,
             TraversalRootScope = traversalRootScope,
+            IdentityRootAvailable = identityRootSignal.Available,
+            IdentityRootUnavailableReason = identityRootSignal.UnavailableReason,
+            GraphEvidenceConfidence = identityRootSignal.EvidenceConfidence,
+            IdentityRootResolutionTruncated = identityRootSignal.ResolutionTruncated,
             TraversalPartialFamilyId = logicalPartialFamilyDefinition?.PartialFamilyId,
             PartialFamilyMemberCount = partialFamilyMemberCount,
             PartialFamilyMemberRootCount = partialFamilyMemberRootCount,

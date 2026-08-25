@@ -1706,15 +1706,25 @@ index paths to replace older physical-path target keys before identity-aware rea
 C# common member names are never discarded during extraction. The writer persists their
 receiver/type evidence in `target_qualifier`, and reference finalization records
 `resolution_state`. Bare-name `references` and unqualified graph discovery remain broad and
-retain the stored resolution labels. On a current reference-identity contract, however, exact
-qualified C# `callers` queries and confirmed `impact` traversal require a `resolved` or
-`resolved_group` candidate that matches one of the selected definition IDs or its resolved
-polymorphic-dispatch family; unresolved or ambiguous same-leaf evidence remains inspectable but
-cannot become a confirmed caller edge.
+retain the stored resolution labels. On a current C# reference-identity contract, however,
+exact C# `callers` queries and confirmed C# `impact` traversal require a `resolved` or
+`resolved_group` candidate that matches one of the selected definition IDs, including the
+resolved polymorphic-dispatch family. Multiple C#
+same-name definitions contribute their resolved ID union; unresolved or ambiguous same-leaf
+evidence remains inspectable but cannot become a confirmed caller edge or transitive hop. When
+no matching definition ID exists, exact callers and impact return zero confirmed rows instead
+of traversing the name fallback. CLI/MCP payloads expose `identity_root_available`,
+`identity_root_unavailable_reason`, `graph_evidence_confidence`, and
+`identity_root_resolution_truncated`; missing roots and capped identity sets set
+`authoritative_count: false`, while impact marks a missing root heuristic and strict mode fails
+through the stable `no_identity_backed_root` failure code. Legacy or stale identity contracts
+may keep the name-based compatibility path, but must label it `name_fallback`, degraded, and
+non-authoritative.
+Other graph languages retain their existing language-specific exact matching until they expose
+the same persisted target-identity contract.
 C# callable hotspots likewise count logical target identities instead of leaf-name aggregates.
 Candidate groups contribute only when they collapse to one logical target, name, and kind, and
-unresolved rows do not inflate the confirmed count. Legacy or stale identity contracts keep the
-name-based compatibility path. The CLI `--include-qualified-common-calls` flag and MCP
+unresolved rows do not inflate the confirmed count. The CLI `--include-qualified-common-calls` flag and MCP
 `includeQualifiedCommonCalls` argument still bypass the query-time common-member noise filter.
 Keep dependency edges identity-scoped: completeness options may expose unresolved evidence but
 must not convert it into a same-name file dependency.
@@ -5761,14 +5771,22 @@ identity-aware read を ready にする前に、full、scoped、no-op、削除�
 C# の一般的な member 名は extraction 時に破棄しません。writer は receiver / 型の evidence を
 `target_qualifier` に永続化し、reference finalization は `resolution_state` を記録します。bare-name の
 `references` と無修飾 graph discovery は広い検索結果と保存済み resolution label を維持します。一方、
-現行の reference-identity contract では、exact qualified C# `callers` query と confirmed `impact`
-traversal は、選択した definition ID のいずれかに一致する `resolved` または `resolved_group` candidate
-か、その解決済み polymorphic-dispatch family を必須とします。未解決または曖昧な same-leaf evidence
-は引き続き確認できますが、confirmed caller edge にはなりません。C# callable hotspot も
+現行の C# reference-identity contract では、exact C# `callers` query と confirmed C#
+`impact` traversal は、選択した definition ID または解決済み polymorphic-dispatch family の
+いずれかに一致する `resolved` または `resolved_group` candidate を必須とします。C# の同名 definition
+が複数ある場合は解決済み ID の和集合を対象にしますが、未解決または
+曖昧な same-leaf evidence は引き続き確認できても confirmed caller edge や推移 hop にはなりません。
+一致する definition ID が無い場合、exact callers と impact は name fallback を走査せず confirmed 0 件を
+返します。CLI/MCP payload は `identity_root_available`、`identity_root_unavailable_reason`、
+`graph_evidence_confidence`、`identity_root_resolution_truncated` を公開し、root 不在または identity 集合の
+cap 到達では `authoritative_count: false` を設定します。impact は root 不在を heuristic とし、strict mode は
+安定した `no_identity_backed_root` failure code で失敗します。legacy または stale な identity contract が
+名前ベースの互換経路を維持する場合も、`name_fallback`、degraded、non-authoritative と明示しなければなりません。
+他の graph 言語は、同等の永続 target-identity contract を公開するまで既存の言語固有 exact matching を維持します。
+C# callable hotspot も
 leaf-name aggregate ではなく logical target identity を
 集計し、candidate group は logical target、name、kind が 1 つに収束するときだけ加算し、unresolved
-row は confirmed count を増やしません。legacy または stale な identity contract は名前ベースの
-互換経路を維持します。CLI の `--include-qualified-common-calls` と MCP の
+row は confirmed count を増やしません。CLI の `--include-qualified-common-calls` と MCP の
 `includeQualifiedCommonCalls` は、引き続き query-time common-member noise filter を無効化します。
 dependency edge は identity scope のままにし、completeness option で未解決 evidence を公開しても、
 同名の file dependency へ変換してはいけません。
