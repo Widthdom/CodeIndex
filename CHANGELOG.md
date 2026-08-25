@@ -11,6 +11,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.44.1] - 2026-08-25
+
+#### Changed
+
+- **Initial indexing defers trimmed reference contexts until a row is emitted** — reference-free source lines no longer allocate context strings while the core, functional-language, and Solidity extractors scan them. Emitted contexts remain trimmed and reference columns continue to use the physical source line.
+- **Open-file metadata probes are aggregated across content-loading paths** — authoritative raw loads, raw-chunk checks, the specialized C# prepass, and unknown-language probes now obtain length, modification time, and file identity together from one platform-native handle snapshot before and after each stable read. This removes redundant handle metadata calls while retaining bounded mutation retries, atomic-replacement and symlink-retarget detection, max-file enforcement, and safe managed fallbacks.
+- **Fresh full indexes build core secondary indexes after bulk persistence** — authoritative empty-database CLI runs now defer 22 language-neutral secondary indexes on files, chunks, issues, and symbols, then build each B-tree once after native inserts finalize and before graph reads begin. UNIQUE constraints and the per-file symbol index required by fresh-reference source lookup remain active, while cancellation rolls the schema back atomically; rebuild, incremental, claim-race fallback, and MCP writes retain their indexes.
+- **Fresh full indexes persist every language in substantially larger native SQLite batches** — the authoritative empty-database path now uses a dedicated 512-parameter budget for chunks, symbols, issues, reference lines, and references instead of inheriting the provider-oriented 32-parameter ceiling. RETURNING validation remains bounded and atomic while duplicate-ID checks are linear, and incremental, rebuild, MCP, and public writer paths retain their existing provider contracts.
+- **Fresh full indexes coalesce file-list generation invalidation** — the authoritative empty-database transaction suspends per-file resource-generation triggers during bulk persistence, restores them after native statements finalize, and advances the generation once when files were persisted. Empty repositories leave the generation unchanged. Rollback restores the rows, trigger schema, and generation together, while incremental, rebuild, MCP, and ordinary writer mutations retain per-change invalidation.
+- **Parallel full scans reuse symbol preparation completed by extraction workers** — the single persistence consumer now receives each file's applied family-scope state and completed C# source observation instead of resolving and observing them again. Explicit completion flags distinguish a legitimately null scope from an unprepared capped payload while preserving generated-code suppression, serial hook mutation, cancellation, and scoped-update behavior.
+- **C#, Java, and Kotlin record components are extracted with reusable declaration state** — dense record and primary-constructor files no longer construct bounded regex engines for every declaration, and multiline headers are accumulated in one contiguous buffer without materializing every growing prefix. Declaration-name matching and component semantics remain language-accurate while first-index extraction allocation and CPU work stay bounded.
+- **Fixed SQLite savepoint controls now reuse prepared commands** — empty-state full indexing reuses the depth-one per-file SAVEPOINT / RELEASE / ROLLBACK statements, and metadata plus FTS marker savepoints share the same bounded cache path, reducing command prepare/finalize churn while deeper dynamic scopes and rollback/cancellation behavior remain unchanged.
+- **Full indexing reuses scan-produced file targets across CLI and MCP** — discovery now carries normalized paths, safely reusable language detection, and path-only generated-code suppression directly into full indexing, authoritative dry-run, and freshness checks instead of rebuilding workspace-sized target arrays. Real MCP indexing also reuses the project-marker fingerprints from the same source scan, removing an independent directory-tree walk while preserving secure open, live stat/authorization checks, content-dependent language detection, and fail-closed marker trust.
+- **Unknown-language discovery reuses one bounded authorized file snapshot** — final extensionless and unregistered-extension candidates now read the 256-byte script header and, only when it is unsupported, continue Git LFS, UTF-16, NUL, and max-file coverage checks on the same pooled stream. Stable unknown files avoid a second open and payload-sized allocation, while recognized shebangs and `#compdef`, ambiguous extensions, mutation retries, CLI dry-run, freshness, and MCP authorization semantics remain intact.
+
 ### [1.44.0] - 2026-08-24
 
 #### Added
@@ -6632,6 +6647,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.44.1] - 2026-08-25
+
+#### 変更
+
+- **初回indexでtrim済みreference contextをrow発行時まで遅延するようになりました** — core、functional language、Solidityのextractorが走査する際、referenceを出さないsource lineではcontext文字列を割り当てません。発行されたcontextは従来どおりtrim済みで、reference columnも物理source line基準を維持します。
+- **open済みfileのmetadata probeをcontent-loading経路全体で集約しました** — authoritative raw load、raw-chunk判定、C#専用prepass、未知言語probeは、stableなreadの前後にplatform-nativeなhandle snapshotを1回ずつ取得し、length・更新時刻・file identityをまとめて得るようになりました。重複するhandle metadata callを削減しつつ、上限付きmutation retry、atomic replacement / symlink retarget検出、max-file強制、安全なmanaged fallbackを維持します。
+- **初回full indexでcore secondary indexをbulk永続化後に構築するようになりました** — authoritativeな空databaseのCLI runではfiles、chunks、issues、symbolsの言語共通secondary index 22本を遅延し、native insertのfinalize後かつgraph read前に各B-treeを1回だけ構築します。UNIQUE constraintとfresh-referenceのsource lookupに必要なfile単位symbol indexは維持し、cancel時はschemaをatomicにrollbackします。rebuild、incremental、claim-race fallback、MCPのwriteはindexを維持します。
+- **空DBの初回フルインデックスが、全言語を大幅に大きいnative SQLite batchで永続化するようになりました** — authoritativeな空DB経路ではchunk、symbol、issue、reference line、referenceにprovider向け32 parameter上限を継承せず、専用の512 parameter budgetを使います。RETURNING検証のbounded性とatomic性を保ったままduplicate ID検査を線形化し、incremental、rebuild、MCP、public writer経路のprovider契約は変更しません。
+- **初回full indexでfile list generationの無効化をまとめるようになりました** — authoritativeな空database transactionはbulk永続化中のfile単位resource-generation triggerを停止し、native statementのfinalize後に復元してfileを永続化した場合だけgenerationを1回進めます。空repositoryではgenerationを変更しません。rollback時はrow、trigger schema、generationを一括で元へ戻し、incremental、rebuild、MCP、通常writerのmutationは変更ごとの無効化を維持します。
+- **parallel full scanがextraction workerで完了したsymbol preparationを再利用するようになりました** — single persistence consumerはfileごとの適用済みfamily-scope状態と完了済みC# source observationを受け取り、同じ解決と観測を繰り返しません。明示的な完了flagにより、正当にnullのscopeと未準備のcap payloadを区別しつつ、generated-code suppression、serial hook mutation、cancellation、scoped updateの挙動を維持します。
+- **C#、Java、Kotlinのrecord component抽出が宣言状態を再利用するようになりました** — recordやprimary constructorが密なfileで宣言ごとにbounded regex engineを構築せず、複数行headerも拡大途中のprefixを毎回文字列化せず1つの連続bufferへ蓄積します。宣言名の照合とcomponent semanticsを言語ごとに維持しながら、初回index抽出のallocationとCPU処理を抑えます。
+- **固定 SQLite savepoint control が prepared command を再利用するようになりました** — 空状態からの full index では file 単位の depth 1 SAVEPOINT / RELEASE / ROLLBACK を再利用し、metadata と FTS marker の savepoint も同じ有界 cache 経路を共有することで、深い動的 scope と rollback / cancellation の挙動を変えずに command の prepare / finalize 負荷を減らします。
+- **CLIとMCPのfull indexingがscanで生成したfile targetを再利用するようになりました** — discoveryで得た正規化path、安全に再利用できる言語判定、path-onlyのgenerated-code suppressionをfull indexing、authoritative dry-run、freshness checkへ直接引き継ぎ、workspace規模のtarget array再構築をなくしました。実MCP indexingも同じsource scanのproject-marker fingerprintを再利用して独立したdirectory-tree walkを削減しつつ、secure open、live stat/authorization check、content依存の言語判定、fail-closedなmarker trustを維持します。
+- **未知言語の探索が1つの上限付き認可済みfile snapshotを再利用するようになりました** — 最終的な拡張子なし・未登録拡張子candidateでは256 byteのscript headerを読み、未対応の場合だけ同じpooled stream上でGit LFS、UTF-16、NUL、max-fileのcoverage判定を続行します。stableな未知fileは2回目のopenとpayload size比例allocationを回避しつつ、認識済みshebang / `#compdef`、曖昧拡張子、mutation retry、CLI dry-run、freshness、MCP authorizationの意味論を維持します。
+
 ### [1.44.0] - 2026-08-24
 
 #### 追加
@@ -13225,7 +13255,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.44.0...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.44.1...HEAD
+[1.44.1]: https://github.com/Widthdom/CodeIndex/compare/v1.44.0...v1.44.1
 [1.44.0]: https://github.com/Widthdom/CodeIndex/compare/v1.43.1...v1.44.0
 [1.43.1]: https://github.com/Widthdom/CodeIndex/compare/v1.43.0...v1.43.1
 [1.43.0]: https://github.com/Widthdom/CodeIndex/compare/v1.42.0...v1.43.0
