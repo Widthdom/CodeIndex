@@ -129,7 +129,7 @@ public partial class DbReader
         var useCSharpIdentity = canResolveCSharpIdentity
             && (definitions.Count == 0
                 || definitions.All(static definition => definition.Lang == "csharp"));
-        if (useCSharpIdentity && definitions.Count == 0)
+        if (useCSharpIdentity && definitions.Count == 0 && request.Lang != null)
             return null;
 
         var definitionPaths = definitions
@@ -142,7 +142,7 @@ public partial class DbReader
         var identityIds = useCSharpIdentity
             ? resolution.PhysicalSymbolIds.ToHashSet()
             : [];
-        if (useCSharpIdentity && identityIds.Count == 0)
+        if (useCSharpIdentity && identityIds.Count == 0 && definitions.Count > 0)
             return null;
 
         var traversalIds = identityIds.ToHashSet();

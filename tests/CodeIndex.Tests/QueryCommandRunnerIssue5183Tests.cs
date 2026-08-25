@@ -92,6 +92,37 @@ public partial class QueryCommandRunnerTests
             Assert.NotEmpty(inspect.GetProperty("references").EnumerateArray());
             Assert.Empty(inspect.GetProperty("callers").EnumerateArray());
             Assert.Equal(0, inspect.GetProperty("graph_sections").GetProperty("callers").GetProperty("total").GetInt32());
+
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/issue5183/StaleTarget.cs",
+                "csharp",
+                "public class StaleTarget5183 { public void Start() { } }\n");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/issue5183/StaleCaller.cs",
+                "csharp",
+                "public class StaleCaller5183 { public void Call(StaleTarget5183 target) => target.Start(); }\n");
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.MarkGraphReady();
+                writer.MarkFoldReady();
+                writer.ClearReferenceIdentityContractReady();
+            }
+
+            var (staleCompactExitCode, staleCompactStdout, staleCompactStderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["impact", "StaleTarget5183", "--db", dbPath, "--format", "compact", "--fields", "callers"],
+                _jsonOptions,
+                "1.44.3-test"));
+            using var staleCompactDocument = ParseJsonOutput(staleCompactStdout);
+            var staleCompactMetadata = staleCompactDocument.RootElement.GetProperty("metadata");
+            var staleCompactContext = staleCompactMetadata.GetProperty("response_context");
+            Assert.Equal(CommandExitCodes.Success, staleCompactExitCode);
+            Assert.Equal(string.Empty, staleCompactStderr);
+            Assert.Equal("reference_identity_unavailable", staleCompactContext.GetProperty("identity_root_unavailable_reason").GetString());
+            Assert.False(staleCompactContext.GetProperty("authoritative_count").GetBoolean());
+            Assert.False(staleCompactMetadata.GetProperty("total_count_authoritative").GetBoolean());
         }
         finally
         {

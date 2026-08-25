@@ -136,6 +136,21 @@ public partial class DbReaderTests
             pythonOnlyImpact.Callers.Select(caller => caller.CallerName).Order().ToArray());
         Assert.DoesNotContain(pythonOnlyImpact.Callers, caller => caller.CallerName == "CallUnresolvedPythonLeaf5183");
 
+        var pythonExternalImpact = _reader.AnalyzeImpact(
+            "ExternalOnlyLeaf5183",
+            maxDepth: 5,
+            limit: 20,
+            pathPatterns: ["src/issue5183/*"]);
+        Assert.False(pythonExternalImpact.IdentityRootAvailable);
+        Assert.Equal("no_identity_backed_root", pythonExternalImpact.IdentityRootUnavailableReason);
+        Assert.False(pythonExternalImpact.CountIsAuthoritative);
+        Assert.Equal(
+            ["PythonExternalCaller5183", "PythonExternalTop5183"],
+            pythonExternalImpact.Callers.Select(caller => caller.CallerName).Order().ToArray());
+        Assert.DoesNotContain(
+            pythonExternalImpact.Callers,
+            caller => caller.CallerName == "CallUnresolvedExternalOnly5183");
+
         _reader.ImpactGraphStateEntryBudgetForTesting = 1;
         try
         {
@@ -259,6 +274,7 @@ public partial class DbReaderTests
                 public void AboveResolved5183() => CallResolved5183(new ResolvedTarget5183());
                 public void CallUnresolvedSameLeaf5183() => ExternalApi5183.IdentityLeaf5183();
                 public void CallUnresolvedPythonLeaf5183() => ExternalApi5183.PythonOnlyLeaf5183();
+                public void CallUnresolvedExternalOnly5183() => ExternalApi5183.ExternalOnlyLeaf5183();
                 public void CallFirst5183(FirstTarget5183 target) => target.CollisionLeaf5183();
                 public void CallSecond5183(SecondTarget5183 target) => target.CollisionLeaf5183();
                 public void CallUnresolvedCollision5183() => ExternalApi5183.CollisionLeaf5183();
@@ -281,6 +297,12 @@ public partial class DbReaderTests
 
             def PythonCallsCSharp5183():
                 return IdentityLeaf5183()
+
+            def PythonExternalCaller5183():
+                return ExternalOnlyLeaf5183()
+
+            def PythonExternalTop5183():
+                return PythonExternalCaller5183()
             """);
     }
 }

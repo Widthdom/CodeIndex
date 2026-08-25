@@ -1482,7 +1482,11 @@ internal static partial class JsonEnvelopeWrapper
                     && extraction.SourcePayload is not null
                     && TryReadBool(extraction.SourcePayload, "reference_graph_complete", out var graphComplete)
                     && !graphComplete;
-                var authoritative = (!missingIdentityRoot && !incompleteCallerGraph)
+                var unavailableCallerRoot = extraction.PrimaryCollection == "callers"
+                    && extraction.SourcePayload is not null
+                    && TryReadBool(extraction.SourcePayload, "identity_root_available", out var identityRootAvailable)
+                    && !identityRootAvailable;
+                var authoritative = (!missingIdentityRoot && !incompleteCallerGraph && !unavailableCallerRoot)
                     || extraction.SourcePayload == null
                     || !TryReadBool(
                         extraction.SourcePayload,
