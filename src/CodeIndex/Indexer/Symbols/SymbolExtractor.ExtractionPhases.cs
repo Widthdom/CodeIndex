@@ -79,6 +79,7 @@ public static partial class SymbolExtractor
                 : null;
 
             int[]?[] csharpMatchColumnToRaw = null!;
+            string[]? csharpScopeLines = null;
             CSharpMatchLines = lang == "csharp"
                 ? BuildCSharpMatchLines(
                     lines,
@@ -87,9 +88,11 @@ public static partial class SymbolExtractor
                     requiredLiteralGateCounts,
                     applyCSharpRegexProbeOptimizations,
                     csharpRegexProbeCounts,
-                    out csharpMatchColumnToRaw)
+                    out csharpMatchColumnToRaw,
+                    out csharpScopeLines)
                 : null;
             CSharpMatchColumnToRaw = csharpMatchColumnToRaw;
+            CSharpScopeLines = csharpScopeLines;
             GetCSharpLineStartStates = lang == "csharp"
                 ? BuildCSharpLineStartStates
                 : null;
@@ -116,6 +119,7 @@ public static partial class SymbolExtractor
         public bool[]? PowershellEnumBodyLines { get; }
         public int[]?[] CSharpMatchColumnToRaw { get; }
         public string[]? CSharpMatchLines { get; }
+        public string[]? CSharpScopeLines { get; }
         public Func<CSharpLexState[]>? GetCSharpLineStartStates { get; }
         public Func<JavaScriptScopePrivacyFlags[][]>? GetPrivateScopeColumns { get; }
         public Func<bool[]?>? GetCSharpSwitchExpressionLines { get; }
@@ -128,16 +132,16 @@ public static partial class SymbolExtractor
             _dartInsideClassBody ??= BuildDartClassBodyScope(StructuralLines);
 
         public CSharpTypeBodyScope GetCSharpInsideTypeBody() =>
-            _csharpInsideTypeBody ??= BuildCSharpTypeBodyScope(StructuralLines);
+            _csharpInsideTypeBody ??= BuildCSharpTypeBodyScope(CSharpScopeLines!);
 
         public CSharpCallableParameterScope GetCSharpCallableParameterScope() =>
             _csharpCallableParameterScope ??= BuildCSharpCallableParameterScope(
-                StructuralLines,
+                CSharpScopeLines!,
                 GetCSharpInsideTypeBody());
 
         public CSharpDeclarationStartScope GetCSharpDeclarationStartScope() =>
             _csharpDeclarationStartScope ??= BuildCSharpDeclarationStartScope(
-                StructuralLines,
+                CSharpScopeLines!,
                 GetCSharpInsideTypeBody());
 
         private CSharpLexState[] BuildCSharpLineStartStates() =>
@@ -165,8 +169,8 @@ public static partial class SymbolExtractor
             if (!_csharpSwitchExpressionLinesInitialized)
             {
                 _csharpSwitchExpressionLinesInitialized = true;
-                _csharpSwitchExpressionLines = LinesContain(StructuralLines, "switch", StringComparison.Ordinal)
-                    ? FindCSharpSwitchExpressionLines(StructuralLines)
+                _csharpSwitchExpressionLines = LinesContain(CSharpScopeLines!, "switch", StringComparison.Ordinal)
+                    ? FindCSharpSwitchExpressionLines(CSharpScopeLines!)
                     : null;
             }
 
