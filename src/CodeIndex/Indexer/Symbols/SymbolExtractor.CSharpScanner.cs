@@ -3909,26 +3909,34 @@ public static partial class SymbolExtractor
         && csharpSwitchExpressionLines[lineIndex];
 
     private static string[] BuildCSharpMatchLines(
-        string[] structuralLines,
+        string[] rawLines,
         IReadOnlyList<SymbolPattern> applicablePatterns,
         bool applyRequiredLiteralMatchInputGate,
         RequiredLiteralGateCounts? requiredLiteralGateCounts,
         bool applyCSharpRegexProbeOptimizations,
         CSharpRegexProbeCounts? csharpRegexProbeCounts,
-        out int[]?[] collapsedToRaw)
+        out int[]?[] collapsedToRaw,
+        out string[] scopeLines)
     {
-        var matchLines = new string[structuralLines.Length];
-        collapsedToRaw = new int[]?[structuralLines.Length];
+        var matchLines = new string[rawLines.Length];
+        collapsedToRaw = new int[]?[rawLines.Length];
+        scopeLines = new string[rawLines.Length];
         var csharpLexState = new CSharpLexState();
         var inLeadingAttributeBlock = false;
         var attributeBracketDepth = 0;
         var attributeParenDepth = 0;
         var pendingEnumDeclaration = false;
         var activeEnumBodyDepth = 0;
-        for (int lineIndex = 0; lineIndex < structuralLines.Length; lineIndex++)
+        for (int lineIndex = 0; lineIndex < rawLines.Length; lineIndex++)
         {
-            var lexedLine = LexCSharpLine(structuralLines[lineIndex], csharpLexState);
+            var lexedLine = LexCSharpLine(rawLines[lineIndex], csharpLexState);
             csharpLexState = lexedLine.EndState;
+            // Scope scans need the full C# lexer's literal/comment masking while preserving
+            // raw columns; generic structural masking does not understand every C# literal.
+            // scope scan では raw column を保った完全な C# lexer の literal/comment
+            // masking が必要であり、汎用 structural masking だけでは全 C# literal を扱えない。
+            scopeLines[lineIndex] = BlankCSharpStringDelimitersForCrossLineScan(
+                lexedLine.SanitizedLine);
             matchLines[lineIndex] = CollapseCSharpGenericTypeWhitespace(
                 StripLeadingCSharpAttributeLists(
                     lexedLine.SanitizedLine,

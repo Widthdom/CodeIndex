@@ -90,7 +90,7 @@ public sealed class SymbolExtractorCSharpRegexProbeTests
     }
 
     [Fact]
-    public void CSharpPhysicalInputNegativePrefix_RequiresContiguousNonTimeoutFailures()
+    public void CSharpPhysicalInputNegativePrefix_RequiresContiguousNonTimeoutFailures_Issue5182()
     {
         var cache = new SymbolExtractor.CSharpPhysicalInputNegativePrefixCache();
         var timeoutRegex = new BoundedRegex("(a+)+$", default, TimeSpan.FromMilliseconds(1));

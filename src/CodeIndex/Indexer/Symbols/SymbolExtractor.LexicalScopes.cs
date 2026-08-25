@@ -171,8 +171,8 @@ public static partial class SymbolExtractor
     // interface / record / enum). Used to gate the plain-field pattern so that
     // local variable declarations inside a method, property accessor, lambda, or
     // other non-type body are not misclassified as the public `field` kind. The scan uses
-    // `structuralLines` (strings / chars / comments already masked), so it is not
-    // fooled by braces or type-declaration-looking text inside literals. Only
+    // the raw-column-aligned C# scope lines produced by the full C# lexer, so it is
+    // not fooled by braces or type-declaration-looking text inside literals. Only
     // brace-delimited types push a type-body frame — `new { ... }`, collection
     // initializers, and lambda bodies all carry the `class|struct|interface|record|enum`
     // keyword absent from the preceding buffer, so they correctly stay non-type.
@@ -181,8 +181,8 @@ public static partial class SymbolExtractor
     // 直下にあるか」を行単位で事前計算する。新しい通常フィールド抽出パターンが
     // メソッド本体・プロパティアクセサ・ラムダなど「非型本体」に含まれる
     // ローカル変数宣言を公開 kind `field` として誤抽出しないよう、このフラグで
-    // ゲートする。走査は既に文字列・文字・コメントを空白化した
-    // `structuralLines` を使うため、リテラル内の `{` や `class` 相当の文字列に
+    // ゲートする。走査は完全な C# lexer が生成した、raw column と対応する
+    // C# scope line を使うため、リテラル内の `{` や `class` 相当の文字列に
     // 騙されない。`new { ... }` や collection initializer、ラムダ本体の `{` は
     // 直前バッファに `class|struct|interface|record|enum` を含まないため
     // 非型本体として扱われる。Closes #298 の codex レビュー blocker 対応。
