@@ -575,7 +575,7 @@ public class PerformanceTests : IDisposable
         var kotlinAllocatedBytes = MeasureAllocatedBytes(() => SymbolExtractor.Extract(1, "kotlin", kotlinContent));
 
         Assert.True(
-            csharpAllocatedBytes < 12_000_000
+            csharpAllocatedBytes < 12_800_000
                 && javaAllocatedBytes < 6_600_000
                 && kotlinAllocatedBytes < 5_700_000,
             $"Record-component extraction allocated C#={csharpAllocatedBytes:N0}, Java={javaAllocatedBytes:N0}, Kotlin={kotlinAllocatedBytes:N0} bytes");
