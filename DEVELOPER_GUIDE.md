@@ -2948,7 +2948,18 @@ If every platform candidate is unavailable, the final temp fallback is a
 hashed per-user `cdidx-u.../logs` directory under the OS temp root. Each
 candidate is probed with a create/write/delete round trip before the logger
 commits to it, so read-only state/cache/runtime mounts fall through to the
-next candidate instead of losing the first log write. The file name is
+next candidate instead of losing the first log write. Repository-configured
+`metrics_path` and `global_tool_log_dir` values from `.cdidxrc.json` or
+`.cdidx/config.json` use a stricter boundary: every existing component below
+the config workspace is rejected when it is a symbolic link, junction,
+cross-device mount point, reparse point, device, or dangling link. The boundary
+is revalidated before each mutation; on POSIX, directory creation, append,
+permission changes, rotation, and deletion are additionally anchored to the
+workspace directory handle with no-follow relative operations. An unsafe value fails config
+validation with the bounded `unsafe_output_path` diagnostic and does not create,
+append, rotate, delete, or chmod the external target. Explicit CLI and process
+environment destinations retain their existing operator-controlled behavior.
+The file name is
 `stderr-YYYYMMDD.log`, timestamps inside the file are ISO-8601 UTC
 (`yyyy-MM-ddTHH:mm:ss.fffZ`) using invariant culture, and the logger keeps
 only the newest 30 daily files. `CDIDX_LOG_FORMAT` / `--log-format` switch
@@ -6950,7 +6961,17 @@ platform candidate がすべて使えない場合、最後の temp fallback は 
 配下のユーザー別 hashed `cdidx-u.../logs` ディレクトリです。各 candidate は
 logger が採用する前に create/write/delete の往復で probe されるため、
 read-only な state/cache/runtime mount は最初の log write を失うのではなく
-次の candidate へ fall through します。ファイル名は
+次の candidate へ fall through します。`.cdidxrc.json` または
+`.cdidx/config.json` の repository config に由来する `metrics_path` と
+`global_tool_log_dir` には、より厳格な境界を適用します。config workspace
+配下の既存 component が symbolic link、junction、cross-device mount point、
+reparse point、device、dangling link のいずれかであれば拒否し、各 mutation の
+直前にも境界を再検証します。POSIX ではさらに directory 作成、append、permission
+変更、rotation、delete を workspace directory handle 起点の no-follow relative
+operation へ固定します。安全でない値は上限付きの `unsafe_output_path` 診断で config validation
+に失敗し、外部 target の作成、追記、rotation、削除、chmod は行いません。明示的な
+CLI と process environment の保存先は、operator が制御する従来の挙動を維持します。
+ファイル名は
 `stderr-YYYYMMDD.log`、ファイル内 timestamp は invariant culture の
 ISO-8601 UTC（`yyyy-MM-ddTHH:mm:ss.fffZ`）で、logger は新しい 30 日次
 ファイルだけを保持します。`CDIDX_LOG_FORMAT` / `--log-format` は text と

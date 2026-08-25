@@ -9,37 +9,69 @@ internal static class PrivateLogFile
     internal const int MaxExistingFilesToHarden = 128;
     private const int MaxDiagnosticTargetChars = 160;
 
-    internal static FileStream OpenAppend(string path, FileShare share = FileShare.ReadWrite)
+    internal static Stream OpenAppend(
+        string path,
+        FileShare share = FileShare.ReadWrite,
+        RepositoryOutputPathGuard? boundary = null)
     {
+        boundary?.PrepareMutation("open_append", path);
         RejectUnsafeTarget(path);
 
-        if (OperatingSystem.IsWindows())
-            return new FileStream(path, FileMode.Append, FileAccess.Write, share);
-
-        return new FileStream(path, new FileStreamOptions
+        Stream stream;
+        if (boundary is not null && !OperatingSystem.IsWindows())
         {
-            Mode = FileMode.Append,
-            Access = FileAccess.Write,
-            Share = share,
-            UnixCreateMode = PrivateFileMode,
-        });
+            stream = boundary.OpenAppendUnix(path);
+        }
+        else if (OperatingSystem.IsWindows())
+        {
+            stream = new FileStream(path, FileMode.Append, FileAccess.Write, share);
+        }
+        else
+        {
+            stream = new FileStream(path, new FileStreamOptions
+            {
+                Mode = FileMode.Append,
+                Access = FileAccess.Write,
+                Share = share,
+                UnixCreateMode = PrivateFileMode,
+            });
+        }
+
+        try
+        {
+            boundary?.CompleteMutation(path);
+            return stream;
+        }
+        catch
+        {
+            stream.Dispose();
+            throw;
+        }
     }
 
-    internal static StreamWriter OpenAppendText(string path)
-        => new(OpenAppend(path), new UTF8Encoding(false))
+    internal static StreamWriter OpenAppendText(string path, RepositoryOutputPathGuard? boundary = null)
+        => new(OpenAppend(path, boundary: boundary), new UTF8Encoding(false))
         {
             AutoFlush = true,
         };
 
-    internal static void TrySetPrivatePermissions(string path, Action<PrivateLogFileDiagnostic>? diagnosticSink = null)
+    internal static void TrySetPrivatePermissions(
+        string path,
+        Action<PrivateLogFileDiagnostic>? diagnosticSink = null,
+        RepositoryOutputPathGuard? boundary = null)
     {
         if (OperatingSystem.IsWindows())
             return;
 
         try
         {
+            boundary?.PrepareMutation("set_private_permissions", path);
             RejectUnsafeTarget(path);
-            File.SetUnixFileMode(path, PrivateFileMode);
+            if (boundary is null)
+                File.SetUnixFileMode(path, PrivateFileMode);
+            else
+                boundary.SetPrivateFileModeUnix(path);
+            boundary?.CompleteMutation(path);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
         {
@@ -47,7 +79,11 @@ internal static class PrivateLogFile
         }
     }
 
-    internal static void HardenExisting(string directory, string pattern, Action<PrivateLogFileDiagnostic>? diagnosticSink = null)
+    internal static void HardenExisting(
+        string directory,
+        string pattern,
+        Action<PrivateLogFileDiagnostic>? diagnosticSink = null,
+        RepositoryOutputPathGuard? boundary = null)
     {
         if (OperatingSystem.IsWindows())
             return;
@@ -65,7 +101,7 @@ internal static class PrivateLogFile
                     break;
                 }
 
-                TrySetPrivatePermissions(file.FullName, diagnosticSink);
+                TrySetPrivatePermissions(file.FullName, diagnosticSink, boundary);
                 hardened++;
             }
         }
@@ -115,7 +151,8 @@ internal static class PrivateLogFile
         string pattern,
         int retainedFileCount,
         Action<PrivateLogFileDiagnostic>? diagnosticSink = null,
-        Action<string>? deleteOverride = null)
+        Action<string>? deleteOverride = null,
+        RepositoryOutputPathGuard? boundary = null)
     {
         try
         {
@@ -131,10 +168,19 @@ internal static class PrivateLogFile
             {
                 if (ShouldPruneFile(file, retainedPaths, retainedFiles, retainedFileCount))
                 {
-                    AtomicFileWriter.TryDeleteFile(
-                        file.FullName,
-                        ex => ReportDiagnostic(diagnosticSink, "prune_old_file_delete", file.FullName, ex),
-                        deleteOverride);
+                    boundary?.PrepareMutation("prune_old_file", file.FullName);
+                    if (boundary is not null && !OperatingSystem.IsWindows())
+                    {
+                        boundary.DeleteFileUnix(file.FullName);
+                    }
+                    else
+                    {
+                        AtomicFileWriter.TryDeleteFile(
+                            file.FullName,
+                            ex => ReportDiagnostic(diagnosticSink, "prune_old_file_delete", file.FullName, ex),
+                            deleteOverride);
+                    }
+                    boundary?.CompleteMutation(file.FullName);
                 }
             }
         }
@@ -201,11 +247,18 @@ internal static class PrivateLogFile
         int retainedFileCount,
         Action<string>? afterMove = null,
         Action<Exception>? onFailure = null,
-        Action<Exception>? onCleanupFailure = null)
+        Action<Exception>? onCleanupFailure = null,
+        RepositoryOutputPathGuard? boundary = null)
     {
         try
         {
-            AtomicFileWriter.TryDeleteFile(SlotPath(path, retainedFileCount - 1), onCleanupFailure);
+            var lastSlot = SlotPath(path, retainedFileCount - 1);
+            boundary?.PrepareMutation("rotate_delete", lastSlot);
+            if (boundary is not null && !OperatingSystem.IsWindows())
+                boundary.DeleteFileUnix(lastSlot);
+            else
+                AtomicFileWriter.TryDeleteFile(lastSlot, onCleanupFailure);
+            boundary?.CompleteMutation(lastSlot);
 
             for (var slot = retainedFileCount - 2; slot >= 1; slot--)
             {
@@ -213,14 +266,28 @@ internal static class PrivateLogFile
                 var next = SlotPath(path, slot + 1);
                 if (!File.Exists(LongPath.EnsureWindowsPrefix(current)))
                     continue;
-                AtomicFileWriter.MoveReplacing(current, next);
+                boundary?.PrepareMutation("rotate_source", current);
+                boundary?.PrepareMutation("rotate_destination", next);
+                if (boundary is not null && !OperatingSystem.IsWindows())
+                    boundary.MoveReplacingUnix(current, next);
+                else
+                    AtomicFileWriter.MoveReplacing(current, next);
+                boundary?.CompleteMutation(current);
+                boundary?.CompleteMutation(next);
                 afterMove?.Invoke(next);
             }
 
             if (File.Exists(LongPath.EnsureWindowsPrefix(path)))
             {
                 var first = SlotPath(path, 1);
-                AtomicFileWriter.MoveReplacing(path, first);
+                boundary?.PrepareMutation("rotate_source", path);
+                boundary?.PrepareMutation("rotate_destination", first);
+                if (boundary is not null && !OperatingSystem.IsWindows())
+                    boundary.MoveReplacingUnix(path, first);
+                else
+                    AtomicFileWriter.MoveReplacing(path, first);
+                boundary?.CompleteMutation(path);
+                boundary?.CompleteMutation(first);
                 afterMove?.Invoke(first);
             }
 

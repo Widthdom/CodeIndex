@@ -171,6 +171,130 @@ public class MetricsSinkTests
     }
 
     [Fact]
+    public void Record_RepositoryConfiguredOrdinaryPathWritesSuccessfully_Issue5181()
+    {
+        var workspace = TestProjectHelper.CreateTempProject("cdidx_metrics_config_5181");
+        var metricsPath = Path.Combine(workspace, "logs", "metrics.jsonl");
+        var configPath = Path.Combine(workspace, CdidxConfigFile.FileName);
+        var warnings = new List<string>();
+        try
+        {
+            File.WriteAllText(configPath, """{ "metrics_path": "logs/metrics.jsonl" }""");
+            var config = CdidxConfigFile.Load(workspace);
+            Assert.True(config.Loaded);
+            using var environment = CdidxEnvironment.Push(config.Settings, config.Sources);
+            using var session = MetricsSink.TryStartForTesting(
+                explicitPath: null,
+                maxBytes: 1024 * 1024,
+                warningSink: warnings.Add);
+            Assert.NotNull(session);
+            var boundary = RepositoryOutputPathBoundary.CreateGuardForConfigSource(
+                MetricsSink.EnvVarName,
+                "metrics_path",
+                metricsPath,
+                destinationIsDirectory: false);
+            if (!OperatingSystem.IsWindows())
+            {
+                Assert.Equal(PrivateLogFile.PrivateFileMode, File.GetUnixFileMode(metricsPath));
+                Assert.Equal(
+                    DataDirectorySecurity.PrivateDirectoryMode,
+                    File.GetUnixFileMode(Path.GetDirectoryName(metricsPath)!));
+            }
+            using (var stream = PrivateLogFile.OpenAppend(metricsPath, boundary: boundary))
+            {
+                stream.WriteByte((byte)'\n');
+            }
+
+            MetricsSink.Record(new MetricsEvent(
+                Timestamp: DateTimeOffset.UtcNow,
+                Tool: "status",
+                Source: "cli",
+                ElapsedMs: 1,
+                ExitCode: 0));
+
+            Assert.True(session.WaitForIdle(TimeSpan.FromSeconds(5)));
+            var diagnostics = session.SnapshotDiagnostics();
+            Assert.False(diagnostics.Degraded, diagnostics.LastFailure);
+            Assert.Empty(warnings);
+            Assert.Contains("\"tool\":\"status\"", File.ReadAllText(metricsPath), StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(workspace);
+        }
+    }
+
+    [Fact]
+    public void Record_RepositoryConfiguredPathRotatesWithinWorkspace_Issue5181()
+    {
+        var workspace = TestProjectHelper.CreateTempProject("cdidx_metrics_config_rotate_5181");
+        var metricsPath = Path.Combine(workspace, "logs", "metrics.jsonl");
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(workspace, CdidxConfigFile.FileName),
+                """{ "metrics_path": "logs/metrics.jsonl" }""");
+            var config = CdidxConfigFile.Load(workspace);
+            Assert.True(config.Loaded);
+            using var environment = CdidxEnvironment.Push(config.Settings, config.Sources);
+            using var session = MetricsSink.TryStartForTesting(explicitPath: null, maxBytes: 1);
+            Assert.NotNull(session);
+
+            MetricsSink.Record(new MetricsEvent(
+                Timestamp: DateTimeOffset.UtcNow,
+                Tool: "status",
+                Source: "cli",
+                ElapsedMs: 1,
+                ExitCode: 0));
+
+            Assert.True(session.WaitForIdle(TimeSpan.FromSeconds(5)));
+            var diagnostics = session.SnapshotDiagnostics();
+            Assert.False(diagnostics.Degraded, diagnostics.LastFailure);
+            Assert.True(File.Exists(metricsPath + ".1"));
+            Assert.Contains("\"tool\":\"status\"", File.ReadAllText(metricsPath + ".1"), StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(workspace);
+        }
+    }
+
+    [Fact]
+    public void Record_ExplicitPathRetainsOperatorControlledBehavior_Issue5181()
+    {
+        var workspace = TestProjectHelper.CreateTempProject("cdidx_metrics_config_explicit_5181");
+        var explicitDirectory = TestProjectHelper.CreateTempProject("cdidx_metrics_explicit_5181");
+        var explicitPath = Path.Combine(explicitDirectory, "metrics.jsonl");
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(workspace, CdidxConfigFile.FileName),
+                """{ "metrics_path": "logs/config-metrics.jsonl" }""");
+            var config = CdidxConfigFile.Load(workspace);
+            Assert.True(config.Loaded);
+            using var environment = CdidxEnvironment.Push(config.Settings, config.Sources);
+            using var session = MetricsSink.TryStartForTesting(explicitPath, maxBytes: 1024 * 1024);
+            Assert.NotNull(session);
+
+            MetricsSink.Record(new MetricsEvent(
+                Timestamp: DateTimeOffset.UtcNow,
+                Tool: "status",
+                Source: "cli",
+                ElapsedMs: 1,
+                ExitCode: 0));
+
+            Assert.True(session.WaitForIdle(TimeSpan.FromSeconds(5)));
+            Assert.Contains("\"tool\":\"status\"", File.ReadAllText(explicitPath), StringComparison.Ordinal);
+            Assert.False(File.Exists(Path.Combine(workspace, "logs", "config-metrics.jsonl")));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(workspace);
+            TestProjectHelper.DeleteDirectory(explicitDirectory);
+        }
+    }
+
+    [Fact]
     public void Record_RotatesMetricsLogAtMaxBytes()
     {
         var metricsPath = Path.Combine(Path.GetTempPath(), $"cdidx_metrics_rotate_{Guid.NewGuid():N}.jsonl");

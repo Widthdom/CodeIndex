@@ -283,6 +283,204 @@ public class CdidxConfigFileTests
     }
 
     [Theory]
+    [InlineData("metrics_path", "bridge/new/metrics.jsonl")]
+    [InlineData("global_tool_log_dir", "bridge/new/logs")]
+    public void LoadAndApply_OutputPathUnderSymlinkAncestorIsRejectedWithoutExternalMutation_Issue5181(
+        string key,
+        string configuredPath)
+    {
+        var workspace = CreateTempDir();
+        var outside = CreateTempDir();
+        var bridge = Path.Combine(workspace, "bridge");
+        try
+        {
+            if (!TryCreateDirectoryLink(bridge, outside))
+                return;
+
+            File.WriteAllText(
+                Path.Combine(workspace, CdidxConfigFile.FileName),
+                JsonSerializer.Serialize(new Dictionary<string, string> { [key] = configuredPath }));
+
+            var result = CdidxConfigFile.Load(workspace, new TestEnvironment().Read);
+
+            Assert.True(result.Failed);
+            Assert.Contains(key, result.Error, StringComparison.Ordinal);
+            Assert.Contains(RepositoryOutputPathBoundary.UnsafeReason, result.Error, StringComparison.Ordinal);
+            Assert.DoesNotContain(outside, result.Error, StringComparison.Ordinal);
+            Assert.False(Directory.Exists(Path.Combine(outside, "new")));
+            Assert.Empty(result.Settings);
+        }
+        finally
+        {
+            DeleteLinkEntry(bridge);
+            TestProjectHelper.DeleteDirectory(workspace);
+            TestProjectHelper.DeleteDirectory(outside);
+        }
+    }
+
+    [Theory]
+    [InlineData("metrics_path", false, false)]
+    [InlineData("metrics_path", false, true)]
+    [InlineData("global_tool_log_dir", true, false)]
+    [InlineData("global_tool_log_dir", true, true)]
+    public void LoadAndApply_FinalLinkIsRejectedWithoutChangingTarget_Issue5181(
+        string key,
+        bool directoryLink,
+        bool targetExists)
+    {
+        var workspace = CreateTempDir();
+        var outside = CreateTempDir();
+        var destinationName = directoryLink ? "logs" : "metrics.jsonl";
+        var destination = Path.Combine(workspace, destinationName);
+        var target = Path.Combine(outside, "target");
+        UnixFileMode? originalOutsideMode = null;
+        UnixFileMode? originalTargetMode = null;
+        try
+        {
+            if (targetExists)
+            {
+                if (directoryLink)
+                    Directory.CreateDirectory(target);
+                else
+                    File.WriteAllText(target, "outside-target-content");
+            }
+            if (!OperatingSystem.IsWindows())
+            {
+                originalOutsideMode = File.GetUnixFileMode(outside);
+                if (targetExists)
+                    originalTargetMode = File.GetUnixFileMode(target);
+            }
+            if (!TryCreateLink(destination, target, directoryLink))
+                return;
+
+            File.WriteAllText(
+                Path.Combine(workspace, CdidxConfigFile.FileName),
+                JsonSerializer.Serialize(new Dictionary<string, string> { [key] = destinationName }));
+
+            var result = CdidxConfigFile.Load(workspace, new TestEnvironment().Read);
+
+            Assert.True(result.Failed);
+            Assert.Contains(key, result.Error, StringComparison.Ordinal);
+            Assert.Contains(RepositoryOutputPathBoundary.UnsafeReason, result.Error, StringComparison.Ordinal);
+            Assert.DoesNotContain(outside, result.Error, StringComparison.Ordinal);
+            if (targetExists && !directoryLink)
+                Assert.Equal("outside-target-content", File.ReadAllText(target));
+            if (!targetExists)
+            {
+                Assert.False(File.Exists(target));
+                Assert.False(Directory.Exists(target));
+            }
+            if (!OperatingSystem.IsWindows())
+            {
+                Assert.Equal(originalOutsideMode, File.GetUnixFileMode(outside));
+                if (targetExists)
+                    Assert.Equal(originalTargetMode, File.GetUnixFileMode(target));
+            }
+        }
+        finally
+        {
+            DeleteLinkEntry(destination);
+            TestProjectHelper.DeleteDirectory(workspace);
+            TestProjectHelper.DeleteDirectory(outside);
+        }
+    }
+
+    [Fact]
+    public void LoadAndApply_WorkspaceRootAliasStillAllowsOrdinaryContainedOutput_Issue5181()
+    {
+        var container = CreateTempDir();
+        var physicalWorkspace = Path.Combine(container, "physical");
+        var workspaceAlias = Path.Combine(container, "workspace-alias");
+        try
+        {
+            Directory.CreateDirectory(physicalWorkspace);
+            if (!TryCreateDirectoryLink(workspaceAlias, physicalWorkspace))
+                return;
+
+            File.WriteAllText(
+                Path.Combine(physicalWorkspace, CdidxConfigFile.FileName),
+                """{ "metrics_path": "safe/metrics.jsonl" }""");
+
+            var result = CdidxConfigFile.Load(workspaceAlias, new TestEnvironment().Read);
+
+            Assert.True(result.Loaded);
+            Assert.Null(result.Error);
+            Assert.Equal(
+                Path.Combine(workspaceAlias, "safe", "metrics.jsonl"),
+                result.Settings[MetricsSink.EnvVarName]);
+            using var environment = CdidxEnvironment.Push(result.Settings, result.Sources);
+            using var session = MetricsSink.TryStartForTesting(explicitPath: null, maxBytes: 1024 * 1024);
+            Assert.NotNull(session);
+            MetricsSink.Record(new MetricsEvent(
+                Timestamp: DateTimeOffset.UtcNow,
+                Tool: "status",
+                Source: "cli",
+                ElapsedMs: 1,
+                ExitCode: 0));
+            Assert.True(session.WaitForIdle(TimeSpan.FromSeconds(5)));
+            Assert.Contains(
+                "\"tool\":\"status\"",
+                File.ReadAllText(Path.Combine(physicalWorkspace, "safe", "metrics.jsonl")),
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            DeleteLinkEntry(workspaceAlias);
+            TestProjectHelper.DeleteDirectory(container);
+        }
+    }
+
+    [Fact]
+    public void RepositoryOutputBoundary_RevalidatesAfterInjectedAncestorSwap_Issue5181()
+    {
+        var workspace = CreateTempDir();
+        var outside = CreateTempDir();
+        var safeDirectory = Path.Combine(workspace, "safe");
+        var configuredPath = Path.Combine(safeDirectory, "new", "metrics.jsonl");
+        try
+        {
+            Directory.CreateDirectory(safeDirectory);
+            File.WriteAllText(
+                Path.Combine(workspace, CdidxConfigFile.FileName),
+                """{ "metrics_path": "safe/new/metrics.jsonl" }""");
+            var result = CdidxConfigFile.Load(workspace, new TestEnvironment().Read);
+            Assert.True(result.Loaded);
+
+            using var environment = CdidxEnvironment.Push(result.Settings, result.Sources);
+            var boundary = RepositoryOutputPathBoundary.CreateGuardForConfigSource(
+                MetricsSink.EnvVarName,
+                "metrics_path",
+                configuredPath,
+                destinationIsDirectory: false);
+            Assert.NotNull(boundary);
+
+            var swapped = false;
+            RepositoryOutputPathBoundary.BeforeMutationForTesting = (operation, _) =>
+            {
+                if (swapped || operation != "create_directory")
+                    return;
+                swapped = true;
+                Directory.Delete(safeDirectory);
+                Directory.CreateSymbolicLink(safeDirectory, outside);
+            };
+
+            var exception = Assert.Throws<RepositoryOutputPathBoundaryException>(
+                () => boundary!.CreateSensitiveDestinationDirectory());
+
+            Assert.Contains(RepositoryOutputPathBoundary.UnsafeReason, exception.Message, StringComparison.Ordinal);
+            Assert.False(Directory.Exists(Path.Combine(outside, "new")));
+            Assert.False(File.Exists(Path.Combine(outside, "new", "metrics.jsonl")));
+        }
+        finally
+        {
+            RepositoryOutputPathBoundary.BeforeMutationForTesting = null;
+            DeleteLinkEntry(safeDirectory);
+            TestProjectHelper.DeleteDirectory(workspace);
+            TestProjectHelper.DeleteDirectory(outside);
+        }
+    }
+
+    [Theory]
     [InlineData("""{ "search": { "limit": 0 } }""", "positive integer")]
     [InlineData("""{ "search": { "snippet_lines": -1 } }""", "positive integer")]
     [InlineData("""{ "search": { "max_line_width": -1 } }""", "non-negative integer")]
@@ -1096,6 +1294,42 @@ public class CdidxConfigFileTests
     private static string CreateTempDir()
     {
         return TestProjectHelper.CreateTempProject("cdidx_config");
+    }
+
+    private static bool TryCreateDirectoryLink(string linkPath, string targetPath)
+        => TryCreateLink(linkPath, targetPath, directoryLink: true);
+
+    private static bool TryCreateLink(string linkPath, string targetPath, bool directoryLink)
+    {
+        try
+        {
+            if (directoryLink)
+                Directory.CreateSymbolicLink(linkPath, targetPath);
+            else
+                File.CreateSymbolicLink(linkPath, targetPath);
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            return false;
+        }
+    }
+
+    private static void DeleteLinkEntry(string path)
+    {
+        try
+        {
+            var attributes = File.GetAttributes(path);
+            if ((attributes & FileAttributes.ReparsePoint) == 0)
+                return;
+            if ((attributes & FileAttributes.Directory) != 0)
+                Directory.Delete(path);
+            else
+                File.Delete(path);
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+        }
     }
 
     private static (int ExitCode, string Stdout, string Stderr) CaptureConsole(Func<int> action)

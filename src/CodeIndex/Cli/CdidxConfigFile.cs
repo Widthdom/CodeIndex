@@ -573,7 +573,7 @@ internal static class CdidxConfigFile
         return false;
     }
 
-    private static string ResolveConfigWorkspaceRoot(string configPath)
+    internal static string ResolveConfigWorkspaceRoot(string configPath)
     {
         var fullConfigPath = Path.GetFullPath(configPath);
         var configDirectory = Path.GetDirectoryName(fullConfigPath) ?? Path.GetFullPath(".");
@@ -1005,45 +1005,24 @@ internal static class CdidxConfigFile
             return false;
 
         var workspaceRoot = ResolveConfigWorkspaceRoot(path);
-        if (!TryResolveWorkspaceOutputPath(raw!, workspaceRoot, out value, out var pathError))
+        var destinationIsDirectory = string.Equals(key, "global_tool_log_dir", StringComparison.Ordinal);
+        if (!RepositoryOutputPathBoundary.TryResolveConfiguredPath(
+                raw!,
+                workspaceRoot,
+                destinationIsDirectory,
+                out var resolvedPath,
+                out var pathFailure))
         {
-            error = pathError;
+            error = pathFailure == "outside_workspace"
+                ? $"{FormatConfigDiagnosticPrefix(path)} `{key}` must resolve inside the config workspace root `{FormatConfigDiagnosticPath(workspaceRoot)}`."
+                : pathFailure == RepositoryOutputPathBoundary.UnsafeReason
+                    ? $"{FormatConfigDiagnosticPrefix(path)} `{key}` is unsafe ({RepositoryOutputPathBoundary.UnsafeReason}); symbolic links, junctions, cross-device mount points, reparse points, devices, and dangling links are not allowed below the config workspace root."
+                    : $"{FormatConfigDiagnosticPrefix(path)} `{key}` path is invalid (invalid_path).";
             return false;
         }
 
+        value = resolvedPath;
         return true;
-
-        bool TryResolveWorkspaceOutputPath(string rawPath, string root, out string? resolved, out string? pathError)
-        {
-            resolved = null;
-            pathError = null;
-            try
-            {
-                var normalizedRoot = PathCasing.NormalizeBoundaryPath(root);
-                var fullPath = Path.IsPathRooted(rawPath)
-                    ? Path.GetFullPath(rawPath)
-                    : Path.GetFullPath(Path.Combine(normalizedRoot, rawPath));
-                var normalizedPath = PathCasing.NormalizeBoundaryPath(fullPath);
-
-                if (!PathCasing.IsPathEqualOrParent(normalizedRoot, normalizedPath))
-                {
-                    pathError = $"{FormatConfigDiagnosticPrefix(path)} `{key}` must resolve inside the config workspace root `{FormatConfigDiagnosticPath(normalizedRoot)}`.";
-                    return false;
-                }
-
-                resolved = fullPath;
-                return true;
-            }
-            catch (Exception ex) when (ex is ArgumentException
-                                           or IOException
-                                           or NotSupportedException
-                                           or PathTooLongException
-                                           or UnauthorizedAccessException)
-            {
-                pathError = $"{FormatConfigDiagnosticPrefix(path)} `{key}` path is invalid (invalid_path).";
-                return false;
-            }
-        }
     }
 
     private static bool TryReadStringArray(JsonElement element, string key, string path, out string[]? value, out string? error)

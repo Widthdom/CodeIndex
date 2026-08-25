@@ -32,6 +32,7 @@ internal static class GlobalToolLog
     private const int PrivateLogDiagnosticEmitLimit = 16;
     internal static TimeProvider TimeProvider { get; set; } = TimeProvider.System;
     private static readonly AsyncLocal<Session?> CurrentSession = new();
+    private sealed record LogDirectorySelection(string Path, RepositoryOutputPathGuard? Boundary);
 
     internal static IDisposable? TryStart(string[] args, string appVersion)
         => TryStart(args, appVersion, createWriter: null, afterWriterCreated: null);
@@ -56,15 +57,20 @@ internal static class GlobalToolLog
                 return null;
 
             var privateLogDiagnostics = new List<PrivateLogFileDiagnostic>();
-            var logDirectory = ResolveLogDirectory();
-            Directory.CreateDirectory(logDirectory);
-            HardenLogFiles(logDirectory, privateLogDiagnostics.Add);
+            var selection = ResolveLogDirectorySelection(requireWritableCandidate: true);
+            var logDirectory = selection.Path;
+            var boundary = selection.Boundary;
+            if (boundary is null)
+                Directory.CreateDirectory(logDirectory);
+            else
+                boundary.CreateSensitiveDestinationDirectory();
+            HardenLogFiles(logDirectory, privateLogDiagnostics.Add, boundary);
             var options = LogOptions.FromEnvironment();
             var logPath = ResolveLogPath(logDirectory, options);
-            writer = createWriter?.Invoke(logPath) ?? CreateLogWriter(logPath);
+            writer = createWriter?.Invoke(logPath) ?? CreateLogWriter(logPath, boundary);
             afterWriterCreated?.Invoke();
-            SetLogFilePermissions(logPath, privateLogDiagnostics.Add);
-            PruneOldLogs(logDirectory, options.RetainCount, privateLogDiagnostics.Add);
+            SetLogFilePermissions(logPath, privateLogDiagnostics.Add, boundary);
+            PruneOldLogs(logDirectory, options.RetainCount, privateLogDiagnostics.Add, boundary);
 
             var session = new Session(writer, logPath, options.Format);
             writer = null;
@@ -78,6 +84,15 @@ internal static class GlobalToolLog
             WritePrivateLogDiagnostics(session, privateLogDiagnostics);
             return session;
         }
+        catch (RepositoryOutputPathBoundaryException)
+        {
+            writer?.Dispose();
+            CurrentSession.Value = null;
+            CommandErrorWriter.WriteWarning(
+                "persistent log disabled; repository-configured `global_tool_log_dir` is unsafe "
+                + $"({RepositoryOutputPathBoundary.UnsafeReason}).");
+            return null;
+        }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             writer?.Dispose();
@@ -86,8 +101,8 @@ internal static class GlobalToolLog
         }
     }
 
-    private static StreamWriter CreateLogWriter(string logPath) =>
-        PrivateLogFile.OpenAppendText(logPath);
+    private static StreamWriter CreateLogWriter(string logPath, RepositoryOutputPathGuard? boundary) =>
+        PrivateLogFile.OpenAppendText(logPath, boundary);
 
     internal static void Info(string message) => CurrentSession.Value?.Write("INFO", message);
 
@@ -275,23 +290,40 @@ internal static class GlobalToolLog
 
     internal static string ResolveLogDirectoryForStatus() => ResolveLogDirectory();
 
-    private static string ResolveLogDirectory() => ResolveLogDirectory(requireWritableCandidate: true);
+    private static string ResolveLogDirectory() => ResolveLogDirectorySelection(requireWritableCandidate: true).Path;
 
     internal static string ResolveLogDirectoryWithoutWriteProbeForTesting()
-        => ResolveLogDirectory(requireWritableCandidate: false);
+        => ResolveLogDirectorySelection(requireWritableCandidate: false).Path;
 
-    private static string ResolveLogDirectory(bool requireWritableCandidate)
+    private static LogDirectorySelection ResolveLogDirectorySelection(bool requireWritableCandidate)
     {
+        var configuredOverride = CdidxEnvironment.GetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR");
+        var configuredSource = CdidxConfigSourceResolver.GetSource("CDIDX_GLOBAL_TOOL_LOG_DIR");
         foreach (var candidate in EnumerateLogDirectoryCandidates())
         {
             if (!TryNormalizeLogDirectoryCandidate(candidate, out var fullPath))
                 continue;
 
-            if (!requireWritableCandidate || CanWriteProbe(fullPath))
-                return fullPath;
+            RepositoryOutputPathGuard? boundary = null;
+            if (!string.IsNullOrWhiteSpace(configuredOverride)
+                && !string.IsNullOrWhiteSpace(configuredSource)
+                && string.Equals(
+                    PathCasing.NormalizeBoundaryPath(ExpandUserLogDirectory(configuredOverride)),
+                    PathCasing.NormalizeBoundaryPath(candidate),
+                    PathCasing.ComparisonFor(candidate)))
+            {
+                boundary = RepositoryOutputPathBoundary.CreateGuardForConfigSource(
+                    "CDIDX_GLOBAL_TOOL_LOG_DIR",
+                    "global_tool_log_dir",
+                    fullPath,
+                    destinationIsDirectory: true);
+            }
+
+            if (!requireWritableCandidate || CanWriteProbe(fullPath, boundary))
+                return new LogDirectorySelection(fullPath, boundary);
         }
 
-        return ResolveTempFallbackLogDirectory();
+        return new LogDirectorySelection(ResolveTempFallbackLogDirectory(), null);
     }
 
     internal static bool TryNormalizeLogDirectoryCandidate(string candidate, out string fullPath)
@@ -352,13 +384,33 @@ internal static class GlobalToolLog
     private static string ResolveTempFallbackLogDirectory()
         => DataDirectorySecurity.ResolveSensitiveTempFallbackDirectory("logs");
 
-    private static bool CanWriteProbe(string directory)
+    private static bool CanWriteProbe(string directory, RepositoryOutputPathGuard? boundary)
     {
         try
         {
-            DataDirectorySecurity.CreateSensitiveDirectory(directory);
+            if (boundary is null)
+                DataDirectorySecurity.CreateSensitiveDirectory(directory);
+            else
+                boundary.CreateSensitiveDestinationDirectory();
             var probePath = Path.Combine(directory, $".cdidx-write-probe-{Guid.NewGuid():N}.tmp");
+            if (boundary is not null)
+            {
+                using (PrivateLogFile.OpenAppend(probePath, boundary: boundary))
+                {
+                }
+                boundary.PrepareMutation("write_probe_delete", probePath);
+                if (OperatingSystem.IsWindows())
+                    File.Delete(LongPath.EnsureWindowsPrefix(probePath));
+                else
+                    boundary.DeleteFileUnix(probePath);
+                boundary.CompleteMutation(probePath);
+                return true;
+            }
             return FileWriteProbe.TryWriteAndDeleteEmptyFile(probePath, Encoding.UTF8);
+        }
+        catch (RepositoryOutputPathBoundaryException)
+        {
+            throw;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
         {
@@ -429,11 +481,17 @@ internal static class GlobalToolLog
     private static void PruneOldLogs(
         string logDirectory,
         int retainedLogFileCount,
-        Action<PrivateLogFileDiagnostic>? diagnosticSink)
+        Action<PrivateLogFileDiagnostic>? diagnosticSink,
+        RepositoryOutputPathGuard? boundary)
     {
         try
         {
-            PrivateLogFile.PruneOldFiles(logDirectory, "stderr-*.log", retainedLogFileCount, diagnosticSink);
+            PrivateLogFile.PruneOldFiles(
+                logDirectory,
+                "stderr-*.log",
+                retainedLogFileCount,
+                diagnosticSink,
+                boundary: boundary);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -441,14 +499,17 @@ internal static class GlobalToolLog
         }
     }
 
-    private static void HardenLogFiles(string logDirectory, Action<PrivateLogFileDiagnostic>? diagnosticSink)
+    private static void HardenLogFiles(
+        string logDirectory,
+        Action<PrivateLogFileDiagnostic>? diagnosticSink,
+        RepositoryOutputPathGuard? boundary)
     {
         if (OperatingSystem.IsWindows())
             return;
 
         try
         {
-            PrivateLogFile.HardenExisting(logDirectory, "stderr-*.log", diagnosticSink);
+            PrivateLogFile.HardenExisting(logDirectory, "stderr-*.log", diagnosticSink, boundary);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -456,14 +517,17 @@ internal static class GlobalToolLog
         }
     }
 
-    private static void SetLogFilePermissions(string logPath, Action<PrivateLogFileDiagnostic>? diagnosticSink)
+    private static void SetLogFilePermissions(
+        string logPath,
+        Action<PrivateLogFileDiagnostic>? diagnosticSink,
+        RepositoryOutputPathGuard? boundary)
     {
         if (OperatingSystem.IsWindows())
             return;
 
         try
         {
-            PrivateLogFile.TrySetPrivatePermissions(logPath, diagnosticSink);
+            PrivateLogFile.TrySetPrivatePermissions(logPath, diagnosticSink, boundary);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
