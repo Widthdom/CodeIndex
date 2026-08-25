@@ -11,6 +11,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.44.3] - 2026-08-25
+
+#### Internal
+
+- **Record-component allocation coverage allows for Linux runtime variance** — the C# guard now uses a 12.8 MB ceiling so normal Ubuntu runner allocation does not fail release CI, while Java and Kotlin budgets and all component-result assertions remain unchanged.
+
 ### [1.44.2] - 2026-08-25
 
 #### Internal
@@ -6653,6 +6659,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.44.3] - 2026-08-25
+
+#### 内部変更
+
+- **record component の allocation coverage が Linux runtime の差を許容するようになりました** — C# guard の上限を 12.8 MB とし、Ubuntu runner の通常 allocation で release CI が失敗しないようにしました。Java / Kotlin の budget と component 結果の全 assertion は変更していません。
+
 ### [1.44.2] - 2026-08-25
 
 #### 内部変更
@@ -13267,7 +13279,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.44.2...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.44.3...HEAD
+[1.44.3]: https://github.com/Widthdom/CodeIndex/compare/v1.44.2...v1.44.3
 [1.44.2]: https://github.com/Widthdom/CodeIndex/compare/v1.44.1...v1.44.2
 [1.44.1]: https://github.com/Widthdom/CodeIndex/compare/v1.44.0...v1.44.1
 [1.44.0]: https://github.com/Widthdom/CodeIndex/compare/v1.43.1...v1.44.0
