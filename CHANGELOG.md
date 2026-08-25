@@ -11,6 +11,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.44.2] - 2026-08-25
+
+#### Internal
+
+- **Shell completion probes tolerate cold startup on loaded CI hosts** — completion-script execution tests now use a bounded 30-second deadline while retaining process-tree termination on timeout, avoiding false failures when PowerShell starts slowly.
+
 ### [1.44.1] - 2026-08-25
 
 #### Changed
@@ -6647,6 +6653,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.44.2] - 2026-08-25
+
+#### 内部変更
+
+- **shell completion probe が負荷の高い CI host での cold start に耐えられるようになりました** — completion script の実行テストは timeout 時の process tree 終了を維持しながら上限 30 秒の deadline を使用し、PowerShell の起動が遅い場合の誤検知を防ぎます。
+
 ### [1.44.1] - 2026-08-25
 
 #### 変更
@@ -13255,7 +13267,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.44.1...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.44.2...HEAD
+[1.44.2]: https://github.com/Widthdom/CodeIndex/compare/v1.44.1...v1.44.2
 [1.44.1]: https://github.com/Widthdom/CodeIndex/compare/v1.44.0...v1.44.1
 [1.44.0]: https://github.com/Widthdom/CodeIndex/compare/v1.43.1...v1.44.0
 [1.43.1]: https://github.com/Widthdom/CodeIndex/compare/v1.43.0...v1.43.1
