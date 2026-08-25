@@ -2951,11 +2951,13 @@ commits to it, so read-only state/cache/runtime mounts fall through to the
 next candidate instead of losing the first log write. Repository-configured
 `metrics_path` and `global_tool_log_dir` values from `.cdidxrc.json` or
 `.cdidx/config.json` use a stricter boundary: every existing component below
-the config workspace is rejected when it is a symbolic link, junction,
+the config workspace is rejected when it is a symbolic link, junction, bind or
 cross-device mount point, reparse point, device, or dangling link. The boundary
-is revalidated before each mutation; on POSIX, directory creation, append,
-permission changes, rotation, and deletion are additionally anchored to the
-workspace directory handle with no-follow relative operations. The same
+is revalidated before each mutation; on Linux, path and opened-handle mount IDs
+also reject same-device bind mounts. On POSIX, directory creation, append,
+permission changes, rotation, replacement, and deletion are additionally anchored
+to the workspace directory handle with no-follow relative operations, and guarded
+renames fsync their already-open destination parent before reporting success. The same
 `global_tool_log_dir` guard covers lifecycle logs, file query traces, and the
 bounded `last-failure.json` diagnostic. An unsafe value fails config validation
 with the bounded `unsafe_output_path` diagnostic and does not create, append,
@@ -6966,11 +6968,13 @@ read-only な state/cache/runtime mount は最初の log write を失うので�
 次の candidate へ fall through します。`.cdidxrc.json` または
 `.cdidx/config.json` の repository config に由来する `metrics_path` と
 `global_tool_log_dir` には、より厳格な境界を適用します。config workspace
-配下の既存 component が symbolic link、junction、cross-device mount point、
+配下の既存 component が symbolic link、junction、bind mount / cross-device mount point、
 reparse point、device、dangling link のいずれかであれば拒否し、各 mutation の
-直前にも境界を再検証します。POSIX ではさらに directory 作成、append、permission
-変更、rotation、delete を workspace directory handle 起点の no-follow relative
-operation へ固定します。同じ `global_tool_log_dir` guard を lifecycle log、file
+直前にも境界を再検証します。Linux では path と open 済み handle の mount ID も
+比較して同一 device の bind mount を拒否します。POSIX ではさらに directory 作成、
+append、permission 変更、rotation、置換、delete を workspace directory handle 起点の
+no-follow relative operation へ固定し、guarded rename は成功を返す前に open 済みの
+destination parent を fsync します。同じ `global_tool_log_dir` guard を lifecycle log、file
 query trace、上限付きの `last-failure.json` 診断にも適用します。安全でない値は
 上限付きの `unsafe_output_path` 診断で config validation に失敗し、外部 target の
 作成、追記、rotation、置換、削除、chmod は行いません。明示的な CLI と process

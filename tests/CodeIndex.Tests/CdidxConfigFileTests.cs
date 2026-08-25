@@ -484,6 +484,140 @@ public class CdidxConfigFileTests
     }
 
     [Fact]
+    public void OutputBoundary_RejectsSameDeviceDistinctUnixMountIdentity_Issue5181Review()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var workspace = CreateTempDir();
+        var mountedDirectory = Path.Combine(workspace, "mounted");
+        try
+        {
+            Directory.CreateDirectory(mountedDirectory);
+            File.WriteAllText(
+                Path.Combine(workspace, CdidxConfigFile.FileName),
+                """{ "metrics_path": "mounted/new/metrics.jsonl" }""");
+            RepositoryOutputPathBoundary.UnixMountIdForTesting = path =>
+                string.Equals(
+                    Path.GetFullPath(path),
+                    mountedDirectory,
+                    StringComparison.Ordinal)
+                    ? 2UL
+                    : 1UL;
+
+            var result = CdidxConfigFile.Load(workspace, new TestEnvironment().Read);
+
+            Assert.True(result.Failed);
+            Assert.Contains(RepositoryOutputPathBoundary.UnsafeReason, result.Error, StringComparison.Ordinal);
+            Assert.False(Directory.Exists(Path.Combine(mountedDirectory, "new")));
+            Assert.Empty(result.Settings);
+        }
+        finally
+        {
+            RepositoryOutputPathBoundary.UnixMountIdForTesting = null;
+            TestProjectHelper.DeleteDirectory(workspace);
+        }
+    }
+
+    [Fact]
+    public void OutputBoundary_RejectsDistinctMountIdentityFromOpenedAncestor_Issue5181Review()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var workspace = CreateTempDir();
+        var safeDirectory = Path.Combine(workspace, "safe");
+        var metricsPath = Path.Combine(safeDirectory, "metrics.jsonl");
+        try
+        {
+            Directory.CreateDirectory(safeDirectory);
+            File.WriteAllText(
+                Path.Combine(workspace, CdidxConfigFile.FileName),
+                """{ "metrics_path": "safe/metrics.jsonl" }""");
+            RepositoryOutputPathBoundary.UnixMountIdForTesting = _ => 1UL;
+            var result = CdidxConfigFile.Load(workspace, new TestEnvironment().Read);
+            Assert.True(result.Loaded);
+            using var environment = CdidxEnvironment.Push(result.Settings, result.Sources);
+            var boundary = RepositoryOutputPathBoundary.CreateGuardForConfigSource(
+                MetricsSink.EnvVarName,
+                "metrics_path",
+                metricsPath,
+                destinationIsDirectory: false);
+            Assert.NotNull(boundary);
+            var handleProbeCount = 0;
+            RepositoryOutputPathBoundary.UnixHandleMountIdForTesting = _ =>
+                Interlocked.Increment(ref handleProbeCount) == 1 ? 1UL : 2UL;
+
+            var exception = Assert.Throws<RepositoryOutputPathBoundaryException>(
+                () => PrivateLogFile.OpenAppend(metricsPath, boundary: boundary));
+
+            Assert.Contains(RepositoryOutputPathBoundary.UnsafeReason, exception.Message, StringComparison.Ordinal);
+            Assert.Equal(2, handleProbeCount);
+            Assert.False(File.Exists(metricsPath));
+        }
+        finally
+        {
+            RepositoryOutputPathBoundary.UnixHandleMountIdForTesting = null;
+            RepositoryOutputPathBoundary.UnixMountIdForTesting = null;
+            TestProjectHelper.DeleteDirectory(workspace);
+        }
+    }
+
+    [Fact]
+    public void OutputBoundary_GuardedRenameSurfacesParentFsyncFailure_Issue5181Review()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var workspace = CreateTempDir();
+        var metricsPath = Path.Combine(workspace, "logs", "metrics.jsonl");
+        Exception? rotationFailure = null;
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(metricsPath)!);
+            File.WriteAllText(metricsPath, "current");
+            File.WriteAllText(
+                Path.Combine(workspace, CdidxConfigFile.FileName),
+                """{ "metrics_path": "logs/metrics.jsonl" }""");
+            var result = CdidxConfigFile.Load(workspace, new TestEnvironment().Read);
+            Assert.True(result.Loaded);
+            using var environment = CdidxEnvironment.Push(result.Settings, result.Sources);
+            var boundary = RepositoryOutputPathBoundary.CreateGuardForConfigSource(
+                MetricsSink.EnvVarName,
+                "metrics_path",
+                metricsPath,
+                destinationIsDirectory: false);
+            Assert.NotNull(boundary);
+            var fsyncCount = 0;
+            RepositoryOutputPathBoundary.UnixDirectoryFsyncForTesting = _ =>
+            {
+                fsyncCount++;
+                return -1;
+            };
+
+            var rotated = PrivateLogFile.TryRotateSlots(
+                metricsPath,
+                retainedFileCount: 2,
+                onFailure: ex => rotationFailure = ex,
+                boundary: boundary);
+
+            Assert.False(rotated);
+            var durabilityFailure = Assert.IsType<IOException>(rotationFailure);
+            Assert.IsNotType<RepositoryOutputPathBoundaryException>(durabilityFailure);
+            Assert.Contains("already replaced", durabilityFailure.Message, StringComparison.Ordinal);
+            Assert.Contains("parent directory could not be flushed", durabilityFailure.Message, StringComparison.Ordinal);
+            Assert.Equal(1, fsyncCount);
+            Assert.False(File.Exists(metricsPath));
+            Assert.Equal("current", File.ReadAllText(metricsPath + ".1"));
+        }
+        finally
+        {
+            RepositoryOutputPathBoundary.UnixDirectoryFsyncForTesting = null;
+            TestProjectHelper.DeleteDirectory(workspace);
+        }
+    }
+
+    [Fact]
     public void RepositoryOutputBoundary_RevalidatesAfterInjectedAncestorSwap_Issue5181()
     {
         var workspace = CreateTempDir();

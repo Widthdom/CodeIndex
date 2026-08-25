@@ -14,9 +14,12 @@ internal static class RepositoryOutputPathBoundary
 {
     internal const string UnsafeReason = "unsafe_output_path";
     private const string UnsafeMessage =
-        "symbolic links, junctions, cross-device mount points, reparse points, devices, and dangling links are not allowed below the config workspace root";
+        "symbolic links, junctions, bind or cross-device mount points, reparse points, devices, and dangling links are not allowed below the config workspace root";
     private static readonly AsyncLocal<Action<string, string>?> BeforeMutation = new();
     private static readonly AsyncLocal<Func<string, string, bool>?> ContainsPath = new();
+    private static readonly AsyncLocal<Func<string, ulong?>?> UnixMountId = new();
+    private static readonly AsyncLocal<Func<int, ulong?>?> UnixHandleMountId = new();
+    private static readonly AsyncLocal<Func<int, int>?> UnixDirectoryFsync = new();
 
     internal static Action<string, string>? BeforeMutationForTesting
     {
@@ -28,6 +31,24 @@ internal static class RepositoryOutputPathBoundary
     {
         get => ContainsPath.Value;
         set => ContainsPath.Value = value;
+    }
+
+    internal static Func<string, ulong?>? UnixMountIdForTesting
+    {
+        get => UnixMountId.Value;
+        set => UnixMountId.Value = value;
+    }
+
+    internal static Func<int, ulong?>? UnixHandleMountIdForTesting
+    {
+        get => UnixHandleMountId.Value;
+        set => UnixHandleMountId.Value = value;
+    }
+
+    internal static Func<int, int>? UnixDirectoryFsyncForTesting
+    {
+        get => UnixDirectoryFsync.Value;
+        set => UnixDirectoryFsync.Value = value;
     }
 
     internal static bool TryResolveConfiguredPath(
@@ -143,6 +164,14 @@ internal static class RepositoryOutputPathBoundary
         }
 
         var rootDevice = TryGetUnixDevice(normalizedRoot, out var device) ? device : (long?)null;
+        ulong? rootMountId = null;
+        if (RequiresUnixMountIdentity)
+        {
+            var canonicalRoot = ResolveCanonicalWorkspaceRoot(normalizedRoot);
+            if (!TryGetUnixMountId(canonicalRoot, out var resolvedRootMountId))
+                throw CreateException("output path", UnsafeReason);
+            rootMountId = resolvedRootMountId;
+        }
         var relative = Path.GetRelativePath(normalizedRoot, normalizedPath);
         if (relative == ".")
             return;
@@ -181,6 +210,12 @@ internal static class RepositoryOutputPathBoundary
             if (rootDevice.HasValue
                 && TryGetUnixDevice(current, out var currentDevice)
                 && currentDevice != rootDevice.Value)
+            {
+                throw CreateException("output path", UnsafeReason);
+            }
+            if (rootMountId.HasValue
+                && (!TryGetUnixMountId(current, out var currentMountId)
+                    || currentMountId != rootMountId.Value))
             {
                 throw CreateException("output path", UnsafeReason);
             }
@@ -235,6 +270,105 @@ internal static class RepositoryOutputPathBoundary
         }
     }
 
+    internal static bool RequiresUnixMountIdentity =>
+        OperatingSystem.IsLinux()
+        || UnixMountIdForTesting is not null
+        || UnixHandleMountIdForTesting is not null;
+
+    internal static bool TryGetUnixMountId(string path, out ulong mountId)
+    {
+        mountId = 0;
+        if (UnixMountIdForTesting is { } provider)
+        {
+            var value = provider(path);
+            if (value.HasValue)
+            {
+                mountId = value.Value;
+                return true;
+            }
+            return false;
+        }
+
+        if (!OperatingSystem.IsLinux())
+            return false;
+
+        try
+        {
+            if (UnixStatX(
+                    UnixCurrentWorkingDirectory,
+                    path,
+                    UnixAtSymlinkNoFollow,
+                    UnixStatXMountId,
+                    out var status) != 0
+                || (status.Mask & UnixStatXMountId) == 0)
+            {
+                return false;
+            }
+
+            mountId = status.MountId;
+            return true;
+        }
+        catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException)
+        {
+            return false;
+        }
+    }
+
+    internal static bool TryGetUnixMountId(SafeFileHandle handle, out ulong mountId)
+    {
+        mountId = 0;
+        var descriptor = handle.DangerousGetHandle().ToInt32();
+        if (UnixHandleMountIdForTesting is { } provider)
+        {
+            var value = provider(descriptor);
+            if (value.HasValue)
+            {
+                mountId = value.Value;
+                return true;
+            }
+            return false;
+        }
+
+        if (!OperatingSystem.IsLinux())
+            return false;
+
+        try
+        {
+            if (UnixStatX(
+                    descriptor,
+                    string.Empty,
+                    UnixAtEmptyPath | UnixAtSymlinkNoFollow,
+                    UnixStatXMountId,
+                    out var status) != 0
+                || (status.Mask & UnixStatXMountId) == 0)
+            {
+                return false;
+            }
+
+            mountId = status.MountId;
+            return true;
+        }
+        catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException)
+        {
+            return false;
+        }
+    }
+
+    internal static int FsyncUnixDirectory(SafeFileHandle handle)
+    {
+        var descriptor = handle.DangerousGetHandle().ToInt32();
+        if (UnixDirectoryFsyncForTesting is { } fsync)
+            return fsync(descriptor);
+
+        int result;
+        do
+        {
+            result = UnixFsync(descriptor);
+        }
+        while (result != 0 && Marshal.GetLastWin32Error() == 4);
+        return result;
+    }
+
     private static bool IsPathException(Exception ex)
         => ex is ArgumentException
             or IOException
@@ -254,6 +388,32 @@ internal static class RepositoryOutputPathBoundary
 
     [DllImport("libc", EntryPoint = "free")]
     private static extern void UnixFree(IntPtr pointer);
+
+    [DllImport("libc", EntryPoint = "statx", SetLastError = true)]
+    private static extern int UnixStatX(
+        int directory,
+        string path,
+        int flags,
+        uint mask,
+        out UnixStatXStatus status);
+
+    [DllImport("libc", EntryPoint = "fsync", SetLastError = true)]
+    private static extern int UnixFsync(int descriptor);
+
+    private const int UnixCurrentWorkingDirectory = -100;
+    private const int UnixAtSymlinkNoFollow = 0x100;
+    private const int UnixAtEmptyPath = 0x1000;
+    private const uint UnixStatXMountId = 0x1000;
+
+    [StructLayout(LayoutKind.Explicit, Size = 256)]
+    private struct UnixStatXStatus
+    {
+        [FieldOffset(0)]
+        internal uint Mask;
+
+        [FieldOffset(144)]
+        internal ulong MountId;
+    }
 
     [StructLayout(LayoutKind.Sequential)]
     private struct UnixFileStatus
@@ -393,6 +553,12 @@ internal sealed class RepositoryOutputPathGuard
         {
             throw CreateNativeIOException();
         }
+        if (RepositoryOutputPathBoundary.FsyncUnixDirectory(destinationParent) != 0)
+        {
+            throw new IOException(
+                "Guarded replace completed, but the target file was already replaced "
+                + "and its parent directory could not be flushed.");
+        }
     }
 
     internal void ValidateRelatedPath(string path, bool expectsDirectory = false)
@@ -459,7 +625,7 @@ internal sealed class RepositoryOutputPathGuard
     {
         var normalizedDirectory = PathCasing.NormalizeBoundaryPath(directory);
         var components = GetRelativeComponents(normalizedDirectory);
-        using var root = OpenUnixRootDirectory(out var rootDevice);
+        using var root = OpenUnixRootDirectory(out var rootIdentity);
         SafeFileHandle current = root;
         try
         {
@@ -488,7 +654,7 @@ internal sealed class RepositoryOutputPathGuard
                         created = true;
                     }
 
-                    EnsureUnixObject(next, rootDevice, expectedType: UnixDirectoryType);
+                    EnsureUnixObject(next, rootIdentity, expectedType: UnixDirectoryType);
                     if (created || index == components.Length - 1)
                     {
                         PrepareMutation("set_directory_permissions", currentPath, expectsDirectory: true);
@@ -521,7 +687,7 @@ internal sealed class RepositoryOutputPathGuard
 
     private SafeFileHandle OpenUnixFile(string path, bool create, bool append, bool truncate = false)
     {
-        using var parent = OpenUnixParentDirectory(path, out var rootDevice);
+        using var parent = OpenUnixParentDirectory(path, out var rootIdentity);
         var flags = UnixWriteOnly | UnixCloseOnExec | UnixNoFollow;
         if (append)
             flags |= UnixAppend;
@@ -540,7 +706,7 @@ internal sealed class RepositoryOutputPathGuard
         var handle = new SafeFileHandle(new IntPtr(descriptor), ownsHandle: true);
         try
         {
-            EnsureUnixObject(handle, rootDevice, expectedType: UnixRegularFileType);
+            EnsureUnixObject(handle, rootIdentity, expectedType: UnixRegularFileType);
             if (create
                 && UnixFChmod(handle.DangerousGetHandle().ToInt32(), (uint)PrivateLogFile.PrivateFileMode) != 0)
             {
@@ -558,17 +724,17 @@ internal sealed class RepositoryOutputPathGuard
     private SafeFileHandle OpenUnixParentDirectory(string path)
         => OpenUnixParentDirectory(path, out _);
 
-    private SafeFileHandle OpenUnixParentDirectory(string path, out long rootDevice)
+    private SafeFileHandle OpenUnixParentDirectory(string path, out UnixBoundaryIdentity rootIdentity)
     {
         var parentPath = Path.GetDirectoryName(Path.GetFullPath(path))
             ?? throw RepositoryOutputPathBoundary.CreateException(FieldName, "invalid_path");
-        return OpenUnixDirectory(parentPath, out rootDevice);
+        return OpenUnixDirectory(parentPath, out rootIdentity);
     }
 
-    private SafeFileHandle OpenUnixDirectory(string directory, out long rootDevice)
+    private SafeFileHandle OpenUnixDirectory(string directory, out UnixBoundaryIdentity rootIdentity)
     {
         var components = GetRelativeComponents(PathCasing.NormalizeBoundaryPath(directory));
-        var current = OpenUnixRootDirectory(out rootDevice);
+        var current = OpenUnixRootDirectory(out rootIdentity);
         try
         {
             foreach (var component in components)
@@ -576,7 +742,7 @@ internal sealed class RepositoryOutputPathGuard
                 var next = TryOpenUnixDirectoryAt(current, component) ?? throw CreateNativeIOException();
                 try
                 {
-                    EnsureUnixObject(next, rootDevice, expectedType: UnixDirectoryType);
+                    EnsureUnixObject(next, rootIdentity, expectedType: UnixDirectoryType);
                 }
                 catch
                 {
@@ -595,7 +761,7 @@ internal sealed class RepositoryOutputPathGuard
         }
     }
 
-    private SafeFileHandle OpenUnixRootDirectory(out long rootDevice)
+    private SafeFileHandle OpenUnixRootDirectory(out UnixBoundaryIdentity rootIdentity)
     {
         var descriptor = UnixOpen(
             CanonicalWorkspaceRoot,
@@ -611,7 +777,14 @@ internal sealed class RepositoryOutputPathGuard
             {
                 throw CreateNativeIOException();
             }
-            rootDevice = status.Device;
+            ulong? mountId = null;
+            if (RepositoryOutputPathBoundary.RequiresUnixMountIdentity)
+            {
+                if (!RepositoryOutputPathBoundary.TryGetUnixMountId(handle, out var resolvedMountId))
+                    throw CreateNativeIOException();
+                mountId = resolvedMountId;
+            }
+            rootIdentity = new UnixBoundaryIdentity(status.Device, mountId);
             return handle;
         }
         catch
@@ -635,11 +808,20 @@ internal sealed class RepositoryOutputPathGuard
         throw CreateNativeIOException();
     }
 
-    private static void EnsureUnixObject(SafeFileHandle handle, long rootDevice, int expectedType)
+    private static void EnsureUnixObject(
+        SafeFileHandle handle,
+        UnixBoundaryIdentity rootIdentity,
+        int expectedType)
     {
         if (UnixFStat(handle.DangerousGetHandle(), out var status) != 0
             || (status.Mode & UnixFileTypeMask) != expectedType
-            || status.Device != rootDevice)
+            || status.Device != rootIdentity.Device)
+        {
+            throw CreateNativeIOException();
+        }
+        if (rootIdentity.MountId.HasValue
+            && (!RepositoryOutputPathBoundary.TryGetUnixMountId(handle, out var mountId)
+                || mountId != rootIdentity.MountId.Value))
         {
             throw CreateNativeIOException();
         }
@@ -708,6 +890,8 @@ internal sealed class RepositoryOutputPathGuard
     private const int UnixFileTypeMask = 0xF000;
     private const int UnixDirectoryType = 0x4000;
     private const int UnixRegularFileType = 0x8000;
+
+    private readonly record struct UnixBoundaryIdentity(long Device, ulong? MountId);
 
     private static int UnixCloseOnExec => OperatingSystem.IsMacOS() ? 0x01000000 : 0x00080000;
     private static int UnixNoFollow => OperatingSystem.IsMacOS() ? 0x00000100 : 0x00020000;

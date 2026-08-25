@@ -1016,7 +1016,7 @@ internal static class CdidxConfigFile
             error = pathFailure == "outside_workspace"
                 ? $"{FormatConfigDiagnosticPrefix(path)} `{key}` must resolve inside the config workspace root `{FormatConfigDiagnosticPath(workspaceRoot)}`."
                 : pathFailure == RepositoryOutputPathBoundary.UnsafeReason
-                    ? $"{FormatConfigDiagnosticPrefix(path)} `{key}` is unsafe ({RepositoryOutputPathBoundary.UnsafeReason}); symbolic links, junctions, cross-device mount points, reparse points, devices, and dangling links are not allowed below the config workspace root."
+                    ? $"{FormatConfigDiagnosticPrefix(path)} `{key}` is unsafe ({RepositoryOutputPathBoundary.UnsafeReason}); symbolic links, junctions, bind or cross-device mount points, reparse points, devices, and dangling links are not allowed below the config workspace root."
                     : $"{FormatConfigDiagnosticPrefix(path)} `{key}` path is invalid (invalid_path).";
             return false;
         }
