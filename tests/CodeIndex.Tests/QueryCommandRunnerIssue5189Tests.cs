@@ -29,8 +29,10 @@ public sealed class QueryCommandRunnerIssue5189Tests
     [Theory]
     [InlineData("_ = new Alias(first: 1, second: 2);")]
     [InlineData("_ = new Alias(\"\"\"raw,(value)\"\"\");")]
+    [InlineData("_ = new Alias(left < right, high > low);")]
+    [InlineData("_ = new Alias($\"{Make(\"x,y\")}\", 0);")]
     [InlineData("_ = new Alias(1,")]
-    public void AliasInvocationArity_KeepsBindingSensitiveSyntaxAmbiguous_Issue5189(
+    public void AliasInvocationArity_KeepsUnsupportedSyntaxAmbiguous_Issue5189(
         string context)
     {
         var column = context.IndexOf("Alias", StringComparison.Ordinal) + 1;
@@ -40,6 +42,16 @@ public sealed class QueryCommandRunnerIssue5189Tests
             "Widget",
             column,
             "Alias".Length));
+    }
+
+    [Fact]
+    public void AliasInvocationArity_RejectsOverflowingRecordedSpan_Issue5189()
+    {
+        Assert.Null(CSharpTypeReferenceArity.GetInvocationArgumentCount(
+            "_ = new Alias(1);",
+            "Widget",
+            columnNumber: 1_500_000_001,
+            spanLength: 1_500_000_000));
     }
 
     [Theory]
@@ -225,6 +237,8 @@ public sealed class QueryCommandRunnerIssue5189Tests
                          "AmbiguousWidget",
                          "OptionalWidget",
                          "ParamsWidget",
+                         "RelationalWidget",
+                         "InterpolatedWidget",
                      })
             {
                 using var ambiguousDocument = InspectConstructors(
@@ -314,6 +328,20 @@ public sealed class QueryCommandRunnerIssue5189Tests
             {
                 public PrimaryOptionalWidget(string value = "") : this(0) { }
             }
+
+            public sealed class RelationalWidget
+            {
+                public RelationalWidget(bool value) { }
+                public RelationalWidget(bool left, bool right) { }
+                public RelationalWidget(bool first, bool second, bool third) { }
+            }
+
+            public sealed class InterpolatedWidget
+            {
+                public InterpolatedWidget(string value) { }
+                public InterpolatedWidget(string value, int second) { }
+                public InterpolatedWidget(string value, int second, int third) { }
+            }
             """);
         TestProjectHelper.WriteTextFile(
             projectRoot,
@@ -327,6 +355,8 @@ public sealed class QueryCommandRunnerIssue5189Tests
             using ParamsAlias = Conservative.ParamsWidget;
             using EscapedAlias = Conservative.EscapedWidget;
             using PrimaryOptionalAlias = Conservative.PrimaryOptionalWidget;
+            using RelationalAlias = Conservative.RelationalWidget;
+            using InterpolatedAlias = Conservative.InterpolatedWidget;
 
             namespace Calls;
 
@@ -372,6 +402,8 @@ public sealed class QueryCommandRunnerIssue5189Tests
                     _ = new EscapedAlias(1); // escaped-params-one
                     _ = new PrimaryOptionalAlias(); // primary-optional-alias-zero
                     _ = new Conservative.PrimaryOptionalWidget(); // primary-optional-direct-zero
+                    _ = new RelationalAlias(1 < 2, 3 > 2); // relational-ambiguous-two
+                    _ = new InterpolatedAlias($"{Make("x,y")}", 0); // interpolated-ambiguous-two
                 }
             }
 

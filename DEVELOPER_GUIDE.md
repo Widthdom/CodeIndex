@@ -1849,8 +1849,10 @@ but preserve the physical source line and anchor the lexical constructor token w
 column and span when counting positional arguments. A bounded multiline context may complete the
 balanced scan. If any primary or explicit constructor in the target family has optional/default or
 `params` binding, do not use argument count to narrow that family. Named arguments, raw strings,
-and malformed calls likewise remain ambiguous; conditional expressions and `global::` qualifiers
-are positional expressions rather than named-argument syntax.
+interpolated strings with embedded expressions, relational/generic angle syntax that the bounded
+scanner cannot distinguish, malformed persisted spans, and malformed calls likewise remain
+ambiguous. Simple conditional expressions and `global::` qualifiers are positional expressions
+rather than named-argument syntax.
 Path/line resolution must select `symbols.id` and enter the same candidate-bundle builder as
 name resolution; do not hand graph loaders only the display name. Each bounded references,
 callers, and callees section computes its own stable-order page and authoritative total.
@@ -5951,9 +5953,10 @@ C# constructor resolution では direct call と未修飾の `using` alias を�
 位置引数を数える際は物理 source line を維持して source column と span で字句上の constructor
 token を特定します。上限付きの multiline context で balanced scan を完結できます。target family
 内の primary / explicit constructor に optional/default または `params` binding を持つものが1つでも
-あれば、引数個数でその family を絞り込まないでください。named argument、raw string、不正な call
-も同様に曖昧なままにしますが、conditional expression と `global::` qualifier は named-argument
-syntax ではなく位置引数 expression として扱います。
+あれば、引数個数でその family を絞り込まないでください。named argument、raw string、embedded
+expression を含む interpolated string、上限付き scanner では区別できない relational / generic angle syntax、
+不正な persisted span、不正な call も同様に曖昧なままにします。単純な conditional expression と
+`global::` qualifier は named-argument syntax ではなく位置引数 expression として扱います。
 path/line resolution は `symbols.id` を select し、name resolution と同じ
 candidate-bundle builder に入れてください。graph loader に display name だけを渡しては
 なりません。上限付きの references、callers、callees section は、それぞれ安定順序の page と

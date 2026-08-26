@@ -58,6 +58,7 @@ internal static class CSharpTypeReferenceArity
                && TryAnalyzeTopLevelParameters(
                    context,
                    openParenthesis,
+                   rejectAmbiguousArgumentExpressions: true,
                    out var count,
                    out var hasNamedArgument,
                    out _,
@@ -92,6 +93,7 @@ internal static class CSharpTypeReferenceArity
                && TryAnalyzeTopLevelParameters(
                    context,
                    openParenthesis,
+                   rejectAmbiguousArgumentExpressions: true,
                    out _,
                    out _,
                    out _,
@@ -124,6 +126,7 @@ internal static class CSharpTypeReferenceArity
         return TryAnalyzeTopLevelParameters(
                    context,
                    cursor,
+                   rejectAmbiguousArgumentExpressions: true,
                    out var count,
                    out var hasNamedArgument,
                    out var hasTopLevelColon,
@@ -176,6 +179,7 @@ internal static class CSharpTypeReferenceArity
             return TryAnalyzeTopLevelParameters(
                        signature,
                        cursor,
+                       rejectAmbiguousArgumentExpressions: false,
                        out var count,
                        out _,
                        out _,
@@ -286,6 +290,7 @@ internal static class CSharpTypeReferenceArity
                 return TryAnalyzeTopLevelParameters(
                     signature,
                     cursor,
+                    rejectAmbiguousArgumentExpressions: false,
                     out var count,
                     out _,
                     out _,
@@ -520,9 +525,9 @@ internal static class CSharpTypeReferenceArity
         out int identifierStart)
     {
         identifierStart = -1;
-        if (recordedStart < 0
+        if ((uint)recordedStart >= (uint)text.Length
             || recordedLength <= 0
-            || recordedStart + recordedLength > text.Length)
+            || recordedLength > text.Length - recordedStart)
         {
             return false;
         }
@@ -930,6 +935,7 @@ internal static class CSharpTypeReferenceArity
         => TryAnalyzeTopLevelParameters(
             text,
             openParenthesis,
+            rejectAmbiguousArgumentExpressions: false,
             out count,
             out _,
             out _,
@@ -940,6 +946,7 @@ internal static class CSharpTypeReferenceArity
     private static bool TryAnalyzeTopLevelParameters(
         string text,
         int openParenthesis,
+        bool rejectAmbiguousArgumentExpressions,
         out int count,
         out bool hasNamedArgument,
         out bool hasTopLevelColon,
@@ -971,6 +978,12 @@ internal static class CSharpTypeReferenceArity
                     && i + 2 < text.Length
                     && text[i + 1] == '"'
                     && text[i + 2] == '"')
+                {
+                    return false;
+                }
+                if (rejectAmbiguousArgumentExpressions
+                    && c == '"'
+                    && IsInterpolatedStringQuote(text, i))
                 {
                     return false;
                 }
@@ -1031,6 +1044,15 @@ internal static class CSharpTypeReferenceArity
                     hasItemContent = true;
                     break;
                 case '<':
+                    if (rejectAmbiguousArgumentExpressions
+                        && angleDepth == 0
+                        && !HasStrongGenericExpressionPrefix(text, i))
+                    {
+                        // Relational expressions and unqualified generic inference are
+                        // indistinguishable to this lightweight scanner. Do not let a
+                        // comparison hide an outer argument separator.
+                        return false;
+                    }
                     hasAngleBrackets = true;
                     angleDepth++;
                     hasItemContent = true;
@@ -1092,6 +1114,47 @@ internal static class CSharpTypeReferenceArity
         }
 
         return false;
+    }
+
+    private static bool IsInterpolatedStringQuote(string text, int quoteIndex)
+        => quoteIndex > 0
+           && (text[quoteIndex - 1] == '$'
+               || (quoteIndex > 1
+                   && text[quoteIndex - 1] == '@'
+                   && text[quoteIndex - 2] == '$'));
+
+    private static bool HasStrongGenericExpressionPrefix(string text, int openAngleIndex)
+    {
+        // Qualified generic members (`Factory.Create<T>`) and object creation
+        // (`new List<T>`) are sufficiently distinct from relational expressions. Bare
+        // `Create<T>` remains conservative because generic inference is outside this
+        // arity helper's contract.
+        if (openAngleIndex <= 0 || !IsIdentifierPart(text[openAngleIndex - 1]))
+            return false;
+
+        var identifierStart = openAngleIndex - 1;
+        while (identifierStart > 0 && IsIdentifierPart(text[identifierStart - 1]))
+            identifierStart--;
+        if (identifierStart > 0 && text[identifierStart - 1] == '@')
+            identifierStart--;
+
+        var prefixCursor = identifierStart;
+        if (!SkipCSharpTriviaBackward(text, ref prefixCursor))
+            return false;
+        if (prefixCursor > 0 && text[prefixCursor - 1] == '.')
+            return true;
+        if (prefixCursor >= 2
+            && text[prefixCursor - 2] == ':'
+            && text[prefixCursor - 1] == ':')
+        {
+            return true;
+        }
+
+        const string keyword = "new";
+        var keywordStart = prefixCursor - keyword.Length;
+        return keywordStart >= 0
+               && text.AsSpan(keywordStart, keyword.Length).SequenceEqual(keyword)
+               && IsIdentifierOccurrence(text, keywordStart, keyword.Length);
     }
 
     private static bool IsNamedArgumentPrefix(string text, int itemStart, int colonIndex)
