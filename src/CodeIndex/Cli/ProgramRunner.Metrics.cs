@@ -154,7 +154,7 @@ internal static partial class ProgramRunner
         return true;
     }
 
-    private static void EmitQueryTrace(string mode, string commandName, string[] subArgs, DateTimeOffset startTimestamp, Stopwatch stopwatch, int exitCode, int? resultCount)
+    internal static void EmitQueryTrace(string mode, string commandName, string[] subArgs, DateTimeOffset startTimestamp, Stopwatch stopwatch, int exitCode, int? resultCount)
     {
         if (mode == "none")
             return;
@@ -169,18 +169,27 @@ internal static partial class ProgramRunner
                 return;
             }
 
-            var directory = GlobalToolLog.ResolveLogDirectoryForStatus();
-            Directory.CreateDirectory(directory);
-            PrivateLogFile.HardenExisting(directory, "query-trace-*.jsonl");
+            var selection = GlobalToolLog.ResolveLogDirectorySelectionForRepositoryWrite();
+            var directory = selection.Path;
+            var boundary = selection.Boundary;
+            if (boundary is null)
+                Directory.CreateDirectory(directory);
+            else
+                boundary.CreateSensitiveDestinationDirectory();
+            PrivateLogFile.HardenExisting(directory, "query-trace-*.jsonl", boundary: boundary);
             var path = ResolveQueryTracePath(directory);
             var encoded = Encoding.UTF8.GetBytes(payload + Environment.NewLine);
-            using (var stream = PrivateLogFile.OpenAppend(path, FileShare.ReadWrite))
+            using (var stream = PrivateLogFile.OpenAppend(path, FileShare.ReadWrite, boundary))
             {
                 stream.Write(encoded, 0, encoded.Length);
                 stream.Flush();
             }
-            PrivateLogFile.TrySetPrivatePermissions(path);
-            PrivateLogFile.PruneOldFiles(directory, "query-trace-*.jsonl", RetainedQueryTraceFileCount);
+            PrivateLogFile.TrySetPrivatePermissions(path, boundary: boundary);
+            PrivateLogFile.PruneOldFiles(
+                directory,
+                "query-trace-*.jsonl",
+                RetainedQueryTraceFileCount,
+                boundary: boundary);
         }
         catch
         {

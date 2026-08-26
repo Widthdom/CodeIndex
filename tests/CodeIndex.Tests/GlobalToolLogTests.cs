@@ -70,6 +70,219 @@ public class GlobalToolLogTests
     }
 
     [Fact]
+    public void TryStart_RepositoryConfiguredOrdinaryDirectoryWritesSuccessfully_Issue5181()
+    {
+        var workspace = TestProjectHelper.CreateTempProject("cdidx_global_log_config_5181");
+        var logDirectory = Path.Combine(workspace, "state", "logs");
+        var sourceVariable = CdidxConfigFile.ConfigSourceEnvironmentVariablePrefix + "CDIDX_GLOBAL_TOOL_LOG_DIR";
+        using var environment = EnvironmentVariableScope.Capture(
+            "CDIDX_FORCE_GLOBAL_TOOL_LOG",
+            "CDIDX_DISABLE_PERSISTENT_LOG",
+            "CDIDX_GLOBAL_TOOL_LOG_DIR",
+            sourceVariable);
+        environment.Set("CDIDX_FORCE_GLOBAL_TOOL_LOG", "1");
+        environment.Set("CDIDX_DISABLE_PERSISTENT_LOG", null);
+        environment.Set("CDIDX_GLOBAL_TOOL_LOG_DIR", null);
+        environment.Set(sourceVariable, null);
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(workspace, CdidxConfigFile.FileName),
+                """{ "global_tool_log_dir": "state/logs" }""");
+            var config = CdidxConfigFile.Load(workspace);
+            Assert.True(config.Loaded);
+
+            using (CdidxEnvironment.Push(config.Settings, config.Sources))
+            using (var session = GlobalToolLog.TryStartForTesting(["status"], "test"))
+            {
+                Assert.NotNull(session);
+                GlobalToolLog.Info("repository_configured_log_boundary_ok");
+            }
+
+            var logPath = Assert.Single(Directory.GetFiles(logDirectory, "stderr-*.log"));
+            Assert.Contains("repository_configured_log_boundary_ok", File.ReadAllText(logPath), StringComparison.Ordinal);
+            if (!OperatingSystem.IsWindows())
+            {
+                Assert.Equal(
+                    DataDirectorySecurity.PrivateDirectoryMode,
+                    File.GetUnixFileMode(logDirectory) & PermissionBits);
+                Assert.Equal(PrivateLogFile.PrivateFileMode, File.GetUnixFileMode(logPath) & PermissionBits);
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(workspace);
+        }
+    }
+
+    [Fact]
+    public void TryStart_RepositoryConfiguredAncestorSwapIsRejectedWithoutFallbackWrite_Issue5181()
+    {
+        var workspace = TestProjectHelper.CreateTempProject("cdidx_global_log_race_5181");
+        var outside = TestProjectHelper.CreateTempProject("cdidx_global_log_outside_5181");
+        var safeDirectory = Path.Combine(workspace, "safe");
+        var sourceVariable = CdidxConfigFile.ConfigSourceEnvironmentVariablePrefix + "CDIDX_GLOBAL_TOOL_LOG_DIR";
+        using var environment = EnvironmentVariableScope.Capture(
+            "CDIDX_FORCE_GLOBAL_TOOL_LOG",
+            "CDIDX_DISABLE_PERSISTENT_LOG",
+            "CDIDX_GLOBAL_TOOL_LOG_DIR",
+            sourceVariable);
+        environment.Set("CDIDX_FORCE_GLOBAL_TOOL_LOG", "1");
+        environment.Set("CDIDX_DISABLE_PERSISTENT_LOG", null);
+        environment.Set("CDIDX_GLOBAL_TOOL_LOG_DIR", null);
+        environment.Set(sourceVariable, null);
+        try
+        {
+            Directory.CreateDirectory(safeDirectory);
+            File.WriteAllText(
+                Path.Combine(workspace, CdidxConfigFile.FileName),
+                """{ "global_tool_log_dir": "safe/new/logs" }""");
+            var config = CdidxConfigFile.Load(workspace);
+            Assert.True(config.Loaded);
+            var swapped = false;
+            RepositoryOutputPathBoundary.BeforeMutationForTesting = (operation, _) =>
+            {
+                if (swapped || operation != "create_directory")
+                    return;
+                swapped = true;
+                Directory.Delete(safeDirectory);
+                Directory.CreateSymbolicLink(safeDirectory, outside);
+            };
+
+            using var scopedConfig = CdidxEnvironment.Push(config.Settings, config.Sources);
+            var capture = ConsoleCapture.Capture(() =>
+            {
+                using var session = GlobalToolLog.TryStartForTesting(["status"], "test");
+                return session is null ? 0 : 1;
+            });
+
+            Assert.Equal(0, capture.ExitCode);
+            Assert.Contains("global_tool_log_dir", capture.Stderr, StringComparison.Ordinal);
+            Assert.Contains(RepositoryOutputPathBoundary.UnsafeReason, capture.Stderr, StringComparison.Ordinal);
+            Assert.False(Directory.Exists(Path.Combine(outside, "new")));
+            Assert.Empty(Directory.GetFiles(outside, "stderr-*.log", SearchOption.AllDirectories));
+        }
+        finally
+        {
+            RepositoryOutputPathBoundary.BeforeMutationForTesting = null;
+            DeleteDirectoryLink(safeDirectory);
+            TestProjectHelper.DeleteDirectory(workspace);
+            TestProjectHelper.DeleteDirectory(outside);
+        }
+    }
+
+    [Fact]
+    public void QueryTrace_RepositoryConfiguredAncestorSwapDoesNotWriteOutsideWorkspace_Issue5181()
+    {
+        var workspace = TestProjectHelper.CreateTempProject("cdidx_query_trace_race_5181");
+        var outside = TestProjectHelper.CreateTempProject("cdidx_query_trace_outside_5181");
+        var safeDirectory = Path.Combine(workspace, "safe");
+        var originalDirectory = Path.Combine(workspace, "safe-original");
+        var logDirectory = Path.Combine(safeDirectory, "logs");
+        var sourceVariable = CdidxConfigFile.ConfigSourceEnvironmentVariablePrefix + "CDIDX_GLOBAL_TOOL_LOG_DIR";
+        using var environment = EnvironmentVariableScope.Capture("CDIDX_GLOBAL_TOOL_LOG_DIR", sourceVariable);
+        environment.Set("CDIDX_GLOBAL_TOOL_LOG_DIR", null);
+        environment.Set(sourceVariable, null);
+        try
+        {
+            Directory.CreateDirectory(logDirectory);
+            File.WriteAllText(
+                Path.Combine(workspace, CdidxConfigFile.FileName),
+                """{ "global_tool_log_dir": "safe/logs" }""");
+            var config = CdidxConfigFile.Load(workspace);
+            Assert.True(config.Loaded);
+            var swapped = false;
+            RepositoryOutputPathBoundary.BeforeMutationForTesting = (operation, path) =>
+            {
+                if (swapped
+                    || operation != "open_append"
+                    || !Path.GetFileName(path).StartsWith("query-trace-", StringComparison.Ordinal))
+                {
+                    return;
+                }
+
+                swapped = true;
+                Directory.Move(safeDirectory, originalDirectory);
+                Directory.CreateSymbolicLink(safeDirectory, outside);
+            };
+
+            using var scopedConfig = CdidxEnvironment.Push(config.Settings, config.Sources);
+            ProgramRunner.EmitQueryTrace(
+                "file",
+                "search",
+                ["needle"],
+                DateTimeOffset.UtcNow,
+                System.Diagnostics.Stopwatch.StartNew(),
+                CommandExitCodes.Success,
+                resultCount: 0);
+
+            Assert.True(swapped);
+            Assert.Empty(Directory.GetFiles(outside, "query-trace-*.jsonl", SearchOption.AllDirectories));
+        }
+        finally
+        {
+            RepositoryOutputPathBoundary.BeforeMutationForTesting = null;
+            DeleteDirectoryLink(safeDirectory);
+            TestProjectHelper.DeleteDirectory(workspace);
+            TestProjectHelper.DeleteDirectory(outside);
+        }
+    }
+
+    [Fact]
+    public void LastFailure_RepositoryConfiguredAncestorSwapDoesNotWriteOutsideWorkspace_Issue5181()
+    {
+        var workspace = TestProjectHelper.CreateTempProject("cdidx_last_failure_race_5181");
+        var outside = TestProjectHelper.CreateTempProject("cdidx_last_failure_outside_5181");
+        var safeDirectory = Path.Combine(workspace, "safe");
+        var originalDirectory = Path.Combine(workspace, "safe-original");
+        var logDirectory = Path.Combine(safeDirectory, "logs");
+        var sourceVariable = CdidxConfigFile.ConfigSourceEnvironmentVariablePrefix + "CDIDX_GLOBAL_TOOL_LOG_DIR";
+        using var environment = EnvironmentVariableScope.Capture("CDIDX_GLOBAL_TOOL_LOG_DIR", sourceVariable);
+        environment.Set("CDIDX_GLOBAL_TOOL_LOG_DIR", null);
+        environment.Set(sourceVariable, null);
+        try
+        {
+            Directory.CreateDirectory(logDirectory);
+            File.WriteAllText(
+                Path.Combine(workspace, CdidxConfigFile.FileName),
+                """{ "global_tool_log_dir": "safe/logs" }""");
+            var config = CdidxConfigFile.Load(workspace);
+            Assert.True(config.Loaded);
+            var swapped = false;
+            RepositoryOutputPathBoundary.BeforeMutationForTesting = (operation, _) =>
+            {
+                if (swapped || operation != "write_private_text")
+                    return;
+
+                swapped = true;
+                Directory.Move(safeDirectory, originalDirectory);
+                Directory.CreateSymbolicLink(safeDirectory, outside);
+            };
+
+            using var scopedConfig = CdidxEnvironment.Push(config.Settings, config.Sources);
+            var persisted = LastFailureEventStore.TryPersist(
+                ["search"],
+                "test",
+                CommandExitCodes.UnhandledException,
+                new InvalidOperationException("test failure"),
+                DateTimeOffset.UtcNow,
+                dbPathForTesting: Path.Combine(workspace, ".cdidx", "codeindex.db"),
+                workspacePathForTesting: workspace);
+
+            Assert.False(persisted);
+            Assert.True(swapped);
+            Assert.False(File.Exists(Path.Combine(outside, LastFailureEventStore.FileName)));
+        }
+        finally
+        {
+            RepositoryOutputPathBoundary.BeforeMutationForTesting = null;
+            DeleteDirectoryLink(safeDirectory);
+            TestProjectHelper.DeleteDirectory(workspace);
+            TestProjectHelper.DeleteDirectory(outside);
+        }
+    }
+
+    [Fact]
     public void PrivateLogFile_HardenExisting_CapsBestEffortWork_Issue3027()
     {
         if (OperatingSystem.IsWindows())
@@ -745,6 +958,18 @@ public class GlobalToolLogTests
 
     private static void ThrowForGlobalToolLogTest() =>
         throw new InvalidOperationException("global log stack trace test");
+
+    private static void DeleteDirectoryLink(string path)
+    {
+        try
+        {
+            if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+                Directory.Delete(path);
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+        }
+    }
 
     private sealed class ThrowingTextWriter : TextWriter
     {

@@ -63,18 +63,44 @@ internal static class MetricsSink
         try
         {
             var fullPath = Path.GetFullPath(path);
-            DataDirectorySecurity.CreateSensitiveParentDirectoryForFile(fullPath);
+            var boundary = string.IsNullOrWhiteSpace(explicitPath)
+                ? RepositoryOutputPathBoundary.CreateGuardForConfigSource(
+                    EnvVarName,
+                    "metrics_path",
+                    fullPath,
+                    destinationIsDirectory: false)
+                : null;
+            if (boundary is null)
+                DataDirectorySecurity.CreateSensitiveParentDirectoryForFile(fullPath);
+            else
+                boundary.CreateSensitiveDestinationDirectory();
 
             long bytesWritten;
-            using (var probe = PrivateLogFile.OpenAppend(fullPath, FileShare.ReadWrite))
+            using (var probe = PrivateLogFile.OpenAppend(fullPath, FileShare.ReadWrite, boundary))
             {
                 bytesWritten = probe.Length;
             }
-            PrivateLogFile.TrySetPrivatePermissions(fullPath);
+            PrivateLogFile.TrySetPrivatePermissions(fullPath, boundary: boundary);
 
-            var session = new Session(fullPath, maxBytes, bytesWritten, warningSink, queueCapacity, retryDelay, disposeWriterTimeout);
+            var session = new Session(
+                fullPath,
+                maxBytes,
+                bytesWritten,
+                warningSink,
+                queueCapacity,
+                retryDelay,
+                disposeWriterTimeout,
+                boundary);
             CurrentSession.Value = session;
             return session;
+        }
+        catch (RepositoryOutputPathBoundaryException)
+        {
+            warningSink?.Invoke(
+                "metrics output disabled; repository-configured `metrics_path` is unsafe "
+                + $"({RepositoryOutputPathBoundary.UnsafeReason}).");
+            CurrentSession.Value = null;
+            return null;
         }
         catch (Exception ex)
         {
@@ -133,6 +159,7 @@ internal static class MetricsSink
         private readonly Action<string>? _warningSink;
         private readonly Func<TimeSpan, CancellationToken, Task> _retryDelay;
         private readonly TimeSpan _disposeWriterTimeout;
+        private readonly RepositoryOutputPathGuard? _boundary;
         private long _bytesWritten;
         private long _pendingEventCount;
         private long _queueDepth;
@@ -162,7 +189,8 @@ internal static class MetricsSink
             Action<string>? warningSink,
             int? queueCapacity = null,
             Func<TimeSpan, CancellationToken, Task>? retryDelay = null,
-            TimeSpan? disposeWriterTimeout = null)
+            TimeSpan? disposeWriterTimeout = null,
+            RepositoryOutputPathGuard? boundary = null)
         {
             Path = path;
             _maxBytes = maxBytes;
@@ -170,6 +198,7 @@ internal static class MetricsSink
             _warningSink = warningSink;
             _retryDelay = retryDelay ?? ((delay, cancellationToken) => Task.Delay(delay, cancellationToken));
             _disposeWriterTimeout = disposeWriterTimeout ?? DisposeWriterTimeout;
+            _boundary = boundary;
             if (_disposeWriterTimeout < TimeSpan.Zero)
                 throw new ArgumentOutOfRangeException(nameof(disposeWriterTimeout));
             _queueCapacity = ResolveQueueCapacity(queueCapacity);
@@ -413,7 +442,7 @@ internal static class MetricsSink
 
                 try
                 {
-                    using (var stream = PrivateLogFile.OpenAppend(Path, FileShare.ReadWrite))
+                    using (var stream = PrivateLogFile.OpenAppend(Path, FileShare.ReadWrite, _boundary))
                     {
                         for (var i = start; i < index; i++)
                             stream.Write(batch[i].Encoded, 0, batch[i].Encoded.Length);
@@ -450,7 +479,8 @@ internal static class MetricsSink
             if (PrivateLogFile.TryRotateSlots(
                 Path,
                 RotationKeep,
-                onFailure: ex => capturedFailure = ex))
+                onFailure: ex => capturedFailure = ex,
+                boundary: _boundary))
             {
                 Volatile.Write(ref _bytesWritten, 0);
                 return true;

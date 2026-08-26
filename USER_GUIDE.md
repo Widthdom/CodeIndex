@@ -2708,6 +2708,13 @@ Run `cdidx status --log-path` to print the active log directory without opening 
 
 ### Project-local configuration file (`.cdidx/config.json` / `.cdidxrc.json`)
 
+Repository-configured `metrics_path` and `global_tool_log_dir` values must remain
+inside the config workspace. Existing components below that workspace must not be
+symbolic links, junctions, bind or cross-device mount points, reparse points,
+devices or special files, or dangling links; unsafe values fail validation with
+`unsafe_output_path`. Use the CLI flag or a real environment variable when an
+outside destination is intentional.
+
 You can check a `.cdidx/config.json` or `.cdidxrc.json` file into a repository to set per-project defaults instead of relying on shell-profile or CI env vars (#1571). Before a config-dependent command runs, `cdidx` walks upward from the current working directory looking for the first project config file, validates its schema, and materializes recognized keys as scoped environment settings — so every existing env-var consumer picks them up without process-global mutation. Static commands that do not consume project settings (`license`, `--version`, help forms, shell completions, and any command's `--help`) skip config discovery and remain usable even when an unrelated project config is malformed. Discovery stops after checking a directory that contains `.git`, `.hg`, `.svn`, `cdidx.workspace.json`, or `.cdidx-workspace.json`, so a child workspace does not inherit a config file from an unrelated parent.
 
 Precedence is **CLI flag > environment variable > config file > built-in default**. A config-file value is applied only when the matching env var is not already set in the process, so a value the user already exported in the shell or CI always wins. Config JSON is bounded to 64 KiB and a conservative nesting depth before schema validation. For config-dependent commands, a malformed file (invalid JSON, unknown key, wrong type, or excessive nesting) is a hard error: cdidx exits `1` with the file path and all detected offending fields. JSON mode returns the versioned command-error envelope with `error_code: "E024_CONFIG_INVALID"` and `category: "configuration"` instead of writing human-only text to stderr. Set `CDIDX_DISABLE_CONFIG_FILE=1` to bypass the file entirely.
@@ -6311,6 +6318,13 @@ MCP のレスポンスサイズ上限は、環境変数 override で guard が�
 有効なログディレクトリだけを確認したい場合は `cdidx status --log-path` を実行してください。このコマンドは index database を開きません。`--json` を付けると `{"log_path":"..."}` を返します。永続 lifecycle log を無効化するには `CDIDX_DISABLE_PERSISTENT_LOG=1` を設定します。
 
 ### プロジェクト固有の設定ファイル (`.cdidx/config.json` / `.cdidxrc.json`)
+
+repository config の `metrics_path` と `global_tool_log_dir` は config workspace
+内に収まる必要があります。workspace 配下の既存 component には symbolic link、
+junction、bind mount または cross-device mount、reparse point、device / special
+file、dangling link を含めることはできず、安全でない値は
+`unsafe_output_path` で検証に失敗します。意図的に外部の出力先を使う場合は CLI
+flag または実際の環境変数を使ってください。
 
 シェルプロファイルや CI の環境変数に頼らず、プロジェクトごとの既定値を `.cdidx/config.json` または `.cdidxrc.json` ファイルとしてリポジトリにチェックインできます (#1571)。config に依存する command の実行前に、`cdidx` はカレントディレクトリから上方向に最初のプロジェクト設定ファイルを探索し、スキーマを検証してから既知のキーを scoped environment setting として注入します。これにより、process-global な環境変数を変更せずに、既存の環境変数コンシューマが同じ値を受け取れます。プロジェクト設定を使用しない static command（`license`、`--version`、help 形式、shell completion、および各 command の `--help`）は config 探索を省略するため、無関係なプロジェクト設定が不正でも利用できます。探索は `.git`、`.hg`、`.svn`、`cdidx.workspace.json`、`.cdidx-workspace.json` を含むディレクトリを確認した後で停止するため、子 workspace が無関係な親ディレクトリの設定ファイルを継承しません。
 
