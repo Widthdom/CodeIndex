@@ -2030,6 +2030,24 @@ cdidx callers ResolveGitCommonDir --exclude-tests --json
 cdidx callees AddToGitExclude --exclude-tests
 ```
 
+When `inspect` returns multiple `candidate_bundles` for the same leaf name, pass one
+bundle's generation-bound selector to `references`, `callers`, `callees`, or `impact`:
+
+```bash
+cdidx callees --selector 'id:<n>@g:<fingerprint>' --json
+```
+
+The selected graph is scoped to that exact symbol ID and never falls back to a same-name
+union, including when the selected identity has zero rows. The selector is validated against
+the active database generation before language, path, test, or generated-code filters are
+applied. Bare-name queries remain backward compatible and aggregate matching definitions,
+but human output warns when the name is ambiguous, while JSON and matching MCP tools return
+`identity_scoped: false` plus bounded `candidates` and their selectors. Selected JSON/MCP
+output instead returns `identity_scoped: true` and `selected_symbol`. Use `--fields list` to
+discover these structured CLI fields. Continuation cursors are bound to the selector and
+cannot be replayed for another identity. MCP uses the same `selector` input on `references`,
+`callers`, `callees`, and `impact_analysis`.
+
 These commands use the indexed reference graph. The canonical graph-supported language filters are reported by `cdidx languages`; in this release they are Assembly, Batch, C, COBOL, C++, C#, CSS, Dart, Dockerfile, Elixir, F#, Go, Gradle, Haskell, Java, JavaScript, Kotlin, Lua, Makefile, Perl, PHP, PowerShell, Protobuf, Python, R, Ruby, Rust, Scala, Shell, SQL, Svelte, Swift, Terraform, TypeScript, VB.NET, Vue, and Zig (37 filters). In JavaScript/TypeScript, graph extraction now also treats zero-argument constructor calls that omit `()` — for example `new Foo;`, `new Date;`, and `new Box<number>;` — as `instantiate` edges. Terraform also indexes dotted `var.*`, `local.*`, `module.*`, and `data.*` references, plus same-file resource-like `TYPE.NAME` references such as `aws_instance.web` and `depends_on = [aws_s3_bucket.foo]`. F# now indexes parenthesized, pipeline, and common space-separated application call sites such as `printfn "x"` and `List.map increment numbers`. Assembly indexes direct call and branch targets such as `call`, `jmp`, `j*`, `bl` / `blx`, `b`, `b.<cond>`, known conditional branch mnemonics, and `loop`-family mnemonics as graph references. Shell now indexes bare function calls in command syntax, so same-file function names remain visible in the graph. For docs, config, markup, or other unsupported languages, fall back to `search`.
 
 When you pass `--lang` for an unsupported language, human-readable graph commands now say so explicitly, and MCP graph tools expose `graph_language`, `graph_supported`, and `graph_support_reason` alongside the empty result list.
@@ -2059,8 +2077,8 @@ C# files with executable top-level statements expose a file-scoped synthetic
 `function` named `<top-level>`. JSON and MCP identify it with
 `sub_kind: "top_level_scope"`, `is_synthetic: true`, a
 `<file>::<top-level>` `qualified_name`, and a snapshot-bound `selector` that can
-be passed directly to CLI `callees` as its positional query or to MCP
-`callees.query` (optionally scoped with CLI `--path` or MCP `path`) and is
+be passed directly to CLI `callees --selector` or MCP `callees.selector`
+(optionally scoped with CLI `--path` or MCP `path`) and is
 distinct for each file. Coordinate `inspect --path <file> --line <line>` selects the same
 node on executable lines. Its span runs from the first through the last
 executable top-level line while excluding imports, comments, directives, and
@@ -5660,6 +5678,24 @@ cdidx callers ResolveGitCommonDir --exclude-tests --json
 cdidx callees AddToGitExclude --exclude-tests
 ```
 
+同じ leaf name に対して `inspect` が複数の `candidate_bundles` を返した場合は、
+そのうち 1 件の generation-bound selector を `references`、`callers`、`callees`、
+または `impact` に渡します。
+
+```bash
+cdidx callees --selector 'id:<n>@g:<fingerprint>' --json
+```
+
+選択後の graph はその正確な symbol ID だけに限定され、結果が 0 件でも同名 symbol の
+和集合へ fallback しません。selector は language、path、test、generated-code filter の適用前に、
+active database generation に対して検証されます。bare-name query は後方互換として一致定義を
+集約しますが、名前が曖昧な場合は human 出力が警告し、JSON と対応する MCP tool は
+`identity_scoped: false`、上限付き `candidates`、各 selector を返します。選択済みの JSON / MCP
+出力は代わりに `identity_scoped: true` と `selected_symbol` を返します。CLI の構造化 field は
+`--fields list` で確認できます。continuation cursor は selector に束縛され、別 identity には
+再利用できません。MCP でも `references`、`callers`、`callees`、`impact_analysis` の同じ
+`selector` input を使います。
+
 これらのコマンドはインデックス済み参照グラフを使います。canonical な graph 対応言語フィルタは `cdidx languages` が返します。このリリースでは Assembly、Batch、C、COBOL、C++、C#、CSS、Dart、Dockerfile、Elixir、F#、Go、Gradle、Haskell、Java、JavaScript、Kotlin、Lua、Makefile、Perl、PHP、PowerShell、Protobuf、Python、R、Ruby、Rust、Scala、Shell、SQL、Svelte、Swift、Terraform、TypeScript、VB.NET、Vue、Zig の 37 フィルタです。JavaScript/TypeScript では `()` を省略した zero-arg コンストラクタ呼び出し、たとえば `new Foo;`、`new Date;`、`new Box<number>;` も `instantiate` edge として扱います。Terraform では `var.*`、`local.*`、`module.*`、`data.*` の dotted 参照に加えて、`aws_instance.web` や `depends_on = [aws_s3_bucket.foo]` のような同一ファイル内の resource-like `TYPE.NAME` 参照も索引されます。F# は親付き呼び出し、pipeline 呼び出し、空白区切り application の common な形も graph で拾えるようになりました。Assembly は `call`、`jmp`、`j*`、`bl` / `blx`、`b`、`b.<cond>`、既知の条件分岐 mnemonic、`loop` 系 mnemonic などの直接 call/branch ターゲットを graph 参照として索引します。Shell は command syntax の bare function call を索引するため、同一ファイル内の関数名も graph で見えるようになります。ドキュメント、設定ファイル、マークアップなどの未対応言語では `search` に戻してください。
 
 未対応言語を `--lang` で指定した場合、人間向けの graph コマンドはその旨を明示し、MCP の graph ツールは空結果に加えて `graph_language`、`graph_supported`、`graph_support_reason` を返します。
@@ -5689,8 +5725,8 @@ cdidx outline src/CodeIndex/Cli/QueryCommandRunner.cs --compact --kind function 
 file-scoped synthetic `function` を公開します。JSON / MCP では
 `sub_kind: "top_level_scope"`、`is_synthetic: true`、
 `<file>::<top-level>` 形式の `qualified_name`、snapshot に束縛された
-`selector` で識別します。selector は file ごとに異なり、CLI `callees` の positional
-query または MCP `callees.query` として直接渡せます（必要に応じて CLI `--path` または
+`selector` で識別します。selector は file ごとに異なり、CLI `callees --selector`
+または MCP `callees.selector` として直接渡せます（必要に応じて CLI `--path` または
 MCP `path` で scope を限定できます）。実行行に対する
 `inspect --path <file> --line <line>` も同じ node を選択します。span は import、
 comment、directive、compilation metadata を可能な範囲で除外し、最初から最後の

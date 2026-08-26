@@ -18,6 +18,12 @@ internal static class ProjectionFieldRegistry
 {
     private const string DiscoveryValue = "list";
 
+    private static readonly string[] GraphIdentityFields =
+    [
+        "identity_scoped", "identity_scope_reason", "selected_symbol", "candidate_count",
+        "candidates", "candidates_truncated",
+    ];
+
     private static readonly IReadOnlyList<string> StatusExplainCompactFields =
     [
         "api_version",
@@ -434,6 +440,7 @@ internal static class ProjectionFieldRegistry
                     "target_symbol_key", "reference_kind", "line", "column", "context",
                     "context_truncated", "container_kind", "container_name", "is_self_reference",
                     "is_mutual_recursion", "resolution_state", "resolution_candidate_count")
+                .Fields(GraphIdentityFields)
                 .Alias("file", "path"));
 
     private static ProjectionCommandFieldSchema CreateCallGraphSchema(string command)
@@ -450,9 +457,10 @@ internal static class ProjectionFieldRegistry
             {
                 builder
                     .Fields(resultFields)
+                    .Fields(GraphIdentityFields)
                     .Fields(
-                    "reference_extraction_limits", "reference_graph_complete",
-                    "reference_extraction_cap_hits")
+                        "reference_extraction_limits", "reference_graph_complete",
+                        "reference_extraction_cap_hits")
                     .Alias("file", "path")
                     .Alias("line", "first_line")
                     .Alias("column", "first_column");
@@ -509,6 +517,7 @@ internal static class ProjectionFieldRegistry
             ],
             builder => builder
                 .Fields(callerFields.Concat(fileImpactFields).Concat(definitionFields).Distinct(StringComparer.Ordinal))
+                .Fields(GraphIdentityFields)
                 .Alias("file", "path")
                 .Collection("callers", callerFields, pathAlias: true)
                 .Collection("file_impacts", fileImpactFields)
