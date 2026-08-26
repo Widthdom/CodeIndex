@@ -64,26 +64,61 @@ public partial class DbReader
     public List<CallerResult> GetCallers(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, bool rawKinds = false, ReferenceRankMode rankMode = ReferenceRankMode.Weighted, bool excludeSelfReferences = false, int offset = 0, bool includeQualifiedCommonCalls = false, bool includeMemberReads = false)
         => GetCallersCore(query, limit, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact, rawKinds, rankMode, excludeSelfReferences, offset, includeQualifiedCommonCalls, includeMemberReads, targetSymbolId: null);
 
-    private List<CallerResult> GetCallersForCandidate(DefinitionResult definition, int limit, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, int offset = 0)
-        => GetCallersCore(definition.Name, limit, definition.Lang, referenceKind: null, pathPatterns, excludePathPatterns, excludeTests, exact: true, rawKinds: false, ReferenceRankMode.Weighted, excludeSelfReferences: false, offset, includeQualifiedCommonCalls: false, includeMemberReads: false, targetSymbolId: definition.SymbolId);
-
-    private int CountCallersForCandidate(DefinitionResult definition, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
-    {
-        if (definition.SymbolId is not long symbolId || !HasTable("symbol_reference_candidates"))
-            return 0;
-
-        return CountCallersTotalCore(
+    internal List<CallerResult> GetCallersForCandidate(
+        DefinitionResult definition,
+        int limit,
+        IReadOnlyList<string>? pathPatterns,
+        IReadOnlyList<string>? excludePathPatterns,
+        bool excludeTests,
+        int offset = 0,
+        string? referenceKind = null,
+        bool rawKinds = false,
+        ReferenceRankMode rankMode = ReferenceRankMode.Weighted,
+        bool excludeSelfReferences = false,
+        bool includeQualifiedCommonCalls = false,
+        bool includeMemberReads = false)
+        => GetCallersCore(
             definition.Name,
+            limit,
             definition.Lang,
-            referenceKind: null,
+            referenceKind,
             pathPatterns,
             excludePathPatterns,
             excludeTests,
             exact: true,
-            rawKinds: false,
-            includeQualifiedCommonCalls: false,
-            includeMemberReads: false,
-            symbolId).Count;
+            rawKinds,
+            rankMode,
+            excludeSelfReferences,
+            offset,
+            includeQualifiedCommonCalls,
+            includeMemberReads,
+            targetSymbolId: definition.SymbolId);
+
+    internal QueryCountResult CountCallersForCandidate(
+        DefinitionResult definition,
+        IReadOnlyList<string>? pathPatterns,
+        IReadOnlyList<string>? excludePathPatterns,
+        bool excludeTests,
+        string? referenceKind = null,
+        bool rawKinds = false,
+        bool includeQualifiedCommonCalls = false,
+        bool includeMemberReads = false)
+    {
+        if (definition.SymbolId is not long symbolId || !HasTable("symbol_reference_candidates"))
+            return new QueryCountResult(0, 0);
+
+        return CountCallersTotalCore(
+            definition.Name,
+            definition.Lang,
+            referenceKind,
+            pathPatterns,
+            excludePathPatterns,
+            excludeTests,
+            exact: true,
+            rawKinds,
+            includeQualifiedCommonCalls,
+            includeMemberReads,
+            symbolId);
     }
 
     private List<CallerResult> GetCallersCore(string query, int limit, string? lang, string? referenceKind, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, bool exact, bool rawKinds, ReferenceRankMode rankMode, bool excludeSelfReferences, int offset, bool includeQualifiedCommonCalls, bool includeMemberReads, long? targetSymbolId)
@@ -837,13 +872,16 @@ public partial class DbReader
     /// file dependency をフォールバックとして返す。<paramref name="maxDepth"/> は inclusive で
     /// N 指定時は depth 1〜N の caller を返し、<c>maxDepth: 0</c> は symbol 解決のみで終了する。
     /// </summary>
-    public ImpactAnalysisResult AnalyzeImpact(string symbolName, int maxDepth = 5, int limit = 50, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool withPaths = false, int offset = 0, string? responseCollection = null, bool includeMemberReads = false)
+    public ImpactAnalysisResult AnalyzeImpact(string symbolName, int maxDepth = 5, int limit = 50, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool withPaths = false, int offset = 0, string? responseCollection = null, bool includeMemberReads = false, DefinitionResult? selectedDefinition = null)
     {
         lang = NormalizeQueryLanguage(lang);
-        var resolvedName = ResolveSymbolName(symbolName, lang);
+        var resolvedName = selectedDefinition?.Name ?? ResolveSymbolName(symbolName, lang);
         var definitionOffset = string.Equals(responseCollection, "definitions", StringComparison.Ordinal) ? offset : 0;
-        var definitionResolution = ResolveImpactDefinitions(symbolName, limit, lang, pathPatterns, excludePathPatterns, excludeTests, definitionOffset);
-        if (definitionResolution.Definitions.Count == 0
+        var definitionResolution = selectedDefinition != null
+            ? ResolveSelectedImpactDefinition(selectedDefinition)
+            : ResolveImpactDefinitions(symbolName, limit, lang, pathPatterns, excludePathPatterns, excludeTests, definitionOffset);
+        if (selectedDefinition == null
+            && definitionResolution.Definitions.Count == 0
             && !string.Equals(symbolName, resolvedName, StringComparison.Ordinal))
         {
             definitionResolution = ResolveImpactDefinitions(resolvedName, limit, lang, pathPatterns, excludePathPatterns, excludeTests, definitionOffset);
@@ -956,11 +994,35 @@ public partial class DbReader
         var callerOffset = responseCollection is null || string.Equals(responseCollection, "callers", StringComparison.Ordinal)
             ? offset
             : 0;
-        var (callers, truncated, truncatedReason, terminationReason, cycles) = GetTransitiveCallers(symbolName, maxDepth, limit, lang, pathPatterns, excludePathPatterns, excludeTests, withPaths, resultOffset: callerOffset, includeMemberReads: includeMemberReads);
+        var (callers, truncated, truncatedReason, terminationReason, cycles) = selectedDefinition != null
+            ? GetTransitiveCallersForCandidate(
+                selectedDefinition,
+                maxDepth,
+                limit,
+                lang,
+                pathPatterns,
+                excludePathPatterns,
+                excludeTests,
+                withPaths,
+                callerOffset,
+                includeMemberReads)
+            : GetTransitiveCallers(symbolName, maxDepth, limit, lang, pathPatterns, excludePathPatterns, excludeTests, withPaths, resultOffset: callerOffset, includeMemberReads: includeMemberReads);
         var callerExistsBeforeOffset = false;
         if (callers.Count == 0 && callerOffset > 0)
         {
-            var callerProbe = GetTransitiveCallers(symbolName, maxDepth, 1, lang, pathPatterns, excludePathPatterns, excludeTests, withPaths: false, resultOffset: 0, includeMemberReads: includeMemberReads);
+            var callerProbe = selectedDefinition != null
+                ? GetTransitiveCallersForCandidate(
+                    selectedDefinition,
+                    maxDepth,
+                    1,
+                    lang,
+                    pathPatterns,
+                    excludePathPatterns,
+                    excludeTests,
+                    withPaths: false,
+                    resultOffset: 0,
+                    includeMemberReads)
+                : GetTransitiveCallers(symbolName, maxDepth, 1, lang, pathPatterns, excludePathPatterns, excludeTests, withPaths: false, resultOffset: 0, includeMemberReads: includeMemberReads);
             callerExistsBeforeOffset = callerProbe.Results.Count > 0;
         }
 

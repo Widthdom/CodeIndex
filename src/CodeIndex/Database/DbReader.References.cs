@@ -104,14 +104,17 @@ public partial class DbReader
         return results;
     }
 
-    private List<ReferenceResult> SearchReferencesForCandidate(
+    internal List<ReferenceResult> SearchReferencesForCandidate(
         DefinitionResult definition,
         int limit,
         IReadOnlyList<string>? pathPatterns,
         IReadOnlyList<string>? excludePathPatterns,
         bool excludeTests,
         int maxLineWidth,
-        int offset = 0)
+        int offset = 0,
+        string? referenceKind = null,
+        bool excludeSelfReferences = false,
+        bool includeQualifiedCommonCalls = false)
     {
         if (definition.SymbolId is not long symbolId || !HasTable("symbol_reference_candidates"))
             return [];
@@ -120,44 +123,46 @@ public partial class DbReader
             definition.Name,
             limit,
             definition.Lang,
-            referenceKind: null,
+            referenceKind,
             pathPatterns,
             excludePathPatterns,
             excludeTests,
             exact: true,
             offset,
             maxLineWidth,
-            excludeSelfReferences: false,
-            includeQualifiedCommonCalls: false,
+            excludeSelfReferences,
+            includeQualifiedCommonCalls,
             targetSymbolId: symbolId);
     }
 
-    private int CountSearchReferencesForCandidate(
+    internal QueryCountResult CountSearchReferencesForCandidate(
         DefinitionResult definition,
         IReadOnlyList<string>? pathPatterns,
         IReadOnlyList<string>? excludePathPatterns,
-        bool excludeTests)
+        bool excludeTests,
+        string? referenceKind = null,
+        bool excludeSelfReferences = false,
+        bool includeQualifiedCommonCalls = false)
     {
         if (definition.SymbolId is not long symbolId || !HasTable("symbol_reference_candidates"))
-            return 0;
+            return new QueryCountResult(0, 0);
 
         using var cmd = CreateSearchReferencesCommandCore(
             definition.Name,
-            limit: 1,
+            limit: int.MaxValue,
             definition.Lang,
-            referenceKind: null,
+            referenceKind,
             pathPatterns,
             excludePathPatterns,
             excludeTests,
             exact: true,
             offset: 0,
             includeOrdering: false,
-            excludeSelfReferences: false,
-            includeQualifiedCommonCalls: false,
+            excludeSelfReferences,
+            includeQualifiedCommonCalls,
             targetSymbolId: symbolId);
-        cmd.CommandText = $"SELECT COUNT(*) FROM ({cmd.CommandText})";
-        var raw = cmd.ExecuteScalar();
-        return raw is long count ? checked((int)count) : Convert.ToInt32(raw);
+        cmd.CommandText = $"SELECT COUNT(*), COUNT(DISTINCT path), MAX(CASE WHEN lang = 'sql' THEN 1 ELSE 0 END) FROM ({cmd.CommandText})";
+        return ExecuteCountSummary(cmd);
     }
 
     internal ReferencePositionResolution GetReferencePositionResolution(

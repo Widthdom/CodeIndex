@@ -103,4 +103,26 @@ public partial class DbReader
             families.PhysicalDefinitionPaths,
             families.Truncated);
     }
+
+    private static ImpactDefinitionResolution ResolveSelectedImpactDefinition(
+        DefinitionResult definition)
+    {
+        var precise = IsPreciseImpactFallbackKind(definition.Kind);
+        var symbolIds = definition.SymbolId is long symbolId
+            ? new HashSet<long> { symbolId }
+            : [];
+        return new ImpactDefinitionResolution(
+            [definition],
+            PhysicalCount: 1,
+            PhysicalFileCount: 1,
+            LogicalCount: 1,
+            PreciseDefinitionCount: precise ? 1 : 0,
+            PreciseLogicalDefinitionCount: precise ? 1 : 0,
+            PreciseDefinitionFileCount: precise ? 1 : 0,
+            NonCallableDefinitionCount: precise ? 1 : 0,
+            SinglePreciseDefinition: precise ? definition : null,
+            PhysicalSymbolIds: symbolIds,
+            PhysicalDefinitionPaths: new HashSet<string>(StringComparer.Ordinal) { definition.Path },
+            PhysicalSymbolIdsTruncated: false);
+    }
 }

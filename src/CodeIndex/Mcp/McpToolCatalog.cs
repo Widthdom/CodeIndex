@@ -26,8 +26,46 @@ public partial class McpServer
         AddToolDefinitions(tools, CreateAuditAndFeedbackTools());
 
         AddProjectScopeProperties(tools);
+        AddGraphSelectorSchemas(tools);
         AddCommonSchemaConstraints(tools);
         return tools;
+    }
+
+    private static void AddGraphSelectorSchemas(JsonArray tools)
+    {
+        var graphTools = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "references",
+            "callers",
+            "callees",
+            "impact_analysis",
+        };
+        foreach (var tool in tools.OfType<JsonObject>())
+        {
+            var name = tool["name"]?.GetValue<string>();
+            if (name == null || !graphTools.Contains(name))
+                continue;
+            if (tool["inputSchema"] is not JsonObject schema
+                || schema["properties"] is not JsonObject properties)
+            {
+                continue;
+            }
+
+            properties["selector"] = new JsonObject
+            {
+                ["type"] = "string",
+                ["pattern"] = "^id:[1-9][0-9]*@g:[0-9a-fA-F]{16}$",
+                ["description"] = "Generation-bound exact symbol identity emitted by inspect. Provide either selector or query, never both. / inspect が出力した generation-bound な正確な symbol identity。selector と query はどちらか一方だけを指定する。",
+            };
+            schema.Remove("required");
+            schema["oneOf"] = new JsonArray
+            {
+                new JsonObject { ["required"] = new JsonArray { "query" } },
+                new JsonObject { ["required"] = new JsonArray { "selector" } },
+            };
+            tool["description"] = tool["description"]?.GetValue<string>()
+                + " Pass a generation-bound inspect selector to scope the graph to one exact symbol ID; ambiguous name output exposes candidate selectors and identity_scoped=false. / generation-bound な inspect selector を渡すと graph を 1 件の正確な symbol ID に限定する。曖昧な名前出力は候補 selector と identity_scoped=false を返す。";
+        }
     }
 
     private static void AddToolDefinitions(JsonArray catalog, JsonObject[] definitions)

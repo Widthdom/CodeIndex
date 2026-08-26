@@ -11,11 +11,11 @@ public partial class McpServer
 {
     private JsonNode ExecuteImpactAnalysis(JsonNode? id, JsonNode? args)
     {
-        if (!TryReadRequiredStringParameter(args, "query", out var query, out var requiredError))
+        if (!TryReadGraphSymbolRequest(args, "impact_analysis", out var query, out var selectorValue, out var requiredError))
             return CreateToolErrorResponse(id, requiredError!);
         if (query.Length > QueryLimits.MaxQueryLength)
             return CreateToolErrorResponse(id, QueryLimits.FormatQueryTooLongError());
-        if (IsBareVerbatimQueryToken(query))
+        if (selectorValue == null && IsBareVerbatimQueryToken(query))
             return CreateToolErrorResponse(id, "Add a real symbol name after the command; bare verbatim prefixes like `@` are not valid queries.");
 
         var maxHopsNode = args?["maxHops"];
@@ -47,7 +47,27 @@ public partial class McpServer
 
         return WithDbReader(id, args, reader =>
         {
-            var analysis = reader.AnalyzeImpact(query, maxDepth, limit, lang, pathPatterns, excludePaths, excludeTests, withPaths, includeMemberReads: includeMemberReads);
+            if (TryResolveMcpGraphSelector(id, reader, selectorValue, out var selectedDefinition) is JsonNode selectorError)
+                return selectorError;
+            var effectiveQuery = selectedDefinition?.Name ?? query;
+            var identityMetadata = reader.GetGraphQueryIdentityMetadata(
+                effectiveQuery,
+                selectedDefinition,
+                lang,
+                pathPatterns,
+                excludePaths,
+                excludeTests);
+            var analysis = reader.AnalyzeImpact(
+                effectiveQuery,
+                maxDepth,
+                limit,
+                lang,
+                pathPatterns,
+                excludePaths,
+                excludeTests,
+                withPaths,
+                includeMemberReads: includeMemberReads,
+                selectedDefinition: selectedDefinition);
             var sqlGraphSignal = QueryCommandRunner.NarrowSqlGraphContractSignal(
                 reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests),
                 DbReader.IsSqlLanguage(lang)
@@ -99,6 +119,7 @@ public partial class McpServer
                     pathPatterns,
                     excludePaths,
                     excludeTests);
+                AddMcpGraphIdentityFields(countOnlyPayload, identityMetadata);
                 adjustments.ApplyTo(countOnlyPayload);
                 return CreateToolResult(id, $"Counted {ConsoleUi.Counted(count, "impact result")}.", countOnlyPayload);
             }
@@ -147,6 +168,7 @@ public partial class McpServer
                 pathPatterns,
                 excludePaths,
                 excludeTests);
+            AddMcpGraphIdentityFields(payload, identityMetadata);
             if (analysis.ZeroResultReason != null)
                 payload["zero_result_reason"] = analysis.ZeroResultReason;
             AddImpactFailureFields(payload, analysis);
@@ -182,7 +204,8 @@ public partial class McpServer
 
             if (count == 0)
             {
-                AddSymbolRecoveryHint(payload, query, "impact_analysis", lang, null, PathEcho(pathPatterns));
+                if (selectedDefinition == null)
+                    AddSymbolRecoveryHint(payload, query, "impact_analysis", lang, null, PathEcho(pathPatterns));
                 AddFreshnessHint(payload, reader);
                 var graphReason = ReferenceExtractor.BuildGraphSupportReason(lang, lang != null ? reader.SupportsReferenceLanguage(lang) : null);
                 if (graphReason != null)
