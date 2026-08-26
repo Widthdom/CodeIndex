@@ -24,21 +24,24 @@ public sealed class GitHubCliExecutableResolverTests
     }
 
     [Fact]
-    public void HomebrewCellarCandidates_EnumerateVersionedRegularTargetsWithoutLaunchingBinSymlinks_Issue5184()
+    public void HomebrewCellarCandidates_OrderSemanticallyBeforeCappingWithoutLaunchingBinSymlinks_Issue5184()
     {
         var prefix = TestProjectHelper.CreateTempProject("cdidx_gh_homebrew_5184");
         try
         {
-            var older = Path.Combine(prefix, "Cellar", "gh", "2.94.0", "bin", "gh");
-            var newer = Path.Combine(prefix, "Cellar", "gh", "2.95.0", "bin", "gh");
-            Directory.CreateDirectory(Path.GetDirectoryName(older)!);
-            Directory.CreateDirectory(Path.GetDirectoryName(newer)!);
-            File.WriteAllText(older, "older");
-            File.WriteAllText(newer, "newer");
+            var expected = Enumerable.Range(9, 32)
+                .Reverse()
+                .Select(minor => Path.Combine(prefix, "Cellar", "gh", $"2.{minor}.0", "bin", "gh"))
+                .ToArray();
+            foreach (var minor in Enumerable.Range(1, 40))
+            {
+                Directory.CreateDirectory(
+                    Path.Combine(prefix, "Cellar", "gh", $"2.{minor}.0", "bin"));
+            }
 
             var candidates = GitHubCliExecutableResolver.HomebrewCellarCandidatePathsForTests(prefix);
 
-            Assert.Equal([newer, older], candidates);
+            Assert.Equal(expected, candidates);
             Assert.All(candidates, candidate =>
             {
                 Assert.True(Path.IsPathFullyQualified(candidate));

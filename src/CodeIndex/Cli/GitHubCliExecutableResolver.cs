@@ -170,8 +170,13 @@ internal static class GitHubCliExecutableResolver
         {
             versionDirectories = Directory
                 .EnumerateDirectories(formulaDirectory)
+                .Select(CreateHomebrewCellarVersionCandidate)
+                .OrderByDescending(static candidate => candidate.Parsed)
+                .ThenByDescending(static candidate => candidate.Version)
+                .ThenByDescending(static candidate => candidate.Revision)
+                .ThenByDescending(static candidate => candidate.Path, StringComparer.Ordinal)
                 .Take(MaxHomebrewCellarVersions)
-                .OrderByDescending(static path => path, StringComparer.Ordinal)
+                .Select(static candidate => candidate.Path)
                 .ToArray();
         }
         catch (Exception ex) when (ex is IOException
@@ -185,6 +190,24 @@ internal static class GitHubCliExecutableResolver
 
         foreach (var versionDirectory in versionDirectories)
             yield return Path.Combine(versionDirectory, "bin", "gh");
+    }
+
+    private static HomebrewCellarVersionCandidate CreateHomebrewCellarVersionCandidate(string path)
+    {
+        var directoryName = Path.GetFileName(path);
+        var versionText = directoryName;
+        var revision = 0;
+        var revisionSeparator = directoryName.LastIndexOf('_');
+        if (revisionSeparator >= 0)
+        {
+            versionText = directoryName[..revisionSeparator];
+            if (!int.TryParse(directoryName[(revisionSeparator + 1)..], out revision) || revision < 0)
+                return new HomebrewCellarVersionCandidate(path, new Version(0, 0), 0, Parsed: false);
+        }
+
+        return Version.TryParse(versionText, out var version)
+            ? new HomebrewCellarVersionCandidate(path, version, revision, Parsed: true)
+            : new HomebrewCellarVersionCandidate(path, new Version(0, 0), 0, Parsed: false);
     }
 
     private static bool IsMacHomebrewCellarGhPath(string path)
@@ -249,4 +272,10 @@ internal static class GitHubCliExecutableResolver
     }
 
     private sealed record GitHubCliExecutableResolution(string? Path, GitExecutableStatus Status);
+
+    private sealed record HomebrewCellarVersionCandidate(
+        string Path,
+        Version Version,
+        int Revision,
+        bool Parsed);
 }
