@@ -667,11 +667,13 @@ public partial class DbWriter
         )
         """;
 
+    // Generic C# candidate paths must never admit local functions; only the exact
+    // csharp_local coordinate path has sufficient lexical-scope evidence.
+    // C#の汎用candidate経路ではlocal functionを常に除外し、十分な字句scope根拠を持つ
+    // csharp_local宣言座標経路だけで候補に含める。
     private static string CSharpTypeReferenceCandidatePredicateSql => $"""
         (
             source_file.lang <> 'csharp'
-            OR r.target_qualifier IS NULL
-            OR r.target_qualifier <> char(31) || 'csharp_nonlocal'
             OR s.kind <> 'function'
             OR COALESCE(s.container_kind, '') NOT IN ('function', 'test.method', 'lambda', 'property')
         )
@@ -1525,8 +1527,7 @@ public partial class DbWriter
           AND r.reference_kind NOT IN ('instantiate', 'type_reference')
           AND {BuildCSharpCallCandidatePredicateSql("target")}
           AND (
-              r.target_qualifier IS NULL
-              OR target.kind <> 'function'
+              target.kind <> 'function'
               OR COALESCE(target.container_kind, '') NOT IN ('function', 'test.method', 'lambda', 'property')
           )
           AND NOT EXISTS (

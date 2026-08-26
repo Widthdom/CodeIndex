@@ -89,6 +89,12 @@ public sealed class CSharpLocalFunctionResolutionIssue5188Tests
                 int ExpressionOnly() => 1;
                 _ = ExpressionOnly(); // expression-bodied
             }
+
+            public Action ReturnedGroup()
+            {
+                void ReturnedLocal() { }
+                return ReturnedLocal; // returned-method-group
+            }
         }
 
         public class SecondHost
@@ -130,7 +136,8 @@ public sealed class CSharpLocalFunctionResolutionIssue5188Tests
                        'SiblingOnly',
                        'MemberFallback',
                        'LambdaOnly',
-                       'ExpressionOnly')
+                       'ExpressionOnly',
+                       'ReturnedLocal')
                 ORDER BY reference.line, reference.column_number;
                 """;
             command.Parameters.AddWithValue("@path", FixturePath);
@@ -167,6 +174,7 @@ public sealed class CSharpLocalFunctionResolutionIssue5188Tests
             AssertResolved("nonlocal-member-fallback", LineOf("public void MemberFallback() { }"), "FirstHost");
             AssertResolved("lambda-visible", LineOf("void LambdaOnly() { }"), "Lambda");
             AssertResolved("expression-bodied", LineOf("int ExpressionOnly() => 1;"), "ExpressionBodied");
+            AssertResolved("returned-method-group", LineOf("void ReturnedLocal() { }"), "ReturnedGroup");
 
             AssertUnresolved("parameter-shadow");
             AssertUnresolved("local-shadow");
@@ -193,6 +201,62 @@ public sealed class CSharpLocalFunctionResolutionIssue5188Tests
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
+    }
+
+    [Fact]
+    public void GenericFallback_NeverSelectsLocalFunctionFromAnotherFile_Issue5188Review()
+    {
+        const string callerSource = """
+            public class Caller
+            {
+                public void Run()
+                {
+                    CrossFileOnly();
+                }
+            }
+            """;
+        const string localOwnerSource = """
+            public class LocalOwner
+            {
+                public void Run()
+                {
+                    void CrossFileOnly() { }
+                    CrossFileOnly();
+                }
+            }
+            """;
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_csharp_local_cross_file_5188");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        TestProjectHelper.InsertIndexedFile(dbPath, "src/Caller.cs", "csharp", callerSource);
+        TestProjectHelper.InsertIndexedFile(dbPath, "src/LocalOwner.cs", "csharp", localOwnerSource);
+
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+        using var command = db.Connection.CreateCommand();
+        command.CommandText = """
+            SELECT source_file.path,
+                   reference.resolution_state,
+                   reference.resolution_candidate_count,
+                   target_file.path
+            FROM symbol_references AS reference
+            JOIN files AS source_file ON source_file.id = reference.file_id
+            LEFT JOIN symbols AS target ON target.id = reference.target_symbol_id
+            LEFT JOIN files AS target_file ON target_file.id = target.file_id
+            WHERE reference.symbol_name = 'CrossFileOnly'
+              AND reference.reference_kind = 'call'
+            ORDER BY source_file.path;
+            """;
+        using var reader = command.ExecuteReader();
+        Assert.True(reader.Read());
+        Assert.Equal("src/Caller.cs", reader.GetString(0));
+        Assert.Equal("unresolved", reader.GetString(1));
+        Assert.Equal(0, reader.GetInt32(2));
+        Assert.True(reader.IsDBNull(3));
+        Assert.True(reader.Read());
+        Assert.Equal("src/LocalOwner.cs", reader.GetString(0));
+        Assert.Equal("resolved", reader.GetString(1));
+        Assert.Equal(1, reader.GetInt32(2));
+        Assert.Equal("src/LocalOwner.cs", reader.GetString(3));
+        Assert.False(reader.Read());
     }
 
     [Fact]
@@ -384,6 +448,24 @@ public sealed class CSharpLocalFunctionResolutionIssue5188Tests
             var secondLocation = Assert.Single(secondDefinition!["result"]!.AsArray());
             Assert.Equal(LineOf("void SameLocal() { }", occurrence: 2) - 1,
                 secondLocation!["range"]!["start"]!["line"]!.GetValue<int>());
+
+            var shadowCallLine = LineOf("parameter-shadow");
+            var shadowDefinition = server.HandleMessage(CreatePositionRequest(
+                "textDocument/definition",
+                sourcePath,
+                51884,
+                shadowCallLine,
+                CharacterOf(shadowCallLine, "SameLocal")));
+            Assert.Empty(shadowDefinition!["result"]!.AsArray());
+
+            var shadowReferences = server.HandleMessage(CreatePositionRequest(
+                "textDocument/references",
+                sourcePath,
+                51885,
+                shadowCallLine,
+                CharacterOf(shadowCallLine, "SameLocal"),
+                includeDeclaration: false));
+            Assert.Empty(shadowReferences!["result"]!.AsArray());
 
             var firstDeclarationLine = LineOf("void SameLocal() { }", occurrence: 1);
             var firstReferences = server.HandleMessage(CreatePositionRequest(

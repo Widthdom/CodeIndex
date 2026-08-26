@@ -26,7 +26,11 @@ internal sealed partial class LspServer : IDisposable
             if (positionDefinitions.Count > 0)
                 return positionDefinitions;
 
-            var localReferenceTargets = ResolveReferenceTargetsAtPosition(context);
+            var localReferenceTargets = ResolveReferenceTargetsAtPosition(
+                context,
+                out var authoritativeUnresolved);
+            if (authoritativeUnresolved)
+                return [];
             return localReferenceTargets.Count == 0 ? localDefinitions : localReferenceTargets;
         }
 
@@ -49,9 +53,13 @@ internal sealed partial class LspServer : IDisposable
             if (positionDefinitions.Count == 1)
                 return _reader.GetReferencesForDefinition(positionDefinitions[0], DefaultLimit);
 
-            var localReferenceTarget = ResolveReferenceTargetAtPosition(context);
-            if (localReferenceTarget != null)
-                return _reader.GetReferencesForDefinition(localReferenceTarget, DefaultLimit);
+            var localReferenceTargets = ResolveReferenceTargetsAtPosition(
+                context,
+                out var authoritativeUnresolved);
+            if (localReferenceTargets.Count == 1)
+                return _reader.GetReferencesForDefinition(localReferenceTargets[0], DefaultLimit);
+            if (authoritativeUnresolved)
+                return [];
 
             return _reader.AnalyzeSymbol(context.Token, DefaultLimit, pathPatterns: [context.IndexedPath], exact: true).References;
         }
@@ -77,6 +85,11 @@ internal sealed partial class LspServer : IDisposable
     }
 
     private List<DefinitionResult> ResolveReferenceTargetsAtPosition(PositionTokenContext context)
+        => ResolveReferenceTargetsAtPosition(context, out _);
+
+    private List<DefinitionResult> ResolveReferenceTargetsAtPosition(
+        PositionTokenContext context,
+        out bool authoritativeUnresolved)
     {
         var resolution = _reader.GetReferencePositionResolution(
             context.IndexedPath,
@@ -84,6 +97,13 @@ internal sealed partial class LspServer : IDisposable
             context.Line + 1,
             context.StartCharacter + 1,
             MaxReferencePositionCandidates);
+        // A persisted zero-candidate row is authoritative negative evidence (for example,
+        // parameter/local shadowing), not permission to fall back to same-name definitions.
+        // 永続化済みの候補0件rowは、parameter/local shadowingなどの権威ある否定根拠であり、
+        // 同名definitionへのfallback許可ではない。
+        authoritativeUnresolved = resolution.IdentityAvailable
+            && !resolution.CandidatesTruncated
+            && resolution.Candidates.Count == 0;
         if (!resolution.IdentityAvailable || resolution.CandidatesTruncated)
             return [];
 
