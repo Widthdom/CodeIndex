@@ -403,13 +403,43 @@ internal static partial class ExportImportCommandRunner
         return true;
     }
 
-    private static void ExtractDatabaseEntryToFile(ZipArchiveEntry dbEntry, string destinationPath, CancellationToken cancellationToken)
+    internal static void ExtractDatabaseEntryToFile(ZipArchiveEntry dbEntry, string destinationPath, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         using var source = dbEntry.Open();
-        using var target = File.Open(destinationPath, FileMode.Create, FileAccess.Write, FileShare.None);
+        using var target = DataDirectorySecurity.OpenPrivateFileStream(
+            destinationPath,
+            FileMode.CreateNew,
+            FileAccess.Write,
+            FileShare.None);
+        EnsureImportStagingFilesPrivate(destinationPath);
         CopyToWithLimit(source, target, MaxImportDatabaseBytes, cancellationToken);
+        EnsureImportStagingFilesPrivate(destinationPath);
     }
+
+    internal static void EnsureImportStagingFilesPrivate(string databasePath)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            foreach (var path in new[] { databasePath, databasePath + "-wal", databasePath + "-shm" })
+            {
+                if (!File.Exists(path))
+                    continue;
+
+                DataDirectorySecurity.ApplyPrivateFileMode(path);
+                var mode = File.GetUnixFileMode(path) & DataDirectorySecurity.PermissionBits;
+                if (mode != DataDirectorySecurity.PrivateFileMode)
+                {
+                    throw new UnauthorizedAccessException(
+                        "import staging database permissions could not be restricted to the current user");
+                }
+            }
+        }
+
+        ImportStagingFilesHardenedForTesting?.Invoke(databasePath);
+    }
+
+    internal static Action<string>? ImportStagingFilesHardenedForTesting { get; set; }
 
     internal static long CopyToWithLimit(
         Stream source,
