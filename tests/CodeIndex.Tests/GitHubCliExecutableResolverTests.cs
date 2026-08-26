@@ -23,6 +23,38 @@ public sealed class GitHubCliExecutableResolverTests
         });
     }
 
+    [Fact]
+    public void HomebrewCellarCandidates_EnumerateVersionedRegularTargetsWithoutLaunchingBinSymlinks_Issue5184()
+    {
+        var prefix = TestProjectHelper.CreateTempProject("cdidx_gh_homebrew_5184");
+        try
+        {
+            var older = Path.Combine(prefix, "Cellar", "gh", "2.94.0", "bin", "gh");
+            var newer = Path.Combine(prefix, "Cellar", "gh", "2.95.0", "bin", "gh");
+            Directory.CreateDirectory(Path.GetDirectoryName(older)!);
+            Directory.CreateDirectory(Path.GetDirectoryName(newer)!);
+            File.WriteAllText(older, "older");
+            File.WriteAllText(newer, "newer");
+
+            var candidates = GitHubCliExecutableResolver.HomebrewCellarCandidatePathsForTests(prefix);
+
+            Assert.Equal([newer, older], candidates);
+            Assert.All(candidates, candidate =>
+            {
+                Assert.True(Path.IsPathFullyQualified(candidate));
+                Assert.Equal("gh", Path.GetFileName(candidate));
+                Assert.Contains(
+                    $"{Path.DirectorySeparatorChar}Cellar{Path.DirectorySeparatorChar}gh{Path.DirectorySeparatorChar}",
+                    candidate,
+                    StringComparison.Ordinal);
+            });
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(prefix);
+        }
+    }
+
     [ExternalProcessFact]
     public void PathFirstSubstitute_IsNeverExecutedWhenNoTrustedVerifierExists_Issue5184()
     {
@@ -177,6 +209,38 @@ public sealed class GitHubCliExecutableResolverTests
         finally
         {
             GitHubCliExecutableResolver.CandidatePathsForTesting = oldCandidates;
+            GitHubCliExecutableResolver.VersionProbeForTesting = oldProbe;
+            TestProjectHelper.DeleteDirectory(root);
+        }
+    }
+
+    [Fact]
+    public void GetStatus_PropagatesCancellationIntoVersionProbe_Issue5184()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var root = TestProjectHelper.CreateTempProject("cdidx_gh_status_cancel_5184");
+        var ghPath = CreatePosixGh(root);
+        using var env = EnvironmentVariableScope.Capture(
+            GitHubCliExecutableResolver.ExecutableEnvironmentVariable);
+        var oldProbe = GitHubCliExecutableResolver.VersionProbeForTesting;
+        using var cancellation = new CancellationTokenSource();
+        env.Set(GitHubCliExecutableResolver.ExecutableEnvironmentVariable, ghPath);
+        GitHubCliExecutableResolver.VersionProbeForTesting = (_, token) =>
+        {
+            Assert.True(token.CanBeCanceled);
+            cancellation.Cancel();
+            token.ThrowIfCancellationRequested();
+            return true;
+        };
+        try
+        {
+            Assert.Throws<OperationCanceledException>(
+                () => GitHubCliExecutableResolver.GetStatus(cancellation.Token));
+        }
+        finally
+        {
             GitHubCliExecutableResolver.VersionProbeForTesting = oldProbe;
             TestProjectHelper.DeleteDirectory(root);
         }

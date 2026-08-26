@@ -78,7 +78,7 @@ public partial class McpServer
             status.GraphSupportedLanguages = ReferenceExtractor.GetSupportedLanguages(status.ProjectRoot).OrderBy(l => l).ToList();
             status.Extractors = ExtractorPluginRegistry.GetStatusSnapshot(status.ProjectRoot);
             status.GitExecutable = GitHelper.GetGitExecutableStatus();
-            status.GitHubCliExecutable = GitHubCliExecutableResolver.GetStatus();
+            status.GitHubCliExecutable = GitHubCliExecutableResolver.GetStatus(requestToken);
             var postExtractionHookSnapshot = PostExtractionHookRunner.DiscoverDefaultMetadata();
             var postExtractionHooks = postExtractionHookSnapshot.Hooks;
             if (postExtractionHookSnapshot.Diagnostics.Count > 0)
@@ -489,6 +489,8 @@ public partial class McpServer
             payload["trust_overrides"] = JsonSerializer.SerializeToNode(status.TrustOverrides);
         if (status.GitExecutable is not null)
             payload["git_executable"] = JsonSerializer.SerializeToNode(status.GitExecutable);
+        if (status.GitHubCliExecutable is not null)
+            payload["github_cli_executable"] = JsonSerializer.SerializeToNode(status.GitHubCliExecutable);
         return payload;
     }
 

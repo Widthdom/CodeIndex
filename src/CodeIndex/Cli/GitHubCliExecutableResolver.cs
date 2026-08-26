@@ -11,6 +11,7 @@ internal static class GitHubCliExecutableResolver
 
     private const string UnavailableMessage =
         "Could not resolve a trusted GitHub CLI executable. Install gh in a standard location or set CDIDX_GH_EXECUTABLE to a trusted absolute path (gh.exe on Windows).";
+    private const int MaxHomebrewCellarVersions = 32;
     private static readonly TimeSpan VersionProbeTimeout = TimeSpan.FromSeconds(5);
     private static readonly AsyncLocal<IReadOnlyList<string>?> CandidatePathsOverride = new();
     private static readonly AsyncLocal<Func<string, CancellationToken, bool>?> VersionProbeOverride = new();
@@ -30,8 +31,8 @@ internal static class GitHubCliExecutableResolver
     internal static string ResolvePathOrThrow(CancellationToken cancellationToken = default)
         => Resolve(cancellationToken).Path ?? throw new TrustedGitHubCliUnavailableException(UnavailableMessage);
 
-    internal static GitExecutableStatus GetStatus()
-        => Resolve(CancellationToken.None).Status;
+    internal static GitExecutableStatus GetStatus(CancellationToken cancellationToken = default)
+        => Resolve(cancellationToken).Status;
 
     internal static IReadOnlyList<ExtensionTrustOverride> GetAcceptedTrustOverrides(GitExecutableStatus status)
     {
@@ -54,6 +55,9 @@ internal static class GitHubCliExecutableResolver
 
     internal static IReadOnlyList<string> KnownCandidatePathsForTests()
         => EnumerateKnownCandidatePaths().ToList();
+
+    internal static IReadOnlyList<string> HomebrewCellarCandidatePathsForTests(string prefix)
+        => EnumerateHomebrewCellarCandidatePaths(prefix).ToList();
 
     internal static GitExecutableStatus EvaluateCandidateForTesting(
         string path,
@@ -103,7 +107,8 @@ internal static class GitHubCliExecutableResolver
             expectedWindowsFileName: "gh.exe",
             executionProbe: probeVersion
                 ? executablePath => ProbeVersion(executablePath, cancellationToken)
-                : null);
+                : null,
+            allowMacHomebrewAdminGroupWrite: IsMacHomebrewCellarGhPath(path));
         return new GitHubCliExecutableResolution(
             validation.Path,
             new GitExecutableStatus(
@@ -143,7 +148,11 @@ internal static class GitHubCliExecutableResolver
         if (OperatingSystem.IsMacOS())
         {
             yield return "/opt/homebrew/bin/gh";
+            foreach (var candidate in EnumerateHomebrewCellarCandidatePaths("/opt/homebrew"))
+                yield return candidate;
             yield return "/usr/local/bin/gh";
+            foreach (var candidate in EnumerateHomebrewCellarCandidatePaths("/usr/local"))
+                yield return candidate;
             yield return "/usr/bin/gh";
             yield break;
         }
@@ -151,6 +160,64 @@ internal static class GitHubCliExecutableResolver
         yield return "/usr/bin/gh";
         yield return "/usr/local/bin/gh";
         yield return "/bin/gh";
+    }
+
+    private static IEnumerable<string> EnumerateHomebrewCellarCandidatePaths(string prefix)
+    {
+        var formulaDirectory = Path.Combine(prefix, "Cellar", "gh");
+        IEnumerable<string> versionDirectories;
+        try
+        {
+            versionDirectories = Directory
+                .EnumerateDirectories(formulaDirectory)
+                .Take(MaxHomebrewCellarVersions)
+                .OrderByDescending(static path => path, StringComparer.Ordinal)
+                .ToArray();
+        }
+        catch (Exception ex) when (ex is IOException
+                                   or UnauthorizedAccessException
+                                   or ArgumentException
+                                   or NotSupportedException
+                                   or DirectoryNotFoundException)
+        {
+            yield break;
+        }
+
+        foreach (var versionDirectory in versionDirectories)
+            yield return Path.Combine(versionDirectory, "bin", "gh");
+    }
+
+    private static bool IsMacHomebrewCellarGhPath(string path)
+    {
+        if (!OperatingSystem.IsMacOS() || !Path.IsPathFullyQualified(path))
+            return false;
+
+        string fullPath;
+        try
+        {
+            fullPath = Path.GetFullPath(path);
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
+
+        return IsPathUnderHomebrewGhCellar(fullPath, "/opt/homebrew")
+               || IsPathUnderHomebrewGhCellar(fullPath, "/usr/local");
+    }
+
+    private static bool IsPathUnderHomebrewGhCellar(string path, string prefix)
+    {
+        var formulaDirectory = Path.Combine(prefix, "Cellar", "gh") + Path.DirectorySeparatorChar;
+        if (!path.StartsWith(formulaDirectory, StringComparison.Ordinal)
+            || !string.Equals(Path.GetFileName(path), "gh", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var relative = path[formulaDirectory.Length..];
+        var segments = relative.Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries);
+        return segments.Length == 3 && string.Equals(segments[1], "bin", StringComparison.Ordinal);
     }
 
     private static bool ProbeVersion(string executablePath, CancellationToken cancellationToken)

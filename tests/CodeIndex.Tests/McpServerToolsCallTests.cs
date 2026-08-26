@@ -5318,6 +5318,64 @@ public partial class McpServerTests
     }
 
     [Fact]
+    public void ToolsCall_Status_CompactReportsRejectedGitHubCliOverride_Issue5184()
+    {
+        using var env = EnvironmentVariableScope.Capture(
+            GitHubCliExecutableResolver.ExecutableEnvironmentVariable);
+        env.Set(GitHubCliExecutableResolver.ExecutableEnvironmentVariable, "gh");
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":5184,"method":"tools/call","params":{"name":"status","arguments":{"format":"compact"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        var githubCliExecutable = structured["github_cli_executable"]!;
+        Assert.Equal("environment_override", githubCliExecutable["source"]!.GetValue<string>());
+        Assert.False(githubCliExecutable["accepted"]!.GetValue<bool>());
+        Assert.Equal("path_not_absolute", githubCliExecutable["reason"]!.GetValue<string>());
+        Assert.DoesNotContain(
+            structured["trust_overrides"]?.AsArray() ?? [],
+            item => item!["kind"]!.GetValue<string>() == "github_cli_executable");
+    }
+
+    [Fact]
+    public void ToolsCall_Status_CompactReportsAcceptedGitHubCliOverride_Issue5184()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var root = TestProjectHelper.CreateTempProject("cdidx_mcp_gh_status_5184");
+        var ghPath = Path.Combine(root, "gh");
+        File.WriteAllText(ghPath, "#!/bin/sh\nprintf 'gh version 2.99.0\\n'\n");
+        File.SetUnixFileMode(
+            ghPath,
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        using var env = EnvironmentVariableScope.Capture(
+            GitHubCliExecutableResolver.ExecutableEnvironmentVariable);
+        var oldProbe = GitHubCliExecutableResolver.VersionProbeForTesting;
+        env.Set(GitHubCliExecutableResolver.ExecutableEnvironmentVariable, ghPath);
+        GitHubCliExecutableResolver.VersionProbeForTesting = (_, _) => true;
+        try
+        {
+            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":5184,"method":"tools/call","params":{"name":"status","arguments":{"format":"compact"}}}""")!;
+            var response = _server.HandleMessage(request)!;
+
+            var structured = response["result"]!["structuredContent"]!;
+            var githubCliExecutable = structured["github_cli_executable"]!;
+            Assert.True(githubCliExecutable["accepted"]!.GetValue<bool>());
+            Assert.Equal("accepted", githubCliExecutable["reason"]!.GetValue<string>());
+            Assert.Equal("gh", githubCliExecutable["path"]!.GetValue<string>());
+            Assert.Contains(
+                structured["trust_overrides"]!.AsArray(),
+                item => item!["kind"]!.GetValue<string>() == "github_cli_executable");
+        }
+        finally
+        {
+            GitHubCliExecutableResolver.VersionProbeForTesting = oldProbe;
+            TestProjectHelper.DeleteDirectory(root);
+        }
+    }
+
+    [Fact]
     public void ToolsCall_Status_FieldsProjectsExactCompactFields_Issue4724()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status","arguments":{"format":"compact","fields":["summary","readiness","summary"]}}}""")!;

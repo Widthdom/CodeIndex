@@ -154,7 +154,7 @@ public static partial class QueryCommandRunner
             status.GraphSupportedLanguages = ReferenceExtractor.GetSupportedLanguages(status.ProjectRoot).OrderBy(l => l).ToList();
             status.Extractors = ExtractorPluginRegistry.GetStatusSnapshot(status.ProjectRoot);
             status.GitExecutable = GitHelper.GetGitExecutableStatus();
-            status.GitHubCliExecutable = GitHubCliExecutableResolver.GetStatus();
+            status.GitHubCliExecutable = GitHubCliExecutableResolver.GetStatus(cancellationToken);
             var postExtractionHookSnapshot = PostExtractionHookRunner.DiscoverDefaultMetadata();
             var postExtractionHooks = postExtractionHookSnapshot.Hooks;
             if (postExtractionHookSnapshot.Diagnostics.Count > 0)

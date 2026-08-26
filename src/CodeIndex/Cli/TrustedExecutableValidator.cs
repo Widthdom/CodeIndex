@@ -31,13 +31,15 @@ internal static class TrustedExecutableValidator
         string source,
         string expectedUnixFileName,
         string expectedWindowsFileName,
-        Func<string, bool>? executionProbe)
+        Func<string, bool>? executionProbe,
+        bool allowMacHomebrewAdminGroupWrite = false)
     {
         var before = EvaluateWithoutExecutionProbe(
             path,
             source,
             expectedUnixFileName,
-            expectedWindowsFileName);
+            expectedWindowsFileName,
+            allowMacHomebrewAdminGroupWrite);
         if (!before.Accepted || executionProbe == null)
             return before;
 
@@ -52,7 +54,8 @@ internal static class TrustedExecutableValidator
             before.Path!,
             source,
             expectedUnixFileName,
-            expectedWindowsFileName);
+            expectedWindowsFileName,
+            allowMacHomebrewAdminGroupWrite);
         if (!after.Accepted)
             return after;
         if (!string.Equals(
@@ -74,7 +77,8 @@ internal static class TrustedExecutableValidator
         string path,
         string source,
         string expectedUnixFileName,
-        string expectedWindowsFileName)
+        string expectedWindowsFileName,
+        bool allowMacHomebrewAdminGroupWrite)
     {
         if (string.IsNullOrWhiteSpace(path))
             return Reject(source, "path_empty", null);
@@ -197,7 +201,10 @@ internal static class TrustedExecutableValidator
                 ownerTrusted: false);
         }
 
-        var ancestorsTrusted = TryValidateExecutableAncestors(fullPath, effectiveUserId);
+        var ancestorsTrusted = TryValidateExecutableAncestors(
+            fullPath,
+            effectiveUserId,
+            allowMacHomebrewAdminGroupWrite);
         if (!ancestorsTrusted)
         {
             return Reject(
@@ -345,7 +352,10 @@ internal static class TrustedExecutableValidator
     private static string FormatUnixMode(UnixFileMode mode)
         => Convert.ToString((int)mode, 8).PadLeft(4, '0');
 
-    private static bool TryValidateExecutableAncestors(string executablePath, uint? effectiveUserId)
+    private static bool TryValidateExecutableAncestors(
+        string executablePath,
+        uint? effectiveUserId,
+        bool allowMacHomebrewAdminGroupWrite = false)
     {
         try
         {
@@ -372,7 +382,9 @@ internal static class TrustedExecutableValidator
 
                     var sharedWritable = (mode & (UnixFileMode.GroupWrite | UnixFileMode.OtherWrite)) != 0;
                     var rootOwnedStickyDirectory = ownerId == 0 && (mode & UnixFileMode.StickyBit) != 0;
-                    if (sharedWritable && !rootOwnedStickyDirectory)
+                    var trustedMacHomebrewCellar = allowMacHomebrewAdminGroupWrite
+                        && IsTrustedMacHomebrewCellarAncestor(current, ownerId, userId, mode);
+                    if (sharedWritable && !rootOwnedStickyDirectory && !trustedMacHomebrewCellar)
                         return false;
                 }
                 else if (effectiveUserId.HasValue)
@@ -389,6 +401,31 @@ internal static class TrustedExecutableValidator
         {
             return false;
         }
+    }
+
+    private static bool IsTrustedMacHomebrewCellarAncestor(
+        string path,
+        uint ownerId,
+        uint effectiveUserId,
+        UnixFileMode mode)
+    {
+        const uint macOsAdminGroupId = 80;
+        if (!OperatingSystem.IsMacOS()
+            || ownerId != effectiveUserId
+            || (mode & UnixFileMode.OtherWrite) != 0
+            || !FileIndexer.TryGetUnixFileOwnerAndGroupIds(
+                LongPath.EnsureWindowsPrefix(path),
+                out var observedOwnerId,
+                out var groupId)
+            || observedOwnerId != ownerId
+            || groupId != macOsAdminGroupId)
+        {
+            return false;
+        }
+
+        var comparison = StringComparison.Ordinal;
+        return string.Equals(path, "/opt/homebrew/Cellar", comparison)
+               || string.Equals(path, "/usr/local/Cellar", comparison);
     }
 
     [SupportedOSPlatform("windows")]
