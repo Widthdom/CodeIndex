@@ -1693,6 +1693,15 @@ unqualified name receive a global candidate only when that name is unique in the
 symbol set. Otherwise they remain `ambiguous` or `unresolved`, and dependency queries do not
 fall back to a same-name edge.
 
+C# unqualified calls and method groups that match local-function declarations resolve against
+the narrowest complete lexical block inside the enclosing callable. Declaration order is not a
+visibility gate; overloads from the winning block remain candidates and normal call-arity
+filtering selects among them. Parameters, local values, and delegate-valued bindings shadow
+local functions before graph resolution, while sibling blocks and unrelated enclosing
+callables cannot contribute local candidates. Incomplete callable or block-range evidence stays
+`unresolved` instead of falling back to a file-wide same-name edge. The persisted target
+identity is shared by references, callers, inspect, impact, and LSP definition/reference reads.
+
 C# type-reference resolution uses `LogicalPartialSymbolGrouper` for declarations that have a
 valid logical partial-family identity. Full and scoped refreshes persist the same stable
 `family:` target key used by grouped symbol discovery, so multiple physical declarations in one
@@ -5796,6 +5805,14 @@ identity-aware read は、`codeindex_meta` の `reference_identity_contract_vers
 resolution を再構築し、同じ transaction で marker を設定します。C# の無修飾名 reference は、
 対象となる symbol 集合で名前が一意の場合だけ global candidate を持ちます。それ以外は
 `ambiguous` または `unresolved` のままとし、dependency query は同名 edge へ fallback しません。
+
+C# の無修飾 call と method group が local function 宣言に一致する場合、enclosing callable 内の
+最も狭い完全な字句 block に対して解決します。宣言順は visibility gate とせず、選択された block の
+overload 群を候補に残したうえで通常の call arity filter で絞り込みます。parameter、local value、
+delegate value binding は graph 解決より先に local function を shadow し、兄弟 block や無関係な
+enclosing callable の local function は候補になりません。callable または block range の evidence が
+不完全な場合は file 全体の同名 edge へ fallback せず `unresolved` のままにします。永続化した target
+identity は references、callers、inspect、impact、LSP definition/reference read で共有します。
 
 C# の type-reference resolution は、有効な論理 partial-family identity を持つ declaration に
 `LogicalPartialSymbolGrouper` を使用します。full / scoped refresh は grouped symbol discovery と同じ

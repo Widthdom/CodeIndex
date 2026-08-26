@@ -670,6 +670,13 @@ public partial class DbWriter
     private static string CSharpTypeReferenceCandidatePredicateSql => $"""
         (
             source_file.lang <> 'csharp'
+            OR r.target_qualifier IS NULL
+            OR r.target_qualifier <> char(31) || 'csharp_nonlocal'
+            OR s.kind <> 'function'
+            OR COALESCE(s.container_kind, '') NOT IN ('function', 'test.method', 'lambda', 'property')
+        )
+        AND (
+            source_file.lang <> 'csharp'
             OR r.reference_kind NOT IN ('call', 'instantiate', 'type_reference')
             OR CASE
                 WHEN r.reference_kind = 'call'
@@ -1101,6 +1108,33 @@ public partial class DbWriter
                   COLLATE BINARY
           AND s.kind IN ('field', 'property');
 
+        -- C# local-function references carry exact declaration coordinates selected from
+        -- the narrowest complete lexical block. The marker keeps sibling/outer local
+        -- functions out of the candidate family while preserving overload filtering.
+        -- C# local function参照は、最も狭い完全な字句blockから選んだ宣言座標を保持する。
+        -- markerにより、overload絞込みを保ちつつ兄弟/外側のlocal functionを候補から除外する。
+        INSERT INTO symbol_reference_candidates(reference_id, symbol_id, scope_rank)
+        SELECT r.id, target.id, 0
+        FROM symbol_references AS r
+        JOIN files AS source_file ON source_file.id = r.file_id
+        JOIN symbols AS target
+          ON target.file_id = r.file_id
+         AND target.name_folded = r.symbol_name_folded
+         AND target.name = r.symbol_name COLLATE BINARY
+        JOIN files AS target_file ON target_file.id = target.file_id
+        WHERE source_file.lang = 'csharp'
+          AND target_file.lang = 'csharp'
+          AND r.reference_kind = 'call'
+          AND r.target_qualifier LIKE char(31) || 'csharp_local:%'
+          AND target.kind = 'function'
+          AND target.container_kind IN ('function', 'test.method', 'lambda', 'property')
+          AND instr(
+                  r.target_qualifier,
+                  '|' || target.line || ':' ||
+                  COALESCE(target.identifier_start_column, target.start_column, -1) || '|'
+              ) > 0
+          AND {BuildCSharpCallCandidatePredicateSql("target")};
+
         INSERT INTO symbol_reference_candidates(reference_id, symbol_id, scope_rank)
         SELECT r.id, s.id, 0
         FROM symbol_references AS r
@@ -1220,7 +1254,11 @@ public partial class DbWriter
           )
           AND {CSharpTypeReferenceCandidatePredicateSql}
           AND source_file.lang <> 'markdown'
-          AND r.target_qualifier IS NULL
+          AND (
+              r.target_qualifier IS NULL
+              OR (source_file.lang = 'csharp'
+                  AND r.target_qualifier = char(31) || 'csharp_nonlocal')
+          )
           AND s.file_id = r.file_id
           AND source.container_name IS NOT NULL
           AND source.container_name <> ''
@@ -1252,7 +1290,11 @@ public partial class DbWriter
           )
           AND {CSharpTypeReferenceCandidatePredicateSql}
           AND source_file.lang <> 'markdown'
-          AND r.target_qualifier IS NULL
+          AND (
+              r.target_qualifier IS NULL
+              OR (source_file.lang = 'csharp'
+                  AND r.target_qualifier = char(31) || 'csharp_nonlocal')
+          )
           AND (source_file.lang <> 'dependency_lock' OR s.file_id = r.file_id)
           AND source.container_qualified_name IS NOT NULL
           AND source.container_qualified_name <> ''
@@ -1280,7 +1322,11 @@ public partial class DbWriter
           )
           AND {CSharpTypeReferenceCandidatePredicateSql}
           AND source_file.lang <> 'markdown'
-          AND r.target_qualifier IS NULL
+          AND (
+              r.target_qualifier IS NULL
+              OR (source_file.lang = 'csharp'
+                  AND r.target_qualifier = char(31) || 'csharp_nonlocal')
+          )
           AND s.file_id = r.file_id
           AND NOT EXISTS (
               SELECT 1 FROM symbol_reference_candidates AS existing
@@ -1306,7 +1352,11 @@ public partial class DbWriter
           )
           AND {CSharpTypeReferenceCandidatePredicateSql}
           AND source_file.lang <> 'markdown'
-          AND r.target_qualifier IS NULL
+          AND (
+              r.target_qualifier IS NULL
+              OR (source_file.lang = 'csharp'
+                  AND r.target_qualifier = char(31) || 'csharp_nonlocal')
+          )
           AND (source_file.lang <> 'dependency_lock' OR s.file_id = r.file_id)
           AND source.container_name IS NOT NULL
           AND source.container_name <> ''
@@ -1468,9 +1518,17 @@ public partial class DbWriter
              COALESCE(target.container_qualified_name, target.container_name, '') || char(31) ||
              COALESCE(target.name, '') = unique_family.family_key
         WHERE source_file.lang = 'csharp'
-          AND r.target_qualifier IS NULL
+          AND (
+              r.target_qualifier IS NULL
+              OR r.target_qualifier = char(31) || 'csharp_nonlocal'
+          )
           AND r.reference_kind NOT IN ('instantiate', 'type_reference')
           AND {BuildCSharpCallCandidatePredicateSql("target")}
+          AND (
+              r.target_qualifier IS NULL
+              OR target.kind <> 'function'
+              OR COALESCE(target.container_kind, '') NOT IN ('function', 'test.method', 'lambda', 'property')
+          )
           AND NOT EXISTS (
               SELECT 1
               FROM temp.{ReferenceLowerRankCandidateMatchesTable} AS lower_rank_match
