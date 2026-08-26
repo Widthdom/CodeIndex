@@ -92,6 +92,93 @@ public partial class McpServerTests
             Assert.Equal(0, languageMismatch["total"]!.GetValue<int>());
         }
 
+        var overloadSelectors = reader.GetDefinitions(
+                "Issue5187Overloaded",
+                limit: 10,
+                kind: null,
+                lang: "csharp",
+                includeBody: false,
+                pathPatterns: null,
+                excludePathPatterns: null,
+                excludeTests: false,
+                exact: true)
+            .Select(reader.BuildSymbolCandidateSelector)
+            .Select(candidate => candidate.Selector)
+            .ToArray();
+        Assert.Equal(2, overloadSelectors.Length);
+        foreach (var overloadSelector in overloadSelectors)
+        {
+            foreach (var tool in new[] { "references", "callers", "impact_analysis" })
+            {
+                var arguments = new JsonObject
+                {
+                    ["selector"] = overloadSelector,
+                    ["countOnly"] = true,
+                };
+                if (tool == "impact_analysis")
+                    arguments["maxHops"] = 1;
+                var overloadSelected = CallIssue4853Tool(
+                    _server,
+                    tool,
+                    arguments,
+                    id: 518754);
+                Assert.Equal(0, overloadSelected["count"]!.GetValue<int>());
+                Assert.True(overloadSelected["identity_scoped"]!.GetValue<bool>());
+            }
+        }
+
+        foreach (var tool in new[] { "references", "callers" })
+        {
+            var overloadBare = CallIssue4853Tool(
+                _server,
+                tool,
+                new JsonObject
+                {
+                    ["query"] = "Issue5187Overloaded",
+                    ["exact"] = true,
+                    ["countOnly"] = true,
+                },
+                id: 518755);
+            Assert.False(overloadBare["identity_scoped"]!.GetValue<bool>());
+            Assert.Equal(2, overloadBare["candidate_count"]!.GetValue<int>());
+        }
+
+        var filteredImpact = CallIssue4853Tool(
+            _server,
+            "impact_analysis",
+            new JsonObject
+            {
+                ["selector"] = selector,
+                ["lang"] = "typescript",
+                ["maxHops"] = 0,
+            },
+            id: 518756);
+        Assert.Equal(0, filteredImpact["definition_count"]!.GetValue<int>());
+        Assert.Empty(filteredImpact["definitions"]!.AsArray());
+
+        var selectedType = Assert.Single(reader.GetDefinitions(
+            "Issue5187SelectedType",
+            limit: 10,
+            kind: null,
+            lang: "csharp",
+            includeBody: false,
+            pathPatterns: null,
+            excludePathPatterns: null,
+            excludeTests: false,
+            exact: true));
+        var selectedTypeSelector = reader.BuildSymbolCandidateSelector(selectedType).Selector;
+        var selectedTypeImpact = CallIssue4853Tool(
+            _server,
+            "impact_analysis",
+            new JsonObject
+            {
+                ["selector"] = selectedTypeSelector,
+                ["maxHops"] = 1,
+            },
+            id: 518757);
+        Assert.Equal("file_dependency_hints", selectedTypeImpact["impact_mode"]!.GetValue<string>());
+        Assert.Contains("tests/AlphaConsumer.cs", selectedTypeImpact.ToJsonString(), StringComparison.Ordinal);
+
         var malformed = CallIssue4853ToolError(
             _server,
             "callers",

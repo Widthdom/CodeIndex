@@ -724,7 +724,7 @@ public partial class DbReader
     /// SQL 側で要求された LIMIT/OFFSET を適用し、呼び出し側が要求以上の中間ページを
     /// materialize しないようにする。
     /// </summary>
-    private List<CallerResult> GetCallersExactCore(string symbolName, int limit, int offset, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, IReadOnlyList<long>? targetSymbolIds, bool includeAmbiguousMSource, bool includeMemberReads)
+    private List<CallerResult> GetCallersExactCore(string symbolName, int limit, int offset, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, IReadOnlyList<long>? targetSymbolIds, bool requireAuthoritativeIdentity, bool includeAmbiguousMSource, bool includeMemberReads)
     {
         if (!_hasReferencesTable) return new List<CallerResult>();
         using var cmd = _conn.CreateCommand();
@@ -744,12 +744,7 @@ public partial class DbReader
         var targetSymbolIdSql = hasIdentityTargetScope
             ? $@"CASE
                     WHEN r.resolution_state = 'resolved'
-                         AND EXISTS (
-                             SELECT 1
-                             FROM symbol_reference_candidates projected_identity_candidate
-                             WHERE projected_identity_candidate.reference_id = r.id
-                               AND projected_identity_candidate.symbol_id IN ({targetSymbolIdsSql})
-                         )
+                         AND r.target_symbol_id IN ({targetSymbolIdsSql})
                     THEN r.target_symbol_id
                     ELSE NULL
                 END"
@@ -783,19 +778,25 @@ public partial class DbReader
                 ? "(r.symbol_name = @symbolName COLLATE NOCASE OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@symbolName) COLLATE NOCASE)" + polymorphicNameCondition + " OR (f.lang = 'solution' AND r.reference_kind = 'project_reference' AND r.container_name = @symbolName COLLATE NOCASE))"
                 : "(((f.lang = 'sql') AND sql_context_has_name_at(" + contextSql + @", @symbolName, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name = @symbolName COLLATE NOCASE) OR " + BuildCSharpQualifiedContextFallbackSql(BuildQualifiedContextMatchSql(contextSql, "r.column_number", folded: false, like: false)) + " OR " + BuildQualifiedLeafFallbackSql("r.symbol_name", "r.symbol_name_folded", folded: false) + polymorphicNameCondition + " OR (f.lang = 'solution' AND r.reference_kind = 'project_reference' AND r.container_name = @symbolName COLLATE NOCASE))";
         var nameCondition = "\n              AND " + namePredicate;
-        // Identity-scoped traversal admits only references whose candidate set contains the
-        // requested canonical target. Unresolved/ambiguous same-leaf rows remain available to
-        // broad reference discovery, but they are not confirmed call-graph edges.
-        // identity scope の traversal は candidate set が要求 target を含む参照だけを採用する。
-        // unresolved/ambiguous な同名 leaf は広い reference 探索には残すが、確定 call graph edge
-        // としては扱わない。
-        var identityTargetPredicate = $@"EXISTS (
+        // Selector traversal admits only references authoritatively resolved to that target.
+        // Name-resolved roots, including a partial family that currently has one member, retain
+        // resolved-group evidence whose candidate set intersects the requested identities.
+        // Unresolved/ambiguous same-leaf rows remain available to broad reference discovery,
+        // but not as confirmed graph edges.
+        // selector traversal は対象へ確定解決された参照だけを採用する。現在の member が1件の
+        // partial family を含む name-resolved root は、candidate set が要求 identity と交差する
+        // resolved-group evidence を維持する。未解決・曖昧な同名 leaf は広い reference 探索には
+        // 残すが、確定 graph edge としては扱わない。
+        var candidateIdentityTargetPredicate = $@"EXISTS (
                   SELECT 1
                   FROM symbol_reference_candidates identity_candidate
                   WHERE identity_candidate.reference_id = r.id
                     AND identity_candidate.symbol_id IN ({targetSymbolIdsSql})
                     AND r.resolution_state IN ('resolved', 'resolved_group')
               )";
+        var identityTargetPredicate = requireAuthoritativeIdentity
+            ? $"(r.resolution_state = 'resolved' AND r.target_symbol_id IN ({targetSymbolIdsSql}))"
+            : candidateIdentityTargetPredicate;
         var targetCondition = !hasIdentityTargetContract
             ? nameCondition
             : targetSymbolIds!.Count == 0
@@ -962,8 +963,17 @@ public partial class DbReader
         lang = NormalizeQueryLanguage(lang);
         var resolvedName = selectedDefinition?.Name ?? ResolveSymbolName(symbolName, lang);
         var definitionOffset = string.Equals(responseCollection, "definitions", StringComparison.Ordinal) ? offset : 0;
+        var selectedDefinitionMatchesFilters = selectedDefinition != null
+            && SelectedDefinitionMatchesImpactFilters(
+                selectedDefinition,
+                lang,
+                pathPatterns,
+                excludePathPatterns,
+                excludeTests);
         var definitionResolution = selectedDefinition != null
-            ? ResolveSelectedImpactDefinition(selectedDefinition)
+            ? selectedDefinitionMatchesFilters
+                ? ResolveSelectedImpactDefinition(selectedDefinition)
+                : EmptyImpactDefinitionResolution()
             : ResolveImpactDefinitions(symbolName, limit, lang, pathPatterns, excludePathPatterns, excludeTests, definitionOffset);
         if (selectedDefinition == null
             && definitionResolution.Definitions.Count == 0
@@ -1080,7 +1090,8 @@ public partial class DbReader
             ? offset
             : 0;
         var (callers, truncated, truncatedReason, terminationReason, cycles) = selectedDefinition != null
-            ? GetTransitiveCallersForCandidate(
+            ? selectedDefinitionMatchesFilters
+                ? GetTransitiveCallersForCandidate(
                 selectedDefinition,
                 maxDepth,
                 limit,
@@ -1091,12 +1102,14 @@ public partial class DbReader
                 withPaths,
                 callerOffset,
                 includeMemberReads)
+                : ([], false, null, ImpactTerminationReasons.Completed, [])
             : GetTransitiveCallers(symbolName, maxDepth, limit, lang, pathPatterns, excludePathPatterns, excludeTests, withPaths, resultOffset: callerOffset, includeMemberReads: includeMemberReads);
         var callerExistsBeforeOffset = false;
         if (callers.Count == 0 && callerOffset > 0)
         {
             var callerProbe = selectedDefinition != null
-                ? GetTransitiveCallersForCandidate(
+                ? selectedDefinitionMatchesFilters
+                    ? GetTransitiveCallersForCandidate(
                     selectedDefinition,
                     maxDepth,
                     1,
@@ -1107,6 +1120,7 @@ public partial class DbReader
                     withPaths: false,
                     resultOffset: 0,
                     includeMemberReads)
+                    : ([], false, null, ImpactTerminationReasons.Completed, [])
                 : GetTransitiveCallers(symbolName, maxDepth, 1, lang, pathPatterns, excludePathPatterns, excludeTests, withPaths: false, resultOffset: 0, includeMemberReads: includeMemberReads);
             callerExistsBeforeOffset = callerProbe.Results.Count > 0;
         }

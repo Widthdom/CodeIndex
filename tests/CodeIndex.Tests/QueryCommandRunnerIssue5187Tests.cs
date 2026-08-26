@@ -311,6 +311,106 @@ public sealed class QueryCommandRunnerIssue5187Tests
     }
 
     [Fact]
+    public void GraphSelectors_PreserveOverloadAmbiguityAndImpactFilterFallbackSemantics_Issue5187()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_graph_selector_review_5187");
+        try
+        {
+            var dbPath = CreateGraphFixture(projectRoot);
+            string[] overloadSelectors;
+            using (var db = new DbContext(DbOpenIntent.QueryOnly, dbPath))
+            {
+                var reader = new DbReader(db.Connection);
+                overloadSelectors = reader.GetDefinitions(
+                        "Issue5187Overloaded",
+                        limit: 10,
+                        kind: null,
+                        lang: "csharp",
+                        includeBody: false,
+                        pathPatterns: null,
+                        excludePathPatterns: null,
+                        excludeTests: false,
+                        exact: true)
+                    .Select(reader.BuildSymbolCandidateSelector)
+                    .Select(candidate => candidate.Selector)
+                    .ToArray();
+            }
+
+            Assert.Equal(2, overloadSelectors.Length);
+            foreach (var selector in overloadSelectors)
+            {
+                AssertSelectedGraphCountZero(
+                    () => QueryCommandRunner.RunReferences(
+                        ["--selector", selector, "--db", dbPath, "--json", "--count"],
+                        QueryCommandTestSupport.JsonOptions),
+                    selector);
+                AssertSelectedGraphCountZero(
+                    () => QueryCommandRunner.RunCallers(
+                        ["--selector", selector, "--db", dbPath, "--json", "--count"],
+                        QueryCommandTestSupport.JsonOptions),
+                    selector);
+                AssertSelectedGraphCountZero(
+                    () => QueryCommandRunner.RunImpact(
+                        ["--selector", selector, "--db", dbPath, "--json", "--count", "--max-hops", "1"],
+                        QueryCommandTestSupport.JsonOptions),
+                    selector);
+            }
+
+            foreach (var run in new Func<int>[]
+                     {
+                         () => QueryCommandRunner.RunReferences(
+                             ["Issue5187Overloaded", "--db", dbPath, "--json", "--count", "--exact-name"],
+                             QueryCommandTestSupport.JsonOptions),
+                         () => QueryCommandRunner.RunCallers(
+                             ["Issue5187Overloaded", "--db", dbPath, "--json", "--count", "--exact-name"],
+                             QueryCommandTestSupport.JsonOptions),
+                     })
+            {
+                var (exitCode, stdout, stderr) = QueryCommandTestSupport.CaptureConsole(run);
+                using var result = QueryCommandTestSupport.ParseJsonOutput(stdout);
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                Assert.False(result.RootElement.GetProperty("identity_scoped").GetBoolean());
+                Assert.Equal(2, result.RootElement.GetProperty("candidate_count").GetInt32());
+                Assert.Equal(2, result.RootElement.GetProperty("candidates").GetArrayLength());
+            }
+
+            var alphaSelector = GetInspectSelectors(dbPath)["Issue5187Fixture.Issue5187Alpha.Issue5187Shared"];
+            AssertSelectedImpactDefinitionCount(dbPath, alphaSelector, 0, "--lang", "typescript");
+            AssertSelectedImpactDefinitionCount(dbPath, alphaSelector, 0, "--path", "tests/**");
+
+            var betaSelector = GetInspectSelectors(dbPath)["Issue5187Fixture.Issue5187Beta.Issue5187Shared"];
+            AssertSelectedImpactDefinitionCount(dbPath, betaSelector, 0, "--exclude-tests");
+
+            var generatedSelector = GetInspectSelectors(
+                dbPath,
+                query: "Issue5187GeneratedRoot",
+                includeGenerated: true)["Issue5187Fixture.Issue5187Generated.Issue5187GeneratedRoot"];
+            AssertSelectedImpactDefinitionCount(dbPath, generatedSelector, 0);
+            AssertSelectedImpactDefinitionCount(dbPath, generatedSelector, 1, "--include-generated");
+
+            var typeSelector = GetInspectSelectors(
+                dbPath,
+                query: "Issue5187SelectedType")["Issue5187Fixture.Issue5187SelectedType"];
+            var (typeExitCode, typeStdout, typeStderr) = QueryCommandTestSupport.CaptureConsole(() =>
+                QueryCommandRunner.RunImpact(
+                    ["--selector", typeSelector, "--db", dbPath, "--json", "--max-hops", "1"],
+                    QueryCommandTestSupport.JsonOptions));
+            using var typeImpact = QueryCommandTestSupport.ParseJsonOutput(typeStdout);
+
+            Assert.Equal(CommandExitCodes.Success, typeExitCode);
+            Assert.Equal(string.Empty, typeStderr);
+            Assert.Equal("file_dependency_hints", typeImpact.RootElement.GetProperty("impact_mode").GetString());
+            Assert.Contains("tests/AlphaConsumer.cs", typeStdout, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void GraphSelector_AppearsInHelpStructuredFieldDiscoveryAndEveryShellCompletion_Issue5187()
     {
         foreach (var command in new[] { "references", "callers", "callees", "impact" })
@@ -408,6 +508,41 @@ public sealed class QueryCommandRunnerIssue5187Tests
         Assert.Equal(selector, result.RootElement.GetProperty("selected_symbol").GetProperty("selector").GetString());
     }
 
+    private static void AssertSelectedGraphCountZero(Func<int> run, string selector)
+    {
+        var (exitCode, stdout, stderr) = QueryCommandTestSupport.CaptureConsole(run);
+        using var result = QueryCommandTestSupport.ParseJsonOutput(stdout);
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Equal(0, result.RootElement.GetProperty("count").GetInt32());
+        Assert.True(result.RootElement.GetProperty("identity_scoped").GetBoolean());
+        Assert.Equal(selector, result.RootElement.GetProperty("selected_symbol").GetProperty("selector").GetString());
+    }
+
+    private static void AssertSelectedImpactDefinitionCount(
+        string dbPath,
+        string selector,
+        int expectedCount,
+        params string[] filters)
+    {
+        var args = new List<string>
+        {
+            "--selector", selector, "--db", dbPath, "--json", "--max-hops", "0",
+        };
+        args.AddRange(filters);
+        var (exitCode, stdout, stderr) = QueryCommandTestSupport.CaptureConsole(() =>
+            QueryCommandRunner.RunImpact(args.ToArray(), QueryCommandTestSupport.JsonOptions));
+        using var result = QueryCommandTestSupport.ParseJsonOutput(stdout);
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Equal(expectedCount, result.RootElement.GetProperty("definition_count").GetInt32());
+        Assert.Equal(expectedCount, result.RootElement.GetProperty("definitions").GetArrayLength());
+        Assert.True(result.RootElement.GetProperty("identity_scoped").GetBoolean());
+        Assert.Equal(selector, result.RootElement.GetProperty("selected_symbol").GetProperty("selector").GetString());
+    }
+
     private static Dictionary<string, string> GetInspectSelectors(
         string dbPath,
         string query = "Issue5187Shared",
@@ -469,6 +604,16 @@ public sealed class QueryCommandRunnerIssue5187Tests
                         public static void InvokeAlphaB() => Issue5187Alpha.Issue5187Shared();
                         public static void InvokeSuffix() => Issue5187Alpha.Issue5187SharedSuffix();
                     }
+
+                    public static class Issue5187OverloadContainer
+                    {
+                        public static void Issue5187Overloaded(int value) => Issue5187OverloadIntLeaf();
+                        public static void Issue5187Overloaded(string value) => Issue5187OverloadStringLeaf();
+                        private static void Issue5187OverloadIntLeaf() { }
+                        private static void Issue5187OverloadStringLeaf() { }
+                    }
+
+                    public sealed class Issue5187SelectedType { }
                     """),
                 new TestProjectHelper.IndexedFileFixture(
                     "tests/AlphaConsumer.cs",
@@ -479,6 +624,11 @@ public sealed class QueryCommandRunnerIssue5187Tests
                     public static class Issue5187AlphaTestCaller
                     {
                         public static void InvokeAlphaFromTests() => Issue5187Alpha.Issue5187Shared();
+                    }
+
+                    public sealed class Issue5187TypeConsumer
+                    {
+                        public Issue5187SelectedType? Value { get; }
                     }
                     """),
                 new TestProjectHelper.IndexedFileFixture(
@@ -496,6 +646,12 @@ public sealed class QueryCommandRunnerIssue5187Tests
                     public static class Issue5187BetaCaller
                     {
                         public static void InvokeBeta() => Issue5187Beta.Issue5187Shared();
+                    }
+
+                    public static class Issue5187OverloadCaller
+                    {
+                        public static void InvokeOverloadInt() => Issue5187OverloadContainer.Issue5187Overloaded(1);
+                        public static void InvokeOverloadString() => Issue5187OverloadContainer.Issue5187Overloaded("value");
                     }
                     """),
                 new TestProjectHelper.IndexedFileFixture(

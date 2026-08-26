@@ -406,8 +406,9 @@ public partial class DbReader
             request.ExcludePathPatterns,
             request.ExcludeTests,
             targetIds,
-            includeAmbiguousMSource,
-            request.IncludeMemberReads);
+            requireAuthoritativeIdentity: request.SelectedDefinition != null,
+            includeAmbiguousMSource: includeAmbiguousMSource,
+            includeMemberReads: request.IncludeMemberReads);
     }
 
     private int GetImpactGraphStateEntryBudget(int limit)

@@ -73,7 +73,8 @@ public partial class McpServer
                             excludePaths,
                             excludeTests,
                             kind,
-                            includeQualifiedCommonCalls: includeQualifiedCommonCalls).Count
+                            includeQualifiedCommonCalls: includeQualifiedCommonCalls,
+                            requireAuthoritativeIdentity: true).Count
                         : reader.CountSearchReferencesTotal(effectiveQuery, lang, kind, pathPatterns, excludePaths, excludeTests, exact, includeQualifiedCommonCalls).Count;
                 var histogramResults = countOnlyTotal > 0
                     ? selectedDefinition != null
@@ -85,7 +86,8 @@ public partial class McpServer
                             excludeTests,
                             maxLineWidth,
                             referenceKind: kind,
-                            includeQualifiedCommonCalls: includeQualifiedCommonCalls)
+                            includeQualifiedCommonCalls: includeQualifiedCommonCalls,
+                            requireAuthoritativeIdentity: true)
                         : reader.SearchReferences(effectiveQuery, Math.Min(countOnlyTotal, MaxLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact, maxLineWidth, includeQualifiedCommonCalls: includeQualifiedCommonCalls)
                     : [];
                 var countOnlyPayload = BuildCountOnlyPayload(countOnlyTotal, countOnlyTotal, truncated: false, histogramResults, result => result.Path);
@@ -115,14 +117,15 @@ public partial class McpServer
                         maxLineWidth,
                         offset,
                         kind,
-                        includeQualifiedCommonCalls: includeQualifiedCommonCalls)
+                        includeQualifiedCommonCalls: includeQualifiedCommonCalls,
+                        requireAuthoritativeIdentity: true)
                     : reader.SearchReferences(effectiveQuery, FetchLimitForEnvelope(limit), lang, kind, pathPatterns, excludePaths, excludeTests, exact, maxLineWidth, offset: offset, includeQualifiedCommonCalls: includeQualifiedCommonCalls);
             var truncated = TrimToRequestedLimit(results, limit);
             var total = !selectorMatchesLanguage
                 ? 0
                 : truncated || offset > 0
                     ? selectedDefinition != null
-                        ? reader.CountSearchReferencesForCandidate(selectedDefinition, pathPatterns, excludePaths, excludeTests, kind, includeQualifiedCommonCalls: includeQualifiedCommonCalls).Count
+                        ? reader.CountSearchReferencesForCandidate(selectedDefinition, pathPatterns, excludePaths, excludeTests, kind, includeQualifiedCommonCalls: includeQualifiedCommonCalls, requireAuthoritativeIdentity: true).Count
                         : reader.CountSearchReferencesTotal(effectiveQuery, lang, kind, pathPatterns, excludePaths, excludeTests, exact, includeQualifiedCommonCalls).Count
                     : results.Count;
             if (lspCompatible)

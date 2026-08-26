@@ -108,6 +108,7 @@ public partial class DbReader
         DefinitionResult definition)
     {
         var precise = IsPreciseImpactFallbackKind(definition.Kind);
+        var nonCallable = definition.Kind is "namespace" or "import";
         var symbolIds = definition.SymbolId is long symbolId
             ? new HashSet<long> { symbolId }
             : [];
@@ -119,10 +120,45 @@ public partial class DbReader
             PreciseDefinitionCount: precise ? 1 : 0,
             PreciseLogicalDefinitionCount: precise ? 1 : 0,
             PreciseDefinitionFileCount: precise ? 1 : 0,
-            NonCallableDefinitionCount: precise ? 1 : 0,
+            NonCallableDefinitionCount: nonCallable ? 1 : 0,
             SinglePreciseDefinition: precise ? definition : null,
             PhysicalSymbolIds: symbolIds,
             PhysicalDefinitionPaths: new HashSet<string>(StringComparer.Ordinal) { definition.Path },
             PhysicalSymbolIdsTruncated: false);
+    }
+
+    private static ImpactDefinitionResolution EmptyImpactDefinitionResolution()
+        => new(
+            [],
+            PhysicalCount: 0,
+            PhysicalFileCount: 0,
+            LogicalCount: 0,
+            PreciseDefinitionCount: 0,
+            PreciseLogicalDefinitionCount: 0,
+            PreciseDefinitionFileCount: 0,
+            NonCallableDefinitionCount: 0,
+            SinglePreciseDefinition: null,
+            PhysicalSymbolIds: [],
+            PhysicalDefinitionPaths: [],
+            PhysicalSymbolIdsTruncated: false);
+
+    private bool SelectedDefinitionMatchesImpactFilters(
+        DefinitionResult definition,
+        string? lang,
+        IReadOnlyList<string>? pathPatterns,
+        IReadOnlyList<string>? excludePathPatterns,
+        bool excludeTests)
+    {
+        if (lang != null && !string.Equals(definition.Lang, lang, StringComparison.Ordinal))
+            return false;
+
+        using var command = _conn.CreateCommand();
+        var sql = "SELECT 1 FROM files f WHERE f.path = @selectedDefinitionPath";
+        AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
+        sql += " LIMIT 1";
+        command.CommandText = sql;
+        SqliteCommandPolicy.Add(command, "@selectedDefinitionPath", definition.Path);
+        AddPathFilterParameters(command, pathPatterns, excludePathPatterns);
+        return command.ExecuteScalar() != null;
     }
 }

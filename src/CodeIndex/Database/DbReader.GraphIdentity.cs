@@ -220,6 +220,22 @@ public partial class DbReader
             CandidatesTruncated: truncated);
     }
 
+    private string BuildReferenceRootSymbolIdsSql(string referenceAlias)
+    {
+        if (!_referenceIdentityContractCurrent)
+            return "NULL";
+
+        var targetSymbolIdSql = $"CAST({referenceAlias}.target_symbol_id AS TEXT)";
+        if (!HasTable("symbol_reference_candidates"))
+            return targetSymbolIdSql;
+
+        return $@"COALESCE((
+                    SELECT GROUP_CONCAT(identity_candidate.symbol_id)
+                    FROM symbol_reference_candidates AS identity_candidate
+                    WHERE identity_candidate.reference_id = {referenceAlias}.id
+                ), {targetSymbolIdSql})";
+    }
+
     private GraphQueryIdentityMetadata BuildSelectedGraphQueryIdentityMetadata(
         DefinitionResult selectedDefinition)
         => new(

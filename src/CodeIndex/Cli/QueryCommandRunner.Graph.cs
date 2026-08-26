@@ -68,7 +68,8 @@ public static partial class QueryCommandRunner
                             options.ExcludePaths,
                             options.ExcludeTests,
                             options.Kind,
-                            includeQualifiedCommonCalls: options.IncludeQualifiedCommonCalls)
+                            includeQualifiedCommonCalls: options.IncludeQualifiedCommonCalls,
+                            requireAuthoritativeIdentity: true)
                         : reader.CountSearchReferencesTotal(query, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact, options.IncludeQualifiedCommonCalls);
                 var effectiveSqlGraphSignal = NarrowSqlGraphContractSignal(
                     baseSqlGraphSignal,
@@ -113,7 +114,8 @@ public static partial class QueryCommandRunner
                         options.MaxLineWidth,
                         offset: JsonEnvelopeWrapper.GetBoundedResponseOffset("references"),
                         referenceKind: options.Kind,
-                        includeQualifiedCommonCalls: options.IncludeQualifiedCommonCalls)
+                        includeQualifiedCommonCalls: options.IncludeQualifiedCommonCalls,
+                        requireAuthoritativeIdentity: true)
                     : reader.SearchReferences(query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact, options.MaxLineWidth, offset: JsonEnvelopeWrapper.GetBoundedResponseOffset("references"), includeQualifiedCommonCalls: options.IncludeQualifiedCommonCalls);
             if (options.IncludeBody && JsonEnvelopeWrapper.ShouldMaterializeBody("references"))
                 AttachBodyExcerpts(reader, results, options.SnippetLines, options.MaxLineWidth);

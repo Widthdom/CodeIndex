@@ -327,7 +327,7 @@ public partial class DbReader
         var selfReferenceSql = _referenceColumns.Contains("is_self_reference") ? "r.is_self_reference" : "0";
         var mutualRecursionSql = _referenceColumns.Contains("is_mutual_recursion") ? "r.is_mutual_recursion" : "0";
         var referenceSpanLengthSql = _referenceColumns.Contains("span_length") ? "r.span_length" : "NULL";
-        var rootSymbolIdSql = _referenceIdentityContractCurrent ? "r.target_symbol_id" : "NULL";
+        var rootSymbolIdSql = BuildReferenceRootSymbolIdsSql("r");
         var sql = @"
             WITH logical_references AS (
                 SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name,
@@ -536,6 +536,13 @@ public partial class DbReader
 
     private string BuildCallerIdentityFilterSql(GraphReferenceQueryRequest request)
     {
+        if (request.IdentitySymbolId != null)
+        {
+            return _referenceIdentityContractCurrent
+                ? " AND r.target_symbol_id = @targetSymbolId"
+                : " AND 1 = 0";
+        }
+
         if (request.CallerIdentitySymbolIds == null || !HasTable("symbol_reference_candidates"))
             return string.Empty;
 
@@ -634,7 +641,11 @@ public partial class DbReader
         }
         if (plan.BindIdentityParameter)
         {
-            if (request.CallerIdentitySymbolIds != null)
+            if (request.IdentitySymbolId != null)
+            {
+                SqliteCommandPolicy.Add(command, plan.Direction.IdentityParameterName, request.IdentitySymbolId.Value);
+            }
+            else if (request.CallerIdentitySymbolIds != null)
             {
                 var symbolIdValues = request.CallerIdentitySymbolIds
                     .Select(static symbolId => symbolId.ToString(System.Globalization.CultureInfo.InvariantCulture))
@@ -643,10 +654,6 @@ public partial class DbReader
                     command,
                     "@callerTargetSymbolIdsJson",
                     JsonStringListCodec.Serialize(symbolIdValues));
-            }
-            else
-            {
-                SqliteCommandPolicy.Add(command, plan.Direction.IdentityParameterName, request.IdentitySymbolId!.Value);
             }
         }
         AddPathFilterParameters(command, request.PathPatterns, request.ExcludePathPatterns);

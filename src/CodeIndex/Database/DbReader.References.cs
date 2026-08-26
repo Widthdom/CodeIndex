@@ -70,9 +70,9 @@ public partial class DbReader
         return filtered.Count <= limit ? filtered : filtered.Take(limit).ToList();
     }
 
-    private List<ReferenceResult> SearchReferencesCore(string? query, int limit, string? lang, string? referenceKind, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, bool exact, int offset, int maxLineWidth, bool excludeSelfReferences, bool includeQualifiedCommonCalls, long? targetSymbolId = null)
+    private List<ReferenceResult> SearchReferencesCore(string? query, int limit, string? lang, string? referenceKind, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, bool exact, int offset, int maxLineWidth, bool excludeSelfReferences, bool includeQualifiedCommonCalls, long? targetSymbolId = null, bool requireAuthoritativeIdentity = false)
     {
-        using var cmd = CreateSearchReferencesCommandCore(query, limit, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact, offset, includeOrdering: true, excludeSelfReferences, includeQualifiedCommonCalls, targetSymbolId);
+        using var cmd = CreateSearchReferencesCommandCore(query, limit, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact, offset, includeOrdering: true, excludeSelfReferences, includeQualifiedCommonCalls, targetSymbolId, requireAuthoritativeIdentity);
         var results = new List<ReferenceResult>();
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
@@ -134,10 +134,16 @@ public partial class DbReader
             includeQualifiedCommonCalls,
             targetSymbolId: null);
         command.CommandText = $@"
-            SELECT DISTINCT target_symbol_id
+            SELECT DISTINCT CAST(identity.value AS INTEGER) AS symbol_id
             FROM ({command.CommandText}) AS graph_rows
-            WHERE target_symbol_id IS NOT NULL
-            ORDER BY target_symbol_id
+            JOIN json_each(
+                CASE
+                    WHEN graph_rows.root_symbol_ids IS NULL OR graph_rows.root_symbol_ids = '' THEN '[]'
+                    ELSE '[' || graph_rows.root_symbol_ids || ']'
+                END
+            ) AS identity
+            WHERE CAST(identity.value AS INTEGER) > 0
+            ORDER BY symbol_id
             LIMIT @graphIdentityLimit";
         SqliteCommandPolicy.Add(command, "@graphIdentityLimit", GraphIdentityCandidateLimit + 1);
 
@@ -158,7 +164,8 @@ public partial class DbReader
         int offset = 0,
         string? referenceKind = null,
         bool excludeSelfReferences = false,
-        bool includeQualifiedCommonCalls = false)
+        bool includeQualifiedCommonCalls = false,
+        bool requireAuthoritativeIdentity = false)
     {
         if (definition.SymbolId is not long symbolId || !HasTable("symbol_reference_candidates"))
             return [];
@@ -176,7 +183,8 @@ public partial class DbReader
             maxLineWidth,
             excludeSelfReferences,
             includeQualifiedCommonCalls,
-            targetSymbolId: symbolId);
+            targetSymbolId: symbolId,
+            requireAuthoritativeIdentity: requireAuthoritativeIdentity);
     }
 
     internal QueryCountResult CountSearchReferencesForCandidate(
@@ -186,7 +194,8 @@ public partial class DbReader
         bool excludeTests,
         string? referenceKind = null,
         bool excludeSelfReferences = false,
-        bool includeQualifiedCommonCalls = false)
+        bool includeQualifiedCommonCalls = false,
+        bool requireAuthoritativeIdentity = false)
     {
         if (definition.SymbolId is not long symbolId || !HasTable("symbol_reference_candidates"))
             return new QueryCountResult(0, 0);
@@ -204,7 +213,8 @@ public partial class DbReader
             includeOrdering: false,
             excludeSelfReferences,
             includeQualifiedCommonCalls,
-            targetSymbolId: symbolId);
+            targetSymbolId: symbolId,
+            requireAuthoritativeIdentity: requireAuthoritativeIdentity);
         cmd.CommandText = $"SELECT COUNT(*), COUNT(DISTINCT path), MAX(CASE WHEN lang = 'sql' THEN 1 ELSE 0 END) FROM ({cmd.CommandText})";
         return ExecuteCountSummary(cmd);
     }
@@ -329,7 +339,7 @@ public partial class DbReader
     private SqliteCommand CreateSearchReferencesCommand(string? query, int limit, string? lang, string? referenceKind, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, bool exact, int offset = 0, bool includeOrdering = true, bool excludeSelfReferences = false, bool includeQualifiedCommonCalls = false)
         => CreateSearchReferencesCommandCore(query, limit, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact, offset, includeOrdering, excludeSelfReferences, includeQualifiedCommonCalls, targetSymbolId: null);
 
-    private SqliteCommand CreateSearchReferencesCommandCore(string? query, int limit, string? lang, string? referenceKind, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, bool exact, int offset, bool includeOrdering, bool excludeSelfReferences, bool includeQualifiedCommonCalls, long? targetSymbolId)
+    private SqliteCommand CreateSearchReferencesCommandCore(string? query, int limit, string? lang, string? referenceKind, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, bool exact, int offset, bool includeOrdering, bool excludeSelfReferences, bool includeQualifiedCommonCalls, long? targetSymbolId, bool requireAuthoritativeIdentity = false)
     {
         var cmd = _conn.CreateCommand();
         var referenceLineJoin = ReferenceLineJoinSql("r");
@@ -341,6 +351,7 @@ public partial class DbReader
         var resolutionStateSql = _referenceIdentityContractCurrent ? "r.resolution_state" : "NULL";
         var resolutionCandidateCountSql = _referenceIdentityContractCurrent ? "r.resolution_candidate_count" : "0";
         var referenceSpanLengthSql = _referenceColumns.Contains("span_length") ? "r.span_length" : "NULL";
+        var rootSymbolIdsSql = BuildReferenceRootSymbolIdsSql("r");
         var sql = referenceKind == null
             ? $@"
             WITH logical_references AS (
@@ -356,7 +367,8 @@ public partial class DbReader
                        CASE WHEN COUNT(DISTINCT COALESCE({targetSymbolKeySql}, '')) = 1 THEN MIN({targetSymbolKeySql}) ELSE NULL END AS target_symbol_key,
                        CASE WHEN COUNT(DISTINCT COALESCE({resolutionStateSql}, '')) = 1 THEN MIN({resolutionStateSql}) ELSE 'ambiguous' END AS resolution_state,
                        MAX({resolutionCandidateCountSql}) AS resolution_candidate_count,
-                       MIN(CASE WHEN {referenceSpanLengthSql} > 0 THEN {referenceSpanLengthSql} ELSE NULL END) AS span_length
+                       MIN(CASE WHEN {referenceSpanLengthSql} > 0 THEN {referenceSpanLengthSql} ELSE NULL END) AS span_length,
+                       GROUP_CONCAT(DISTINCT {rootSymbolIdsSql}) AS root_symbol_ids
                 FROM symbol_references r
                 JOIN files f ON r.file_id = f.id
                 {referenceLineJoin}
@@ -371,7 +383,8 @@ public partial class DbReader
                    " + targetSymbolKeySql + @" AS target_symbol_key,
                    " + resolutionStateSql + @" AS resolution_state,
                    " + resolutionCandidateCountSql + @" AS resolution_candidate_count,
-                   " + referenceSpanLengthSql + @" AS span_length
+                   " + referenceSpanLengthSql + @" AS span_length,
+                   " + rootSymbolIdsSql + @" AS root_symbol_ids
             FROM symbol_references r
             JOIN files f ON r.file_id = f.id
             " + referenceLineJoin + @"
@@ -474,9 +487,13 @@ public partial class DbReader
             sql += " AND r.reference_kind = @referenceKind";
         if (excludeSelfReferences)
             sql += $" AND {selfReferenceSql} = 0";
-        if (targetSymbolId != null && HasTable("symbol_reference_candidates"))
+        if (targetSymbolId != null)
         {
-            sql += @"
+            sql += !_referenceIdentityContractCurrent
+                ? " AND 1 = 0"
+                : requireAuthoritativeIdentity
+                    ? " AND r.resolution_state = 'resolved' AND r.target_symbol_id = @targetSymbolId"
+                    : @"
                 AND EXISTS (
                     SELECT 1
                     FROM symbol_reference_candidates AS identity_candidate
@@ -504,7 +521,8 @@ public partial class DbReader
             )
             SELECT path, lang, symbol_name, reference_kind, line, column_number,
                    context, container_kind, container_name, is_self_reference, is_mutual_recursion,
-                   target_symbol_id, target_symbol_key, resolution_state, resolution_candidate_count, span_length
+                   target_symbol_id, target_symbol_key, resolution_state, resolution_candidate_count, span_length,
+                   root_symbol_ids
             FROM logical_references r";
         }
         if (includeOrdering)
@@ -555,7 +573,7 @@ public partial class DbReader
             SqliteCommandPolicy.Add(cmd, "@referenceKind", referenceKind);
         if (lang != null)
             SqliteCommandPolicy.Add(cmd, "@lang", NormalizeQueryLanguage(lang));
-        if (targetSymbolId != null && HasTable("symbol_reference_candidates"))
+        if (targetSymbolId != null && _referenceIdentityContractCurrent)
             SqliteCommandPolicy.Add(cmd, "@targetSymbolId", targetSymbolId.Value);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
         if (includeOrdering)
