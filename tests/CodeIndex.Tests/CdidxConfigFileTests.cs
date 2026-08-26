@@ -432,6 +432,61 @@ public class CdidxConfigFileTests
     }
 
     [Fact]
+    public void OutputBoundary_WindowsWorkspaceRootAliasRetargetUsesOriginalTarget_Issue5181Review()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        var container = CreateTempDir();
+        var physicalWorkspace = Path.Combine(container, "physical");
+        var workspaceAlias = Path.Combine(container, "workspace-alias");
+        var outside = CreateTempDir();
+        try
+        {
+            Directory.CreateDirectory(physicalWorkspace);
+            if (!TryCreateDirectoryLink(workspaceAlias, physicalWorkspace))
+                return;
+
+            File.WriteAllText(
+                Path.Combine(physicalWorkspace, CdidxConfigFile.FileName),
+                """{ "metrics_path": "safe/metrics.jsonl" }""");
+            var result = CdidxConfigFile.Load(workspaceAlias, new TestEnvironment().Read);
+            Assert.True(result.Loaded);
+            using var environment = CdidxEnvironment.Push(result.Settings, result.Sources);
+            var metricsPath = result.Settings[MetricsSink.EnvVarName];
+            var boundary = RepositoryOutputPathBoundary.CreateGuardForConfigSource(
+                MetricsSink.EnvVarName,
+                "metrics_path",
+                metricsPath,
+                destinationIsDirectory: false);
+            Assert.NotNull(boundary);
+            var swapped = false;
+            RepositoryOutputPathBoundary.BeforeWindowsNativeMutationForTesting = (operation, _) =>
+            {
+                if (swapped || operation != "open")
+                    return;
+
+                DeleteLinkEntry(workspaceAlias);
+                Assert.True(TryCreateDirectoryLink(workspaceAlias, outside));
+                swapped = true;
+            };
+
+            boundary!.CreateSensitiveDestinationDirectory();
+
+            Assert.True(swapped);
+            Assert.True(Directory.Exists(Path.Combine(physicalWorkspace, "safe")));
+            Assert.False(Directory.Exists(Path.Combine(outside, "safe")));
+        }
+        finally
+        {
+            RepositoryOutputPathBoundary.BeforeWindowsNativeMutationForTesting = null;
+            DeleteLinkEntry(workspaceAlias);
+            TestProjectHelper.DeleteDirectory(container);
+            TestProjectHelper.DeleteDirectory(outside);
+        }
+    }
+
+    [Fact]
     public void OutputBoundary_RejectsCaseOnlySiblingInDistinctParentNamespace_Issue5181Review()
     {
         var root = CreateTempDir();

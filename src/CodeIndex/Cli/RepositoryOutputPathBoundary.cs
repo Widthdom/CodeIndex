@@ -131,7 +131,7 @@ internal static class RepositoryOutputPathBoundary
     internal static string ResolveCanonicalWorkspaceRoot(string workspaceRoot)
     {
         if (OperatingSystem.IsWindows())
-            return PathCasing.NormalizeBoundaryPath(workspaceRoot);
+            return RepositoryOutputPathGuard.ResolveCanonicalWindowsDirectory(workspaceRoot);
 
         IntPtr pointer = IntPtr.Zero;
         try
@@ -477,6 +477,25 @@ internal sealed class RepositoryOutputPathGuard
     internal string CanonicalWorkspaceRoot { get; }
     internal string DestinationPath { get; }
     internal bool DestinationIsDirectory { get; }
+
+    internal static string ResolveCanonicalWindowsDirectory(string path)
+    {
+        if (!OperatingSystem.IsWindows())
+            throw new PlatformNotSupportedException();
+
+        using var handle = WindowsCreateFile(
+            LongPath.EnsureWindowsPrefix(path),
+            WindowsFileListDirectory | WindowsFileReadAttributes | WindowsSynchronize,
+            WindowsShareRead | WindowsShareWrite | WindowsShareDelete,
+            IntPtr.Zero,
+            WindowsOpenExisting,
+            WindowsFileFlagBackupSemantics,
+            IntPtr.Zero);
+        if (handle.IsInvalid)
+            throw CreateNativeIOException();
+
+        return PathCasing.NormalizeBoundaryPath(GetWindowsFinalPath(handle));
+    }
 
     internal void CreateSensitiveDestinationDirectory()
     {

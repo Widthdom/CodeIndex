@@ -2959,9 +2959,10 @@ permission changes, rotation, replacement, and deletion are additionally anchore
 to the workspace directory handle with no-follow relative operations. Directory
 parents are rebound from that root after mutation-time validation so a
 moved ancestor is not reused. Guarded renames fsync their already-open destination
-parent before reporting success. On Windows, root-handle-relative native opens reject
-reparse points during name resolution, and guarded replacement and deletion remain
-handle/root relative. The same
+parent before reporting success. On Windows, the guard retains the workspace root's
+final physical path so a retargeted root alias is not followed; root-handle-relative
+native opens reject reparse points during name resolution, and guarded replacement
+and deletion remain handle/root relative. The same
 `global_tool_log_dir` guard covers lifecycle logs, file query traces, and the
 bounded `last-failure.json` diagnostic. An unsafe value fails config validation
 with the bounded `unsafe_output_path` diagnostic and does not create, append,
@@ -6979,9 +6980,10 @@ reparse point、device、dangling link のいずれかであれば拒否し、�
 append、permission 変更、rotation、置換、delete を workspace directory handle 起点の
 no-follow relative operation へ固定し、mutation 時の検証後に directory parent を root
 から再取得するため、外部へ移動済みの ancestor handle を再利用しません。guarded rename は
-成功を返す前に open 済みの destination parent を fsync します。Windows では root handle
-相対の native open が name resolution 中の reparse point を拒否し、guarded replacement /
-delete も handle / root 相対で実行します。同じ `global_tool_log_dir` guard を lifecycle log、file
+成功を返す前に open 済みの destination parent を fsync します。Windows では workspace
+root の最終的な物理 path を guard が保持するため、差し替えられた root alias を再追跡しません。
+root handle 相対の native open は name resolution 中の reparse point を拒否し、guarded
+replacement / delete も handle / root 相対で実行します。同じ `global_tool_log_dir` guard を lifecycle log、file
 query trace、上限付きの `last-failure.json` 診断にも適用します。安全でない値は
 上限付きの `unsafe_output_path` 診断で config validation に失敗し、外部 target の
 作成、追記、rotation、置換、削除、chmod は行いません。明示的な CLI と process
