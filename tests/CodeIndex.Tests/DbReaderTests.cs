@@ -811,6 +811,10 @@ public partial class DbReaderTests : IDisposable
     [Fact]
     public void MemberReadEdges_AreOptInWhileLegacyCallRowsRemainReadable_Issue4894()
     {
+        InsertIndexedFile(
+            "src/member_read_target.cs",
+            "csharp",
+            "public class MemberReadTarget { public int CurrentValue { get; } public void LegacyValue() { } }");
         InsertManualReference(
             "src/modern.cs",
             "csharp",
@@ -1311,8 +1315,8 @@ public partial class DbReaderTests : IDisposable
         InsertManualReferences("src/Factory.cs", "Factory", target, "instantiate", 3);
         InsertManualReferences("src/EventBus.cs", "EventBus", target, "subscribe", 50);
 
-        var weighted = _reader.GetCallers(target, lang: "csharp", exact: true);
-        var countRanked = _reader.GetCallers(target, lang: "csharp", exact: true, rankMode: ReferenceRankMode.Count);
+        var weighted = _reader.GetCallers(target, lang: "csharp", exact: false);
+        var countRanked = _reader.GetCallers(target, lang: "csharp", exact: false, rankMode: ReferenceRankMode.Count);
 
         Assert.Equal("Factory", weighted[0].CallerName);
         Assert.Equal(3, weighted[0].ReferenceCount);
@@ -1340,7 +1344,7 @@ public partial class DbReaderTests : IDisposable
         var all = _reader.GetCallers(
             target,
             lang: "csharp",
-            exact: true,
+            exact: false,
             rankMode: ReferenceRankMode.Count);
 
         Assert.Equal(
@@ -1357,13 +1361,13 @@ public partial class DbReaderTests : IDisposable
             target,
             limit: 2,
             lang: "csharp",
-            exact: true,
+            exact: false,
             rankMode: ReferenceRankMode.Count);
         var secondPage = _reader.GetCallers(
             target,
             limit: 2,
             lang: "csharp",
-            exact: true,
+            exact: false,
             rankMode: ReferenceRankMode.Count,
             offset: 2);
         Assert.Equal(
@@ -1374,7 +1378,7 @@ public partial class DbReaderTests : IDisposable
             target,
             lang: "csharp",
             pathPatterns: ["src/**", "tests/**"],
-            exact: true,
+            exact: false,
             rankMode: ReferenceRankMode.Count);
         Assert.Equal(
             ["tests/HighVolumeTests.cs", "src/ProductionCaller.cs", "tests/TiedTests.cs"],
@@ -1384,7 +1388,7 @@ public partial class DbReaderTests : IDisposable
             target,
             lang: "csharp",
             excludeTests: true,
-            exact: true,
+            exact: false,
             rankMode: ReferenceRankMode.Count);
         Assert.Equal(
             ["src/ProductionCaller.cs", "docs/DocumentedSample.cs"],
@@ -2177,7 +2181,7 @@ public partial class DbReaderTests : IDisposable
             new ReferenceRecord { FileId = fileId, SymbolName = "Target", ReferenceKind = "call", Line = 3, Column = 5, Context = "    Target();", ContainerKind = "function", ContainerName = "Run" },
         ]);
 
-        var caller = Assert.Single(_reader.GetCallers("Target", exact: true));
+        var caller = Assert.Single(_reader.GetCallers("Target", exact: false));
 
         Assert.Equal(2, caller.FirstLine);
         Assert.Equal(20, caller.FirstColumn);
@@ -2210,7 +2214,15 @@ public partial class DbReaderTests : IDisposable
         Assert.Equal("Run", caller.CalleeName);
         Assert.Equal(1, caller.ReferenceCount);
         Assert.Equal(1, _reader.CountCallers("Run", lang: "csharp", exact: true, pathPatterns: ["src/*Program.cs*"]));
-        Assert.Equal(new QueryCountResult(1, 1), _reader.CountCallersTotal("Run", lang: "csharp", exact: true, pathPatterns: ["src/*Program.cs*"]));
+        Assert.Equal(new QueryCountResult(
+            1,
+            1,
+            IdentityRootAvailable: true,
+            GraphEvidenceConfidence: "identity_backed"), _reader.CountCallersTotal(
+                "Run",
+                lang: "csharp",
+                exact: true,
+                pathPatterns: ["src/*Program.cs*"]));
     }
 
     [Fact]
@@ -3135,7 +3147,12 @@ public partial class DbReaderTests : IDisposable
             lang: "csharp",
             exact: true,
             pathPatterns: ["src/*issue2819*"]));
-        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: false), _reader.CountCallersTotal(
+        Assert.Equal(new QueryCountResult(
+            1,
+            1,
+            IncludesSql: false,
+            IdentityRootAvailable: true,
+            GraphEvidenceConfidence: "identity_backed"), _reader.CountCallersTotal(
             "HttpMcpTransport.RunEventStreamAsync",
             lang: "csharp",
             exact: true,
@@ -3800,12 +3817,10 @@ public partial class DbReaderTests : IDisposable
         Assert.Equal(3, Assert.Single(completePartialCallers, result => result.CallerName == "Run").ReferenceCount);
         Assert.Equal(1, Assert.Single(completePartialCallers, result => result.CallerName == "Noise").ReferenceCount);
         Assert.Equal(1, Assert.Single(completePartialCallers, result => result.CallerName == "Complex").ReferenceCount);
-        Assert.Equal(3, Assert.Single(completeCallers, result => result.CallerName == "Run").ReferenceCount);
-        Assert.Equal(1, Assert.Single(completeCallers, result => result.CallerName == "Noise").ReferenceCount);
-        Assert.Equal(1, Assert.Single(completeCallers, result => result.CallerName == "Complex").ReferenceCount);
+        Assert.Equal(2, Assert.Single(completeCallers).ReferenceCount);
         Assert.Equal(1, _reader.CountCallers("GetString", lang: "csharp", exact: true, pathPatterns: ["src/*common_member_graph_fixture*"]));
         Assert.Equal(
-            3,
+            1,
             _reader.CountCallers(
                 "GetString",
                 lang: "csharp",
@@ -4183,7 +4198,7 @@ public partial class DbReaderTests : IDisposable
             "seed",
             lang: "csharp",
             referenceKind: "capture",
-            exact: true);
+            exact: false);
 
         Assert.Contains(callers, caller =>
             caller.CallerName == "Run"
@@ -5230,7 +5245,7 @@ public partial class DbReaderTests : IDisposable
             },
         ]);
 
-        var caller = Assert.Single(_reader.GetCallers("Changed", lang: "csharp", exact: true, pathPatterns: ["src/*mixed_kind_caller*"]));
+        var caller = Assert.Single(_reader.GetCallers("Changed", lang: "csharp", exact: false, pathPatterns: ["src/*mixed_kind_caller*"]));
         Assert.Equal("Setup", caller.CallerName);
         Assert.Equal("Changed", caller.CalleeName);
         Assert.Equal(6, caller.ReferenceCount);
@@ -5256,7 +5271,7 @@ public partial class DbReaderTests : IDisposable
         Assert.Equal(new[] { "subscribe" }, callees[1].ReferenceKinds);
         Assert.Equal(1, callees[1].ReferenceKindCounts["subscribe"]);
 
-        var rawCaller = Assert.Single(_reader.GetCallers("Changed", lang: "csharp", exact: true, pathPatterns: ["src/*mixed_kind_caller*"], rawKinds: true));
+        var rawCaller = Assert.Single(_reader.GetCallers("Changed", lang: "csharp", exact: false, pathPatterns: ["src/*mixed_kind_caller*"], rawKinds: true));
         Assert.Equal(new[] { "call", "subscribe" }, rawCaller.ReferenceKinds);
         Assert.Equal(5, rawCaller.ReferenceKindCounts["call"]);
         Assert.Equal(1, rawCaller.ReferenceKindCounts["subscribe"]);
@@ -5321,11 +5336,11 @@ public partial class DbReaderTests : IDisposable
             },
         ]);
 
-        var logicalCaller = Assert.Single(_reader.GetCallers("Changed", lang: "csharp", exact: true, pathPatterns: ["src/*unsubscribe_kind_caller*"]));
+        var logicalCaller = Assert.Single(_reader.GetCallers("Changed", lang: "csharp", exact: false, pathPatterns: ["src/*unsubscribe_kind_caller*"]));
         Assert.Equal(new[] { "call", "subscribe" }, logicalCaller.ReferenceKinds);
         Assert.Equal("subscribe", logicalCaller.ReferenceKind);
 
-        var rawCaller = Assert.Single(_reader.GetCallers("Changed", lang: "csharp", exact: true, pathPatterns: ["src/*unsubscribe_kind_caller*"], rawKinds: true));
+        var rawCaller = Assert.Single(_reader.GetCallers("Changed", lang: "csharp", exact: false, pathPatterns: ["src/*unsubscribe_kind_caller*"], rawKinds: true));
         Assert.Equal(new[] { "call", "razor_event_binding", "subscribe", "unsubscribe" }, rawCaller.ReferenceKinds);
         Assert.Equal("subscribe", rawCaller.ReferenceKind);
 
@@ -5333,7 +5348,7 @@ public partial class DbReaderTests : IDisposable
             "Changed",
             lang: "csharp",
             referenceKind: "subscribe",
-            exact: true,
+            exact: false,
             pathPatterns: ["src/*unsubscribe_kind_caller*"]));
         Assert.Equal("subscribe", canonicalFilteredCaller.ReferenceKind);
         Assert.Equal(new[] { "subscribe" }, canonicalFilteredCaller.ReferenceKinds);
@@ -5344,7 +5359,7 @@ public partial class DbReaderTests : IDisposable
             "Changed",
             lang: "csharp",
             referenceKind: "unsubscribe",
-            exact: true,
+            exact: false,
             pathPatterns: ["src/*unsubscribe_kind_caller*"]));
         Assert.Equal("subscribe", explicitRawKindCanonicalOutput.ReferenceKind);
         Assert.Equal(new[] { "subscribe" }, explicitRawKindCanonicalOutput.ReferenceKinds);
@@ -5353,7 +5368,7 @@ public partial class DbReaderTests : IDisposable
             "Changed",
             lang: "csharp",
             referenceKind: "subscribe",
-            exact: true,
+            exact: false,
             pathPatterns: ["src/*unsubscribe_kind_caller*"],
             rawKinds: true));
         Assert.Equal(new[] { "razor_event_binding", "subscribe", "unsubscribe" }, rawFilteredCaller.ReferenceKinds);
@@ -5380,8 +5395,8 @@ public partial class DbReaderTests : IDisposable
             rawKinds: true);
         Assert.Equal(new[] { "razor_event_binding", "subscribe", "unsubscribe" }, rawFilteredCallees.Select(callee => callee.ReferenceKind).Order().ToArray());
 
-        Assert.Equal(1, _reader.CountCallers("Changed", lang: "csharp", referenceKind: "subscribe", exact: true, pathPatterns: ["src/*unsubscribe_kind_caller*"]));
-        Assert.Equal(new QueryCountResult(1, 1), _reader.CountCallersTotal("Changed", lang: "csharp", referenceKind: "subscribe", exact: true, pathPatterns: ["src/*unsubscribe_kind_caller*"]));
+        Assert.Equal(1, _reader.CountCallers("Changed", lang: "csharp", referenceKind: "subscribe", exact: false, pathPatterns: ["src/*unsubscribe_kind_caller*"]));
+        Assert.Equal(new QueryCountResult(1, 1), _reader.CountCallersTotal("Changed", lang: "csharp", referenceKind: "subscribe", exact: false, pathPatterns: ["src/*unsubscribe_kind_caller*"]));
         Assert.Equal(1, _reader.CountCallees("Cleanup", lang: "csharp", referenceKind: "subscribe", exact: true, pathPatterns: ["src/*unsubscribe_kind_caller*"]));
         Assert.Equal(new QueryCountResult(1, 1), _reader.CountCalleesTotal("Cleanup", lang: "csharp", referenceKind: "subscribe", exact: true, pathPatterns: ["src/*unsubscribe_kind_caller*"]));
         Assert.Equal(3, _reader.CountCallees("Cleanup", lang: "csharp", referenceKind: "subscribe", exact: true, pathPatterns: ["src/*unsubscribe_kind_caller*"], rawKinds: true));
@@ -5867,7 +5882,11 @@ public partial class DbReaderTests : IDisposable
             ]);
         }
 
-        var (results, truncated, truncatedReason, _, _) = _reader.GetTransitiveCallers("target", maxDepth: 1, limit: 3);
+        var (results, truncated, truncatedReason, _, _) = _reader.GetTransitiveCallers(
+            "target",
+            maxDepth: 1,
+            limit: 3,
+            lang: "python");
 
         Assert.True(truncated);
         Assert.Equal(ImpactTruncatedReasons.UserLimit, truncatedReason);

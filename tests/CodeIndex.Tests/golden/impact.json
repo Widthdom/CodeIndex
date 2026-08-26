@@ -24,6 +24,10 @@
     }
   ],
   "traversal_root_scope": "symbol",
+  "identity_root_available": true,
+  "graph_evidence_confidence": "identity_backed",
+  "identity_root_resolution_truncated": false,
+  "authoritative_count": true,
   "definition_count": 1,
   "definition_file_count": 1,
   "has_multiple_definitions": false,

@@ -10509,6 +10509,11 @@ public partial class QueryCommandRunnerTests
 
         var findContent = string.Join('\n', Enumerable.Range(1, 25).Select(i => $"guard {i:D2}")) + "\n";
         TestProjectHelper.InsertIndexedFile(dbPath, "src/find/Sample.cs", "csharp", findContent);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "src/graph/CountRunTarget.cs",
+            "csharp",
+            "public static class CountRunTarget { public static void CountRun() { } }\n");
         MarkGraphAndFoldReady(dbPath);
         return (projectRoot, dbPath);
     }
@@ -10520,8 +10525,8 @@ public partial class QueryCommandRunnerTests
             "search" => new List<string> { "needletoken", "--db", dbPath, "--json", "--count" },
             "symbols" => new List<string> { "CountTarget", "--db", dbPath, "--json", "--count" },
             "definition" => new List<string> { "CountTarget", "--db", dbPath, "--json", "--count" },
-            "references" => new List<string> { "CountRun", "--db", dbPath, "--json", "--count", "--exact" },
-            "callers" => new List<string> { "CountRun", "--db", dbPath, "--json", "--count", "--exact" },
+            "references" => new List<string> { "CountRun", "--db", dbPath, "--json", "--count", "--exact", "--path", "src/graph/CountCaller*.cs" },
+            "callers" => new List<string> { "CountRun", "--db", dbPath, "--json", "--count", "--exact", "--path", "src/graph/CountCaller*.cs" },
             "callees" => new List<string> { "Invoke", "--db", dbPath, "--json", "--count", "--exact" },
             "files" => new List<string> { "CountFile", "--db", dbPath, "--json", "--count" },
             "find" => new List<string> { "guard", "--db", dbPath, "--json", "--count", "--path", "src/find/Sample.cs" },
@@ -10595,6 +10600,26 @@ public partial class QueryCommandRunnerTests
         var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
         using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
         var writer = new DbWriter(db.Connection);
+
+        var targetFileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/RankedTarget.cs",
+            Lang = "csharp",
+            Size = 32,
+            Lines = 1,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        writer.InsertSymbols([
+            new SymbolRecord
+            {
+                FileId = targetFileId,
+                Kind = "function",
+                Name = "RankedTarget",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 1,
+            },
+        ]);
 
         InsertCaller("tests/HighVolumeTests.cs", "HighVolumeTests", 284);
         InsertCaller("src/ProductionCaller.cs", "ProductionCaller", 1);

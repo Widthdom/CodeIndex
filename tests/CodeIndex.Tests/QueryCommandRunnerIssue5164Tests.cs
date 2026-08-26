@@ -146,6 +146,10 @@ public sealed class QueryCommandRunnerIssue5164Tests
                         "src/Target.cs",
                         "csharp",
                         "public static class Target { public static void Run() { } }\n"),
+                    new TestProjectHelper.IndexedFileFixture(
+                        "src/ProgramRunner.cs",
+                        "csharp",
+                        "public static class ProgramRunner { public static int Run(string[] args) => 0; }\n"),
                 ]);
             MarkCurrentContracts(dbPath);
 

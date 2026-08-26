@@ -104,6 +104,8 @@ public static partial class QueryCommandRunner
 
             WriteSqlGraphContractWarningIfNeeded(options.Json, sqlGraphSignal, reader, options);
             WriteHdlGraphContractWarningIfNeeded(options.Json, hdlGraphSignal);
+            if (!options.Json)
+                WriteImpactIdentityRootWarningIfNeeded(analysis);
 
             if (confirmedCount == 0 && !hasHeuristicHints)
             {
@@ -447,6 +449,16 @@ public static partial class QueryCommandRunner
     private static void AddImpactTraversalRootJsonFields(JsonObject payload, ImpactAnalysisResult analysis)
     {
         payload["traversal_root_scope"] = analysis.TraversalRootScope;
+        payload["identity_root_available"] = analysis.IdentityRootAvailable;
+        payload["graph_evidence_confidence"] = analysis.GraphEvidenceConfidence;
+        payload["identity_root_resolution_truncated"] = analysis.IdentityRootResolutionTruncated;
+        if (analysis.IdentityRootUnavailableReason != null)
+            payload["identity_root_unavailable_reason"] = analysis.IdentityRootUnavailableReason;
+        payload["authoritative_count"] = analysis.CountIsAuthoritative;
+        if (!analysis.CountIsAuthoritative)
+        {
+            payload["degraded"] = true;
+        }
         if (analysis.TraversalPartialFamilyId == null)
             return;
 
@@ -465,6 +477,16 @@ public static partial class QueryCommandRunner
 
         payload["degraded"] = true;
         payload["authoritative_count"] = false;
+    }
+
+    private static void WriteImpactIdentityRootWarningIfNeeded(ImpactAnalysisResult analysis)
+    {
+        if (analysis.IdentityRootAvailable)
+            return;
+
+        var reason = analysis.IdentityRootUnavailableReason ?? "unknown";
+        CommandErrorWriter.WriteStderr(
+            $"WARN: impact traversal has no identity-backed root ({reason}); confirmed counts are not authoritative.");
     }
 
     private static List<SymbolResult> BuildImpactDefinitionJsonResults(IReadOnlyList<SymbolResult> definitions)

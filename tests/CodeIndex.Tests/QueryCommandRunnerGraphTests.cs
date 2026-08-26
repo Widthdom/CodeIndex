@@ -727,7 +727,7 @@ public partial class QueryCommandRunnerTests
             }
 
             var (legacyCallerExitCode, legacyCallerStdout, legacyCallerStderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
-                ["LegacyRun", "--db", dbPath, "--json", "--body", "--snippet-lines", "1", "--exact-name"],
+                ["LegacyRun", "--db", dbPath, "--json", "--body", "--snippet-lines", "1"],
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, legacyCallerExitCode);

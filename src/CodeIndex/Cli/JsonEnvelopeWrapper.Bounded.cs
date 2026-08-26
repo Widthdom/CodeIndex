@@ -1473,7 +1473,28 @@ internal static partial class JsonEnvelopeWrapper
                 ? string.Equals(impactMode, "callers", StringComparison.Ordinal)
                 : string.Equals(impactMode, "file_dependency_hints", StringComparison.Ordinal);
             if (!collectionIsActive)
-                return new ResponseCount(0, true);
+            {
+                var missingIdentityRoot = string.Equals(
+                    extraction.SourcePayload?["identity_root_unavailable_reason"]?.GetValue<string>(),
+                    "no_identity_backed_root",
+                    StringComparison.Ordinal);
+                var incompleteCallerGraph = extraction.PrimaryCollection == "callers"
+                    && extraction.SourcePayload is not null
+                    && TryReadBool(extraction.SourcePayload, "reference_graph_complete", out var graphComplete)
+                    && !graphComplete;
+                var unavailableCallerRoot = extraction.PrimaryCollection == "callers"
+                    && extraction.SourcePayload is not null
+                    && TryReadBool(extraction.SourcePayload, "identity_root_available", out var identityRootAvailable)
+                    && !identityRootAvailable;
+                var authoritative = (!missingIdentityRoot && !incompleteCallerGraph && !unavailableCallerRoot)
+                    || extraction.SourcePayload == null
+                    || !TryReadBool(
+                        extraction.SourcePayload,
+                        "authoritative_count",
+                        out var explicitAuthority)
+                    || explicitAuthority;
+                return new ResponseCount(0, authoritative);
+            }
         }
         if (command == "impact" && extraction.PrimaryCollection == "definitions")
         {

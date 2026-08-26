@@ -168,7 +168,8 @@ public partial class McpServer
         {
             if (countOnly)
             {
-                var countOnlyTotal = reader.CountCallersTotal(query, lang, kind, pathPatterns, excludePaths, excludeTests, exact, rawKinds, includeQualifiedCommonCalls, includeMemberReads).Count;
+                var countResult = reader.CountCallersTotal(query, lang, kind, pathPatterns, excludePaths, excludeTests, exact, rawKinds, includeQualifiedCommonCalls, includeMemberReads);
+                var countOnlyTotal = countResult.Count;
                 var histogramResults = countOnlyTotal > 0
                     ? reader.GetCallers(query, Math.Min(countOnlyTotal, MaxLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact, rawKinds, rankMode: rankMode, includeQualifiedCommonCalls: includeQualifiedCommonCalls, includeMemberReads: includeMemberReads)
                     : [];
@@ -190,15 +191,22 @@ public partial class McpServer
                     pathPatterns,
                     excludePaths,
                     excludeTests);
+                AddCallerIdentityRootSignal(countOnlyPayload, countResult);
+                if (!exact)
+                    countOnlyPayload["graph_evidence_confidence"] = "name_discovery";
                 adjustments.ApplyTo(countOnlyPayload);
                 return CreateToolResult(id, $"Counted {ConsoleUi.Counted(countOnlyTotal, "caller")}.", countOnlyPayload);
             }
 
             var results = reader.GetCallers(query, FetchLimitForEnvelope(limit), lang, kind, pathPatterns, excludePaths, excludeTests, exact, rawKinds, rankMode: rankMode, offset: offset, includeQualifiedCommonCalls: includeQualifiedCommonCalls, includeMemberReads: includeMemberReads);
             var truncated = TrimToRequestedLimit(results, limit);
-            var total = truncated || offset > 0
+            var callerIdentityCounts = exact
+                ? reader.CountCallersTotal(query, lang, kind, pathPatterns, excludePaths, excludeTests, exact: true, rawKinds, includeQualifiedCommonCalls, includeMemberReads)
+                : (QueryCountResult?)null;
+            var total = callerIdentityCounts?.Count
+                ?? (truncated || offset > 0
                 ? reader.CountCallersTotal(query, lang, kind, pathPatterns, excludePaths, excludeTests, exact, rawKinds, includeQualifiedCommonCalls, includeMemberReads).Count
-                : results.Count;
+                : results.Count);
             var graphSupport = ResolveGraphSupport(reader, exact, query, lang, pathPatterns, excludePaths, excludeTests);
             var sqlGraphSignal = QueryCommandRunner.NarrowSqlGraphContractSignalByLanguages(
                 reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests),
@@ -243,6 +251,10 @@ public partial class McpServer
                 pathPatterns,
                 excludePaths,
                 excludeTests);
+            if (callerIdentityCounts is { } counts)
+                AddCallerIdentityRootSignal(payload, counts);
+            else
+                payload["graph_evidence_confidence"] = "name_discovery";
             if (results.Count == 0)
             {
                 AddExactZeroHint(payload, exactZeroHint);
@@ -263,6 +275,30 @@ public partial class McpServer
                 BuildGraphSummary("caller", "callers", results.Count, graphSupport.GraphLanguage, graphSupport.GraphSupported, graphSupport.GraphSupportReason),
                 payload);
         });
+    }
+
+    private static void AddCallerIdentityRootSignal(
+        JsonObject payload,
+        QueryCountResult counts)
+    {
+        if (counts.IdentityRootAvailable == null
+            && counts.GraphEvidenceConfidence == null)
+            return;
+
+        payload["graph_evidence_confidence"] = counts.GraphEvidenceConfidence;
+        if (counts.IdentityRootAvailable == null)
+            return;
+
+        payload["identity_root_available"] = counts.IdentityRootAvailable.Value;
+        payload["identity_root_resolution_truncated"] = counts.IdentityRootResolutionTruncated;
+        if (counts.IdentityRootUnavailableReason != null)
+            payload["identity_root_unavailable_reason"] = counts.IdentityRootUnavailableReason;
+
+        var degraded = counts.IdentityRootAvailable == false
+            || counts.IdentityRootResolutionTruncated
+            || payload["degraded"]?.GetValue<bool>() == true;
+        payload["degraded"] = degraded;
+        payload["authoritative_count"] = !degraded;
     }
 
     private JsonNode ExecuteCallees(JsonNode? id, JsonNode? args)

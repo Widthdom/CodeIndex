@@ -276,17 +276,17 @@ public partial class DbReaderTests
         Assert.Equal(2, primaryHotspot.ReferenceCount);
         Assert.Equal(1, secondaryHotspot.ReferenceCount);
 
-        var broadCallers = _reader.GetCallers(
+        var exactCallers = _reader.GetCallers(
             "Open5084",
             limit: 20,
             lang: "csharp",
             pathPatterns: ["src/identity5084/*"],
             exact: true,
             includeQualifiedCommonCalls: true);
-        Assert.Equal(3, broadCallers.Count);
-        Assert.Contains(broadCallers, caller => caller.CallerName == "InvokePrimary");
-        Assert.Contains(broadCallers, caller => caller.CallerName == "InvokeSecondary");
-        Assert.Contains(broadCallers, caller => caller.CallerName == "InvokeExternal");
+        Assert.Equal(2, exactCallers.Count);
+        Assert.Contains(exactCallers, caller => caller.CallerName == "InvokePrimary");
+        Assert.Contains(exactCallers, caller => caller.CallerName == "InvokeSecondary");
+        Assert.DoesNotContain(exactCallers, caller => caller.CallerName == "InvokeExternal");
     }
 
     [Fact]
@@ -479,16 +479,24 @@ public partial class DbReaderTests
             lang: "csharp",
             pathPatterns: ["src/identity/AmbiguousCaller.cs"],
             exact: true);
-        var caller = Assert.Single(callers);
-        Assert.Equal("Invoke", caller.CallerName);
-        Assert.False(caller.HasSelfReference);
-        Assert.False(caller.HasMutualRecursion);
-        Assert.Equal(1, _reader.CountCallers(
+        Assert.Empty(callers);
+        Assert.Equal(0, _reader.CountCallers(
             "Process",
             limit: 20,
             lang: "csharp",
             pathPatterns: ["src/identity/AmbiguousCaller.cs"],
             exact: true));
+
+        var discoveryCallers = _reader.GetCallers(
+            "Process",
+            limit: 20,
+            lang: "csharp",
+            pathPatterns: ["src/identity/AmbiguousCaller.cs"],
+            exact: false);
+        var caller = Assert.Single(discoveryCallers);
+        Assert.Equal("Invoke", caller.CallerName);
+        Assert.False(caller.HasSelfReference);
+        Assert.False(caller.HasMutualRecursion);
     }
 
     [Fact]

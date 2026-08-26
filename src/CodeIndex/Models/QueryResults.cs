@@ -66,7 +66,11 @@ public readonly record struct QueryCountResult(
     double? AverageBytes = null,
     long? MaxBytes = null,
     string? MaxBytesPath = null,
-    bool? BytesAuthoritative = null);
+    bool? BytesAuthoritative = null,
+    [property: JsonIgnore] bool? IdentityRootAvailable = null,
+    [property: JsonIgnore] string? IdentityRootUnavailableReason = null,
+    [property: JsonIgnore] string? GraphEvidenceConfidence = null,
+    [property: JsonIgnore] bool IdentityRootResolutionTruncated = false);
 
 public readonly record struct UnusedCountResult(
     int Count,
@@ -1231,6 +1235,11 @@ public class ImpactAnalysisResult
     public bool HasMultipleDefinitions { get; set; }
     public bool HasMultipleDefinitionFiles { get; set; }
     public string TraversalRootScope { get; set; } = "symbol";
+    public bool IdentityRootAvailable { get; set; } = true;
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? IdentityRootUnavailableReason { get; set; }
+    public string GraphEvidenceConfidence { get; set; } = "identity_backed";
+    public bool IdentityRootResolutionTruncated { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? TraversalPartialFamilyId { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -1244,7 +1253,11 @@ public class ImpactAnalysisResult
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? PartialFamilyMemberRootOmitted { get; set; }
     [JsonIgnore]
-    internal bool CountIsAuthoritative => !Truncated && PartialFamilyMemberRootTruncated != true;
+    internal bool CountIsAuthoritative => IdentityRootAvailable
+        && ReferenceGraphComplete
+        && !Truncated
+        && !IdentityRootResolutionTruncated
+        && PartialFamilyMemberRootTruncated != true;
     public List<SymbolResult> Definitions { get; set; } = [];
     public List<ImpactResult> Callers { get; set; } = [];
     public List<FileDependencyResult> FileImpacts { get; set; } = [];
@@ -1276,6 +1289,8 @@ public class ImpactAnalysisResult
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? TruncatedReason { get; set; }
     public bool GraphTableAvailable { get; set; } = true;
+    [JsonIgnore]
+    internal bool ReferenceGraphComplete { get; set; } = true;
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? ZeroResultReason { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
