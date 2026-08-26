@@ -4,6 +4,7 @@ using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Net.Sockets;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -4232,6 +4233,71 @@ public class HttpMcpTransportTests : IDisposable
         }
     }
 
+    [Theory]
+    [InlineData("issue5186-http-secret", "http-bearer", "token")]
+    [InlineData(null, "http", "anonymous")]
+    public async Task HttpTransport_ConcurrentAuditSeparatesTransportPrincipalFromClientInfo_Issue5186(
+        string? bearerToken,
+        string expectedAuthSource,
+        string expectedAuthSubject)
+    {
+        var auditPath = Path.Combine(_dbDir, $"issue5186-{Guid.NewGuid():N}.jsonl");
+        using var sink = new AuditLogSink(auditPath, AuditLogSink.DefaultMaxBytes, includeValues: false);
+        await using var harness = await McpHttpHarness.StartAsync(
+            _dbPath,
+            bearerToken: bearerToken,
+            auditLog: sink,
+            maxConcurrency: 2);
+
+        using (var initialize = await harness.PostJsonAsync(
+            """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"trusted-admin","version":"999"}}}"""))
+        {
+            Assert.Equal(HttpStatusCode.OK, initialize.StatusCode);
+        }
+
+        var responses = await Task.WhenAll(
+            harness.PostJsonAsync(
+                """{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"ping","arguments":{}}}"""),
+            harness.PostJsonAsync(
+                """{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"does_not_exist","arguments":{}}}"""));
+        try
+        {
+            Assert.All(responses, response => Assert.Equal(HttpStatusCode.OK, response.StatusCode));
+        }
+        finally
+        {
+            foreach (var response in responses)
+                response.Dispose();
+        }
+
+        Assert.True(sink.WaitForIdle(TimeSpan.FromSeconds(5)), "HTTP audit log writer did not drain");
+        var rawLog = File.ReadAllText(auditPath);
+        if (bearerToken is not null)
+        {
+            var tokenHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(bearerToken)));
+            Assert.DoesNotContain(bearerToken, rawLog, StringComparison.Ordinal);
+            Assert.DoesNotContain(tokenHash, rawLog, StringComparison.OrdinalIgnoreCase);
+        }
+
+        var records = File.ReadAllLines(auditPath)
+            .Select(static line =>
+            {
+                using var document = JsonDocument.Parse(line);
+                return document.RootElement.Clone();
+            })
+            .ToArray();
+        Assert.Equal(2, records.Length);
+        Assert.All(records, record =>
+        {
+            Assert.Equal(expectedAuthSource, record.GetProperty("auth_source").GetString());
+            Assert.Equal(expectedAuthSubject, record.GetProperty("auth_subject").GetString());
+            Assert.Equal("trusted-admin", record.GetProperty("caller").GetString());
+            Assert.Equal("999", record.GetProperty("caller_version").GetString());
+        });
+        Assert.Contains(records, record => record.GetProperty("tool").GetString() == "ping");
+        Assert.Contains(records, record => record.GetProperty("tool").GetString() == "does_not_exist");
+    }
+
     [Fact]
     public async Task HttpTransport_BearerToken_RejectsAuthorizationFailureCasesWithoutLeakingValues_Issue4299()
     {
@@ -4796,6 +4862,7 @@ public class HttpMcpTransportTests : IDisposable
             string dbPath,
             string? bearerToken = null,
             IMcpAuthenticator? authenticator = null,
+            AuditLogSink? auditLog = null,
             Action<HttpMcpTransport.HttpRequestLogRecord>? requestLogger = null,
             int? maxRequestBodyBytes = null,
             int? maxResponseBodyBytes = null,
@@ -4824,6 +4891,7 @@ public class HttpMcpTransportTests : IDisposable
                 serializeResponse: null,
                 authenticator: authenticator,
                 toolFilter: null,
+                auditLog: auditLog,
                 maxConcurrency: maxConcurrency ?? McpServer.DefaultMaxConcurrency);
             var cts = new CancellationTokenSource();
             var loopTask = Task.Run(() => server.RunAsync(transport, cts.Token));

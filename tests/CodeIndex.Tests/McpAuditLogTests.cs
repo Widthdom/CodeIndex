@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -40,6 +41,12 @@ public class McpAuditLogTests : IDisposable
         return new(_dbPath, ConsoleUi.LoadVersion(), dbPathExplicit: false, sink);
     }
 
+    private McpServer CreateServer(AuditLogSink sink, IMcpAuthenticator authenticator)
+    {
+        _activeAuditSink = sink;
+        return new(_dbPath, ConsoleUi.LoadVersion(), dbPathExplicit: false, authenticator, sink);
+    }
+
     private McpServer CreateServerWithFilter(AuditLogSink sink, McpToolFilter filter)
     {
         _activeAuditSink = sink;
@@ -64,6 +71,8 @@ public class McpAuditLogTests : IDisposable
 
         var record = ReadOnlyRecord();
         Assert.Equal("ping", record.GetProperty("tool").GetString());
+        Assert.Equal("stdio", record.GetProperty("auth_source").GetString());
+        Assert.Equal("local", record.GetProperty("auth_subject").GetString());
         Assert.Equal("claude-code", record.GetProperty("caller").GetString());
         Assert.Equal("9.9.9", record.GetProperty("caller_version").GetString());
         Assert.Equal(0, record.GetProperty("error_code").GetInt32());
@@ -72,6 +81,149 @@ public class McpAuditLogTests : IDisposable
         // ping arguments are empty so arg_keys is an empty array (not omitted).
         // ping の引数は空なので arg_keys は空配列（省略ではなく）。
         Assert.Equal(0, record.GetProperty("arg_keys").GetArrayLength());
+    }
+
+    [Fact]
+    public void TokenPrincipal_RemainsSeparateFromClientInfoAcrossBatchNotificationUnauthorizedAndError_Issue5186()
+    {
+        const string token = "issue5186-shared-secret";
+        using var sink = new AuditLogSink(_auditPath, AuditLogSink.DefaultMaxBytes, includeValues: true);
+        using var server = CreateServer(sink, new TokenMcpAuthenticator(token));
+
+        var initialize = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "initialize",
+            ["params"] = new JsonObject
+            {
+                ["auth"] = new JsonObject { ["token"] = token },
+                ["clientInfo"] = new JsonObject
+                {
+                    ["name"] = "trusted-admin",
+                    ["version"] = "999",
+                },
+            },
+        };
+        _ = server.HandleMessage(initialize);
+
+        var unauthorized = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"ping","arguments":{}}}""")!;
+        var unauthorizedResponse = server.HandleMessage(unauthorized)!;
+        Assert.Equal(McpErrorEnvelope.CodeUnauthorized, unauthorizedResponse["error"]!["code"]!.GetValue<int>());
+
+        var notification = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "ping",
+                ["auth"] = new JsonObject { ["token"] = token },
+                ["arguments"] = new JsonObject(),
+            },
+        };
+        Assert.Null(server.HandleMessage(notification));
+
+        var batch = new JsonArray(
+            new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = 3,
+                ["method"] = "tools/call",
+                ["params"] = new JsonObject
+                {
+                    ["name"] = "ping",
+                    ["auth"] = new JsonObject { ["token"] = token },
+                    ["arguments"] = new JsonObject(),
+                },
+            },
+            new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = 4,
+                ["method"] = "tools/call",
+                ["params"] = new JsonObject
+                {
+                    ["name"] = "does_not_exist",
+                    ["auth"] = new JsonObject { ["token"] = token },
+                    ["arguments"] = new JsonObject { ["query"] = "visible-value" },
+                },
+            });
+        var batchResponse = server.HandleMessage(batch)!.AsArray();
+        Assert.Equal(2, batchResponse.Count);
+        Assert.Equal(-32602, batchResponse[1]!["error"]!["code"]!.GetValue<int>());
+
+        WaitForAuditLogIdle();
+        var rawLog = File.ReadAllText(_auditPath);
+        var tokenHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token)));
+        Assert.DoesNotContain(token, rawLog, StringComparison.Ordinal);
+        Assert.DoesNotContain(tokenHash, rawLog, StringComparison.OrdinalIgnoreCase);
+
+        var records = File.ReadAllLines(_auditPath).Select(ParseAuditRecord).ToArray();
+        Assert.Equal(2, records.Length);
+        Assert.All(records, record =>
+        {
+            Assert.Equal("stdio-token", record.GetProperty("auth_source").GetString());
+            Assert.Equal("token", record.GetProperty("auth_subject").GetString());
+            Assert.Equal("trusted-admin", record.GetProperty("caller").GetString());
+            Assert.Equal("999", record.GetProperty("caller_version").GetString());
+        });
+        var errorCodes = records
+            .Select(record => record.GetProperty("error_code").GetInt32())
+            .OrderBy(code => code)
+            .ToArray();
+        Assert.Equal([-32602, 0], errorCodes);
+    }
+
+    [Fact]
+    public void ResponseSerializationFailure_RetainsRequestPrincipalInAudit_Issue5186()
+    {
+        using var sink = new AuditLogSink(_auditPath, AuditLogSink.DefaultMaxBytes, includeValues: false);
+        _activeAuditSink = sink;
+        using var server = new McpServer(
+            _dbPath,
+            ConsoleUi.LoadVersion(),
+            dbPathExplicit: false,
+            serializeResponse: static _ => throw new InvalidOperationException("serializer failed"),
+            authenticator: LocalStdioAuthenticator.Instance,
+            toolFilter: null,
+            auditLog: sink);
+
+        var wireResponse = server.ProcessFrame(
+            """{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"ping","arguments":{}}}""");
+
+        Assert.NotNull(wireResponse);
+        var record = ReadOnlyRecord();
+        Assert.Equal("stdio", record.GetProperty("auth_source").GetString());
+        Assert.Equal("local", record.GetProperty("auth_subject").GetString());
+        Assert.Equal("ping", record.GetProperty("tool").GetString());
+    }
+
+    [Fact]
+    public async Task ConcurrentTransport_CancelTimeoutAndNotificationDoNotLeakPrincipal_Issue5186()
+    {
+        using var sink = new AuditLogSink(_auditPath, AuditLogSink.DefaultMaxBytes, includeValues: false);
+        _activeAuditSink = sink;
+        using var server = new McpServer(
+            _dbPath,
+            ConsoleUi.LoadVersion(),
+            dbPathExplicit: false,
+            serializeResponse: null,
+            authenticator: LocalStdioAuthenticator.Instance,
+            toolFilter: null,
+            auditLog: sink,
+            maxConcurrency: 2);
+        var transport = new PrincipalLifetimeProbeTransport();
+
+        await server.RunAsync(transport, CancellationToken.None)
+            .WaitAsync(TestDeterminism.DefaultTimeout);
+
+        var record = ReadOnlyRecord();
+        Assert.Equal("stdio", record.GetProperty("auth_source").GetString());
+        Assert.Equal("local", record.GetProperty("auth_subject").GetString());
+        Assert.Equal("ping", record.GetProperty("tool").GetString());
+        Assert.Equal(5, transport.WriteCount);
     }
 
     [Fact]
@@ -839,6 +991,97 @@ public class McpAuditLogTests : IDisposable
         ElapsedMs: 0,
         ErrorCode: 0,
         ErrorType: null);
+
+    /// <summary>
+    /// Models the server-facing request-cancellation contract for both a disconnected request and
+    /// a transport deadline. HTTP maps both paths to the frame token, so the audit identity must be
+    /// cleared before a notification and a following frame without transport authentication.
+    /// 切断 request と transport deadline の server-facing cancellation 契約を再現する。HTTP は
+    /// どちらも frame token に写像するため、通知および transport 認証を持たない後続 frame の前に
+    /// audit identity がクリアされなければならない。
+    /// </summary>
+    private sealed class PrincipalLifetimeProbeTransport : IMcpTransport, IConcurrentMcpTransport
+    {
+        private readonly CancellationTokenSource _disconnectCts = new();
+        private readonly CancellationTokenSource _deadlineCts = new();
+        private readonly TaskCompletionSource[] _writes =
+            Enumerable.Range(0, 5)
+                .Select(_ => new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously))
+                .ToArray();
+        private int _readCount;
+
+        public PrincipalLifetimeProbeTransport()
+        {
+            _disconnectCts.Cancel();
+            _deadlineCts.Cancel();
+        }
+
+        public string Name => "memory";
+        public string Endpoint => "memory://principal-lifetime";
+        public int WriteCount { get; private set; }
+
+        public Task<string?> ReadFrameAsync(CancellationToken cancellationToken)
+            => throw new NotSupportedException("This probe uses request-scoped concurrent frames.");
+
+        public async Task<McpTransportFrame?> ReadConcurrentFrameAsync(CancellationToken cancellationToken)
+        {
+            var readCount = Interlocked.Increment(ref _readCount);
+            if (readCount > 1 && readCount <= _writes.Length)
+                await _writes[readCount - 2].Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+            return readCount switch
+            {
+                1 => CreateFrame(
+                    readCount,
+                    """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"""),
+                2 => CreateFrame(
+                    readCount,
+                    """{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"ping","arguments":{}}}""",
+                    _disconnectCts.Token,
+                    new McpCallerIdentity("http-bearer", "token")),
+                3 => CreateFrame(
+                    readCount,
+                    """{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"ping","arguments":{}}}""",
+                    _deadlineCts.Token,
+                    new McpCallerIdentity("deadline-probe", "expired")),
+                4 => CreateFrame(
+                    readCount,
+                    """{"jsonrpc":"2.0","method":"tools/call","params":{"name":"ping","arguments":{}}}""",
+                    CancellationToken.None,
+                    McpCallerIdentity.HttpAnonymous),
+                5 => CreateFrame(
+                    readCount,
+                    """{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"ping","arguments":{}}}"""),
+                _ => null,
+            };
+        }
+
+        private McpTransportFrame CreateFrame(
+            int readCount,
+            string frame,
+            CancellationToken requestCancellationToken = default,
+            McpCallerIdentity? identity = null)
+            => new(
+                frame,
+                (_, _) =>
+                {
+                    WriteCount++;
+                    _writes[readCount - 1].TrySetResult();
+                    return Task.CompletedTask;
+                },
+                requestCancellationToken,
+                authenticatedCallerIdentity: identity);
+
+        public Task WriteFrameAsync(string? frame, CancellationToken cancellationToken)
+            => throw new NotSupportedException("This probe uses request-scoped response writers.");
+
+        public ValueTask DisposeAsync()
+        {
+            _disconnectCts.Dispose();
+            _deadlineCts.Dispose();
+            return ValueTask.CompletedTask;
+        }
+    }
 
     private static void AssertJsonNullId(JsonNode response)
     {
