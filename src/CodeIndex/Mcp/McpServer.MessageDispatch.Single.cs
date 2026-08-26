@@ -42,7 +42,10 @@ public partial class McpServer
             return null;
         }
 
-        if (TryAuthenticateRespondedRequest(envelope, out var authenticationError))
+        if (TryAuthenticateRespondedRequest(
+                envelope,
+                out var authenticatedCallerIdentity,
+                out var authenticationError))
             return authenticationError;
         if (rejectForCapacity)
             return CreateServerBusyResponse(envelope.Id);
@@ -56,6 +59,7 @@ public partial class McpServer
 
         return await DispatchRespondedRequestAsync(
             envelope,
+            authenticatedCallerIdentity!,
             isolateRequestDb,
             beforeDispatchAsync,
             queuedBatchRegistration,
@@ -251,6 +255,7 @@ public partial class McpServer
 
     private bool TryAuthenticateRespondedRequest(
         McpRequestEnvelope request,
+        out McpCallerIdentity? authenticatedCallerIdentity,
         out JsonNode? authenticationError)
     {
         // Authenticate every responded request before dispatch, even when `method` is missing or
@@ -258,10 +263,17 @@ public partial class McpServer
         var authResult = _authenticator.Authenticate(request.Object);
         if (authResult.IsAuthenticated)
         {
+            // A transport principal belongs to this exact frame and therefore takes precedence
+            // over a successful payload authenticator identity. The payload gate still runs and
+            // must succeed, so transport identity cannot bypass a future body-level policy.
+            // transport principal はこの frame 固有なので、成功した payload authenticator identity
+            // より優先する。ただし payload gate 自体の成功は必須で、body-level policy を迂回しない。
+            authenticatedCallerIdentity = _currentTransportCallerIdentity.Value ?? authResult.Identity;
             authenticationError = null;
             return false;
         }
 
+        authenticatedCallerIdentity = null;
         DeferFrameLog(BuildAuthFailureLog(request.Method, authResult.FailureReason));
         authenticationError = CreateErrorResponse(
             hasId: true,
@@ -276,6 +288,7 @@ public partial class McpServer
 
     private Task<JsonNode> DispatchRespondedRequestAsync(
         McpRequestEnvelope request,
+        McpCallerIdentity authenticatedCallerIdentity,
         bool isolateRequestDb,
         Func<CancellationToken, Task>? beforeDispatchAsync,
         QueuedBatchRequestRegistration? queuedBatchRegistration,
@@ -285,10 +298,14 @@ public partial class McpServer
             isolateRequestDb,
             beforeDispatchAsync,
             queuedBatchRegistration,
-            () => DispatchRequestMethodAsync(request, deferredInitializeCommits));
+            () => DispatchRequestMethodAsync(
+                request,
+                authenticatedCallerIdentity,
+                deferredInitializeCommits));
 
     private Task<JsonNode> DispatchRequestMethodAsync(
         McpRequestEnvelope request,
+        McpCallerIdentity authenticatedCallerIdentity,
         DeferredInitializeCommits? deferredInitializeCommits)
     {
         var method = request.Method!;
@@ -333,7 +350,11 @@ public partial class McpServer
                 request.Object["params"],
                 deferredInitializeCommits)),
             "tools/list" => Task.FromResult<JsonNode>(HandleToolsList(request.Id, request.Object["params"])),
-            "tools/call" => HandleToolsCallAsync(request.HasId, request.Id, request.Object["params"]),
+            "tools/call" => HandleToolsCallAsync(
+                request.HasId,
+                request.Id,
+                request.Object["params"],
+                authenticatedCallerIdentity),
             "resources/list" => Task.FromResult<JsonNode>(HandleResourcesList(request.Id, request.Object["params"])),
             "resources/templates/list" => Task.FromResult<JsonNode>(HandleResourceTemplatesList(request.Id, request.Object["params"])),
             "resources/read" => Task.FromResult<JsonNode>(HandleResourcesRead(request.Id, request.Object["params"])),

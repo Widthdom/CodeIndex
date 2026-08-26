@@ -185,14 +185,17 @@ public partial class McpServer
         var frame = transportFrame.Frame;
         if (IsCancellationFrame(frame) || IsServerResponseFrame(frame))
         {
+            var previousTransportCallerIdentity = _currentTransportCallerIdentity.Value;
             try
             {
+                _currentTransportCallerIdentity.Value = transportFrame.AuthenticatedCallerIdentity;
                 BeginDeferredFrameLogs();
                 var response = await ProcessFrameAsync(frame).ConfigureAwait(false);
                 await state.WriteResponseAsync(transportFrame.WriteResponseAsync, response).ConfigureAwait(false);
             }
             finally
             {
+                _currentTransportCallerIdentity.Value = previousTransportCallerIdentity;
                 transportFrame.CompleteResourceRetentionWhen(Task.CompletedTask);
             }
             return true;
@@ -208,8 +211,10 @@ public partial class McpServer
         if (state.TryAdmit())
             return false;
 
+        var previousRejectedTransportCallerIdentity = _currentTransportCallerIdentity.Value;
         try
         {
+            _currentTransportCallerIdentity.Value = transportFrame.AuthenticatedCallerIdentity;
             // Keep every response-bearing id registered until its retry-safe overload
             // response has reached the transport. A cancellation before or during that
             // write then belongs to this rejected occurrence instead of poisoning a later
@@ -228,6 +233,7 @@ public partial class McpServer
         }
         finally
         {
+            _currentTransportCallerIdentity.Value = previousRejectedTransportCallerIdentity;
             transportFrame.CompleteResourceRetentionWhen(Task.CompletedTask);
         }
         return true;
@@ -270,6 +276,7 @@ public partial class McpServer
     {
         var detachedIsolatedActions = new ConcurrentQueue<Task>();
         var previousDetachedIsolatedActions = _currentDetachedIsolatedActions.Value;
+        var previousTransportCallerIdentity = _currentTransportCallerIdentity.Value;
         try
         {
             requestTaskStarted.TrySetResult();
@@ -284,6 +291,7 @@ public partial class McpServer
             {
                 _currentDetachedIsolatedActions.Value = detachedIsolatedActions;
                 _currentRequestToken.Value = frameToken;
+                _currentTransportCallerIdentity.Value = transportFrame.AuthenticatedCallerIdentity;
                 _currentOutOfBandFrameWriter.Value = state.CreateOutOfBandFrameWriter();
                 _canAwaitClientResponses.Value = _currentOutOfBandFrameWriter.Value is not null
                     && (state.Transport is not HttpMcpTransport httpResponseTransport || httpResponseTransport.HasEventStreams);
@@ -306,6 +314,7 @@ public partial class McpServer
             {
                 _currentDetachedIsolatedActions.Value = previousDetachedIsolatedActions;
                 _currentRequestToken.Value = CancellationToken.None;
+                _currentTransportCallerIdentity.Value = previousTransportCallerIdentity;
                 _canAwaitClientResponses.Value = false;
                 _currentOutOfBandFrameWriter.Value = null;
             }

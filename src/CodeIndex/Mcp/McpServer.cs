@@ -103,6 +103,11 @@ public partial class McpServer : IDisposable
     // 直後にリセットする。`WithDbReader` が `DbReader` にライブな cancellation token
     // を渡せるようにするため (#1567)。
     private readonly AsyncLocal<CancellationToken> _currentRequestToken = new();
+    // Transport-authenticated identity for the current frame. AsyncLocal keeps concurrent HTTP
+    // requests isolated while allowing JSON-RPC batch workers to inherit the frame principal.
+    // 現在 frame の transport 認証済み identity。AsyncLocal により並行 HTTP request を分離し、
+    // JSON-RPC batch worker には frame principal を継承させる。
+    private readonly AsyncLocal<McpCallerIdentity?> _currentTransportCallerIdentity = new();
     private readonly AsyncLocal<IndexAuditContext?> _currentIndexAuditContext = new();
     private readonly AsyncLocal<bool> _isolateDbForCurrentRequest = new();
     private readonly AsyncLocal<DbReader?> _activeSqliteDiagnosticsReader = new();

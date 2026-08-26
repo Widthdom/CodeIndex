@@ -17,6 +17,8 @@ public class AuditLogSinkTests
         var evt = new AuditLogSink.AuditEvent(
             Timestamp: new DateTimeOffset(2026, 5, 16, 0, 0, 0, TimeSpan.Zero),
             Tool: "search",
+            AuthSource: "stdio",
+            AuthSubject: "local",
             CallerName: null,
             CallerVersion: null,
             RequestId: null,
@@ -37,6 +39,8 @@ public class AuditLogSinkTests
         var root = doc.RootElement;
 
         Assert.Equal("search", root.GetProperty("tool").GetString());
+        Assert.Equal("stdio", root.GetProperty("auth_source").GetString());
+        Assert.Equal("local", root.GetProperty("auth_subject").GetString());
         Assert.False(root.TryGetProperty("caller", out _));
         Assert.False(root.TryGetProperty("caller_version", out _));
         Assert.False(root.TryGetProperty("request_id", out _));
@@ -53,6 +57,25 @@ public class AuditLogSinkTests
         Assert.Equal(4, root.GetProperty("result_count").GetInt32());
         Assert.Equal(12.345, root.GetProperty("elapsed_ms").GetDouble());
         Assert.Equal(0, root.GetProperty("error_code").GetInt32());
+    }
+
+    [Fact]
+    public void SerializeEvent_SanitizesShortPrincipalControlCharacters_Issue5186()
+    {
+        var evt = CreateAuditEvent("ping") with
+        {
+            AuthSource = "http\nbearer",
+            AuthSubject = "tok\u007Fen",
+        };
+
+        var json = AuditLogSink.SerializeEvent(evt, includeValues: false);
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+
+        Assert.Equal("http?bearer", root.GetProperty("auth_source").GetString());
+        Assert.Equal("tok?en", root.GetProperty("auth_subject").GetString());
+        Assert.False(root.TryGetProperty("auth_source_truncated", out _));
+        Assert.False(root.TryGetProperty("auth_subject_truncated", out _));
     }
 
     [Fact]
@@ -494,7 +517,9 @@ public class AuditLogSinkTests
             ElapsedMs: 1.0,
             ErrorCode: 0,
             ErrorType: null,
-            ArgKeyLengths: keyLengths);
+            ArgKeyLengths: keyLengths,
+            AuthSource: "http-bearer",
+            AuthSubject: "token");
 
         var json = AuditLogSink.SerializeEvent(evt, includeValues: false);
 
@@ -504,6 +529,8 @@ public class AuditLogSinkTests
         Assert.Empty(root.GetProperty("arg_keys").EnumerateArray());
         Assert.Empty(root.GetProperty("arg_lengths").EnumerateObject());
         Assert.False(root.TryGetProperty("arg_key_lengths", out _));
+        Assert.Equal("http-bearer", root.GetProperty("auth_source").GetString());
+        Assert.Equal("token", root.GetProperty("auth_subject").GetString());
         Assert.True(root.GetProperty("event_truncated").GetBoolean());
         Assert.Equal(AuditLogSink.MaxSerializedEventBytes, root.GetProperty("event_max_bytes").GetInt32());
         Assert.True(root.GetProperty("arg_keys_truncated").GetBoolean());
@@ -518,6 +545,8 @@ public class AuditLogSinkTests
         var evt = new AuditLogSink.AuditEvent(
             Timestamp: DateTimeOffset.UtcNow,
             Tool: huge,
+            AuthSource: huge,
+            AuthSubject: huge,
             CallerName: huge,
             CallerVersion: huge,
             RequestId: huge,
@@ -537,6 +566,8 @@ public class AuditLogSinkTests
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
         Assert.True(root.GetProperty("tool_truncated").GetBoolean());
+        Assert.True(root.GetProperty("auth_source_truncated").GetBoolean());
+        Assert.True(root.GetProperty("auth_subject_truncated").GetBoolean());
         Assert.True(root.GetProperty("caller_truncated").GetBoolean());
         Assert.True(root.GetProperty("caller_version_truncated").GetBoolean());
         Assert.True(root.GetProperty("request_id_truncated").GetBoolean());

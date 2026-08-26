@@ -67,7 +67,8 @@ internal sealed class McpTransportFrame(
     string frame,
     Func<string?, CancellationToken, Task> writeResponseAsync,
     CancellationToken requestCancellationToken = default,
-    Action<Task>? completeResourceRetentionWhen = null)
+    Action<Task>? completeResourceRetentionWhen = null,
+    McpCallerIdentity? authenticatedCallerIdentity = null)
 {
     private Action<Task>? _completeResourceRetentionWhen = completeResourceRetentionWhen;
 
@@ -82,6 +83,17 @@ internal sealed class McpTransportFrame(
     /// HTTP 切断や期限切れで対応 request だけを cancel する (#4546)。
     /// </summary>
     internal CancellationToken RequestCancellationToken { get; } = requestCancellationToken;
+
+    /// <summary>
+    /// Principal established by the transport for this exact frame. A null value means the
+    /// server authenticator is the only identity source. Transport identity takes precedence
+    /// over a successful placeholder authenticator identity, but never bypasses a failed
+    /// server authentication check.
+    /// この frame に対して transport が確立した principal。null の場合は server authenticator
+    /// だけを identity source とする。transport identity は成功した placeholder authenticator
+    /// identity より優先するが、server authentication の失敗を迂回しない。
+    /// </summary>
+    internal McpCallerIdentity? AuthenticatedCallerIdentity { get; } = authenticatedCallerIdentity;
 
     /// <summary>
     /// Complete the transport's pre-attached resource-retention barrier after any work that
