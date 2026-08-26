@@ -58,6 +58,40 @@ public partial class McpServerTests
         Assert.Equal(2, ambiguous["candidates"]!.AsArray().Count);
         Assert.Contains("not identity-scoped", ambiguous["identity_warning"]!.GetValue<string>(), StringComparison.Ordinal);
 
+        var pathScoped = CallIssue4853Tool(
+            _server,
+            "references",
+            new JsonObject
+            {
+                ["query"] = "Issue5187Shared",
+                ["exact"] = true,
+                ["path"] = new JsonArray("tests/**"),
+                ["countOnly"] = true,
+            },
+            id: 518751);
+        Assert.Equal(2, pathScoped["candidate_count"]!.GetValue<int>());
+        var pathScopedCandidates = pathScoped["candidates"]!.AsArray()
+            .Select(candidate => candidate!["qualified_name"]!.GetValue<string>())
+            .ToArray();
+        Assert.Contains("Issue5187Fixture.Issue5187Alpha.Issue5187Shared", pathScopedCandidates);
+        Assert.Contains("Issue5187Fixture.Issue5187Beta.Issue5187Shared", pathScopedCandidates);
+
+        foreach (var tool in new[] { "references", "callees" })
+        {
+            var languageMismatch = CallIssue4853Tool(
+                _server,
+                tool,
+                new JsonObject
+                {
+                    ["selector"] = selector,
+                    ["lang"] = "typescript",
+                    ["offset"] = 1,
+                },
+                id: tool == "references" ? 518752 : 518753);
+            Assert.Equal(0, languageMismatch["count"]!.GetValue<int>());
+            Assert.Equal(0, languageMismatch["total"]!.GetValue<int>());
+        }
+
         var malformed = CallIssue4853ToolError(
             _server,
             "callers",

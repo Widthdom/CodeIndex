@@ -73,7 +73,7 @@ public static partial class QueryCommandRunner
             if (!TryResolveGraphSelector("impact", options, reader, jsonOptions, out var selectedDefinition, out var selectorExitCode))
                 return selectorExitCode;
             var query = selectedDefinition?.Name ?? options.Query ?? options.Selector!;
-            var identityMetadata = reader.GetGraphQueryIdentityMetadata(
+            var identityMetadata = reader.GetImpactGraphQueryIdentityMetadata(
                 query,
                 selectedDefinition,
                 options.Lang,

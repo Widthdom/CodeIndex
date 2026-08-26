@@ -8,6 +8,7 @@ public partial class DbReader
     private enum GraphReferenceQueryShape
     {
         List,
+        IdentityCandidates,
         LimitedCount,
         TotalCount,
     }
@@ -196,6 +197,10 @@ public partial class DbReader
         var sql = shape switch
         {
             GraphReferenceQueryShape.List => direction.BuildListSql(this, request, context),
+            GraphReferenceQueryShape.IdentityCandidates => BuildGraphReferenceIdentityCandidatesSql(
+                direction,
+                request,
+                context),
             GraphReferenceQueryShape.LimitedCount => BuildGraphReferenceCountSql(direction, request, context, limited: true),
             GraphReferenceQueryShape.TotalCount => BuildGraphReferenceCountSql(direction, request, context, limited: false),
             _ => throw new ArgumentOutOfRangeException(nameof(shape), shape, null),
@@ -211,6 +216,26 @@ public partial class DbReader
             match,
             supportedLanguages,
             BindIdentityParameter: identityFilterSql.Length > 0);
+    }
+
+    private string BuildGraphReferenceIdentityCandidatesSql(
+        GraphReferenceDirectionSpec direction,
+        GraphReferenceQueryRequest request,
+        GraphReferenceBuildContext context)
+    {
+        var listSql = direction.BuildListSql(this, request, context);
+        return $@"
+            SELECT DISTINCT CAST(identity.value AS INTEGER) AS symbol_id
+            FROM ({listSql}) AS graph_rows
+            JOIN json_each(
+                CASE
+                    WHEN graph_rows.root_symbol_ids IS NULL OR graph_rows.root_symbol_ids = '' THEN '[]'
+                    ELSE '[' || graph_rows.root_symbol_ids || ']'
+                END
+            ) AS identity
+            WHERE CAST(identity.value AS INTEGER) > 0
+            ORDER BY symbol_id
+            LIMIT @limit";
     }
 
     private GraphReferenceMatchPlan BuildGraphReferenceMatchPlan(
@@ -302,6 +327,7 @@ public partial class DbReader
         var selfReferenceSql = _referenceColumns.Contains("is_self_reference") ? "r.is_self_reference" : "0";
         var mutualRecursionSql = _referenceColumns.Contains("is_mutual_recursion") ? "r.is_mutual_recursion" : "0";
         var referenceSpanLengthSql = _referenceColumns.Contains("span_length") ? "r.span_length" : "NULL";
+        var rootSymbolIdSql = _referenceIdentityContractCurrent ? "r.target_symbol_id" : "NULL";
         var sql = @"
             WITH logical_references AS (
                 SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name,
@@ -314,7 +340,8 @@ public partial class DbReader
                        r.column_number,
                        " + referenceSpanLengthSql + @" AS span_length,
                        MAX(" + selfReferenceSql + @") AS is_self_reference,
-                       MAX(" + mutualRecursionSql + @") AS is_mutual_recursion
+                       MAX(" + mutualRecursionSql + @") AS is_mutual_recursion,
+                       GROUP_CONCAT(DISTINCT " + rootSymbolIdSql + @") AS root_symbol_ids
                 FROM symbol_references r
                 JOIN files f ON r.file_id = f.id" + ReferenceLineJoinSql("r") + @"
                 WHERE " + BuildCallerContainerPredicate("f", "r") + @"
@@ -348,7 +375,8 @@ public partial class DbReader
                    GROUP_CONCAT(r.count_reference_kind || ':' || r.reference_count) AS reference_kind_counts,
                    SUM(r.weighted_score) AS weighted_score,
                    MAX(r.is_self_reference) AS is_self_reference,
-                   MAX(r.is_mutual_recursion) AS is_mutual_recursion
+                   MAX(r.is_mutual_recursion) AS is_mutual_recursion,
+                   GROUP_CONCAT(DISTINCT r.root_symbol_ids) AS root_symbol_ids
             FROM ranked_call_sites r
             GROUP BY path, lang, container_kind, container_name, symbol_name";
         return sql;
@@ -367,6 +395,9 @@ public partial class DbReader
         var referenceSpanLengthSql = _referenceColumns.Contains("span_length")
             ? "r.span_length"
             : "NULL";
+        var rootSymbolIdSql = _referenceColumns.Contains("source_symbol_id")
+            ? "r.source_symbol_id"
+            : "NULL";
         var sql = $@"
             WITH logical_references AS (
                 SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name,
@@ -377,7 +408,8 @@ public partial class DbReader
                        {ReferenceWeightedScoreSql("r.reference_kind")} AS weighted_score,
                        r.line,
                        r.column_number,
-                       {referenceSpanLengthSql} AS span_length
+                       {referenceSpanLengthSql} AS span_length,
+                       GROUP_CONCAT(DISTINCT {rootSymbolIdSql}) AS root_symbol_ids
                 FROM symbol_references r
                 JOIN files f ON r.file_id = f.id
                 WHERE r.container_name IS NOT NULL
@@ -407,7 +439,8 @@ public partial class DbReader
                    SUM(r.reference_count) AS reference_count,
                    GROUP_CONCAT(DISTINCT reference_kind) AS reference_kinds,
                    GROUP_CONCAT(r.count_reference_kind || ':' || r.reference_count) AS reference_kind_counts,
-                   SUM(r.weighted_score) AS weighted_score
+                   SUM(r.weighted_score) AS weighted_score,
+                   GROUP_CONCAT(DISTINCT r.root_symbol_ids) AS root_symbol_ids
             FROM ranked_call_sites r
             GROUP BY path, lang, container_kind, container_name, symbol_name, reference_kind";
         return sql;

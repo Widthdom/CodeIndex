@@ -104,6 +104,50 @@ public partial class DbReader
         return results;
     }
 
+    internal IReadOnlyList<long> GetReferenceGraphIdentityCandidates(
+        string query,
+        string? lang,
+        string? referenceKind,
+        IReadOnlyList<string>? pathPatterns,
+        IReadOnlyList<string>? excludePathPatterns,
+        bool excludeTests,
+        bool exact,
+        bool includeQualifiedCommonCalls)
+    {
+        if (string.IsNullOrWhiteSpace(query) || !_hasReferencesTable)
+            return [];
+
+        lang = NormalizeQueryLanguage(lang);
+        query = NormalizeSymbolSearchQuery(query, lang, exact) ?? query;
+        using var command = CreateSearchReferencesCommandCore(
+            query,
+            limit: 0,
+            lang,
+            referenceKind,
+            pathPatterns,
+            excludePathPatterns,
+            excludeTests,
+            exact,
+            offset: 0,
+            includeOrdering: false,
+            excludeSelfReferences: false,
+            includeQualifiedCommonCalls,
+            targetSymbolId: null);
+        command.CommandText = $@"
+            SELECT DISTINCT target_symbol_id
+            FROM ({command.CommandText}) AS graph_rows
+            WHERE target_symbol_id IS NOT NULL
+            ORDER BY target_symbol_id
+            LIMIT @graphIdentityLimit";
+        SqliteCommandPolicy.Add(command, "@graphIdentityLimit", GraphIdentityCandidateLimit + 1);
+
+        var symbolIds = new List<long>();
+        using var reader = command.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+            symbolIds.Add(reader.GetInt64(0));
+        return symbolIds;
+    }
+
     internal List<ReferenceResult> SearchReferencesForCandidate(
         DefinitionResult definition,
         int limit,

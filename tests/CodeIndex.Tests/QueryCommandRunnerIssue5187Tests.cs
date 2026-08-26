@@ -62,6 +62,38 @@ public sealed class QueryCommandRunnerIssue5187Tests
                 ambiguous.RootElement.GetProperty("candidates").EnumerateArray(),
                 candidate => Assert.Contains("@g:", candidate.GetProperty("selector").GetString(), StringComparison.Ordinal));
 
+            var (substringExitCode, substringStdout, substringStderr) = QueryCommandTestSupport.CaptureConsole(() =>
+                QueryCommandRunner.RunCallers(
+                    ["Issue5187Shared", "--db", dbPath, "--json", "--count"],
+                    QueryCommandTestSupport.JsonOptions));
+            using var substring = QueryCommandTestSupport.ParseJsonOutput(substringStdout);
+
+            Assert.Equal(CommandExitCodes.Success, substringExitCode);
+            Assert.Equal(string.Empty, substringStderr);
+            Assert.Equal(3, substring.RootElement.GetProperty("candidate_count").GetInt32());
+            Assert.Contains(
+                substring.RootElement.GetProperty("candidates").EnumerateArray(),
+                candidate => candidate.GetProperty("qualified_name").GetString() ==
+                    "Issue5187Fixture.Issue5187Alpha.Issue5187SharedSuffix");
+
+            var (pathExitCode, pathStdout, pathStderr) = QueryCommandTestSupport.CaptureConsole(() =>
+                QueryCommandRunner.RunReferences(
+                    ["Issue5187Shared", "--db", dbPath, "--json", "--count", "--exact-name", "--path", "tests/**"],
+                    QueryCommandTestSupport.JsonOptions));
+            using var pathScoped = QueryCommandTestSupport.ParseJsonOutput(pathStdout);
+
+            Assert.Equal(CommandExitCodes.Success, pathExitCode);
+            Assert.Equal(string.Empty, pathStderr);
+            Assert.Equal(2, pathScoped.RootElement.GetProperty("candidate_count").GetInt32());
+            Assert.Contains(
+                pathScoped.RootElement.GetProperty("candidates").EnumerateArray(),
+                candidate => candidate.GetProperty("qualified_name").GetString() ==
+                    "Issue5187Fixture.Issue5187Alpha.Issue5187Shared");
+            Assert.Contains(
+                pathScoped.RootElement.GetProperty("candidates").EnumerateArray(),
+                candidate => candidate.GetProperty("qualified_name").GetString() ==
+                    "Issue5187Fixture.Issue5187Beta.Issue5187Shared");
+
             var (humanExitCode, humanStdout, humanStderr) = QueryCommandTestSupport.CaptureConsole(() =>
                 QueryCommandRunner.RunCallees(
                     ["Issue5187Shared", "--db", dbPath, "--exact-name"],
@@ -204,6 +236,73 @@ public sealed class QueryCommandRunnerIssue5187Tests
             Assert.Equal(string.Empty, mismatchStdout);
             Assert.Contains("cursor", mismatchStderr, StringComparison.OrdinalIgnoreCase);
             Assert.Contains("cursor_mismatch", mismatchStderr, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void GraphIdentityMetadata_SurvivesCompactEmptyAndByteBoundedOutput_Issue5187()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_graph_selector_compact_5187");
+        try
+        {
+            var dbPath = CreateGraphFixture(projectRoot);
+            var selector = GetInspectSelectors(dbPath)["Issue5187Fixture.Issue5187Alpha.Issue5187Shared"];
+
+            var (compactExitCode, compactStdout, compactStderr) = QueryCommandTestSupport.CaptureConsole(() =>
+                ProgramRunner.Run(
+                    ["callers", "--selector", selector, "--db", dbPath, "--compact"],
+                    QueryCommandTestSupport.JsonOptions,
+                    "1.0.0-test"));
+            using var compact = QueryCommandTestSupport.ParseJsonOutput(compactStdout);
+
+            Assert.Equal(CommandExitCodes.Success, compactExitCode);
+            Assert.Equal(string.Empty, compactStderr);
+            Assert.True(compact.RootElement.GetProperty("identity_scoped").GetBoolean());
+            Assert.Equal(selector, compact.RootElement.GetProperty("selected_symbol").GetProperty("selector").GetString());
+
+            var (ambiguousExitCode, ambiguousStdout, ambiguousStderr) = QueryCommandTestSupport.CaptureConsole(() =>
+                ProgramRunner.Run(
+                    ["callees", "Issue5187Shared", "--db", dbPath, "--compact", "--exact-name"],
+                    QueryCommandTestSupport.JsonOptions,
+                    "1.0.0-test"));
+            using var ambiguous = QueryCommandTestSupport.ParseJsonOutput(ambiguousStdout);
+
+            Assert.Equal(CommandExitCodes.Success, ambiguousExitCode);
+            Assert.Equal(string.Empty, ambiguousStderr);
+            Assert.False(ambiguous.RootElement.GetProperty("identity_scoped").GetBoolean());
+            Assert.Equal(2, ambiguous.RootElement.GetProperty("candidate_count").GetInt32());
+
+            var (emptyExitCode, emptyStdout, emptyStderr) = QueryCommandTestSupport.CaptureConsole(() =>
+                ProgramRunner.Run(
+                    ["callers", "--selector", selector, "--db", dbPath, "--compact", "--path", "does-not-match/**"],
+                    QueryCommandTestSupport.JsonOptions,
+                    "1.0.0-test"));
+            using var empty = QueryCommandTestSupport.ParseJsonOutput(emptyStdout);
+
+            Assert.Equal(CommandExitCodes.Success, emptyExitCode);
+            Assert.Equal(string.Empty, emptyStderr);
+            Assert.Equal(0, empty.RootElement.GetProperty("count").GetInt32());
+            Assert.True(empty.RootElement.GetProperty("identity_scoped").GetBoolean());
+            Assert.Equal(selector, empty.RootElement.GetProperty("selected_symbol").GetProperty("selector").GetString());
+
+            var (boundedExitCode, boundedStdout, boundedStderr) = QueryCommandTestSupport.CaptureConsole(() =>
+                ProgramRunner.Run(
+                    ["callers", "--selector", selector, "--db", dbPath, "--compact", "--max-json-bytes", "4096"],
+                    QueryCommandTestSupport.JsonOptions,
+                    "1.0.0-test"));
+            using var bounded = QueryCommandTestSupport.ParseJsonOutput(boundedStdout);
+            var responseContext = bounded.RootElement
+                .GetProperty("metadata")
+                .GetProperty("response_context");
+
+            Assert.Equal(CommandExitCodes.Success, boundedExitCode);
+            Assert.Equal(string.Empty, boundedStderr);
+            Assert.True(responseContext.GetProperty("identity_scoped").GetBoolean());
+            Assert.Equal(selector, responseContext.GetProperty("selected_symbol").GetProperty("selector").GetString());
         }
         finally
         {
@@ -355,7 +454,9 @@ public sealed class QueryCommandRunnerIssue5187Tests
                     public static class Issue5187Alpha
                     {
                         public static void Issue5187Shared() => Issue5187AlphaLeaf();
+                        public static void Issue5187SharedSuffix() => Issue5187SuffixLeaf();
                         private static void Issue5187AlphaLeaf() { }
+                        private static void Issue5187SuffixLeaf() { }
                     }
 
                     public static class Issue5187AlphaCallerA
@@ -366,6 +467,18 @@ public sealed class QueryCommandRunnerIssue5187Tests
                     public static class Issue5187AlphaCallerB
                     {
                         public static void InvokeAlphaB() => Issue5187Alpha.Issue5187Shared();
+                        public static void InvokeSuffix() => Issue5187Alpha.Issue5187SharedSuffix();
+                    }
+                    """),
+                new TestProjectHelper.IndexedFileFixture(
+                    "tests/AlphaConsumer.cs",
+                    "csharp",
+                    """
+                    namespace Issue5187Fixture;
+
+                    public static class Issue5187AlphaTestCaller
+                    {
+                        public static void InvokeAlphaFromTests() => Issue5187Alpha.Issue5187Shared();
                     }
                     """),
                 new TestProjectHelper.IndexedFileFixture(

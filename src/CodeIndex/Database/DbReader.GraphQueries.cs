@@ -161,6 +161,51 @@ public partial class DbReader
         return ExecuteGraphReferenceList(plan, ProjectCallerResult);
     }
 
+    internal IReadOnlyList<long> GetCallerGraphIdentityCandidates(
+        string query,
+        string? lang,
+        string? referenceKind,
+        IReadOnlyList<string>? pathPatterns,
+        IReadOnlyList<string>? excludePathPatterns,
+        bool excludeTests,
+        bool exact,
+        bool rawKinds,
+        bool includeQualifiedCommonCalls,
+        bool includeMemberReads)
+    {
+        if (string.IsNullOrWhiteSpace(query)
+            || IsBareVerbatimQueryToken(query)
+            || !_hasReferencesTable)
+        {
+            return [];
+        }
+
+        lang = NormalizeQueryLanguage(lang);
+        query = NormalizeSymbolSearchQuery(query, lang, exact) ?? query;
+        var callerIdentity = ResolveCallerIdentity(query, lang, exact, targetSymbolId: null);
+        if (callerIdentity.SymbolIds is { Count: 0 } && lang != null)
+            return [];
+
+        var request = CreateGraphReferenceQueryRequest(
+            query,
+            GraphIdentityCandidateLimit + 1,
+            lang,
+            referenceKind,
+            pathPatterns,
+            excludePathPatterns,
+            excludeTests,
+            exact,
+            rawKinds,
+            includeQualifiedCommonCalls,
+            includeMemberReads,
+            callerIdentitySymbolIds: callerIdentity.SymbolIds);
+        var plan = BuildGraphReferenceQueryPlan(
+            CallerGraphReferenceDirection,
+            request,
+            GraphReferenceQueryShape.IdentityCandidates);
+        return ExecuteGraphReferenceIdentityCandidates(plan);
+    }
+
     public int CountCallers(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, bool rawKinds = false, bool includeQualifiedCommonCalls = false, bool includeMemberReads = false)
     {
         if (string.IsNullOrWhiteSpace(query) || IsBareVerbatimQueryToken(query))
@@ -487,6 +532,46 @@ public partial class DbReader
             GraphReferenceQueryShape.List,
             rankMode);
         return ExecuteGraphReferenceList(plan, ProjectCalleeResult);
+    }
+
+    internal IReadOnlyList<long> GetCalleeGraphIdentityCandidates(
+        string query,
+        string? lang,
+        string? referenceKind,
+        IReadOnlyList<string>? pathPatterns,
+        IReadOnlyList<string>? excludePathPatterns,
+        bool excludeTests,
+        bool exact,
+        bool rawKinds,
+        bool includeQualifiedCommonCalls,
+        bool includeMemberReads)
+    {
+        if (string.IsNullOrWhiteSpace(query)
+            || IsBareVerbatimQueryToken(query)
+            || !_hasReferencesTable)
+        {
+            return [];
+        }
+
+        lang = NormalizeQueryLanguage(lang);
+        query = NormalizeSymbolSearchQuery(query, lang, exact) ?? query;
+        var request = CreateGraphReferenceQueryRequest(
+            query,
+            GraphIdentityCandidateLimit + 1,
+            lang,
+            referenceKind,
+            pathPatterns,
+            excludePathPatterns,
+            excludeTests,
+            exact,
+            rawKinds,
+            includeQualifiedCommonCalls,
+            includeMemberReads);
+        var plan = BuildGraphReferenceQueryPlan(
+            CalleeGraphReferenceDirection,
+            request,
+            GraphReferenceQueryShape.IdentityCandidates);
+        return ExecuteGraphReferenceIdentityCandidates(plan);
     }
 
     public int CountCallees(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, bool rawKinds = false, bool includeQualifiedCommonCalls = false, bool includeMemberReads = false)

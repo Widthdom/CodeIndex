@@ -52,13 +52,16 @@ public partial class McpServer
             var effectiveQuery = selectedDefinition?.Name ?? query;
             var selectorMatchesLanguage = selectedDefinition == null
                 || DbReader.GraphSelectorMatchesLanguageFilter(selectedDefinition, lang);
-            var identityMetadata = reader.GetGraphQueryIdentityMetadata(
+            var identityMetadata = reader.GetReferenceGraphQueryIdentityMetadata(
                 effectiveQuery,
                 selectedDefinition,
                 lang,
                 pathPatterns,
                 excludePaths,
-                excludeTests);
+                excludeTests,
+                kind,
+                exact,
+                includeQualifiedCommonCalls);
             if (countOnly)
             {
                 var countOnlyTotal = !selectorMatchesLanguage
@@ -115,11 +118,13 @@ public partial class McpServer
                         includeQualifiedCommonCalls: includeQualifiedCommonCalls)
                     : reader.SearchReferences(effectiveQuery, FetchLimitForEnvelope(limit), lang, kind, pathPatterns, excludePaths, excludeTests, exact, maxLineWidth, offset: offset, includeQualifiedCommonCalls: includeQualifiedCommonCalls);
             var truncated = TrimToRequestedLimit(results, limit);
-            var total = truncated || offset > 0
-                ? selectedDefinition != null
-                    ? reader.CountSearchReferencesForCandidate(selectedDefinition, pathPatterns, excludePaths, excludeTests, kind, includeQualifiedCommonCalls: includeQualifiedCommonCalls).Count
-                    : reader.CountSearchReferencesTotal(effectiveQuery, lang, kind, pathPatterns, excludePaths, excludeTests, exact, includeQualifiedCommonCalls).Count
-                : results.Count;
+            var total = !selectorMatchesLanguage
+                ? 0
+                : truncated || offset > 0
+                    ? selectedDefinition != null
+                        ? reader.CountSearchReferencesForCandidate(selectedDefinition, pathPatterns, excludePaths, excludeTests, kind, includeQualifiedCommonCalls: includeQualifiedCommonCalls).Count
+                        : reader.CountSearchReferencesTotal(effectiveQuery, lang, kind, pathPatterns, excludePaths, excludeTests, exact, includeQualifiedCommonCalls).Count
+                    : results.Count;
             if (lspCompatible)
                 QueryCommandRunner.AttachLspLocations(results);
             var graphSupport = ResolveGraphSupport(reader, selectedDefinition != null || exact, effectiveQuery, selectedDefinition?.Lang ?? lang, pathPatterns, excludePaths, excludeTests);
@@ -221,13 +226,18 @@ public partial class McpServer
             var effectiveQuery = selectedDefinition?.Name ?? query;
             var selectorMatchesLanguage = selectedDefinition == null
                 || DbReader.GraphSelectorMatchesLanguageFilter(selectedDefinition, lang);
-            var identityMetadata = reader.GetGraphQueryIdentityMetadata(
+            var identityMetadata = reader.GetCallerGraphQueryIdentityMetadata(
                 effectiveQuery,
                 selectedDefinition,
                 lang,
                 pathPatterns,
                 excludePaths,
-                excludeTests);
+                excludeTests,
+                kind,
+                exact,
+                rawKinds,
+                includeQualifiedCommonCalls,
+                includeMemberReads);
             if (countOnly)
             {
                 var countResult = !selectorMatchesLanguage
@@ -448,13 +458,18 @@ public partial class McpServer
             var effectiveQuery = selectedDefinition?.Name ?? query;
             var selectorMatchesLanguage = selectedDefinition == null
                 || DbReader.GraphSelectorMatchesLanguageFilter(selectedDefinition, lang);
-            var identityMetadata = reader.GetGraphQueryIdentityMetadata(
+            var identityMetadata = reader.GetCalleeGraphQueryIdentityMetadata(
                 effectiveQuery,
                 selectedDefinition,
                 lang,
                 pathPatterns,
                 excludePaths,
-                excludeTests);
+                excludeTests,
+                kind,
+                exact,
+                rawKinds,
+                includeQualifiedCommonCalls,
+                includeMemberReads);
             if (countOnly)
             {
                 var countOnlyTotal = !selectorMatchesLanguage
@@ -525,19 +540,21 @@ public partial class McpServer
                     includeMemberReads)
                 : reader.GetCallees(query, FetchLimitForEnvelope(limit), lang, kind, pathPatterns, excludePaths, excludeTests, exact, rawKinds, rankMode: rankMode, offset: offset, includeQualifiedCommonCalls: includeQualifiedCommonCalls, includeMemberReads: includeMemberReads);
             var truncated = TrimToRequestedLimit(results, limit);
-            var total = truncated || offset > 0
-                ? selectedDefinition != null
-                    ? reader.CountCalleesForCandidate(
-                        selectedDefinition,
-                        pathPatterns,
-                        excludePaths,
-                        excludeTests,
-                        kind,
-                        rawKinds,
-                        includeQualifiedCommonCalls,
-                        includeMemberReads).Count
-                    : reader.CountCalleesTotal(query, lang, kind, pathPatterns, excludePaths, excludeTests, exact, rawKinds, includeQualifiedCommonCalls, includeMemberReads).Count
-                : results.Count;
+            var total = !selectorMatchesLanguage
+                ? 0
+                : truncated || offset > 0
+                    ? selectedDefinition != null
+                        ? reader.CountCalleesForCandidate(
+                            selectedDefinition,
+                            pathPatterns,
+                            excludePaths,
+                            excludeTests,
+                            kind,
+                            rawKinds,
+                            includeQualifiedCommonCalls,
+                            includeMemberReads).Count
+                        : reader.CountCalleesTotal(query, lang, kind, pathPatterns, excludePaths, excludeTests, exact, rawKinds, includeQualifiedCommonCalls, includeMemberReads).Count
+                    : results.Count;
             var graphSupport = ResolveGraphSupport(
                 reader,
                 selectedDefinition != null || exact,

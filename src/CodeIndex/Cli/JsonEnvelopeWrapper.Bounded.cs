@@ -1050,7 +1050,7 @@ internal static partial class JsonEnvelopeWrapper
             return new ResponseExtraction(
                 new JsonArray(compactResults.Select(item => item?.DeepClone()).ToArray()),
                 "results",
-                null,
+                ExtractGraphIdentityResponseContext(command, compactPayload),
                 compactPayload);
         }
         if (command == "hotspots" && rawResults.FirstOrDefault() is JsonObject hotspotsPayload)
@@ -1111,13 +1111,41 @@ internal static partial class JsonEnvelopeWrapper
         }
 
         var rows = new JsonArray();
+        JsonObject? graphIdentityContext = null;
         foreach (var result in rawResults)
         {
             if (result is JsonObject obj && IsJsonStreamTerminal(obj))
                 continue;
             rows.Add(result?.DeepClone());
+            if (graphIdentityContext == null && result is JsonObject graphRow)
+                graphIdentityContext = ExtractGraphIdentityResponseContext(command, graphRow);
         }
-        return new ResponseExtraction(rows, null, null, null);
+        return new ResponseExtraction(rows, null, graphIdentityContext, null);
+    }
+
+    private static JsonObject? ExtractGraphIdentityResponseContext(
+        string command,
+        JsonObject source)
+    {
+        if (command is not ("references" or "callers" or "callees" or "impact"))
+            return null;
+
+        var context = new JsonObject();
+        foreach (var field in new[]
+                 {
+                     "identity_scoped",
+                     "identity_scope_reason",
+                     "selected_symbol",
+                     "candidate_count",
+                     "candidates",
+                     "candidates_truncated",
+                     "identity_warning",
+                 })
+        {
+            if (source.TryGetPropertyValue(field, out var value))
+                context[field] = value?.DeepClone();
+        }
+        return context.Count > 0 ? context : null;
     }
 
     private static ResponseExtraction ExtractOutlineSymbols(JsonObject payload)

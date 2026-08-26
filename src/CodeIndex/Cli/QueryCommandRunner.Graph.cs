@@ -38,13 +38,16 @@ public static partial class QueryCommandRunner
             var query = selectedDefinition?.Name ?? requestedQuery;
             var selectorMatchesLanguage = selectedDefinition == null
                 || DbReader.GraphSelectorMatchesLanguageFilter(selectedDefinition, options.Lang);
-            var identityMetadata = reader.GetGraphQueryIdentityMetadata(
+            var identityMetadata = reader.GetReferenceGraphQueryIdentityMetadata(
                 query,
                 selectedDefinition,
                 options.Lang,
                 options.PathPatterns,
                 options.ExcludePaths,
-                options.ExcludeTests);
+                options.ExcludeTests,
+                options.Kind,
+                exact,
+                options.IncludeQualifiedCommonCalls);
             if (!options.Json)
                 WriteGraphIdentityWarningIfNeeded(query, identityMetadata);
 
@@ -128,7 +131,10 @@ public static partial class QueryCommandRunner
             WriteHdlGraphContractWarningIfNeeded(options.Json, hdlGraphSignal);
             if (results.Count == 0)
             {
-                if (options.Json && TryWriteEmptyFormattedResult(options, jsonOptions))
+                if (options.Json && TryWriteEmptyFormattedResult(
+                    options,
+                    jsonOptions,
+                    extraFields: payload => AddGraphIdentityJsonFields(payload, identityMetadata, jsonOptions)))
                     return ZeroResultExitCode(options);
                 if (options.Json)
                     WriteGraphZeroJsonResult(reader, "references", jsonOptions, graphAvailable: reader._hasReferencesTable, exact ? exactSignal : (ExactQuerySignal?)null, exactZeroHint, queryOptions: options, extraFields: payload =>
@@ -152,7 +158,8 @@ public static partial class QueryCommandRunner
                 if (TryWriteFormattedLocations(
                     options,
                     results.Select(r => new FormattedLocation(r.Path, r.Line, r.Column, $"{r.ReferenceKind} {r.SymbolName}")),
-                    jsonOptions))
+                    jsonOptions,
+                    payload => AddGraphIdentityJsonFields(payload, identityMetadata, jsonOptions)))
                     return CommandExitCodes.Success;
                 if (options.OutputFormat == OutputFormatLsp)
                 {
@@ -240,13 +247,18 @@ public static partial class QueryCommandRunner
             var query = selectedDefinition?.Name ?? requestedQuery;
             var selectorMatchesLanguage = selectedDefinition == null
                 || DbReader.GraphSelectorMatchesLanguageFilter(selectedDefinition, options.Lang);
-            var identityMetadata = reader.GetGraphQueryIdentityMetadata(
+            var identityMetadata = reader.GetCallerGraphQueryIdentityMetadata(
                 query,
                 selectedDefinition,
                 options.Lang,
                 options.PathPatterns,
                 options.ExcludePaths,
-                options.ExcludeTests);
+                options.ExcludeTests,
+                options.Kind,
+                exact,
+                options.RawKinds,
+                options.IncludeQualifiedCommonCalls,
+                options.IncludeMemberReads);
             if (!options.Json)
                 WriteGraphIdentityWarningIfNeeded(query, identityMetadata);
 
@@ -362,7 +374,10 @@ public static partial class QueryCommandRunner
                 WriteCallerIdentityRootWarningIfNeeded(humanCounts);
             if (results.Count == 0)
             {
-                if (options.Json && TryWriteEmptyFormattedResult(options, jsonOptions))
+                if (options.Json && TryWriteEmptyFormattedResult(
+                    options,
+                    jsonOptions,
+                    extraFields: payload => AddGraphIdentityJsonFields(payload, identityMetadata, jsonOptions)))
                     return ZeroResultExitCode(options);
                 if (options.Json)
                     WriteGraphZeroJsonResult(reader, "callers", jsonOptions, graphAvailable: reader._hasReferencesTable, exact ? exactSignal : (ExactQuerySignal?)null, exactZeroHint, queryOptions: options, extraFields: payload =>
@@ -390,7 +405,8 @@ public static partial class QueryCommandRunner
                 if (TryWriteFormattedLocations(
                     options,
                     results.Select(r => new FormattedLocation(r.Path, r.FirstLine, Math.Max(1, r.FirstColumn), $"{r.CallerName ?? "<top-level>"} -> {r.CalleeName}")),
-                    jsonOptions))
+                    jsonOptions,
+                    payload => AddGraphIdentityJsonFields(payload, identityMetadata, jsonOptions)))
                     return CommandExitCodes.Success;
                 if (options.OutputFormat == OutputFormatLsp)
                 {
@@ -484,13 +500,18 @@ public static partial class QueryCommandRunner
             var query = selectedDefinition?.Name ?? requestedQuery;
             var selectorMatchesLanguage = selectedDefinition == null
                 || DbReader.GraphSelectorMatchesLanguageFilter(selectedDefinition, options.Lang);
-            var identityMetadata = reader.GetGraphQueryIdentityMetadata(
+            var identityMetadata = reader.GetCalleeGraphQueryIdentityMetadata(
                 query,
                 selectedDefinition,
                 options.Lang,
                 options.PathPatterns,
                 options.ExcludePaths,
-                options.ExcludeTests);
+                options.ExcludeTests,
+                options.Kind,
+                exact,
+                options.RawKinds,
+                options.IncludeQualifiedCommonCalls,
+                options.IncludeMemberReads);
             if (!options.Json)
                 WriteGraphIdentityWarningIfNeeded(query, identityMetadata);
 
@@ -579,7 +600,10 @@ public static partial class QueryCommandRunner
             WriteHdlGraphContractWarningIfNeeded(options.Json, hdlGraphSignal);
             if (results.Count == 0)
             {
-                if (options.Json && TryWriteEmptyFormattedResult(options, jsonOptions))
+                if (options.Json && TryWriteEmptyFormattedResult(
+                    options,
+                    jsonOptions,
+                    extraFields: payload => AddGraphIdentityJsonFields(payload, identityMetadata, jsonOptions)))
                     return ZeroResultExitCode(options);
                 if (options.Json)
                     WriteGraphZeroJsonResult(reader, "callees", jsonOptions, graphAvailable: reader._hasReferencesTable, exact ? exactSignal : (ExactQuerySignal?)null, exactZeroHint, queryOptions: options, extraFields: payload =>
@@ -603,7 +627,8 @@ public static partial class QueryCommandRunner
                 if (TryWriteFormattedLocations(
                     options,
                     results.Select(r => new FormattedLocation(r.Path, r.FirstLine, r.FirstColumn, $"{r.CallerName ?? "<top-level>"} -> {r.CalleeName}")),
-                    jsonOptions))
+                    jsonOptions,
+                    payload => AddGraphIdentityJsonFields(payload, identityMetadata, jsonOptions)))
                     return CommandExitCodes.Success;
                 if (options.OutputFormat == OutputFormatLsp)
                 {

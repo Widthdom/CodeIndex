@@ -50,7 +50,7 @@ public partial class McpServer
             if (TryResolveMcpGraphSelector(id, reader, selectorValue, out var selectedDefinition) is JsonNode selectorError)
                 return selectorError;
             var effectiveQuery = selectedDefinition?.Name ?? query;
-            var identityMetadata = reader.GetGraphQueryIdentityMetadata(
+            var identityMetadata = reader.GetImpactGraphQueryIdentityMetadata(
                 effectiveQuery,
                 selectedDefinition,
                 lang,
