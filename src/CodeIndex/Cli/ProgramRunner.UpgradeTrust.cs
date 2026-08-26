@@ -65,7 +65,27 @@ internal static partial class ProgramRunner
         out bool? verified)
     {
         var compat = string.Equals(verificationPolicy, "compat", StringComparison.Ordinal);
-        verified = UpgradeAssetProvenanceVerifier(assetPath, releaseTag, cancellationToken);
+        try
+        {
+            verified = UpgradeAssetProvenanceVerifier(assetPath, releaseTag, cancellationToken);
+        }
+        catch (TrustedGitHubCliUnavailableException ex)
+        {
+            verified = false;
+            if (!compat)
+            {
+                throw new InvalidDataException(
+                    $"Independent release provenance verification failed for {assetName}; installer execution is blocked. {ex.Message}",
+                    ex);
+            }
+
+            if (!suppressOutput)
+            {
+                CommandErrorWriter.WriteStderr(
+                    $"Warning: AUDIT: CDIDX_VERIFY_POLICY=compat permits {assetName} because no trusted GitHub CLI verifier was available; the asset was not independently verified.");
+            }
+            return;
+        }
 
         if (verified == true)
         {
@@ -83,7 +103,7 @@ internal static partial class ProgramRunner
 
     private static bool VerifyUpgradeAssetProvenance(string assetPath, string releaseTag, CancellationToken cancellationToken)
     {
-        var startInfo = CreateUpgradeAttestationStartInfo(assetPath, releaseTag);
+        var startInfo = CreateUpgradeAttestationStartInfo(assetPath, releaseTag, cancellationToken);
         var result = RunInstallerProcessDetailed(
             startInfo,
             TimeSpan.FromSeconds(30),
@@ -92,11 +112,14 @@ internal static partial class ProgramRunner
         return result.ExitCode == CommandExitCodes.Success;
     }
 
-    internal static ProcessStartInfo CreateUpgradeAttestationStartInfo(string assetPath, string releaseTag)
+    internal static ProcessStartInfo CreateUpgradeAttestationStartInfo(
+        string assetPath,
+        string releaseTag,
+        CancellationToken cancellationToken = default)
     {
         var fullAssetPath = Path.GetFullPath(assetPath);
         var startInfo = CodeIndex.ProcessLaunchPolicy.CreateNoShellStartInfo(
-            fileName: "gh",
+            fileName: GitHubCliExecutableResolver.ResolvePathOrThrow(cancellationToken),
             workingDirectory: Path.GetDirectoryName(fullAssetPath) ?? string.Empty);
         CodeIndex.ProcessLaunchPolicy.AddArguments(
             startInfo,

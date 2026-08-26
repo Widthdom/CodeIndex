@@ -1369,8 +1369,8 @@ public sealed class StatusQueryContext
 }
 
 /// <summary>
-/// Runtime diagnostics for the Git executable selected by cdidx.
-/// cdidx が選択した Git 実行ファイルの runtime 診断。
+/// Runtime diagnostics for a trusted external executable selected by cdidx.
+/// cdidx が選択した信頼済み外部実行ファイルの runtime 診断。
 /// </summary>
 public sealed record GitExecutableStatus(
     [property: JsonPropertyName("source")] string Source,
@@ -1769,6 +1769,9 @@ public class StatusResult
     [JsonPropertyName("git_executable")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public GitExecutableStatus? GitExecutable { get; set; }
+    [JsonPropertyName("github_cli_executable")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public GitExecutableStatus? GitHubCliExecutable { get; set; }
     [JsonPropertyName("extractors")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public ExtractorRegistryStatus? Extractors { get; set; }

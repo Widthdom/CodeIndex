@@ -331,11 +331,11 @@ public static partial class QueryCommandRunner
                 "trust_overrides",
                 "Accepted trust overrides",
                 "each entry records a supported trust-boundary override that was explicitly accepted after validation.",
-                "absence means no supported override widened extractor, hook, or Git executable trust for this status snapshot.",
+                "absence means no supported override widened extractor, hook, Git, or GitHub CLI executable trust for this status snapshot.",
                 "Audit the named environment variable and sanitized value/path; unset it to return to the default trust boundary.",
-                Meaning: "Audits accepted environment overrides that authorize workspace plugins, hook directories, or a Git executable.",
-                Source: "Extractor, hook-directory, and Git executable trust resolvers after validation and sanitization.",
-                Dependencies: ["extractors", "hooks", "git_executable"],
+                Meaning: "Audits accepted environment overrides that authorize workspace plugins, hook directories, Git, or GitHub CLI executables.",
+                Source: "Extractor, hook-directory, Git, and GitHub CLI executable trust resolvers after validation and sanitization.",
+                Dependencies: ["extractors", "hooks", "git_executable", "github_cli_executable"],
                 Interpretation: "Only accepted overrides appear; rejected candidates remain in their owning diagnostic section."),
             new(
                 "db_pragma_settings",
@@ -425,6 +425,12 @@ public static partial class QueryCommandRunner
                 "`accepted=true` means cdidx validated the absolute Git path, metadata type, owner/mode and ancestor trust, then successfully executed `git --version`.",
                 "`accepted=false` includes a stable `reason` identifying the failed path, metadata, owner, mode, ancestor, or execution probe.",
                 $"Set `{GitHelper.GitExecutableEnvironmentVariable}` to a trusted absolute `git` path (`git.exe` on Windows), then inspect the nested diagnostics again."),
+            new(
+                "github_cli_executable",
+                "Trusted GitHub CLI executable selection",
+                "`accepted=true` means cdidx validated the absolute GitHub CLI path, metadata type, owner/mode and ancestor trust, then successfully executed a bounded `gh --version` probe.",
+                "`accepted=false` includes a stable `reason` identifying the failed path, metadata, owner, mode, ancestor, image, identity, or execution probe.",
+                $"Install GitHub CLI in a standard location or set `{GitHubCliExecutableResolver.ExecutableEnvironmentVariable}` to a trusted absolute `gh` path (`gh.exe` on Windows), then inspect the nested diagnostics again."),
             new(
                 "indexed_head_commit",
                 "Legacy full-scan HEAD stamp",

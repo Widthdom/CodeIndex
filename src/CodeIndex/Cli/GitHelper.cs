@@ -289,155 +289,26 @@ public static partial class GitHelper
         string source,
         bool probeVersion = true)
     {
-        if (string.IsNullOrWhiteSpace(path))
-            return RejectedGitExecutable(source, "path_empty", null, null, null, null, null, null, null);
-        if (!Path.IsPathFullyQualified(path))
-            return RejectedGitExecutable(source, "path_not_absolute", null, null, null, null, null, null, null);
-
-        string fullPath;
-        try
-        {
-            fullPath = Path.GetFullPath(path);
-        }
-        catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException or PathTooLongException)
-        {
-            return RejectedGitExecutable(source, "invalid_path", null, null, null, null, null, null, null);
-        }
-
-        var diagnosticPath = DiagnosticSanitizer.ForPath(fullPath);
-        if (fullPath.IndexOfAny(['\r', '\n']) >= 0)
-            return RejectedGitExecutable(source, "path_contains_line_break", diagnosticPath, null, null, null, null, null, null);
-        if (!HasExpectedGitExecutableName(fullPath))
-            return RejectedGitExecutable(source, "unexpected_filename", diagnosticPath, null, null, null, null, null, null);
-
-        FileAttributes attributes;
-        try
-        {
-            attributes = File.GetAttributes(LongPath.EnsureWindowsPrefix(fullPath));
-        }
-        catch (FileNotFoundException)
-        {
-            return RejectedGitExecutable(source, "not_found", diagnosticPath, null, null, null, null, null, null);
-        }
-        catch (DirectoryNotFoundException)
-        {
-            return RejectedGitExecutable(source, "not_found", diagnosticPath, null, null, null, null, null, null);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or PathTooLongException)
-        {
-            return RejectedGitExecutable(source, "attribute_probe_failed", diagnosticPath, null, null, null, null, null, null);
-        }
-
-        if ((attributes & FileAttributes.Directory) != 0)
-            return RejectedGitExecutable(source, "not_regular_file", diagnosticPath, null, null, null, null, null, null);
-        if (FileSystemBoundary.IsSymlinkOrReparsePoint(attributes))
-            return RejectedGitExecutable(source, "symlink_or_reparse_point", diagnosticPath, null, null, null, null, null, null);
-        if (FileSystemBoundary.IsDevice(attributes))
-            return RejectedGitExecutable(source, "device", diagnosticPath, null, null, null, null, null, null);
-
-        if (OperatingSystem.IsWindows())
-        {
-            var windowsAncestorsTrusted = TryValidateGitExecutableAncestors(fullPath, effectiveUserId: null);
-            if (!windowsAncestorsTrusted)
-                return RejectedGitExecutable(source, "ancestor_untrusted", diagnosticPath, null, null, null, null, null, windowsAncestorsTrusted);
-            if (!TryValidateWindowsExecutableAcl(fullPath, out var windowsOwner, out var windowsOwnerTrusted))
-            {
-                return RejectedGitExecutable(
-                    source,
-                    "acl_untrusted",
-                    diagnosticPath,
-                    null,
-                    null,
-                    null,
-                    windowsOwner,
-                    windowsOwnerTrusted,
-                    false);
-            }
-            if (!TryValidateWindowsExecutableImage(fullPath))
-                return RejectedGitExecutable(source, "invalid_executable_format", diagnosticPath, null, null, false, windowsOwner, windowsOwnerTrusted, windowsAncestorsTrusted);
-
-            if (!probeVersion)
-                return AcceptedGitExecutable(source, fullPath, diagnosticPath, null, null, null, windowsOwner, windowsOwnerTrusted, windowsAncestorsTrusted);
-
-            var windowsExecutable = TryProbeGitVersion(fullPath);
-            return windowsExecutable
-                ? AcceptedGitExecutable(source, fullPath, diagnosticPath, null, null, windowsExecutable, windowsOwner, windowsOwnerTrusted, windowsAncestorsTrusted)
-                : RejectedGitExecutable(source, "execution_probe_failed", diagnosticPath, null, null, windowsExecutable, windowsOwner, windowsOwnerTrusted, windowsAncestorsTrusted);
-        }
-
-        if (!TryResolveRealUnixPath(fullPath, out fullPath))
-            return RejectedGitExecutable(source, "canonicalization_failed", diagnosticPath, null, null, null, null, null, null);
-        diagnosticPath = DiagnosticSanitizer.ForPath(fullPath);
-        if (fullPath.IndexOfAny(['\r', '\n']) >= 0)
-            return RejectedGitExecutable(source, "path_contains_line_break", diagnosticPath, null, null, null, null, null, null);
-
-        UnixFileMode mode;
-        try
-        {
-            mode = File.GetUnixFileMode(LongPath.EnsureWindowsPrefix(fullPath));
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
-        {
-            return RejectedGitExecutable(source, "mode_probe_failed", diagnosticPath, null, null, null, null, null, null);
-        }
-
-        var ownerOnlyWritable = (mode & (UnixFileMode.GroupWrite | UnixFileMode.OtherWrite)) == 0;
-        var unixMode = FormatUnixMode(mode);
-        if (!ownerOnlyWritable)
-            return RejectedGitExecutable(source, "shared_writable", diagnosticPath, ownerOnlyWritable, unixMode, null, null, null, null);
-
-        if (!TryGetEffectiveUnixUserId(out var effectiveUserId)
-            || !FileIndexer.TryGetUnixFileOwnerId(LongPath.EnsureWindowsPrefix(fullPath), out var ownerId))
-        {
-            return RejectedGitExecutable(source, "owner_probe_failed", diagnosticPath, ownerOnlyWritable, unixMode, null, null, null, null);
-        }
-
-        var owner = ownerId == effectiveUserId ? "current_user" : ownerId == 0 ? "root" : "other";
-        var ownerTrusted = ownerId == effectiveUserId || ownerId == 0;
-        if (!ownerTrusted)
-            return RejectedGitExecutable(source, "owner_untrusted", diagnosticPath, ownerOnlyWritable, unixMode, null, owner, ownerTrusted, null);
-
-        var ancestorsTrusted = TryValidateGitExecutableAncestors(fullPath, effectiveUserId);
-        if (!ancestorsTrusted)
-            return RejectedGitExecutable(source, "ancestor_untrusted", diagnosticPath, ownerOnlyWritable, unixMode, null, owner, ownerTrusted, ancestorsTrusted);
-
-        var executable = TryAccessUnixExecutable(fullPath);
-        if (!executable)
-            return RejectedGitExecutable(source, "not_executable", diagnosticPath, ownerOnlyWritable, unixMode, executable, owner, ownerTrusted, ancestorsTrusted);
-
-        if (!probeVersion)
-            return AcceptedGitExecutable(source, fullPath, diagnosticPath, ownerOnlyWritable, unixMode, executable, owner, ownerTrusted, ancestorsTrusted);
-
-        executable = TryProbeGitVersion(fullPath);
-        if (!executable)
-            return RejectedGitExecutable(source, "execution_probe_failed", diagnosticPath, ownerOnlyWritable, unixMode, executable, owner, ownerTrusted, ancestorsTrusted);
-
-        return AcceptedGitExecutable(source, fullPath, diagnosticPath, ownerOnlyWritable, unixMode, executable, owner, ownerTrusted, ancestorsTrusted);
-    }
-
-    private static GitExecutableResolution AcceptedGitExecutable(
-        string source,
-        string fullPath,
-        string diagnosticPath,
-        bool? ownerOnlyWritable,
-        string? unixMode,
-        bool? executable,
-        string? owner,
-        bool? ownerTrusted,
-        bool? ancestorDirectoriesTrusted)
-        => new(
-            fullPath,
+        var validation = TrustedExecutableValidator.Evaluate(
+            path,
+            source,
+            expectedUnixFileName: "git",
+            expectedWindowsFileName: "git.exe",
+            executionProbe: probeVersion ? TryProbeGitVersion : null);
+        return new GitExecutableResolution(
+            validation.Path,
             new GitExecutableStatus(
-                source,
-                Accepted: true,
-                "accepted",
-                diagnosticPath,
-                ownerOnlyWritable,
-                unixMode,
-                executable,
-                owner,
-                ownerTrusted,
-                ancestorDirectoriesTrusted));
+                validation.Source,
+                validation.Accepted,
+                validation.Reason,
+                validation.DiagnosticPath,
+                validation.OwnerOnlyWritable,
+                validation.UnixMode,
+                validation.Executable,
+                validation.Owner,
+                validation.OwnerTrusted,
+                validation.AncestorDirectoriesTrusted));
+    }
 
     private static GitExecutableResolution RejectedGitExecutable(
         string source,
@@ -462,9 +333,6 @@ public static partial class GitHelper
                 owner,
                 ownerTrusted,
                 ancestorDirectoriesTrusted));
-
-    private static string FormatUnixMode(UnixFileMode mode)
-        => Convert.ToString((int)mode, 8).PadLeft(4, '0');
 
     private static bool HasExpectedGitExecutableName(string path)
         => string.Equals(
@@ -584,7 +452,7 @@ public static partial class GitHelper
 
             if (!OperatingSystem.IsWindows())
             {
-                if (!TryResolveRealUnixPathCore(canonicalPath, out var resolvedPath)
+                if (!TrustedExecutableValidator.TryResolveRealUnixPath(canonicalPath, out var resolvedPath)
                     || !TryValidateGitMetadataPathComponents(resolvedPath, expectDirectory))
                 {
                     return false;

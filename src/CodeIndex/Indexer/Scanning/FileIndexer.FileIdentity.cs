@@ -315,8 +315,12 @@ public partial class FileIndexer
     }
 
     internal static bool TryGetUnixFileOwnerId(string path, out uint ownerId)
+        => TryGetUnixFileOwnerAndGroupIds(path, out ownerId, out _);
+
+    internal static bool TryGetUnixFileOwnerAndGroupIds(string path, out uint ownerId, out uint groupId)
     {
         ownerId = 0;
+        groupId = 0;
         if (!IsLinuxPlatform && !IsMacOSPlatform)
             return false;
 
@@ -328,6 +332,7 @@ public partial class FileIndexer
                     return false;
 
                 ownerId = stat.Uid;
+                groupId = stat.Gid;
                 return true;
             }
 
@@ -335,6 +340,7 @@ public partial class FileIndexer
                 return false;
 
             ownerId = linuxStat.Uid;
+            groupId = linuxStat.Gid;
             return true;
         }
         catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException)
@@ -512,6 +518,9 @@ public partial class FileIndexer
 
         [FieldOffset(20)]
         public uint Uid;
+
+        [FieldOffset(24)]
+        public uint Gid;
 
         [FieldOffset(32)]
         public ulong Inode;

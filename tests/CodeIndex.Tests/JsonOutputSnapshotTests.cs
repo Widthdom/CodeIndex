@@ -122,6 +122,18 @@ public class Probe
             gitExecutable["executable"] = true;
         }
 
+        if (root["github_cli_executable"] is JsonObject githubCliExecutable)
+        {
+            // Host GitHub CLI availability and ambient CDIDX_GH_EXECUTABLE are intentionally
+            // outside this golden contract. Dedicated Issue5184 tests pin resolver diagnostics.
+            githubCliExecutable.Clear();
+            githubCliExecutable["source"] = "normalized";
+            githubCliExecutable["accepted"] = true;
+            githubCliExecutable["reason"] = "accepted";
+            githubCliExecutable["path"] = "<GH_EXECUTABLE>";
+            githubCliExecutable["executable"] = true;
+        }
+
         return root.ToJsonString();
     }
 
