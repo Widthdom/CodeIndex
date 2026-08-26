@@ -1176,6 +1176,7 @@ internal static partial class JsonEnvelopeWrapper
                      "candidates",
                      "candidates_truncated",
                      "identity_warning",
+                     "reference_graph_incomplete_reasons",
                  })
         {
             if (source.TryGetPropertyValue(field, out var value))

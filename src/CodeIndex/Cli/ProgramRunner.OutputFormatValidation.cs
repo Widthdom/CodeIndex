@@ -2,7 +2,7 @@ namespace CodeIndex.Cli;
 
 internal static partial class ProgramRunner
 {
-    private static bool TryValidateOutputFormatOptions(
+    internal static bool TryValidateOutputFormatOptions(
         string[] args,
         out string error,
         out string hint,

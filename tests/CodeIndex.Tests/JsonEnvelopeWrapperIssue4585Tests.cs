@@ -172,6 +172,70 @@ public sealed class JsonEnvelopeWrapperIssue4585Tests
         }
     }
 
+    [Theory]
+    [InlineData("reference_definition_lookup_symbol_budget_exceeded", false)]
+    [InlineData(DbReader.DynamicReferenceGraphContractStaleReason, true)]
+    public void BoundedProjection_DegradedGraphZeroPreservesIncompleteReasons_Issue5190(
+        string expectedReason,
+        bool staleDynamicContract)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("bounded_graph_degraded_reason_5190");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                staleDynamicContract ? "src/app.cr" : "src/app.py",
+                staleDynamicContract ? "crystal" : "python",
+                staleDynamicContract ? "def helper(value)\n  value\nend\n" : "def app():\n    pass\n");
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.MarkGraphReady();
+                writer.MarkIssuesReady();
+                if (staleDynamicContract)
+                {
+                    writer.SetMeta(DbContext.GetSymbolExtractorVersionMetaKey("crystal"), "2");
+                }
+                else
+                {
+                    using var command = db.Connection.CreateCommand();
+                    command.CommandText = """
+                        INSERT INTO file_issues (file_id, kind, line, message, severity)
+                        SELECT id, 'reference_definition_lookup_symbol_budget_exceeded', 0, 'synthetic cap hit', 'warning'
+                        FROM files
+                        WHERE path = 'src/app.py'
+                        """;
+                    Assert.Equal(1, command.ExecuteNonQuery());
+                }
+            }
+
+            foreach (var commandName in new[] { "callers", "callees" })
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                    [commandName, "DefinitelyNoSuchSymbol", "--exact-name", "--fields", "path,caller_name,callee_name,first_line", "--db", dbPath],
+                    _jsonOptions,
+                    "1.0.0-test"));
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                using var document = JsonDocument.Parse(stdout);
+                Assert.Empty(document.RootElement.GetProperty("results").EnumerateArray());
+                var context = document.RootElement.GetProperty("metadata").GetProperty("response_context");
+                Assert.False(context.GetProperty("reference_graph_complete").GetBoolean());
+                Assert.Contains(
+                    expectedReason,
+                    context.GetProperty("reference_graph_incomplete_reasons")
+                        .EnumerateArray()
+                        .Select(reason => reason.GetString()));
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     [Fact]
     public void BoundedProjection_CursorIsStableAndByteBudgetTrimsProjectedRows_Issue4585()
     {
@@ -374,17 +438,32 @@ public sealed class JsonEnvelopeWrapperIssue4585Tests
             using (var statsDocument = JsonDocument.Parse(statsStdout))
                 Assert.Equal("status", statsDocument.RootElement.GetProperty("metadata").GetProperty("command").GetString());
 
-            using var input = new StringReader("[\"definition\",\"Target\",\"--fields\",\"file,line\",\"--limit\",\"1\",\"--max-json-bytes\",\"4096\"]\n");
-            using var capture = ConsoleCapture.StartWithInput(input, captureOut: true, captureError: true);
-            var batchExitCode = ProgramRunner.Run(["batch", "--db", dbPath], _jsonOptions, "1.0.0-test");
-            var batchStdout = capture.Out!.ToString()!;
-            var batchStderr = capture.Error!.ToString()!;
+            using (var input = new StringReader("[\"definition\",\"Target\",\"--fields\",\"file,line\",\"--limit\",\"1\",\"--max-json-bytes\",\"4096\"]\n"))
+            using (var capture = ConsoleCapture.StartWithInput(input, captureOut: true, captureError: true))
+            {
+                var batchExitCode = ProgramRunner.Run(["batch", "--db", dbPath], _jsonOptions, "1.0.0-test");
+                var batchStdout = capture.Out!.ToString()!;
+                var batchStderr = capture.Error!.ToString()!;
 
-            Assert.Equal(CommandExitCodes.Success, batchExitCode);
-            Assert.Equal(string.Empty, batchStderr);
-            using var batchDocument = JsonDocument.Parse(batchStdout);
-            Assert.Equal("definition", batchDocument.RootElement.GetProperty("metadata").GetProperty("command").GetString());
-            Assert.Equal(1, batchDocument.RootElement.GetProperty("results").GetArrayLength());
+                Assert.Equal(CommandExitCodes.Success, batchExitCode);
+                Assert.Equal(string.Empty, batchStderr);
+                using var batchDocument = JsonDocument.Parse(batchStdout);
+                Assert.Equal("definition", batchDocument.RootElement.GetProperty("metadata").GetProperty("command").GetString());
+                Assert.Equal(1, batchDocument.RootElement.GetProperty("results").GetArrayLength());
+            }
+
+            using (var input = new StringReader("[\"definition\",\"Target\",\"--format\",\"csv\",\"--fields\",\"file,line\"]\n"))
+            using (var capture = ConsoleCapture.StartWithInput(input, captureOut: true, captureError: true))
+            {
+                var batchExitCode = ProgramRunner.Run(["batch", "--db", dbPath], _jsonOptions, "1.0.0-test");
+
+                Assert.Equal(CommandExitCodes.UsageError, batchExitCode);
+                Assert.Equal(string.Empty, capture.Out!.ToString());
+                Assert.Contains(
+                    "--fields cannot be combined with projection-incompatible --format csv",
+                    capture.Error!.ToString(),
+                    StringComparison.Ordinal);
+            }
         }
         finally
         {
