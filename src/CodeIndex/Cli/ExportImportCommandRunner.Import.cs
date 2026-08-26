@@ -97,40 +97,57 @@ internal static partial class ExportImportCommandRunner
                 AddImportValidationPhase(validationPhases, PhaseDatabaseEntry);
 
                 phase = PhaseSha256;
-                if (!TryValidateImportedManifest(manifest, tempPath, out var manifestValidationMessage, out var manifestValidationPhase, cancellationToken))
+                EnsureImportStagingFilesPrivate(tempPath);
+                var manifestIsValid = TryValidateImportedManifest(
+                    manifest,
+                    tempPath,
+                    out var manifestValidationMessage,
+                    out var manifestValidationPhase,
+                    cancellationToken);
+                SqliteConnection.ClearAllPools();
+                EnsureImportStagingFilesPrivate(tempPath);
+                if (!manifestIsValid)
                     return WriteImportError(wantsJson, jsonOptions, manifestValidationPhase, "import_manifest_mismatch", $"archive manifest mismatch: {manifestValidationMessage}.", "re-export from a compatible CodeIndex database.", ImportUsage);
                 AddImportValidationPhase(validationPhases, PhaseSha256);
             }
 
             phase = PhaseSqliteValidate;
-            if (!DbContext.TryValidateExistingCodeIndexDb(
+            EnsureImportStagingFilesPrivate(tempPath);
+            var databaseIsValid = DbContext.TryValidateExistingCodeIndexDb(
                     tempPath,
                     requireWritable: true,
                     requireSupportedUserVersion: false,
                     out var validationMessage,
                     out _,
                     out _,
-                    cancellationToken))
+                    cancellationToken);
+            SqliteConnection.ClearAllPools();
+            EnsureImportStagingFilesPrivate(tempPath);
+            if (!databaseIsValid)
                 return WriteImportError(wantsJson, jsonOptions, PhaseSqliteValidate, "import_database_invalid", $"archive database is invalid: {validationMessage}.", "re-export from a compatible CodeIndex database.", ImportUsage);
             AddImportValidationPhase(validationPhases, PhaseSqliteValidate);
-            SqliteConnection.ClearAllPools();
 
+            EnsureImportStagingFilesPrivate(tempPath);
             importedManifest = ApplyImportedArchiveTrustMetadata(
                 tempPath,
                 importedManifest ?? throw new InvalidDataException("archive manifest was not loaded"),
                 cancellationToken);
             SqliteConnection.ClearAllPools();
+            EnsureImportStagingFilesPrivate(tempPath);
 
             if (prunePaths)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 phase = PhasePrunePaths;
+                EnsureImportStagingFilesPrivate(tempPath);
                 RewriteImportedProjectRoot(tempPath, importTargetProjectRoot);
                 AddImportValidationPhase(validationPhases, PhasePrunePaths);
                 SqliteConnection.ClearAllPools();
+                EnsureImportStagingFilesPrivate(tempPath);
             }
 
             phase = PhasePreReplaceBackup;
+            EnsureImportStagingFilesPrivate(tempPath);
             var backupDiagnostics = new List<DbDiagnosticJsonResult>();
             var backupPreview = ManagedRestoreBackupStore.PreviewCreation(
                 fullDbPath,
@@ -207,6 +224,7 @@ internal static partial class ExportImportCommandRunner
                         : "automatic rollback backup explicitly disabled by --no-backup");
 
             phase = PhaseReplaceDb;
+            EnsureImportStagingFilesPrivate(tempPath);
             ReplaceImportedDatabase(tempPath, fullDbPath, cancellationToken);
             AddImportValidationPhase(validationPhases, PhaseReplaceDb);
             return WriteImportResult(

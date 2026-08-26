@@ -437,6 +437,8 @@ Candidate-ordered parallel-index recovery tests must prove that the fatal result
   When one policy test checks several step-level rules, parse workflow step blocks once and filter the retained blocks for each rule instead of rerunning the multiline step regex for every assertion family.
 - `ExportImportCommandRunnerTests` issue-4827 portable-export coverage
   keeps the overwrite boundary and artifact attestation deterministic. Preserve default refusal of regular and dangling-symlink destinations, explicit replacement with verifiable byte-size/SHA-256/manifest metadata and POSIX owner-only mode, failed-write temp cleanup, and a publish-boundary injection that creates a concurrent winner without using sleeps.
+- `ExportImportCommandRunnerIssue5185Tests`
+  owns the import-staging confidentiality regression. Keep the non-dry-run parent at mode `0755`, set process umask `022` only inside the non-parallel SQLite-sensitive collection, observe the empty staging DB before extraction can write its first byte, and verify owner-only DB/WAL/SHM modes through validation, trust rewriting, `--prune-paths`, rollback-backup creation, cancellation cleanup, collision rejection, and final replacement. POSIX mode assertions must remain platform-conditional while success and `CreateNew` collision behavior continue to run on Windows.
 - `IndexCommandRunnerTests.Run_CancelDuringFreshIndex_ReturnsInterruptedJson`, `Run_CancelDuringDryRunScan_ReturnsInterruptedJson`, and `Run_CancelBeforeFreshScan_ReturnsInterruptedJson`
   exercise the same in-process cancellation paths used after Ctrl-C/SIGINT wiring, including scan-time cancellation, so interrupted index runs keep returning the canonical JSON error contract.
 - `IndexCommandRunnerTests.RunOptimizeFts_DryRunPreviewsWithoutWritingThenOptimizeMutates_Issue4577`, `RunOptimizeFts_LockHeld_ReportsDbLocked`, and `RunOptimizeFts_ReadOnlyUri_ReturnsDbNotWritable`
@@ -1573,6 +1575,8 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   1つの policy test が複数の step-level rule を検証する場合は、workflow step block を一度だけ解析して保持し、assertion family ごとに multiline step regex を再実行せず保持済み block を絞り込みます。
 - `ExportImportCommandRunnerTests` の issue-4827 portable-export coverage
   overwrite 境界と artifact attestation を deterministic に固定します。通常 file と dangling symlink destination の既定拒否、明示置換で検証可能な byte size / SHA-256 / manifest metadata と POSIX owner-only mode、書き込み失敗時の temp cleanup、sleep を使わず publish 境界へ concurrent winner を生成する injection を維持してください。
+- `ExportImportCommandRunnerIssue5185Tests`
+  import staging の confidentiality 回帰を担当します。non-dry-run の parent を mode `0755` にし、process umask `022` は非並列の SQLite-sensitive collection 内だけで設定し、extraction が最初の byte を書く前の空 staging DB を観測してください。validation、trust rewrite、`--prune-paths`、rollback backup 作成、cancellation cleanup、衝突拒否、最終 replacement を通して DB/WAL/SHM が owner-only であることを検証します。POSIX mode assertion は platform 条件付きに保ちつつ、success と `CreateNew` の衝突挙動は Windows でも実行してください。
 - `IndexCommandRunnerTests.Run_CancelDuringFreshIndex_ReturnsInterruptedJson`、`Run_CancelDuringDryRunScan_ReturnsInterruptedJson`、`Run_CancelBeforeFreshScan_ReturnsInterruptedJson`
   Ctrl-C/SIGINT 配線後に使われる in-process cancellation 経路を、scan 中のキャンセルも含めて検証し、interrupted index run が標準の JSON error contract を返し続けることを固定する。
 - `IndexCommandRunnerTests.RunOptimizeFts_DryRunPreviewsWithoutWritingThenOptimizeMutates_Issue4577`、`RunOptimizeFts_LockHeld_ReportsDbLocked`、`RunOptimizeFts_ReadOnlyUri_ReturnsDbNotWritable`
