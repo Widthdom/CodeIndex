@@ -25,8 +25,12 @@ public static partial class ReferenceExtractor
         if (structuralLines.Count == 0 || symbols.Count == 0 || references.Count == 0)
             return;
 
+        var topLevelScope = symbols.FirstOrDefault(symbol =>
+            symbol.SubKind == SyntheticSymbolIdentity.CSharpTopLevelScopeSubKind);
         var localFunctions = symbols
-            .Where(IsCSharpLocalFunctionSymbol)
+            .Where(symbol =>
+                IsCSharpLocalFunctionSymbol(symbol)
+                || IsCSharpTopLevelLocalFunctionSymbol(symbol, topLevelScope))
             .ToArray();
         if (localFunctions.Length == 0)
             return;
@@ -37,7 +41,12 @@ public static partial class ReferenceExtractor
             .GroupBy(symbol => NormalizeCSharpIdentifier(symbol.Name), StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.Ordinal);
         var localScopesByName = localFunctions
-            .Select(symbol => BuildCSharpLocalFunctionScope(symbol, callableSymbolsByName, blockScopes))
+            .Select(symbol => BuildCSharpLocalFunctionScope(
+                symbol,
+                topLevelScope,
+                structuralLines.Count,
+                callableSymbolsByName,
+                blockScopes))
             .GroupBy(scope => NormalizeCSharpIdentifier(scope.Symbol.Name), StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.Ordinal);
         var valueNamesByFunctionStartLine = lookups.GetCSharpFunctionValueReceiverNames();
@@ -145,16 +154,33 @@ public static partial class ReferenceExtractor
         && symbol.ContainerKind is "function" or "test.method" or "lambda" or "property"
         && !string.IsNullOrWhiteSpace(symbol.Name);
 
+    private static bool IsCSharpTopLevelLocalFunctionSymbol(
+        SymbolRecord symbol,
+        SymbolRecord? topLevelScope) =>
+        topLevelScope != null
+        && !ReferenceEquals(symbol, topLevelScope)
+        && symbol.Kind == "function"
+        && symbol.SubKind != SyntheticSymbolIdentity.CSharpTopLevelScopeSubKind
+        && string.IsNullOrWhiteSpace(symbol.ContainerKind)
+        && string.IsNullOrWhiteSpace(symbol.ContainerName)
+        && string.IsNullOrWhiteSpace(symbol.ContainerQualifiedName)
+        && !string.IsNullOrWhiteSpace(symbol.Name);
+
     private static bool IsCSharpCallableScopeSymbol(SymbolRecord symbol) =>
         symbol.Kind is "function" or "property"
         && !string.IsNullOrWhiteSpace(symbol.Name);
 
     private static CSharpLocalFunctionScope BuildCSharpLocalFunctionScope(
         SymbolRecord symbol,
+        SymbolRecord? topLevelScope,
+        int structuralLineCount,
         IReadOnlyDictionary<string, SymbolRecord[]> callableSymbolsByName,
         IReadOnlyList<CSharpBlockScope> blockScopes)
     {
-        var parentCallable = FindCSharpLocalFunctionParentCallable(symbol, callableSymbolsByName);
+        var isTopLevelLocal = IsCSharpTopLevelLocalFunctionSymbol(symbol, topLevelScope);
+        var parentCallable = isTopLevelLocal
+            ? topLevelScope
+            : FindCSharpLocalFunctionParentCallable(symbol, callableSymbolsByName);
         if (parentCallable == null)
             return new CSharpLocalFunctionScope(symbol, null, null);
 
@@ -166,13 +192,22 @@ public static partial class ReferenceExtractor
         foreach (var scope in blockScopes)
         {
             if (!ContainsCSharpBlockScope(scope, declarationLineIndex, declarationColumn)
-                || !IsCSharpBlockWithinCallable(scope, parentCallable))
+                || (!isTopLevelLocal && !IsCSharpBlockWithinCallable(scope, parentCallable)))
             {
                 continue;
             }
 
             if (declarationScope == null || IsNarrowerCSharpBlockScope(scope, declarationScope.Value))
                 declarationScope = scope;
+        }
+
+        if (isTopLevelLocal && declarationScope == null && structuralLineCount > 0)
+        {
+            declarationScope = new CSharpBlockScope(
+                0,
+                0,
+                structuralLineCount - 1,
+                int.MaxValue);
         }
 
         return new CSharpLocalFunctionScope(symbol, parentCallable, declarationScope);

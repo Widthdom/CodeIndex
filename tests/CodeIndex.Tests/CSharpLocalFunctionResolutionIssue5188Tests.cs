@@ -30,6 +30,7 @@ public sealed class CSharpLocalFunctionResolutionIssue5188Tests
                 Overloaded(1); // overload-one-before
                 void Overloaded() { }
                 void Overloaded(int value) { }
+                Action overloadedGroup = Overloaded; // overload-method-group
                 {
                     void Overloaded(string value) { }
                     Overloaded("nested"); // nested-overload
@@ -95,6 +96,10 @@ public sealed class CSharpLocalFunctionResolutionIssue5188Tests
                 void ReturnedLocal() { }
                 return ReturnedLocal; // returned-method-group
             }
+
+            public void NameofFallbackTarget() { }
+
+            public string NameofFallback() => nameof(NameofFallbackTarget); // nameof-fallback
         }
 
         public class SecondHost
@@ -169,6 +174,10 @@ public sealed class CSharpLocalFunctionResolutionIssue5188Tests
             AssertResolved("overload-zero-before", LineOf("void Overloaded() { }"), "Overloads");
             AssertResolved("overload-one-before", LineOf("void Overloaded(int value) { }"), "Overloads");
             AssertResolved("nested-overload", LineOf("void Overloaded(string value) { }"), "Overloads");
+            var overloadGroup = rows[LineOf("overload-method-group")];
+            Assert.Equal("resolved_group", overloadGroup.State);
+            Assert.Equal(2, overloadGroup.CandidateCount);
+            Assert.Null(overloadGroup.TargetLine);
             AssertResolved("local-visible", LineOf("void ValueCall() { }"), "LocalShadow");
             AssertResolved("local-fallback-owner", LineOf("void MemberFallback() { }", occurrence: 2), "LocalFallbackOwner");
             AssertResolved("nonlocal-member-fallback", LineOf("public void MemberFallback() { }"), "FirstHost");
@@ -257,6 +266,123 @@ public sealed class CSharpLocalFunctionResolutionIssue5188Tests
         Assert.Equal(1, reader.GetInt32(2));
         Assert.Equal("src/LocalOwner.cs", reader.GetString(3));
         Assert.False(reader.Read());
+    }
+
+    [Fact]
+    public void TopLevelLocalFunction_StaysWithinItsFileAndLexicalScope_Issue5188Review()
+    {
+        const string topLevelSource = """
+            using System;
+
+            TopLocal(); // top-before
+            void TopLocal() { }
+            TopLocal(); // top-after
+            Action group = TopLocal; // top-method-group
+            """;
+        const string otherSource = """
+            public class Other
+            {
+                public void Run()
+                {
+                    TopLocal(); // other-file
+                }
+            }
+            """;
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_csharp_top_local_5188");
+        const string topLevelPath = "src/Program.cs";
+        const string otherPath = "src/Other.cs";
+        TestProjectHelper.WriteTextFile(project.Root, topLevelPath, topLevelSource);
+        TestProjectHelper.WriteTextFile(project.Root, otherPath, otherSource);
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        TestProjectHelper.InsertIndexedFile(dbPath, topLevelPath, "csharp", topLevelSource);
+        TestProjectHelper.InsertIndexedFile(dbPath, otherPath, "csharp", otherSource);
+
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+        using (var command = db.Connection.CreateCommand())
+        {
+            command.CommandText = """
+                SELECT source_file.path,
+                       reference.line,
+                       reference.resolution_state,
+                       reference.resolution_candidate_count,
+                       target_file.path,
+                       target.line
+                FROM symbol_references AS reference
+                JOIN files AS source_file ON source_file.id = reference.file_id
+                LEFT JOIN symbols AS target ON target.id = reference.target_symbol_id
+                LEFT JOIN files AS target_file ON target_file.id = target.file_id
+                WHERE reference.symbol_name = 'TopLocal'
+                  AND reference.reference_kind = 'call'
+                ORDER BY source_file.path, reference.line;
+                """;
+            using var reader = command.ExecuteReader();
+            var rows = new List<(string Path, int Line, string State, int Count, string? TargetPath, int? TargetLine)>();
+            while (reader.Read())
+            {
+                rows.Add((
+                    reader.GetString(0),
+                    reader.GetInt32(1),
+                    reader.GetString(2),
+                    reader.GetInt32(3),
+                    reader.IsDBNull(4) ? null : reader.GetString(4),
+                    reader.IsDBNull(5) ? null : reader.GetInt32(5)));
+            }
+
+            var other = Assert.Single(rows, row => row.Path == otherPath);
+            Assert.Equal("unresolved", other.State);
+            Assert.Equal(0, other.Count);
+            Assert.Null(other.TargetPath);
+
+            var localRows = rows.Where(row => row.Path == topLevelPath).ToArray();
+            Assert.Equal(3, localRows.Length);
+            Assert.All(localRows, row =>
+            {
+                Assert.Equal("resolved", row.State);
+                Assert.Equal(1, row.Count);
+                Assert.Equal(topLevelPath, row.TargetPath);
+                Assert.Equal(LineOf(topLevelSource, "void TopLocal() { }"), row.TargetLine);
+            });
+        }
+
+        using var server = new LspServer(
+            new DbReader(db),
+            "1.2.3",
+            ProgramRunner.CreateDefaultJsonOptions(),
+            project.Root);
+        var initialize = server.HandleMessage(
+            """{"jsonrpc":"2.0","id":51886,"method":"initialize","params":{}}""");
+        Assert.NotNull(initialize);
+        Assert.Null(initialize!["error"]);
+
+        var topMethodGroupLine = LineOf(topLevelSource, "top-method-group");
+        var topDefinition = server.HandleMessage(CreatePositionRequest(
+            "textDocument/definition",
+            TestProjectHelper.ProjectPath(project.Root, topLevelPath),
+            51887,
+            topMethodGroupLine,
+            CharacterOf(topLevelSource, topMethodGroupLine, "TopLocal")));
+        var topLocation = Assert.Single(topDefinition!["result"]!.AsArray());
+        Assert.Equal(
+            LineOf(topLevelSource, "void TopLocal() { }") - 1,
+            topLocation!["range"]!["start"]!["line"]!.GetValue<int>());
+
+        var otherCallLine = LineOf(otherSource, "other-file");
+        var otherDefinition = server.HandleMessage(CreatePositionRequest(
+            "textDocument/definition",
+            TestProjectHelper.ProjectPath(project.Root, otherPath),
+            51888,
+            otherCallLine,
+            CharacterOf(otherSource, otherCallLine, "TopLocal")));
+        Assert.Empty(otherDefinition!["result"]!.AsArray());
+
+        var otherReferences = server.HandleMessage(CreatePositionRequest(
+            "textDocument/references",
+            TestProjectHelper.ProjectPath(project.Root, otherPath),
+            51889,
+            otherCallLine,
+            CharacterOf(otherSource, otherCallLine, "TopLocal"),
+            includeDeclaration: false));
+        Assert.Empty(otherReferences!["result"]!.AsArray());
     }
 
     [Fact]
@@ -467,6 +593,66 @@ public sealed class CSharpLocalFunctionResolutionIssue5188Tests
                 includeDeclaration: false));
             Assert.Empty(shadowReferences!["result"]!.AsArray());
 
+            var overloadGroupLine = LineOf("overload-method-group");
+            var overloadDefinitions = server.HandleMessage(CreatePositionRequest(
+                "textDocument/definition",
+                sourcePath,
+                51886,
+                overloadGroupLine,
+                CharacterOf(overloadGroupLine, "Overloaded")));
+            Assert.Equal(
+                new[]
+                {
+                    LineOf("void Overloaded() { }"),
+                    LineOf("void Overloaded(int value) { }"),
+                },
+                overloadDefinitions!["result"]!.AsArray()
+                    .Select(location => location!["range"]!["start"]!["line"]!.GetValue<int>() + 1)
+                    .Order()
+                    .ToArray());
+
+            var overloadReferences = server.HandleMessage(CreatePositionRequest(
+                "textDocument/references",
+                sourcePath,
+                51887,
+                overloadGroupLine,
+                CharacterOf(overloadGroupLine, "Overloaded"),
+                includeDeclaration: false));
+            Assert.Equal(
+                new[]
+                {
+                    LineOf("overload-zero-before"),
+                    LineOf("overload-one-before"),
+                    LineOf("overload-method-group"),
+                }.Order().ToArray(),
+                overloadReferences!["result"]!.AsArray()
+                    .Select(location => location!["range"]!["start"]!["line"]!.GetValue<int>() + 1)
+                    .Order()
+                    .ToArray());
+
+            var nameofLine = LineOf("nameof-fallback");
+            var nameofDefinition = server.HandleMessage(CreatePositionRequest(
+                "textDocument/definition",
+                sourcePath,
+                51888,
+                nameofLine,
+                CharacterOf(nameofLine, "NameofFallbackTarget")));
+            var nameofLocation = Assert.Single(nameofDefinition!["result"]!.AsArray());
+            Assert.Equal(
+                LineOf("public void NameofFallbackTarget() { }") - 1,
+                nameofLocation!["range"]!["start"]!["line"]!.GetValue<int>());
+
+            var nameofReferences = server.HandleMessage(CreatePositionRequest(
+                "textDocument/references",
+                sourcePath,
+                51889,
+                nameofLine,
+                CharacterOf(nameofLine, "NameofFallbackTarget"),
+                includeDeclaration: false));
+            Assert.Contains(
+                nameofReferences!["result"]!.AsArray(),
+                location => location!["range"]!["start"]!["line"]!.GetValue<int>() + 1 == nameofLine);
+
             var firstDeclarationLine = LineOf("void SameLocal() { }", occurrence: 1);
             var firstReferences = server.HandleMessage(CreatePositionRequest(
                 "textDocument/references",
@@ -560,9 +746,12 @@ public sealed class CSharpLocalFunctionResolutionIssue5188Tests
         });
     }
 
-    private static int LineOf(string value, int occurrence = 1)
+    private static int LineOf(string value, int occurrence = 1) =>
+        LineOf(FixtureSource, value, occurrence);
+
+    private static int LineOf(string source, string value, int occurrence = 1)
     {
-        var lines = FixtureSource.Split('\n');
+        var lines = source.Split('\n');
         var seen = 0;
         for (var index = 0; index < lines.Length; index++)
         {
@@ -577,8 +766,11 @@ public sealed class CSharpLocalFunctionResolutionIssue5188Tests
     }
 
     private static int CharacterOf(int oneBasedLine, string value)
+        => CharacterOf(FixtureSource, oneBasedLine, value);
+
+    private static int CharacterOf(string source, int oneBasedLine, string value)
     {
-        var line = FixtureSource.Split('\n')[oneBasedLine - 1];
+        var line = source.Split('\n')[oneBasedLine - 1];
         return line.IndexOf(value, StringComparison.Ordinal);
     }
 

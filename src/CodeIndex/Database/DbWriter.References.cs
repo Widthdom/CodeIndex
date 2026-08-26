@@ -667,6 +667,33 @@ public partial class DbWriter
         )
         """;
 
+    private static string BuildCSharpLexicalLocalFunctionPredicateSql(string symbolAlias) => $"""
+        (
+            {symbolAlias}.kind = 'function'
+            AND COALESCE({symbolAlias}.sub_kind, '') <> 'top_level_scope'
+            AND (
+                COALESCE({symbolAlias}.container_kind, '') IN (
+                    'function',
+                    'test.method',
+                    'lambda',
+                    'property'
+                )
+                OR (
+                    {symbolAlias}.container_kind IS NULL
+                    AND {symbolAlias}.container_name IS NULL
+                    AND {symbolAlias}.container_qualified_name IS NULL
+                    AND EXISTS (
+                        SELECT 1
+                        FROM symbols AS csharp_top_level_scope
+                        WHERE csharp_top_level_scope.file_id = {symbolAlias}.file_id
+                          AND csharp_top_level_scope.kind = 'function'
+                          AND csharp_top_level_scope.sub_kind = 'top_level_scope'
+                    )
+                )
+            )
+        )
+        """;
+
     // Generic C# candidate paths must never admit local functions; only the exact
     // csharp_local coordinate path has sufficient lexical-scope evidence.
     // C#の汎用candidate経路ではlocal functionを常に除外し、十分な字句scope根拠を持つ
@@ -674,8 +701,8 @@ public partial class DbWriter
     private static string CSharpTypeReferenceCandidatePredicateSql => $"""
         (
             source_file.lang <> 'csharp'
-            OR s.kind <> 'function'
-            OR COALESCE(s.container_kind, '') NOT IN ('function', 'test.method', 'lambda', 'property')
+            OR r.reference_kind = 'razor_event_binding'
+            OR NOT {BuildCSharpLexicalLocalFunctionPredicateSql("s")}
         )
         AND (
             source_file.lang <> 'csharp'
@@ -1128,8 +1155,7 @@ public partial class DbWriter
           AND target_file.lang = 'csharp'
           AND r.reference_kind = 'call'
           AND r.target_qualifier LIKE char(31) || 'csharp_local:%'
-          AND target.kind = 'function'
-          AND target.container_kind IN ('function', 'test.method', 'lambda', 'property')
+          AND {BuildCSharpLexicalLocalFunctionPredicateSql("target")}
           AND instr(
                   r.target_qualifier,
                   '|' || target.line || ':' ||
@@ -1527,8 +1553,8 @@ public partial class DbWriter
           AND r.reference_kind NOT IN ('instantiate', 'type_reference')
           AND {BuildCSharpCallCandidatePredicateSql("target")}
           AND (
-              target.kind <> 'function'
-              OR COALESCE(target.container_kind, '') NOT IN ('function', 'test.method', 'lambda', 'property')
+              r.reference_kind = 'razor_event_binding'
+              OR NOT {BuildCSharpLexicalLocalFunctionPredicateSql("target")}
           )
           AND NOT EXISTS (
               SELECT 1

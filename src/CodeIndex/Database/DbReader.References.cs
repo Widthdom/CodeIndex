@@ -15,7 +15,8 @@ public partial class DbReader
     internal sealed record ReferencePositionResolution(
         bool IdentityAvailable,
         bool CandidatesTruncated,
-        IReadOnlyList<ReferencePositionCandidate> Candidates);
+        IReadOnlyList<ReferencePositionCandidate> Candidates,
+        bool ExplicitNegativeEvidence = false);
 
     /// <summary>
     /// Search indexed references such as call sites.
@@ -177,6 +178,30 @@ public partial class DbReader
 
         EnsureCSharpCallableTypeKinds(candidateQueries: [symbolName], exact: true);
         using var txn = _conn.BeginTransaction(deferred: true);
+        using var negativeEvidenceCmd = _conn.CreateCommand();
+        negativeEvidenceCmd.CommandText = """
+            SELECT EXISTS (
+                SELECT 1
+                FROM symbol_references AS r
+                JOIN files AS source_file ON source_file.id = r.file_id
+                WHERE source_file.path = @path
+                  AND r.symbol_name = @symbolName COLLATE NOCASE
+                  AND r.line = @line
+                  AND r.column_number = @column
+                  AND r.target_qualifier IN (
+                      char(31) || 'csharp_value_callable',
+                      char(31) || 'csharp_local_uncertain'
+                  )
+            )
+            """;
+        SqliteCommandPolicy.Add(negativeEvidenceCmd, "@path", path);
+        SqliteCommandPolicy.Add(negativeEvidenceCmd, "@symbolName", symbolName);
+        SqliteCommandPolicy.Add(negativeEvidenceCmd, "@line", line);
+        SqliteCommandPolicy.Add(negativeEvidenceCmd, "@column", column);
+        var explicitNegativeEvidence = Convert.ToInt32(
+            negativeEvidenceCmd.ExecuteScalar(),
+            System.Globalization.CultureInfo.InvariantCulture) != 0;
+
         using var cmd = _conn.CreateCommand();
         var startLineSql = GetSymbolColumnSql("start_line", "s.line");
         var endLineSql = GetSymbolColumnSql("end_line", "s.line");
@@ -274,7 +299,11 @@ public partial class DbReader
         if (truncated)
             candidates.RemoveRange(maxCandidates, candidates.Count - maxCandidates);
         txn.Commit();
-        return new ReferencePositionResolution(true, truncated, candidates);
+        return new ReferencePositionResolution(
+            true,
+            truncated,
+            candidates,
+            explicitNegativeEvidence);
     }
 
     private SqliteCommand CreateSearchReferencesCommand(string? query, int limit, string? lang, string? referenceKind, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, bool exact, int offset = 0, bool includeOrdering = true, bool excludeSelfReferences = false, bool includeQualifiedCommonCalls = false)
