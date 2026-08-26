@@ -27,7 +27,11 @@ public partial class McpServer : IDisposable
     /// Execute a tool call.
     /// ツール呼び出しを実行。
     /// </summary>
-    private async Task<JsonNode> HandleToolsCallAsync(bool hasId, JsonNode? id, JsonNode? callParams)
+    private async Task<JsonNode> HandleToolsCallAsync(
+        bool hasId,
+        JsonNode? id,
+        JsonNode? callParams,
+        McpCallerIdentity authenticatedCallerIdentity)
     {
         _currentIndexAuditContext.Value = new IndexAuditContext();
         var callParamsObject = callParams as JsonObject;
@@ -216,7 +220,16 @@ public partial class McpServer : IDisposable
         // TryEmitAudit 内部でベストエフォート化済み (#1562)。
         metricsStopwatch.Stop();
         var auditErrorType = metricsError == "unknown_tool" ? null : metricsError;
-        TryEmitAudit(hasId, observedToolName, id, args, response, metricsStartedAt, metricsStopwatch.Elapsed.TotalMilliseconds, errorType: auditErrorType);
+        TryEmitAudit(
+            hasId,
+            observedToolName,
+            id,
+            args,
+            response,
+            metricsStartedAt,
+            metricsStopwatch.Elapsed.TotalMilliseconds,
+            authenticatedCallerIdentity,
+            errorType: auditErrorType);
         _currentIndexAuditContext.Value = null;
         EmitToolInvocationTelemetry(observedToolName, args, response, metricsStartedAt, metricsStopwatch.Elapsed.TotalMilliseconds, metricsError);
         return response;
@@ -422,7 +435,16 @@ public partial class McpServer : IDisposable
     /// (#1562, #4606)。
     /// audit 失敗で本体ツール呼び出しを壊さないようベストエフォート化する。
     /// </summary>
-    private void TryEmitAudit(bool hasId, string toolName, JsonNode? id, JsonNode? args, JsonNode response, DateTimeOffset startedAt, double elapsedMs, string? errorType)
+    private void TryEmitAudit(
+        bool hasId,
+        string toolName,
+        JsonNode? id,
+        JsonNode? args,
+        JsonNode response,
+        DateTimeOffset startedAt,
+        double elapsedMs,
+        McpCallerIdentity authenticatedCallerIdentity,
+        string? errorType)
     {
         if (_auditLog is null)
             return;
@@ -449,6 +471,8 @@ public partial class McpServer : IDisposable
             var evt = new AuditLogSink.AuditEvent(
                 Timestamp: startedAt,
                 Tool: toolDisplay.Text,
+                AuthSource: authenticatedCallerIdentity.Source,
+                AuthSubject: authenticatedCallerIdentity.Subject,
                 CallerName: initializeState.ClientName,
                 CallerVersion: initializeState.ClientVersion,
                 RequestId: requestId?.Token,

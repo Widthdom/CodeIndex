@@ -26,6 +26,10 @@ public sealed record McpCallerIdentity(string Source, string Subject)
     /// 抑えるためキャッシュする。
     /// </summary>
     public static readonly McpCallerIdentity LocalStdio = new("stdio", "local");
+
+    internal static readonly McpCallerIdentity HttpBearer = new("http-bearer", "token");
+
+    internal static readonly McpCallerIdentity HttpAnonymous = new("http", "anonymous");
 }
 
 /// <summary>
@@ -201,7 +205,7 @@ public sealed class TokenMcpAuthenticator : IMcpAuthenticator
     public const string AuthSource = "stdio-token";
     public const string AuthSubject = "token";
 
-    private static readonly McpCallerIdentity TokenIdentity = new(AuthSource, AuthSubject);
+    internal static readonly McpCallerIdentity TokenIdentity = new(AuthSource, AuthSubject);
 
     private readonly byte[] _expectedTokenHash;
 

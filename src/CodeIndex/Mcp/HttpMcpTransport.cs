@@ -777,7 +777,8 @@ internal sealed partial class HttpMcpTransport :
                 request.Body ?? string.Empty,
                 (frame, writeToken) => WriteFrameAsync(request, frame, writeToken),
                 request.CancellationToken,
-                retentionBarrier.CompleteWhen);
+                retentionBarrier.CompleteWhen,
+                request.AuthenticatedCallerIdentity);
         }
         finally
         {
@@ -2689,6 +2690,7 @@ internal sealed partial class HttpMcpTransport :
         if (_bearerTokenHash is null)
         {
             request.AuthOutcome = "ok";
+            request.AuthenticatedCallerIdentity = McpCallerIdentity.HttpAnonymous;
             return true;
         }
 
@@ -2709,6 +2711,7 @@ internal sealed partial class HttpMcpTransport :
                     if (HashEqualsConfiguredToken(provided!))
                     {
                         request.AuthOutcome = "ok";
+                        request.AuthenticatedCallerIdentity = McpCallerIdentity.HttpBearer;
                         return true;
                     }
 
@@ -3605,6 +3608,8 @@ internal sealed partial class HttpMcpTransport :
         internal string Path { get; }
 
         internal string AuthOutcome { get; set; } = "none";
+
+        internal McpCallerIdentity? AuthenticatedCallerIdentity { get; set; }
 
         internal string? RejectionReason { get; set; }
 

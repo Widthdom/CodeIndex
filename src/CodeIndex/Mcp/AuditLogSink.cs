@@ -624,7 +624,21 @@ internal sealed class AuditLogSink : IDisposable
         if (TrySerializeEventCore(minimal, includeValues: false, out serialized))
             return serialized;
 
-        return "{\"event_truncated\":true,\"event_truncation_reasons\":[\"event_size_limit\"]}";
+        // Keep authenticated provenance even in the last-resort count-only envelope. Source,
+        // subject, and tool were bounded above, so this object is safely below the event cap.
+        // 最終 count-only envelope でも認証 provenance を保持する。source / subject / tool は
+        // 上で bounded 済みなので、この object は event 上限を安全に下回る。
+        var emergency = new JsonObject
+        {
+            ["timestamp"] = minimal.Timestamp.ToString("O", CultureInfo.InvariantCulture),
+            ["tool"] = minimal.Tool,
+            ["auth_source"] = minimal.AuthSource,
+            ["auth_subject"] = minimal.AuthSubject,
+            ["event_truncated"] = true,
+            ["event_truncation_reasons"] = new JsonArray("event_size_limit"),
+            ["error_code"] = minimal.ErrorCode,
+        };
+        return emergency.ToJsonString();
     }
 
     private static bool TrySerializeEventCore(AuditEvent evt, bool includeValues, out string serialized)
@@ -658,6 +672,18 @@ internal sealed class AuditLogSink : IDisposable
             jw.WriteNumber("tool_length", toolLength);
         if (evt.ToolTruncated)
             jw.WriteBoolean("tool_truncated", true);
+        if (evt.AuthSource is { } authSource)
+            jw.WriteString("auth_source", authSource);
+        if (evt.AuthSourceLength is { } authSourceLength)
+            jw.WriteNumber("auth_source_length", authSourceLength);
+        if (evt.AuthSourceTruncated)
+            jw.WriteBoolean("auth_source_truncated", true);
+        if (evt.AuthSubject is { } authSubject)
+            jw.WriteString("auth_subject", authSubject);
+        if (evt.AuthSubjectLength is { } authSubjectLength)
+            jw.WriteNumber("auth_subject_length", authSubjectLength);
+        if (evt.AuthSubjectTruncated)
+            jw.WriteBoolean("auth_subject_truncated", true);
         if (evt.CallerName is { } caller)
             jw.WriteString("caller", caller);
         if (evt.CallerNameLength is { } callerLength)
@@ -784,6 +810,8 @@ internal sealed class AuditLogSink : IDisposable
     private static AuditEvent BoundEventScalarFields(AuditEvent evt)
     {
         var tool = BoundAuditText(evt.Tool, McpBoundedText.MaxToolNameChars, evt.ToolLength, evt.ToolTruncated);
+        var authSource = BoundAuditText(evt.AuthSource, McpBoundedText.MaxDiagnosticDisplayChars, evt.AuthSourceLength, evt.AuthSourceTruncated, sanitizeNonTruncated: true);
+        var authSubject = BoundAuditText(evt.AuthSubject, McpBoundedText.MaxDiagnosticDisplayChars, evt.AuthSubjectLength, evt.AuthSubjectTruncated, sanitizeNonTruncated: true);
         var caller = BoundAuditText(evt.CallerName, McpBoundedText.MaxClientInfoChars, evt.CallerNameLength, evt.CallerNameTruncated);
         var callerVersion = BoundAuditText(evt.CallerVersion, McpBoundedText.MaxClientInfoChars, evt.CallerVersionLength, evt.CallerVersionTruncated);
         var requestId = BoundAuditText(evt.RequestId, MaxRequestIdChars, evt.RequestIdLength, evt.RequestIdTruncated);
@@ -793,6 +821,12 @@ internal sealed class AuditLogSink : IDisposable
             Tool = tool.Text!,
             ToolLength = tool.Length,
             ToolTruncated = tool.Truncated,
+            AuthSource = authSource.Text,
+            AuthSourceLength = authSource.Length,
+            AuthSourceTruncated = authSource.Truncated,
+            AuthSubject = authSubject.Text,
+            AuthSubjectLength = authSubject.Length,
+            AuthSubjectTruncated = authSubject.Truncated,
             CallerName = caller.Text,
             CallerNameLength = caller.Length,
             CallerNameTruncated = caller.Truncated,
@@ -811,14 +845,19 @@ internal sealed class AuditLogSink : IDisposable
         };
     }
 
-    private static (string? Text, int? Length, bool Truncated) BoundAuditText(string? value, int maxChars, int? length, bool truncated)
+    private static (string? Text, int? Length, bool Truncated) BoundAuditText(
+        string? value,
+        int maxChars,
+        int? length,
+        bool truncated,
+        bool sanitizeNonTruncated = false)
     {
         if (value is null)
             return (null, length, truncated);
 
         var display = McpBoundedText.ForDisplay(value, maxChars);
         if (!display.Truncated)
-            return (value, length, truncated);
+            return (sanitizeNonTruncated ? display.Text : value, length, truncated);
 
         return (display.Text, length ?? display.OriginalLength, true);
     }
@@ -1210,5 +1249,11 @@ internal sealed class AuditLogSink : IDisposable
         int? CallerVersionLength = null,
         bool CallerVersionTruncated = false,
         string? RequestIdType = null,
-        string? CheckedRootIdentity = null);
+        string? CheckedRootIdentity = null,
+        string? AuthSource = null,
+        string? AuthSubject = null,
+        int? AuthSourceLength = null,
+        bool AuthSourceTruncated = false,
+        int? AuthSubjectLength = null,
+        bool AuthSubjectTruncated = false);
 }
