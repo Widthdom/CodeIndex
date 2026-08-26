@@ -60,6 +60,25 @@ public class AuditLogSinkTests
     }
 
     [Fact]
+    public void SerializeEvent_SanitizesShortPrincipalControlCharacters_Issue5186()
+    {
+        var evt = CreateAuditEvent("ping") with
+        {
+            AuthSource = "http\nbearer",
+            AuthSubject = "tok\u007Fen",
+        };
+
+        var json = AuditLogSink.SerializeEvent(evt, includeValues: false);
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+
+        Assert.Equal("http?bearer", root.GetProperty("auth_source").GetString());
+        Assert.Equal("tok?en", root.GetProperty("auth_subject").GetString());
+        Assert.False(root.TryGetProperty("auth_source_truncated", out _));
+        Assert.False(root.TryGetProperty("auth_subject_truncated", out _));
+    }
+
+    [Fact]
     public void SerializeEvent_IncludesCallerAndErrorWhenSet()
     {
         var evt = new AuditLogSink.AuditEvent(

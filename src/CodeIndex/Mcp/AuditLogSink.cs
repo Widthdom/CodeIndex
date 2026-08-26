@@ -810,8 +810,8 @@ internal sealed class AuditLogSink : IDisposable
     private static AuditEvent BoundEventScalarFields(AuditEvent evt)
     {
         var tool = BoundAuditText(evt.Tool, McpBoundedText.MaxToolNameChars, evt.ToolLength, evt.ToolTruncated);
-        var authSource = BoundAuditText(evt.AuthSource, McpBoundedText.MaxDiagnosticDisplayChars, evt.AuthSourceLength, evt.AuthSourceTruncated);
-        var authSubject = BoundAuditText(evt.AuthSubject, McpBoundedText.MaxDiagnosticDisplayChars, evt.AuthSubjectLength, evt.AuthSubjectTruncated);
+        var authSource = BoundAuditText(evt.AuthSource, McpBoundedText.MaxDiagnosticDisplayChars, evt.AuthSourceLength, evt.AuthSourceTruncated, sanitizeNonTruncated: true);
+        var authSubject = BoundAuditText(evt.AuthSubject, McpBoundedText.MaxDiagnosticDisplayChars, evt.AuthSubjectLength, evt.AuthSubjectTruncated, sanitizeNonTruncated: true);
         var caller = BoundAuditText(evt.CallerName, McpBoundedText.MaxClientInfoChars, evt.CallerNameLength, evt.CallerNameTruncated);
         var callerVersion = BoundAuditText(evt.CallerVersion, McpBoundedText.MaxClientInfoChars, evt.CallerVersionLength, evt.CallerVersionTruncated);
         var requestId = BoundAuditText(evt.RequestId, MaxRequestIdChars, evt.RequestIdLength, evt.RequestIdTruncated);
@@ -845,14 +845,19 @@ internal sealed class AuditLogSink : IDisposable
         };
     }
 
-    private static (string? Text, int? Length, bool Truncated) BoundAuditText(string? value, int maxChars, int? length, bool truncated)
+    private static (string? Text, int? Length, bool Truncated) BoundAuditText(
+        string? value,
+        int maxChars,
+        int? length,
+        bool truncated,
+        bool sanitizeNonTruncated = false)
     {
         if (value is null)
             return (null, length, truncated);
 
         var display = McpBoundedText.ForDisplay(value, maxChars);
         if (!display.Truncated)
-            return (value, length, truncated);
+            return (sanitizeNonTruncated ? display.Text : value, length, truncated);
 
         return (display.Text, length ?? display.OriginalLength, true);
     }
