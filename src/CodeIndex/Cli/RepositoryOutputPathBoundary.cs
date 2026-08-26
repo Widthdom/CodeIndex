@@ -302,7 +302,9 @@ internal static class RepositoryOutputPathBoundary
                 mountId = value.Value;
                 return true;
             }
-            return false;
+
+            return OperatingSystem.IsLinux()
+                && TryGetLinuxMountIdFromPathDescriptor(path, out mountId);
         }
 
         if (!OperatingSystem.IsLinux())
@@ -315,19 +317,18 @@ internal static class RepositoryOutputPathBoundary
                     path,
                     UnixAtSymlinkNoFollow,
                     UnixStatXMountId,
-                    out var status) != 0
-                || (status.Mask & UnixStatXMountId) == 0)
+                    out var status) == 0
+                && (status.Mask & UnixStatXMountId) != 0)
             {
-                return false;
+                mountId = status.MountId;
+                return true;
             }
-
-            mountId = status.MountId;
-            return true;
         }
         catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException)
         {
-            return false;
         }
+
+        return TryGetLinuxMountIdFromPathDescriptor(path, out mountId);
     }
 
     internal static bool TryGetUnixMountId(SafeFileHandle handle, out ulong mountId)
@@ -342,7 +343,9 @@ internal static class RepositoryOutputPathBoundary
                 mountId = value.Value;
                 return true;
             }
-            return false;
+
+            return OperatingSystem.IsLinux()
+                && TryGetLinuxMountIdFromFdInfo(descriptor, out mountId);
         }
 
         if (!OperatingSystem.IsLinux())
@@ -355,16 +358,58 @@ internal static class RepositoryOutputPathBoundary
                     string.Empty,
                     UnixAtEmptyPath | UnixAtSymlinkNoFollow,
                     UnixStatXMountId,
-                    out var status) != 0
-                || (status.Mask & UnixStatXMountId) == 0)
+                    out var status) == 0
+                && (status.Mask & UnixStatXMountId) != 0)
             {
-                return false;
+                mountId = status.MountId;
+                return true;
             }
-
-            mountId = status.MountId;
-            return true;
         }
         catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException)
+        {
+        }
+
+        return TryGetLinuxMountIdFromFdInfo(descriptor, out mountId);
+    }
+
+    internal static bool TryParseLinuxFdInfoMountId(string fdInfo, out ulong mountId)
+    {
+        mountId = 0;
+        using var reader = new StringReader(fdInfo);
+        while (reader.ReadLine() is { } line)
+        {
+            const string Prefix = "mnt_id:";
+            if (!line.StartsWith(Prefix, StringComparison.Ordinal))
+                continue;
+
+            return ulong.TryParse(line.AsSpan(Prefix.Length).Trim(), out mountId);
+        }
+
+        return false;
+    }
+
+    private static bool TryGetLinuxMountIdFromPathDescriptor(string path, out ulong mountId)
+    {
+        mountId = 0;
+        var descriptor = UnixOpenMountProbe(
+            path,
+            UnixPathOnly | UnixOpenCloseOnExec | UnixOpenNoFollow);
+        if (descriptor < 0)
+            return false;
+
+        using var handle = new SafeFileHandle(new IntPtr(descriptor), ownsHandle: true);
+        return TryGetLinuxMountIdFromFdInfo(descriptor, out mountId);
+    }
+
+    private static bool TryGetLinuxMountIdFromFdInfo(int descriptor, out ulong mountId)
+    {
+        mountId = 0;
+        try
+        {
+            var fdInfo = File.ReadAllText($"/proc/self/fdinfo/{descriptor}");
+            return TryParseLinuxFdInfoMountId(fdInfo, out mountId);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             return false;
         }
@@ -416,9 +461,15 @@ internal static class RepositoryOutputPathBoundary
     [DllImport("libc", EntryPoint = "fsync", SetLastError = true)]
     private static extern int UnixFsync(int descriptor);
 
+    [DllImport("libc", EntryPoint = "open", SetLastError = true)]
+    private static extern int UnixOpenMountProbe(string path, int flags);
+
     private const int UnixCurrentWorkingDirectory = -100;
     private const int UnixAtSymlinkNoFollow = 0x100;
     private const int UnixAtEmptyPath = 0x1000;
+    private const int UnixPathOnly = 0x200000;
+    private const int UnixOpenCloseOnExec = 0x80000;
+    private const int UnixOpenNoFollow = 0x20000;
     private const uint UnixStatXMountId = 0x1000;
     private const int UnixFileTypeMask = 0xF000;
     private const int UnixDirectoryType = 0x4000;

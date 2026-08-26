@@ -574,6 +574,61 @@ public class CdidxConfigFileTests
         }
     }
 
+    [Theory]
+    [InlineData("pos:\t0\nflags:\t0100000\nmnt_id:\t42\nino:\t123\n", 42UL)]
+    [InlineData("mnt_id: 18446744073709551615\n", ulong.MaxValue)]
+    public void OutputBoundary_ParsesLinuxFdInfoMountIdentityFallback_Issue5181Review(
+        string fdInfo,
+        ulong expectedMountId)
+    {
+        var parsed = RepositoryOutputPathBoundary.TryParseLinuxFdInfoMountId(
+            fdInfo,
+            out var mountId);
+
+        Assert.True(parsed);
+        Assert.Equal(expectedMountId, mountId);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("pos:\t0\nino:\t123\n")]
+    [InlineData("mnt_id:\tnot-a-number\n")]
+    [InlineData("mnt_id:\t18446744073709551616\n")]
+    public void OutputBoundary_RejectsInvalidLinuxFdInfoMountIdentityFallback_Issue5181Review(
+        string fdInfo)
+    {
+        Assert.False(
+            RepositoryOutputPathBoundary.TryParseLinuxFdInfoMountId(fdInfo, out _));
+    }
+
+    [Fact]
+    public void OutputBoundary_UsesLinuxFdInfoWhenStatxMountIdentityIsUnavailable_Issue5181Review()
+    {
+        if (!OperatingSystem.IsLinux())
+            return;
+
+        var workspace = CreateTempDir();
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(workspace, CdidxConfigFile.FileName),
+                """{ "metrics_path": "logs/metrics.jsonl" }""");
+            RepositoryOutputPathBoundary.UnixMountIdForTesting = _ => null;
+
+            var result = CdidxConfigFile.Load(workspace, new TestEnvironment().Read);
+
+            Assert.True(result.Loaded);
+            Assert.Equal(
+                Path.Combine(workspace, "logs", "metrics.jsonl"),
+                result.Settings[MetricsSink.EnvVarName]);
+        }
+        finally
+        {
+            RepositoryOutputPathBoundary.UnixMountIdForTesting = null;
+            TestProjectHelper.DeleteDirectory(workspace);
+        }
+    }
+
     [Fact]
     public void OutputBoundary_RejectsDistinctMountIdentityFromOpenedAncestor_Issue5181Review()
     {

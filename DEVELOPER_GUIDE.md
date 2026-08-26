@@ -2954,7 +2954,8 @@ next candidate instead of losing the first log write. Repository-configured
 the config workspace is rejected when it is a symbolic link, junction, bind or
 cross-device mount point, reparse point, device, or dangling link. The boundary
 is revalidated before each mutation; on Linux, path and opened-handle mount IDs
-also reject same-device bind mounts. On POSIX, directory creation, append,
+from `statx` or the `/proc/self/fdinfo` fallback also reject same-device bind
+mounts. On POSIX, directory creation, append,
 permission changes, rotation, replacement, and deletion are additionally anchored
 to the workspace directory handle with no-follow relative operations. Directory
 parents are rebound from that root after mutation-time validation so a
@@ -6975,7 +6976,8 @@ read-only な state/cache/runtime mount は最初の log write を失うので�
 `global_tool_log_dir` には、より厳格な境界を適用します。config workspace
 配下の既存 component が symbolic link、junction、bind mount / cross-device mount point、
 reparse point、device、dangling link のいずれかであれば拒否し、各 mutation の
-直前にも境界を再検証します。Linux では path と open 済み handle の mount ID も
+直前にも境界を再検証します。Linux では `statx` または
+`/proc/self/fdinfo` fallback から得た path と open 済み handle の mount ID も
 比較して同一 device の bind mount を拒否します。POSIX ではさらに directory 作成、
 append、permission 変更、rotation、置換、delete を workspace directory handle 起点の
 no-follow relative operation へ固定し、mutation 時の検証後に directory parent を root
