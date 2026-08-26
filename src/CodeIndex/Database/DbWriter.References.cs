@@ -643,6 +643,13 @@ public partial class DbWriter
             )
             """;
 
+    private static string BuildCSharpConstructorFamilyIdentitySql(string symbolAlias)
+        => $"""
+            COALESCE(
+                {BuildCSharpConstructorIdentitySql(symbolAlias)},
+                {BuildCSharpTypeIdentitySql(symbolAlias)})
+            """;
+
     private static string BuildCSharpConstructorFamilyBindingSensitiveSql(string symbolAlias)
         => $"""
             EXISTS (
@@ -652,18 +659,28 @@ public partial class DbWriter
                   ON binding_sensitive_constructor_file.id =
                      binding_sensitive_constructor.file_id
                  AND binding_sensitive_constructor_file.lang = 'csharp'
-                JOIN temp.csharp_constructor_identity_facts AS binding_sensitive_identity
-                  ON binding_sensitive_identity.symbol_id =
+                LEFT JOIN temp.csharp_constructor_identity_facts AS binding_sensitive_constructor_identity
+                  ON binding_sensitive_constructor_identity.symbol_id =
                      binding_sensitive_constructor.id
-                 AND binding_sensitive_identity.type_identity =
-                     {BuildCSharpConstructorIdentitySql(symbolAlias)} COLLATE BINARY
+                LEFT JOIN temp.csharp_type_identity_facts AS binding_sensitive_type_identity
+                  ON binding_sensitive_type_identity.symbol_id =
+                     binding_sensitive_constructor.id
                 WHERE binding_sensitive_constructor.name_folded =
                       {symbolAlias}.name_folded
                   AND binding_sensitive_constructor.name =
                       {symbolAlias}.name COLLATE BINARY
-                  AND binding_sensitive_constructor.kind = 'function'
-                  AND binding_sensitive_constructor.container_name =
-                      binding_sensitive_constructor.name COLLATE BINARY
+                  AND COALESCE(
+                          binding_sensitive_constructor_identity.type_identity,
+                          binding_sensitive_type_identity.type_identity) =
+                      {BuildCSharpConstructorFamilyIdentitySql(symbolAlias)} COLLATE BINARY
+                  AND (
+                      (
+                          binding_sensitive_constructor.kind = 'function'
+                          AND binding_sensitive_constructor.container_name =
+                              binding_sensitive_constructor.name COLLATE BINARY
+                      )
+                      OR binding_sensitive_constructor.kind IN ('class', 'struct', 'record')
+                  )
                   AND {BuildCSharpConstructorBindingSensitiveSql("binding_sensitive_constructor")} = 1
             )
             """;
@@ -781,6 +798,7 @@ public partial class DbWriter
                              AND (
                                  {CSharpReferenceArgumentCountSql} IS NULL
                                  OR {BuildCSharpConstructorParameterCountSql("s")} IS NULL
+                                 OR {BuildCSharpConstructorFamilyBindingSensitiveSql("s")}
                                  OR {BuildCSharpConstructorParameterCountSql("s")}
                                     = {CSharpReferenceArgumentCountSql}
                              )
@@ -1623,12 +1641,21 @@ public partial class DbWriter
                    unique_family.type_identity COLLATE BINARY,
                    constructor_fact.constructor_parameter_count,
                    {BuildCSharpConstructorBindingSensitiveSql("constructor")},
-                   MAX({BuildCSharpConstructorBindingSensitiveSql("constructor")}) OVER (
-                       PARTITION BY unique_family.name_folded,
-                                    unique_family.name COLLATE BINARY,
-                                    unique_family.type_arity,
-                                    unique_family.type_identity COLLATE BINARY)
+                   MAX(
+                       MAX({BuildCSharpConstructorBindingSensitiveSql("constructor")}) OVER (
+                           PARTITION BY unique_family.name_folded,
+                                        unique_family.name COLLATE BINARY,
+                                        unique_family.type_arity,
+                                        unique_family.type_identity COLLATE BINARY),
+                       primary_member.constructor_binding_sensitive)
             FROM csharp_unique_instantiation_families AS unique_family
+            JOIN csharp_instantiation_type_members AS primary_member
+              ON primary_member.name_folded = unique_family.name_folded
+             AND primary_member.name = unique_family.name COLLATE BINARY
+             AND primary_member.type_arity IS unique_family.type_arity
+             AND primary_member.type_identity =
+                 unique_family.type_identity COLLATE BINARY
+             AND primary_member.representative_rank = 1
             CROSS JOIN symbols AS constructor INDEXED BY idx_symbols_name_folded
               ON constructor.name_folded = unique_family.name_folded
              AND constructor.name = unique_family.name COLLATE BINARY
@@ -1777,6 +1804,7 @@ public partial class DbWriter
                   AND (
                       reference_fact.argument_count IS NULL
                       OR unique_target.constructor_parameter_count IS NULL
+                      OR unique_target.constructor_family_binding_sensitive = 1
                       OR unique_target.constructor_parameter_count
                          = reference_fact.argument_count
                   )

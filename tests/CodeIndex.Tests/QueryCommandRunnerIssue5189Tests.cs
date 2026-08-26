@@ -42,6 +42,22 @@ public sealed class QueryCommandRunnerIssue5189Tests
             "Alias".Length));
     }
 
+    [Theory]
+    [InlineData("_ = new Alias(flag ? 1 : 2);")]
+    [InlineData("_ = new Alias(global::System.Math.Abs(1));")]
+    public void AliasInvocationArity_CountsNonNamedColonSyntax_Issue5189(string context)
+    {
+        var column = context.IndexOf("Alias", StringComparison.Ordinal) + 1;
+
+        Assert.Equal(
+            1,
+            CSharpTypeReferenceArity.GetInvocationArgumentCount(
+                context,
+                "Widget",
+                column,
+                "Alias".Length));
+    }
+
     [Fact]
     public void AliasInvocationArity_DoesNotGuessBetweenUnanchoredSameWidthTokens_Issue5189()
     {
@@ -125,7 +141,13 @@ public sealed class QueryCommandRunnerIssue5189Tests
             var twoParameter = GetBundle(firstBundles, "Widget(int first, string second)");
             var threeParameter = GetBundle(firstBundles, "Widget(int first, string second, int third)");
 
-            AssertResolvedMarkers(oneParameter, "first-alias-one", "first-direct-one");
+            AssertResolvedMarkers(
+                oneParameter,
+                "first-alias-one",
+                "first-direct-one",
+                "first-conditional-one",
+                "first-global-one",
+                "direct-column-collision-one");
             AssertResolvedMarkers(
                 twoParameter,
                 "first-alias-two",
@@ -160,6 +182,43 @@ public sealed class QueryCommandRunnerIssue5189Tests
                 secondBundles,
                 "Widget(int first, string second)");
             AssertSecondAliasResolution(dbPath, secondTwoParameter);
+
+            using var escapedDocument = InspectConstructors(dbPath, "EscapedWidget");
+            var escapedBundles = GetConstructorBundles(
+                escapedDocument,
+                "EscapedWidget",
+                "src/Conservative.cs");
+            Assert.Equal(2, escapedBundles.Length);
+            var escapedOneParameter = GetBundle(escapedBundles, "EscapedWidget(int @params)");
+            var escapedTwoParameter = GetBundle(
+                escapedBundles,
+                "EscapedWidget(int value, string text)");
+            AssertResolvedMarkers(escapedOneParameter, "escaped-params-one");
+            Assert.DoesNotContain(
+                GetReferenceContexts(escapedTwoParameter),
+                context => context.Contains("escaped-params-one", StringComparison.Ordinal));
+            Assert.True(escapedOneParameter.GetProperty("identity_scoped").GetBoolean());
+
+            using var primaryDocument = InspectConstructors(dbPath, "PrimaryOptionalWidget");
+            var primaryBundles = GetCandidateBundles(
+                primaryDocument,
+                "PrimaryOptionalWidget",
+                "src/Conservative.cs");
+            Assert.Equal(2, primaryBundles.Length);
+            Assert.All(
+                primaryBundles,
+                bundle => Assert.False(bundle.GetProperty("identity_scoped").GetBoolean()));
+            Assert.All(
+                primaryBundles,
+                bundle => Assert.Equal(
+                    "ambiguous_reference_candidates",
+                    bundle.GetProperty("identity_scope_reason").GetString()));
+            Assert.All(
+                primaryBundles,
+                bundle => AssertResolvedMarkers(
+                    bundle,
+                    "primary-optional-alias-zero",
+                    "primary-optional-direct-zero"));
 
             foreach (var ambiguousName in new[]
                      {
@@ -244,6 +303,17 @@ public sealed class QueryCommandRunnerIssue5189Tests
                 public ParamsWidget(params int[] values) { }
                 public ParamsWidget(string value) { }
             }
+
+            public sealed class EscapedWidget
+            {
+                public EscapedWidget(int @params) { }
+                public EscapedWidget(int value, string text) { }
+            }
+
+            public sealed class PrimaryOptionalWidget(int value)
+            {
+                public PrimaryOptionalWidget(string value = "") : this(0) { }
+            }
             """);
         TestProjectHelper.WriteTextFile(
             projectRoot,
@@ -255,6 +325,8 @@ public sealed class QueryCommandRunnerIssue5189Tests
             using AmbiguousAlias = Conservative.AmbiguousWidget;
             using OptionalAlias = Conservative.OptionalWidget;
             using ParamsAlias = Conservative.ParamsWidget;
+            using EscapedAlias = Conservative.EscapedWidget;
+            using PrimaryOptionalAlias = Conservative.PrimaryOptionalWidget;
 
             namespace Calls;
 
@@ -272,6 +344,8 @@ public sealed class QueryCommandRunnerIssue5189Tests
                         "comma,(parenthesis)"); // first-multiline-two
                     _ = new FirstWidget(Make(new System.Collections.Generic.List<int> { 1, 2 }), "two"); // first-nested-two
                     _ = new /* before */ FirstWidget(1, /* between */ "two"); // first-comment-two
+                    _ = new FirstWidget(true ? 1 : 2); // first-conditional-one
+                    _ = new FirstWidget(global::System.Math.Abs(1)); // first-global-one
                 }
 
                 public void DirectCalls()
@@ -279,6 +353,7 @@ public sealed class QueryCommandRunnerIssue5189Tests
                     _ = new First.Widget(1); // first-direct-one
                     _ = new First.Widget(1, "two"); // first-direct-two
                     _ = new First.Widget(1, "two", 3); // first-direct-three
+                                   _ = new First.Widget(1); _ = new Gadget(1, "two"); // direct-column-collision-one
                 }
 
                 public void SameLeafAliases()
@@ -294,7 +369,15 @@ public sealed class QueryCommandRunnerIssue5189Tests
                     _ = new AmbiguousAlias("""raw,(value)""");
                     _ = new OptionalAlias();
                     _ = new ParamsAlias(1, 2);
+                    _ = new EscapedAlias(1); // escaped-params-one
+                    _ = new PrimaryOptionalAlias(); // primary-optional-alias-zero
+                    _ = new Conservative.PrimaryOptionalWidget(); // primary-optional-direct-zero
                 }
+            }
+
+            public sealed class Gadget
+            {
+                public Gadget(int first, string second) { }
             }
             """");
     }
@@ -380,6 +463,19 @@ public sealed class QueryCommandRunnerIssue5189Tests
             .Where(bundle =>
                 bundle.GetProperty("definition").GetProperty("kind").GetString() == "function"
                 && bundle.GetProperty("definition").GetProperty("path").GetString() == path
+                && bundle.GetProperty("definition").GetProperty("signature").GetString()!
+                    .Contains($"{name}(", StringComparison.Ordinal))
+            .ToArray();
+
+    private static JsonElement[] GetCandidateBundles(
+        JsonDocument document,
+        string name,
+        string path)
+        => document.RootElement
+            .GetProperty("candidate_bundles")
+            .EnumerateArray()
+            .Where(bundle =>
+                bundle.GetProperty("definition").GetProperty("path").GetString() == path
                 && bundle.GetProperty("definition").GetProperty("signature").GetString()!
                     .Contains($"{name}(", StringComparison.Ordinal))
             .ToArray();

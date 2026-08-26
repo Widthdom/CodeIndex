@@ -62,6 +62,7 @@ internal static class CSharpTypeReferenceArity
                    out var hasNamedArgument,
                    out _,
                    out _,
+                   out _,
                    out _)
                && !hasNamedArgument
             ? count
@@ -95,6 +96,7 @@ internal static class CSharpTypeReferenceArity
                    out _,
                    out _,
                    out _,
+                   out _,
                    out _);
     }
 
@@ -124,10 +126,12 @@ internal static class CSharpTypeReferenceArity
                    cursor,
                    out var count,
                    out var hasNamedArgument,
+                   out var hasTopLevelColon,
                    out _,
                    out _,
                    out var hasAngleBrackets)
                && !hasNamedArgument
+               && !hasTopLevelColon
                && !hasAngleBrackets
             ? count
             : null;
@@ -173,6 +177,7 @@ internal static class CSharpTypeReferenceArity
                        signature,
                        cursor,
                        out var count,
+                       out _,
                        out _,
                        out var hasOptionalDefault,
                        out var hasBindingSensitiveModifier,
@@ -282,6 +287,7 @@ internal static class CSharpTypeReferenceArity
                     signature,
                     cursor,
                     out var count,
+                    out _,
                     out _,
                     out var hasOptionalDefault,
                     out var hasBindingSensitiveModifier,
@@ -928,18 +934,21 @@ internal static class CSharpTypeReferenceArity
             out _,
             out _,
             out _,
+            out _,
             out _);
 
     private static bool TryAnalyzeTopLevelParameters(
         string text,
         int openParenthesis,
         out int count,
+        out bool hasNamedArgument,
         out bool hasTopLevelColon,
         out bool hasTopLevelEquals,
         out bool hasBindingSensitiveModifier,
         out bool hasAngleBrackets)
     {
         count = 0;
+        hasNamedArgument = false;
         hasTopLevelColon = false;
         hasTopLevelEquals = false;
         hasBindingSensitiveModifier = false;
@@ -950,6 +959,7 @@ internal static class CSharpTypeReferenceArity
         var angleDepth = 0;
         var hasItemContent = false;
         var hasTopLevelSeparator = false;
+        var itemStart = openParenthesis + 1;
         for (var i = openParenthesis + 1; i < text.Length; i++)
         {
             var c = text[i];
@@ -1038,12 +1048,14 @@ internal static class CSharpTypeReferenceArity
                     count++;
                     hasItemContent = false;
                     hasTopLevelSeparator = true;
+                    itemStart = i + 1;
                     break;
                 case ':' when parenthesisDepth == 0
                                   && bracketDepth == 0
                                   && braceDepth == 0
                                   && angleDepth == 0:
                     hasTopLevelColon = true;
+                    hasNamedArgument |= IsNamedArgumentPrefix(text, itemStart, i);
                     hasItemContent = true;
                     break;
                 case '=' when parenthesisDepth == 0
@@ -1063,9 +1075,11 @@ internal static class CSharpTypeReferenceArity
                         while (identifierEnd < text.Length && IsIdentifierPart(text[identifierEnd]))
                             identifierEnd++;
                         var identifier = text.AsSpan(i, identifierEnd - i);
+                        var escapedIdentifier = i > 0 && text[i - 1] == '@';
                         hasBindingSensitiveModifier |= bracketDepth == 0
-                            ? identifier.SequenceEqual("params".AsSpan())
-                              || identifier.SequenceEqual("this".AsSpan())
+                            ? !escapedIdentifier
+                              && (identifier.SequenceEqual("params".AsSpan())
+                                  || identifier.SequenceEqual("this".AsSpan()))
                             : identifier.SequenceEqual("Optional".AsSpan())
                               || identifier.SequenceEqual("OptionalAttribute".AsSpan())
                               || identifier.SequenceEqual("DefaultParameterValue".AsSpan())
@@ -1078,6 +1092,28 @@ internal static class CSharpTypeReferenceArity
         }
 
         return false;
+    }
+
+    private static bool IsNamedArgumentPrefix(string text, int itemStart, int colonIndex)
+    {
+        if ((colonIndex > 0 && text[colonIndex - 1] == ':')
+            || (colonIndex + 1 < text.Length && text[colonIndex + 1] == ':'))
+        {
+            return false;
+        }
+
+        var cursor = itemStart;
+        if (!SkipCSharpTrivia(text, ref cursor) || cursor >= colonIndex)
+            return false;
+        if (text[cursor] == '@')
+            cursor++;
+        if (cursor >= colonIndex || !IsIdentifierStart(text[cursor]))
+            return false;
+
+        cursor++;
+        while (cursor < colonIndex && IsIdentifierPart(text[cursor]))
+            cursor++;
+        return SkipCSharpTrivia(text, ref cursor) && cursor == colonIndex;
     }
 
     private static int SkipQuotedLiteral(string text, int quoteIndex, char quote)

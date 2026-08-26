@@ -315,6 +315,12 @@ public static partial class ReferenceExtractor
                     continue;
                 if (reference.Line <= 0 || reference.Line > lines.Length || reference.Column <= 0)
                     continue;
+                if (reference.ReferenceKind == "instantiate")
+                {
+                    reference.Context = BuildCSharpInstantiationInvocationContext(
+                        reference,
+                        reference.SymbolName);
+                }
                 if (!IsUnqualifiedCSharpTokenAtColumn(reference.Line, reference.Column, reference.SymbolName))
                     continue;
 
@@ -340,9 +346,6 @@ public static partial class ReferenceExtractor
                     reference.TargetQualifier = GetCSharpUsingAliasTargetQualifier(
                         normalizedTarget,
                         resolvedName);
-                    reference.Context = BuildCSharpUsingAliasInvocationContext(
-                        reference,
-                        lexicalName);
                 }
                 if (nameChanged)
                 {
@@ -356,15 +359,13 @@ public static partial class ReferenceExtractor
                 CompactCSharpUsingAliasReferences(references, language);
         }
 
-        string BuildCSharpUsingAliasInvocationContext(
+        string BuildCSharpInstantiationInvocationContext(
             ReferenceRecord reference,
             string lexicalName)
         {
             const int maxLineCount = 32;
             const int maxContextLength = 4096;
             var firstLine = lines[reference.Line - 1];
-            if (firstLine.Length > maxContextLength)
-                return reference.Context;
 
             var context = new System.Text.StringBuilder(firstLine);
             for (var lineOffset = 0;
