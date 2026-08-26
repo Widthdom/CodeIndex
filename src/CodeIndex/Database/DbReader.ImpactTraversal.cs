@@ -32,7 +32,8 @@ public partial class DbReader
         bool WithPaths,
         int MaxPathsPerResult,
         int ResultOffset,
-        bool IncludeMemberReads);
+        bool IncludeMemberReads,
+        DefinitionResult? SelectedDefinition);
 
     private sealed record ImpactTraversalRoot(
         string ResolvedName,
@@ -107,7 +108,8 @@ public partial class DbReader
             withPaths,
             maxPathsPerResult,
             resultOffset,
-            includeMemberReads);
+            includeMemberReads,
+            SelectedDefinition: null);
         var root = ResolveImpactTraversalRoot(request);
         if (root == null)
             return ([], false, null, ImpactTerminationReasons.Completed, []);
@@ -115,8 +117,62 @@ public partial class DbReader
         return new ImpactTraversalEngine(this, request, root).Run();
     }
 
+    internal (List<ImpactResult> Results, bool Truncated, string? TruncatedReason, string TerminationReason, List<ImpactCycleResult> Cycles) GetTransitiveCallersForCandidate(
+        DefinitionResult definition,
+        int maxDepth,
+        int limit,
+        string? lang,
+        IReadOnlyList<string>? pathPatterns,
+        IReadOnlyList<string>? excludePathPatterns,
+        bool excludeTests,
+        bool withPaths,
+        int resultOffset,
+        bool includeMemberReads)
+    {
+        var request = new ImpactTraversalRequest(
+            definition.Name,
+            maxDepth,
+            limit,
+            NormalizeQueryLanguage(lang) ?? definition.Lang,
+            pathPatterns,
+            excludePathPatterns,
+            excludeTests,
+            withPaths,
+            DefaultImpactPathsPerResult,
+            resultOffset,
+            includeMemberReads,
+            definition);
+        var root = ResolveImpactTraversalRoot(request);
+        return root == null
+            ? ([], false, null, ImpactTerminationReasons.Completed, [])
+            : new ImpactTraversalEngine(this, request, root).Run();
+    }
+
     private ImpactTraversalRoot? ResolveImpactTraversalRoot(ImpactTraversalRequest request)
     {
+        if (request.SelectedDefinition is { SymbolId: long selectedSymbolId } selectedDefinition)
+        {
+            var selectedPathNode = request.WithPaths
+                ? CreateImpactRootPathNode(
+                    selectedDefinition.Name,
+                    selectedSymbolId,
+                    selectedDefinition.Lang,
+                    isLogicalPartialFamily: false,
+                    [selectedDefinition])
+                : null;
+            return new ImpactTraversalRoot(
+                selectedDefinition.Name,
+                new HashSet<string>(StringComparer.OrdinalIgnoreCase) { selectedDefinition.Path },
+                HasResolvedIdentityGraph: true,
+                IsLogicalPartialFamily: false,
+                IdentitySymbolIds: [selectedSymbolId],
+                InitialTargetSymbolIds: [selectedSymbolId],
+                IncludeAmbiguousMSource: false,
+                InitiallyTruncated: false,
+                NodeKey: ImpactNodeIdentity.TraversalKey(selectedSymbolId, selectedDefinition.Name),
+                PathNode: selectedPathNode);
+        }
+
         var resolvedName = ResolveSymbolName(request.SymbolName, request.Lang);
         var hasResolvedIdentityGraph = HasCurrentReferenceIdentityContractForRead();
         var canResolveCSharpIdentity = hasResolvedIdentityGraph
@@ -350,8 +406,9 @@ public partial class DbReader
             request.ExcludePathPatterns,
             request.ExcludeTests,
             targetIds,
-            includeAmbiguousMSource,
-            request.IncludeMemberReads);
+            requireAuthoritativeIdentity: request.SelectedDefinition != null,
+            includeAmbiguousMSource: includeAmbiguousMSource,
+            includeMemberReads: request.IncludeMemberReads);
     }
 
     private int GetImpactGraphStateEntryBudget(int limit)

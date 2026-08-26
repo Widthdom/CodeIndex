@@ -607,12 +607,12 @@ public partial class DbReader
                 ? GetCallees(definition.Name, limit, definition.Lang, null, pathPatterns, excludePathPatterns, excludeTests, exact: true, offset: calleeOffset)
                 : [];
         var referenceTotal = identityAvailable
-            ? CountSearchReferencesForCandidate(definition, pathPatterns, excludePathPatterns, excludeTests)
+            ? CountSearchReferencesForCandidate(definition, pathPatterns, excludePathPatterns, excludeTests).Count
             : includeNameFallback
                 ? CountSearchReferencesTotal(definition.Name, definition.Lang, null, pathPatterns, excludePathPatterns, excludeTests, exact: true).Count
                 : 0;
         var callerTotal = identityAvailable
-            ? CountCallersForCandidate(definition, pathPatterns, excludePathPatterns, excludeTests)
+            ? CountCallersForCandidate(definition, pathPatterns, excludePathPatterns, excludeTests).Count
             : includeNameFallback
                 ? CountCallersTotal(definition.Name, definition.Lang, null, pathPatterns, excludePathPatterns, excludeTests, exact: true).Count
                 : 0;
@@ -729,7 +729,7 @@ public partial class DbReader
         return Convert.ToInt32(cmd.ExecuteScalar()) != 0;
     }
 
-    private SymbolCandidateSelector BuildSymbolCandidateSelector(DefinitionResult definition)
+    internal SymbolCandidateSelector BuildSymbolCandidateSelector(SymbolResult definition)
     {
         var container = definition.ContainerQualifiedName ?? definition.ContainerName;
         var qualifiedName = SyntheticSymbolIdentity.IsSyntheticSubKind(definition.SubKind)

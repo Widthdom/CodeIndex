@@ -149,16 +149,17 @@ public static partial class QueryCommandRunner
     private static bool TryWriteEmptyFormattedResult(
         QueryCommandOptions options,
         JsonSerializerOptions jsonOptions,
-        JsonObject? sarifRunProperties = null)
+        JsonObject? sarifRunProperties = null,
+        Action<JsonObject>? extraFields = null)
     {
         if (options.OutputFormat == OutputFormatCount)
         {
-            WriteFormattedCount(0, jsonOptions);
+            WriteFormattedCount(0, jsonOptions, extraFields);
             return true;
         }
         if (options.OutputFormat == OutputFormatCompact)
         {
-            WriteCompactLocations([], options, jsonOptions);
+            WriteCompactLocations([], options, jsonOptions, extraFields);
             return true;
         }
         if (options.OutputFormat == OutputFormatCsv || options.OutputFormat == OutputFormatTsv)
@@ -183,16 +184,20 @@ public static partial class QueryCommandRunner
 
     private sealed record FormattedLocation(string File, int Line, int? Column = null, string? Label = null);
 
-    private static bool TryWriteFormattedLocations(QueryCommandOptions options, IEnumerable<FormattedLocation> locations, JsonSerializerOptions jsonOptions)
+    private static bool TryWriteFormattedLocations(
+        QueryCommandOptions options,
+        IEnumerable<FormattedLocation> locations,
+        JsonSerializerOptions jsonOptions,
+        Action<JsonObject>? extraFields = null)
     {
         if (options.OutputFormat == OutputFormatCount)
         {
-            WriteFormattedCount(locations.Count(), jsonOptions);
+            WriteFormattedCount(locations.Count(), jsonOptions, extraFields);
             return true;
         }
         if (options.OutputFormat == OutputFormatCompact)
         {
-            WriteCompactLocations(locations, options, jsonOptions);
+            WriteCompactLocations(locations, options, jsonOptions, extraFields);
             return true;
         }
         if (options.OutputFormat == OutputFormatCsv || options.OutputFormat == OutputFormatTsv)
@@ -203,20 +208,29 @@ public static partial class QueryCommandRunner
         return false;
     }
 
-    private static void WriteFormattedCount(int count, JsonSerializerOptions jsonOptions)
+    private static void WriteFormattedCount(
+        int count,
+        JsonSerializerOptions jsonOptions,
+        Action<JsonObject>? extraFields = null)
     {
         var payload = new JsonObject
         {
             ["count"] = count,
             ["total_estimated"] = count,
         };
+        extraFields?.Invoke(payload);
         AddActiveSqliteDiagnostics(payload);
         CommandOutputWriter.WriteJsonNode(payload, jsonOptions);
     }
 
-    private static void WriteCompactLocations(IEnumerable<FormattedLocation> locations, QueryCommandOptions options, JsonSerializerOptions jsonOptions)
+    private static void WriteCompactLocations(
+        IEnumerable<FormattedLocation> locations,
+        QueryCommandOptions options,
+        JsonSerializerOptions jsonOptions,
+        Action<JsonObject>? extraFields = null)
     {
         var payload = BuildCompactLocationsPayload(locations, options, jsonOptions);
+        extraFields?.Invoke(payload);
         AddActiveSqliteDiagnostics(payload);
         CommandOutputWriter.WriteJsonNode(payload, jsonOptions);
     }

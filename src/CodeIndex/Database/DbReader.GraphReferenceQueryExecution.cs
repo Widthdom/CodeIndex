@@ -36,6 +36,20 @@ public partial class DbReader
         return ExecuteCountSummary(command);
     }
 
+    private IReadOnlyList<long> ExecuteGraphReferenceIdentityCandidates(
+        GraphReferenceQueryPlan plan)
+    {
+        using var command = _conn.CreateCommand();
+        command.CommandText = plan.Sql;
+        BindGraphReferenceQueryPlan(command, plan);
+
+        var symbolIds = new List<long>();
+        using var reader = command.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+            symbolIds.Add(reader.GetInt64(0));
+        return symbolIds;
+    }
+
     private GraphReferenceRow ReadGraphReferenceRow(
         SqliteDataReader reader,
         GraphReferenceRowLayout layout)

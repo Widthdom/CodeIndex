@@ -39,9 +39,17 @@ public static partial class QueryCommandRunner
             CommandErrorWriter.WriteStderr(exactError);
             return CommandExitCodes.UsageError;
         }
-        if (TryWriteBlankQueryError(options, "impact"))
+        if (options.Selector != null && !string.IsNullOrWhiteSpace(options.Query))
+        {
+            WriteUsageError(
+                "--selector cannot be combined with a symbol query argument",
+                GetUsageLineOrThrow("impact"),
+                "Remove the positional/--query value and pass only the generation-bound selector emitted by inspect.");
             return CommandExitCodes.UsageError;
-        if (string.IsNullOrWhiteSpace(options.Query))
+        }
+        if (options.Selector == null && TryWriteBlankQueryError(options, "impact"))
+            return CommandExitCodes.UsageError;
+        if (string.IsNullOrWhiteSpace(options.Query) && string.IsNullOrWhiteSpace(options.Selector))
         {
             WriteUsageError(
                 "impact requires a symbol query argument",
@@ -49,7 +57,7 @@ public static partial class QueryCommandRunner
                 "Add the symbol whose callers you want to inspect, for example: `cdidx impact QueryCommandRunner`.");
             return CommandExitCodes.UsageError;
         }
-        if (IsBareVerbatimQueryToken(options.Query))
+        if (options.Selector == null && IsBareVerbatimQueryToken(options.Query!))
         {
             WriteUsageError(
                 "impact requires a symbol query argument",
@@ -62,12 +70,25 @@ public static partial class QueryCommandRunner
 
         return WithDb(options, jsonOptions, reader =>
         {
+            if (!TryResolveGraphSelector("impact", options, reader, jsonOptions, out var selectedDefinition, out var selectorExitCode))
+                return selectorExitCode;
+            var query = selectedDefinition?.Name ?? options.Query ?? options.Selector!;
+            var identityMetadata = reader.GetImpactGraphQueryIdentityMetadata(
+                query,
+                selectedDefinition,
+                options.Lang,
+                options.PathPatterns,
+                options.ExcludePaths,
+                options.ExcludeTests);
+            if (!options.Json)
+                WriteGraphIdentityWarningIfNeeded(query, identityMetadata);
+
             WriteReferenceGraphCompletenessWarningIfNeeded(options.Json, reader);
             var maxDepth = options.ContextAfterExplicit ? options.ContextAfter : 5; // --max-hops/--depth is parsed into ContextAfter; 0 means resolve-only
             if (!options.Json && options.ImpactDeprecatedDepthUsed)
                 CommandErrorWriter.WriteStderr("Warning: --depth is deprecated for impact; use --max-hops instead.");
             var analysis = reader.AnalyzeImpact(
-                options.Query,
+                query,
                 maxDepth,
                 options.Limit,
                 options.Lang,
@@ -77,7 +98,8 @@ public static partial class QueryCommandRunner
                 options.WithPaths,
                 JsonEnvelopeWrapper.GetBoundedResponseOffset("impact"),
                 JsonEnvelopeWrapper.GetBoundedImpactCollection(),
-                options.IncludeMemberReads);
+                options.IncludeMemberReads,
+                selectedDefinition);
             if (options.IncludeBody
                 && !options.CountOnly
                 && options.OutputFormat is (OutputFormatText or OutputFormatJson)
@@ -121,7 +143,7 @@ public static partial class QueryCommandRunner
                             degraded: false,
                             extraFields: zeroPayload =>
                             {
-                                zeroPayload["query"] = options.Query;
+                                zeroPayload["query"] = query;
                                 zeroPayload["resolved_name"] = analysis.ResolvedName;
                                 zeroPayload["file_count"] = 0;
                                 zeroPayload["confirmed_count"] = 0;
@@ -146,6 +168,7 @@ public static partial class QueryCommandRunner
                                     zeroPayload["suggestion"] = analysis.Suggestion;
                                 AddGraphContractJsonFields(zeroPayload, reader, jsonOptions, sqlGraphSignal, hdlGraphSignal);
                                 AddImpactOptionWarnings(zeroPayload, options);
+                                AddGraphIdentityJsonFields(zeroPayload, identityMetadata, jsonOptions);
                             });
                         var writeExitCode = WriteJsonPayloadWithOptionalByteLimit(
                             payload,
@@ -172,7 +195,7 @@ public static partial class QueryCommandRunner
                     {
                         var payload = new JsonObject
                         {
-                            ["query"] = options.Query,
+                            ["query"] = query,
                             ["resolved_name"] = analysis.ResolvedName,
                             ["count"] = 0,
                             ["files"] = 0,
@@ -202,6 +225,7 @@ public static partial class QueryCommandRunner
                             payload["note"] = "symbol_references table is missing in this index (legacy or read-only DB). Zero result is degraded, not authoritative.";
                         AddGraphContractJsonFields(payload, reader, jsonOptions, sqlGraphSignal, hdlGraphSignal);
                         AddImpactOptionWarnings(payload, options);
+                        AddGraphIdentityJsonFields(payload, identityMetadata, jsonOptions);
                         AddCountEnvelopeJsonFields(payload, reader, jsonOptions, options);
                         ApplyImpactCountAuthority(payload, analysis);
                         var writeExitCode = WriteJsonPayloadWithOptionalByteLimit(
@@ -231,7 +255,7 @@ public static partial class QueryCommandRunner
                         degraded: !analysis.GraphTableAvailable,
                         extraFields: zeroPayload =>
                         {
-                            zeroPayload["query"] = options.Query;
+                            zeroPayload["query"] = query;
                             zeroPayload["resolved_name"] = analysis.ResolvedName;
                             zeroPayload["file_count"] = 0;
                             zeroPayload["confirmed_count"] = 0;
@@ -256,6 +280,7 @@ public static partial class QueryCommandRunner
                                 zeroPayload["suggestion"] = analysis.Suggestion;
                             AddGraphContractJsonFields(zeroPayload, reader, jsonOptions, sqlGraphSignal, hdlGraphSignal);
                             AddImpactOptionWarnings(zeroPayload, options);
+                            AddGraphIdentityJsonFields(zeroPayload, identityMetadata, jsonOptions);
                         });
                     if (!analysis.GraphTableAvailable)
                         payload["note"] = "symbol_references table is missing in this index (legacy or read-only DB). Zero result is degraded, not authoritative.";
@@ -285,7 +310,7 @@ public static partial class QueryCommandRunner
                 {
                     var payload = new JsonObject
                     {
-                        ["query"] = options.Query,
+                        ["query"] = query,
                         ["resolved_name"] = analysis.ResolvedName,
                         ["count"] = visibleCount,
                         ["files"] = visibleFileCount,
@@ -304,6 +329,7 @@ public static partial class QueryCommandRunner
                         payload["truncated_reason"] = analysis.TruncatedReason;
                     AddGraphContractJsonFields(payload, reader, jsonOptions, sqlGraphSignal, hdlGraphSignal);
                     AddImpactOptionWarnings(payload, options);
+                    AddGraphIdentityJsonFields(payload, identityMetadata, jsonOptions);
                     AddCountEnvelopeJsonFields(payload, reader, jsonOptions, options);
                     ApplyImpactCountAuthority(payload, analysis);
                     AddActiveSqliteDiagnostics(payload);
@@ -320,7 +346,7 @@ public static partial class QueryCommandRunner
             {
                 var payload = new JsonObject
                 {
-                    ["query"] = options.Query,
+                    ["query"] = query,
                     ["resolved_name"] = analysis.ResolvedName,
                     ["count"] = visibleCount,
                     ["file_count"] = visibleFileCount,
@@ -346,6 +372,7 @@ public static partial class QueryCommandRunner
                 AddImpactFailureJsonFields(payload, analysis, jsonOptions);
                 AddGraphContractJsonFields(payload, reader, jsonOptions, sqlGraphSignal, hdlGraphSignal);
                 AddImpactOptionWarnings(payload, options);
+                AddGraphIdentityJsonFields(payload, identityMetadata, jsonOptions);
                 var writeExitCode = WriteJsonPayloadWithOptionalByteLimit(
                     payload,
                     options,

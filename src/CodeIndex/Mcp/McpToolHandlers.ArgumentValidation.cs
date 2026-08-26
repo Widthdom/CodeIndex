@@ -279,7 +279,7 @@ public partial class McpServer
             "project" or "capability" or "scopes" or "fields" or "visibility" or "excludeVisibility" or "includeSymbolKind" or "excludeSymbolKind" or
                 "commits" or "changedBetween" or "files" or
                 "requireBefore" or "requireAfter" or "rejectBefore" or "rejectAfter" => "string_or_array",
-            "query" or "uri" or "lang" or "kind" or "format" or "rankBy" or "sort" or "since" or "cursor" or "guardScope" or
+            "query" or "selector" or "uri" or "lang" or "kind" or "format" or "rankBy" or "sort" or "since" or "cursor" or "guardScope" or
                 "solution" or "symbol" or "groupBy" or "category" or "language" or "severity" or "explain" or "snippetFocus" or
                 "bucket" or "minConfidence" or "extension" or "alias" or "description" or "context" or "toolInvocationContext" or "db" or
                 "followSymlinks" or "recipe" or "auditScope" => "string",

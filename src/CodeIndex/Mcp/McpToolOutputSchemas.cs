@@ -22,9 +22,9 @@ internal static class McpToolOutputSchemas
         {
             "search" => SearchProperties(),
             "definition" => QueryRowsProperties(),
-            "references" => QueryRowsProperties(),
-            "callers" => QueryRowsProperties(),
-            "callees" => QueryRowsProperties(),
+            "references" => GraphQueryRowsProperties(),
+            "callers" => GraphQueryRowsProperties(),
+            "callees" => GraphQueryRowsProperties(),
             "symbols" => QueryRowsProperties(),
             "files" => RowsProperties(),
             "excerpt" => ExcerptProperties(),
@@ -275,6 +275,24 @@ internal static class McpToolOutputSchemas
         return properties;
     }
 
+    private static JsonObject GraphQueryRowsProperties()
+    {
+        var properties = QueryRowsProperties();
+        AddGraphIdentityProperties(properties);
+        return properties;
+    }
+
+    private static void AddGraphIdentityProperties(JsonObject properties)
+    {
+        properties["identity_scoped"] = BooleanSchema();
+        properties["identity_scope_reason"] = StringSchema();
+        properties["selected_symbol"] = ObjectSchema();
+        properties["candidate_count"] = NonNegativeIntegerSchema();
+        properties["candidates"] = Reference("rows");
+        properties["candidates_truncated"] = BooleanSchema();
+        properties["identity_warning"] = StringSchema();
+    }
+
     private static JsonObject RowsProperties()
         => new()
         {
@@ -340,7 +358,8 @@ internal static class McpToolOutputSchemas
         };
 
     private static JsonObject ImpactAnalysisProperties()
-        => new()
+    {
+        var properties = new JsonObject
         {
             ["query"] = StringSchema(),
             ["results"] = Reference("rows"),
@@ -348,6 +367,9 @@ internal static class McpToolOutputSchemas
             ["heuristic"] = BooleanSchema(),
             ["has_multiple_definitions"] = BooleanSchema(),
         };
+        AddGraphIdentityProperties(properties);
+        return properties;
+    }
 
     private static JsonObject StatusProperties()
         => new()

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using CodeIndex.Database;
 using CodeIndex.Models;
 
@@ -28,63 +29,121 @@ public static partial class QueryCommandRunner
         {
             return queryExitCode;
         }
-        var query = options.Query!;
+        var requestedQuery = options.Query ?? options.Selector!;
 
         return WithDb(options, jsonOptions, reader =>
         {
+            if (!TryResolveGraphSelector("references", options, reader, jsonOptions, out var selectedDefinition, out var selectorExitCode))
+                return selectorExitCode;
+            var query = selectedDefinition?.Name ?? requestedQuery;
+            var selectorMatchesLanguage = selectedDefinition == null
+                || DbReader.GraphSelectorMatchesLanguageFilter(selectedDefinition, options.Lang);
+            var identityMetadata = reader.GetReferenceGraphQueryIdentityMetadata(
+                query,
+                selectedDefinition,
+                options.Lang,
+                options.PathPatterns,
+                options.ExcludePaths,
+                options.ExcludeTests,
+                options.Kind,
+                exact,
+                options.IncludeQualifiedCommonCalls);
+            if (!options.Json)
+                WriteGraphIdentityWarningIfNeeded(query, identityMetadata);
+
             WriteGraphReferenceKindHint("references", options.Kind, options.Json);
             var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
             var hdlGraphSignal = reader.GetHdlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
-            var exactGraphLanguage = exact
+            var exactGraphLanguage = selectedDefinition?.Lang ?? (exact
                 ? reader.GetExactGraphSupportedDefinitionLanguage(query, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests)
-                : null;
+                : null);
             if (options.CountOnly)
             {
-                var counts = reader.CountSearchReferencesTotal(options.Query, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact, options.IncludeQualifiedCommonCalls);
+                var counts = !selectorMatchesLanguage
+                    ? new QueryCountResult(0, 0)
+                    : selectedDefinition != null
+                        ? reader.CountSearchReferencesForCandidate(
+                            selectedDefinition,
+                            options.PathPatterns,
+                            options.ExcludePaths,
+                            options.ExcludeTests,
+                            options.Kind,
+                            includeQualifiedCommonCalls: options.IncludeQualifiedCommonCalls,
+                            requireAuthoritativeIdentity: true)
+                        : reader.CountSearchReferencesTotal(query, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact, options.IncludeQualifiedCommonCalls);
                 var effectiveSqlGraphSignal = NarrowSqlGraphContractSignal(
                     baseSqlGraphSignal,
                     counts.IncludesSql || DbReader.IsSqlLanguage(options.Lang) || DbReader.IsSqlLanguage(exactGraphLanguage));
                 var exactSignalForCount = reader.GetReferencesExactQuerySignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, includeSqlGraphContractSignal: effectiveSqlGraphSignal.Relevant);
                 var exactZeroHintForCount = BuildExactZeroHint(
-                    exact && reader._hasReferencesTable,
-                    () => reader.CountSearchReferences(options.Query, ExactZeroHintProbeLimit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false, includeQualifiedCommonCalls: options.IncludeQualifiedCommonCalls) > 0,
-                    () => reader.CountSearchReferences(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false, includeQualifiedCommonCalls: options.IncludeQualifiedCommonCalls),
-                    () => reader.SearchReferences(options.Query, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false, includeQualifiedCommonCalls: options.IncludeQualifiedCommonCalls),
+                    selectedDefinition == null && exact && reader._hasReferencesTable,
+                    () => reader.CountSearchReferences(query, ExactZeroHintProbeLimit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false, includeQualifiedCommonCalls: options.IncludeQualifiedCommonCalls) > 0,
+                    () => reader.CountSearchReferences(query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false, includeQualifiedCommonCalls: options.IncludeQualifiedCommonCalls),
+                    () => reader.SearchReferences(query, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false, includeQualifiedCommonCalls: options.IncludeQualifiedCommonCalls),
                     r => r.SymbolName);
                 WriteExactGraphWarningIfNeeded(exact, options.Json, exactSignalForCount, reader, options);
                 WriteSqlGraphContractWarningIfNeeded(options.Json, effectiveSqlGraphSignal, reader, options);
                 WriteHdlGraphContractWarningIfNeeded(options.Json, hdlGraphSignal);
                 if (counts.Count == 0)
                 {
-                    WriteGraphCountResult(reader, 0, 0, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount, exactZeroHintForCount, extraFields: payload => AddReferenceGraphContractJsonFields(payload, effectiveSqlGraphSignal, hdlGraphSignal));
+                    WriteGraphCountResult(reader, 0, 0, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount, exactZeroHintForCount, extraFields: payload =>
+                    {
+                        AddReferenceGraphContractJsonFields(payload, effectiveSqlGraphSignal, hdlGraphSignal);
+                        AddGraphIdentityJsonFields(payload, identityMetadata, jsonOptions);
+                    });
                     return CommandExitCodes.Success;
                 }
 
-                WriteGraphCountResult(reader, counts.Count, counts.FileCount, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount, extraFields: payload => AddReferenceGraphContractJsonFields(payload, effectiveSqlGraphSignal, hdlGraphSignal));
+                WriteGraphCountResult(reader, counts.Count, counts.FileCount, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount, extraFields: payload =>
+                {
+                    AddReferenceGraphContractJsonFields(payload, effectiveSqlGraphSignal, hdlGraphSignal);
+                    AddGraphIdentityJsonFields(payload, identityMetadata, jsonOptions);
+                });
                 return CommandExitCodes.Success;
             }
 
-            var results = reader.SearchReferences(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact, options.MaxLineWidth, offset: JsonEnvelopeWrapper.GetBoundedResponseOffset("references"), includeQualifiedCommonCalls: options.IncludeQualifiedCommonCalls);
+            var results = !selectorMatchesLanguage
+                ? []
+                : selectedDefinition != null
+                    ? reader.SearchReferencesForCandidate(
+                        selectedDefinition,
+                        options.Limit,
+                        options.PathPatterns,
+                        options.ExcludePaths,
+                        options.ExcludeTests,
+                        options.MaxLineWidth,
+                        offset: JsonEnvelopeWrapper.GetBoundedResponseOffset("references"),
+                        referenceKind: options.Kind,
+                        includeQualifiedCommonCalls: options.IncludeQualifiedCommonCalls,
+                        requireAuthoritativeIdentity: true)
+                    : reader.SearchReferences(query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact, options.MaxLineWidth, offset: JsonEnvelopeWrapper.GetBoundedResponseOffset("references"), includeQualifiedCommonCalls: options.IncludeQualifiedCommonCalls);
             if (options.IncludeBody && JsonEnvelopeWrapper.ShouldMaterializeBody("references"))
                 AttachBodyExcerpts(reader, results, options.SnippetLines, options.MaxLineWidth);
             ApplyBodyRecoveryCommands(results, options.DbPath, options.RedactPaths ?? true);
             var sqlGraphSignal = NarrowSqlGraphContractSignalByLanguages(baseSqlGraphSignal, results.Select(result => result.Lang), options.Lang, exactGraphLanguage);
             var exactSignal = reader.GetReferencesExactQuerySignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, includeSqlGraphContractSignal: sqlGraphSignal.Relevant);
             var exactZeroHint = BuildExactZeroHint(
-                exact && reader._hasReferencesTable,
-                () => reader.CountSearchReferences(options.Query, ExactZeroHintProbeLimit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false, includeQualifiedCommonCalls: options.IncludeQualifiedCommonCalls) > 0,
-                () => reader.CountSearchReferences(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false, includeQualifiedCommonCalls: options.IncludeQualifiedCommonCalls),
-                () => reader.SearchReferences(options.Query, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false, includeQualifiedCommonCalls: options.IncludeQualifiedCommonCalls),
+                selectedDefinition == null && exact && reader._hasReferencesTable,
+                () => reader.CountSearchReferences(query, ExactZeroHintProbeLimit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false, includeQualifiedCommonCalls: options.IncludeQualifiedCommonCalls) > 0,
+                () => reader.CountSearchReferences(query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false, includeQualifiedCommonCalls: options.IncludeQualifiedCommonCalls),
+                () => reader.SearchReferences(query, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false, includeQualifiedCommonCalls: options.IncludeQualifiedCommonCalls),
                 r => r.SymbolName);
             WriteExactGraphWarningIfNeeded(exact, options.Json, exactSignal, reader, options);
             WriteSqlGraphContractWarningIfNeeded(options.Json, sqlGraphSignal, reader, options);
             WriteHdlGraphContractWarningIfNeeded(options.Json, hdlGraphSignal);
             if (results.Count == 0)
             {
-                if (options.Json && TryWriteEmptyFormattedResult(options, jsonOptions))
+                if (options.Json && TryWriteEmptyFormattedResult(
+                    options,
+                    jsonOptions,
+                    extraFields: payload => AddGraphIdentityJsonFields(payload, identityMetadata, jsonOptions)))
                     return ZeroResultExitCode(options);
                 if (options.Json)
-                    WriteGraphZeroJsonResult(reader, "references", jsonOptions, graphAvailable: reader._hasReferencesTable, exact ? exactSignal : (ExactQuerySignal?)null, exactZeroHint, queryOptions: options, extraFields: payload => AddReferenceGraphContractJsonFields(payload, sqlGraphSignal, hdlGraphSignal));
+                    WriteGraphZeroJsonResult(reader, "references", jsonOptions, graphAvailable: reader._hasReferencesTable, exact ? exactSignal : (ExactQuerySignal?)null, exactZeroHint, queryOptions: options, extraFields: payload =>
+                    {
+                        AddReferenceGraphContractJsonFields(payload, sqlGraphSignal, hdlGraphSignal);
+                        AddGraphIdentityJsonFields(payload, identityMetadata, jsonOptions);
+                    });
                 else if (!options.Json)
                 {
                     CommandErrorWriter.WriteStderr(BuildZeroResultLine("No references found", options));
@@ -101,7 +160,8 @@ public static partial class QueryCommandRunner
                 if (TryWriteFormattedLocations(
                     options,
                     results.Select(r => new FormattedLocation(r.Path, r.Line, r.Column, $"{r.ReferenceKind} {r.SymbolName}")),
-                    jsonOptions))
+                    jsonOptions,
+                    payload => AddGraphIdentityJsonFields(payload, identityMetadata, jsonOptions)))
                     return CommandExitCodes.Success;
                 if (options.OutputFormat == OutputFormatLsp)
                 {
@@ -121,9 +181,17 @@ public static partial class QueryCommandRunner
                 foreach (var r in results)
                 {
                     if (exact)
-                        WriteGraphJsonResult(r, CliJsonSerializerContextFactory.Create(jsonOptions).ReferenceResult, exactSignal, jsonOptions, extraFields: payload => AddReferenceGraphContractJsonFields(payload, sqlGraphSignal, hdlGraphSignal));
+                        WriteGraphJsonResult(r, CliJsonSerializerContextFactory.Create(jsonOptions).ReferenceResult, exactSignal, jsonOptions, extraFields: payload =>
+                        {
+                            AddReferenceGraphContractJsonFields(payload, sqlGraphSignal, hdlGraphSignal);
+                            AddGraphIdentityJsonFields(payload, identityMetadata, jsonOptions);
+                        });
                     else
-                        WriteJsonResult(r, CliJsonSerializerContextFactory.Create(jsonOptions).ReferenceResult, jsonOptions, extraFields: payload => AddReferenceGraphContractJsonFields(payload, sqlGraphSignal, hdlGraphSignal));
+                        WriteJsonResult(r, CliJsonSerializerContextFactory.Create(jsonOptions).ReferenceResult, jsonOptions, extraFields: payload =>
+                        {
+                            AddReferenceGraphContractJsonFields(payload, sqlGraphSignal, hdlGraphSignal);
+                            AddGraphIdentityJsonFields(payload, identityMetadata, jsonOptions);
+                        });
                 }
             }
             else
@@ -172,26 +240,58 @@ public static partial class QueryCommandRunner
         {
             return queryExitCode;
         }
-        var query = options.Query!;
+        var requestedQuery = options.Query ?? options.Selector!;
 
         return WithDb(options, jsonOptions, reader =>
         {
+            if (!TryResolveGraphSelector("callers", options, reader, jsonOptions, out var selectedDefinition, out var selectorExitCode))
+                return selectorExitCode;
+            var query = selectedDefinition?.Name ?? requestedQuery;
+            var selectorMatchesLanguage = selectedDefinition == null
+                || DbReader.GraphSelectorMatchesLanguageFilter(selectedDefinition, options.Lang);
+            var identityMetadata = reader.GetCallerGraphQueryIdentityMetadata(
+                query,
+                selectedDefinition,
+                options.Lang,
+                options.PathPatterns,
+                options.ExcludePaths,
+                options.ExcludeTests,
+                options.Kind,
+                exact,
+                options.RawKinds,
+                options.IncludeQualifiedCommonCalls,
+                options.IncludeMemberReads);
+            if (!options.Json)
+                WriteGraphIdentityWarningIfNeeded(query, identityMetadata);
+
             WriteGraphReferenceKindHint("callers", options.Kind, options.Json);
             WriteReferenceGraphCompletenessWarningIfNeeded(options.Json, reader);
             var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
             var hdlGraphSignal = reader.GetHdlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
-            var exactGraphLanguage = exact
+            var exactGraphLanguage = selectedDefinition?.Lang ?? (exact
                 ? reader.GetExactGraphSupportedDefinitionLanguage(query, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests)
-                : null;
+                : null);
             if (options.CountOnly)
             {
-                var counts = reader.CountCallersTotal(query, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact, options.RawKinds, options.IncludeQualifiedCommonCalls, options.IncludeMemberReads);
+                var counts = !selectorMatchesLanguage
+                    ? new QueryCountResult(0, 0)
+                    : selectedDefinition != null
+                        ? reader.CountCallersForCandidate(
+                            selectedDefinition,
+                            options.PathPatterns,
+                            options.ExcludePaths,
+                            options.ExcludeTests,
+                            options.Kind,
+                            options.RawKinds,
+                            options.IncludeQualifiedCommonCalls,
+                            options.IncludeMemberReads)
+                        : reader.CountCallersTotal(query, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact, options.RawKinds, options.IncludeQualifiedCommonCalls, options.IncludeMemberReads);
                 var effectiveSqlGraphSignal = NarrowSqlGraphContractSignal(
                     baseSqlGraphSignal,
                     counts.IncludesSql || DbReader.IsSqlLanguage(options.Lang) || DbReader.IsSqlLanguage(exactGraphLanguage));
                 var exactSignalForCount = reader.GetCallersExactQuerySignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, includeSqlGraphContractSignal: effectiveSqlGraphSignal.Relevant);
                 var exactZeroHintForCount = BuildExactZeroHint(
-                    exact && reader._hasReferencesTable,
+                    selectedDefinition == null && exact && reader._hasReferencesTable,
                     () => reader.CountCallers(query, ExactZeroHintProbeLimit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false, rawKinds: options.RawKinds, includeQualifiedCommonCalls: options.IncludeQualifiedCommonCalls, includeMemberReads: options.IncludeMemberReads) > 0,
                     () => reader.CountCallers(query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false, rawKinds: options.RawKinds, includeQualifiedCommonCalls: options.IncludeQualifiedCommonCalls, includeMemberReads: options.IncludeMemberReads),
                     () => reader.GetCallers(query, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false, rawKinds: options.RawKinds, rankMode: options.RankMode, includeQualifiedCommonCalls: options.IncludeQualifiedCommonCalls, includeMemberReads: options.IncludeMemberReads),
@@ -205,7 +305,8 @@ public static partial class QueryCommandRunner
                     {
                         AddGraphContractJsonFields(payload, reader, jsonOptions, effectiveSqlGraphSignal, hdlGraphSignal);
                         AddCallerIdentityRootJsonFields(payload, counts);
-                        if (!exact)
+                        AddGraphIdentityJsonFields(payload, identityMetadata, jsonOptions);
+                        if (selectedDefinition == null && !exact)
                             payload["graph_evidence_confidence"] = "name_discovery";
                     });
                     if (!options.Json)
@@ -217,7 +318,8 @@ public static partial class QueryCommandRunner
                 {
                     AddGraphContractJsonFields(payload, reader, jsonOptions, effectiveSqlGraphSignal, hdlGraphSignal);
                     AddCallerIdentityRootJsonFields(payload, counts);
-                    if (!exact)
+                    AddGraphIdentityJsonFields(payload, identityMetadata, jsonOptions);
+                    if (selectedDefinition == null && !exact)
                         payload["graph_evidence_confidence"] = "name_discovery";
                 });
                 if (!options.Json)
@@ -225,9 +327,36 @@ public static partial class QueryCommandRunner
                 return CommandExitCodes.Success;
             }
 
-            var results = reader.GetCallers(query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact, options.RawKinds, options.RankMode, offset: JsonEnvelopeWrapper.GetBoundedResponseOffset("callers"), includeQualifiedCommonCalls: options.IncludeQualifiedCommonCalls, includeMemberReads: options.IncludeMemberReads);
-            var callerIdentityCounts = exact
-                ? reader.CountCallersTotal(query, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: true, options.RawKinds, options.IncludeQualifiedCommonCalls, options.IncludeMemberReads)
+            var results = !selectorMatchesLanguage
+                ? []
+                : selectedDefinition != null
+                    ? reader.GetCallersForCandidate(
+                        selectedDefinition,
+                        options.Limit,
+                        options.PathPatterns,
+                        options.ExcludePaths,
+                        options.ExcludeTests,
+                        offset: JsonEnvelopeWrapper.GetBoundedResponseOffset("callers"),
+                        referenceKind: options.Kind,
+                        rawKinds: options.RawKinds,
+                        rankMode: options.RankMode,
+                        includeQualifiedCommonCalls: options.IncludeQualifiedCommonCalls,
+                        includeMemberReads: options.IncludeMemberReads)
+                    : reader.GetCallers(query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact, options.RawKinds, options.RankMode, offset: JsonEnvelopeWrapper.GetBoundedResponseOffset("callers"), includeQualifiedCommonCalls: options.IncludeQualifiedCommonCalls, includeMemberReads: options.IncludeMemberReads);
+            var callerIdentityCounts = selectedDefinition != null
+                ? selectorMatchesLanguage
+                    ? reader.CountCallersForCandidate(
+                        selectedDefinition,
+                        options.PathPatterns,
+                        options.ExcludePaths,
+                        options.ExcludeTests,
+                        options.Kind,
+                        options.RawKinds,
+                        options.IncludeQualifiedCommonCalls,
+                        options.IncludeMemberReads)
+                    : new QueryCountResult(0, 0)
+                : exact
+                    ? reader.CountCallersTotal(query, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: true, options.RawKinds, options.IncludeQualifiedCommonCalls, options.IncludeMemberReads)
                 : (QueryCountResult?)null;
             if (options.IncludeBody && JsonEnvelopeWrapper.ShouldMaterializeBody("callers"))
                 AttachBodyExcerpts(reader, results, options.SnippetLines, options.MaxLineWidth);
@@ -235,7 +364,7 @@ public static partial class QueryCommandRunner
             var sqlGraphSignal = NarrowSqlGraphContractSignalByLanguages(baseSqlGraphSignal, results.Select(result => result.Lang), options.Lang, exactGraphLanguage);
             var exactSignal = reader.GetCallersExactQuerySignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, includeSqlGraphContractSignal: sqlGraphSignal.Relevant);
             var exactZeroHint = BuildExactZeroHint(
-                exact && reader._hasReferencesTable,
+                selectedDefinition == null && exact && reader._hasReferencesTable,
                 () => reader.CountCallers(query, ExactZeroHintProbeLimit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false, rawKinds: options.RawKinds, includeQualifiedCommonCalls: options.IncludeQualifiedCommonCalls, includeMemberReads: options.IncludeMemberReads) > 0,
                 () => reader.CountCallers(query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false, rawKinds: options.RawKinds, includeQualifiedCommonCalls: options.IncludeQualifiedCommonCalls, includeMemberReads: options.IncludeMemberReads),
                 () => reader.GetCallers(query, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false, rawKinds: options.RawKinds, rankMode: options.RankMode, includeQualifiedCommonCalls: options.IncludeQualifiedCommonCalls, includeMemberReads: options.IncludeMemberReads),
@@ -247,7 +376,10 @@ public static partial class QueryCommandRunner
                 WriteCallerIdentityRootWarningIfNeeded(humanCounts);
             if (results.Count == 0)
             {
-                if (options.Json && TryWriteEmptyFormattedResult(options, jsonOptions))
+                if (options.Json && TryWriteEmptyFormattedResult(
+                    options,
+                    jsonOptions,
+                    extraFields: payload => AddGraphIdentityJsonFields(payload, identityMetadata, jsonOptions)))
                     return ZeroResultExitCode(options);
                 if (options.Json)
                     WriteGraphZeroJsonResult(reader, "callers", jsonOptions, graphAvailable: reader._hasReferencesTable, exact ? exactSignal : (ExactQuerySignal?)null, exactZeroHint, queryOptions: options, extraFields: payload =>
@@ -255,8 +387,9 @@ public static partial class QueryCommandRunner
                         AddGraphContractJsonFields(payload, reader, jsonOptions, sqlGraphSignal, hdlGraphSignal);
                         if (callerIdentityCounts is { } counts)
                             AddCallerIdentityRootJsonFields(payload, counts);
-                        else
+                        else if (selectedDefinition == null)
                             payload["graph_evidence_confidence"] = "name_discovery";
+                        AddGraphIdentityJsonFields(payload, identityMetadata, jsonOptions);
                     });
                 else if (!options.Json)
                 {
@@ -274,7 +407,8 @@ public static partial class QueryCommandRunner
                 if (TryWriteFormattedLocations(
                     options,
                     results.Select(r => new FormattedLocation(r.Path, r.FirstLine, Math.Max(1, r.FirstColumn), $"{r.CallerName ?? "<top-level>"} -> {r.CalleeName}")),
-                    jsonOptions))
+                    jsonOptions,
+                    payload => AddGraphIdentityJsonFields(payload, identityMetadata, jsonOptions)))
                     return CommandExitCodes.Success;
                 if (options.OutputFormat == OutputFormatLsp)
                 {
@@ -299,13 +433,16 @@ public static partial class QueryCommandRunner
                             AddGraphContractJsonFields(payload, reader, jsonOptions, sqlGraphSignal, hdlGraphSignal);
                             if (callerIdentityCounts is { } counts)
                                 AddCallerIdentityRootJsonFields(payload, counts);
+                            AddGraphIdentityJsonFields(payload, identityMetadata, jsonOptions);
                             AddReferenceRankingQueryContextJson(payload, options, jsonOptions);
                         });
                     else
                         WriteJsonResult(r, CliJsonSerializerContextFactory.Create(jsonOptions).CallerResult, jsonOptions, extraFields: payload =>
                         {
                             AddGraphContractJsonFields(payload, reader, jsonOptions, sqlGraphSignal, hdlGraphSignal);
-                            payload["graph_evidence_confidence"] = "name_discovery";
+                            if (selectedDefinition == null)
+                                payload["graph_evidence_confidence"] = "name_discovery";
+                            AddGraphIdentityJsonFields(payload, identityMetadata, jsonOptions);
                             AddReferenceRankingQueryContextJson(payload, options, jsonOptions);
                         });
                 }
@@ -356,41 +493,29 @@ public static partial class QueryCommandRunner
         {
             return queryExitCode;
         }
-        var query = options.Query!;
-        var selectedSymbol = SymbolSelector.TryParse(query, out var parsedSelector)
-            ? parsedSelector
-            : (SymbolSelector?)null;
+        var requestedQuery = options.Query ?? options.Selector!;
 
         return WithDb(options, jsonOptions, reader =>
         {
-            DefinitionResult? selectedDefinition = null;
-            if (selectedSymbol is { } selector)
-            {
-                if (!reader.IsCurrentSymbolSelector(selector))
-                {
-                    return CommandErrorWriter.WriteJsonOrHuman(
-                        options.Json,
-                        jsonOptions,
-                        $"symbol selector is stale or belongs to another index generation: {selector}",
-                        CommandExitCodes.NotFound,
-                        "Rerun outline or inspect against this database and use the current emitted selector.",
-                        errorCode: CommandErrorCodes.QueryNotFound,
-                        category: "not_found");
-                }
-
-                selectedDefinition = reader.GetDefinitionBySelector(selector, options.Lang);
-                if (selectedDefinition == null)
-                {
-                    return CommandErrorWriter.WriteJsonOrHuman(
-                        options.Json,
-                        jsonOptions,
-                        $"symbol selector was not found in the active index: {selector}",
-                        CommandExitCodes.NotFound,
-                        "Rerun outline or inspect and use a selector emitted by the active database.",
-                        errorCode: CommandErrorCodes.QueryNotFound,
-                        category: "not_found");
-                }
-            }
+            if (!TryResolveGraphSelector("callees", options, reader, jsonOptions, out var selectedDefinition, out var selectorExitCode))
+                return selectorExitCode;
+            var query = selectedDefinition?.Name ?? requestedQuery;
+            var selectorMatchesLanguage = selectedDefinition == null
+                || DbReader.GraphSelectorMatchesLanguageFilter(selectedDefinition, options.Lang);
+            var identityMetadata = reader.GetCalleeGraphQueryIdentityMetadata(
+                query,
+                selectedDefinition,
+                options.Lang,
+                options.PathPatterns,
+                options.ExcludePaths,
+                options.ExcludeTests,
+                options.Kind,
+                exact,
+                options.RawKinds,
+                options.IncludeQualifiedCommonCalls,
+                options.IncludeMemberReads);
+            if (!options.Json)
+                WriteGraphIdentityWarningIfNeeded(query, identityMetadata);
 
             WriteGraphReferenceKindHint("callees", options.Kind, options.Json);
             WriteReferenceGraphCompletenessWarningIfNeeded(options.Json, reader);
@@ -401,7 +526,9 @@ public static partial class QueryCommandRunner
                 : null);
             if (options.CountOnly)
             {
-                var counts = selectedDefinition != null
+                var counts = !selectorMatchesLanguage
+                    ? new QueryCountResult(0, 0)
+                    : selectedDefinition != null
                     ? reader.CountCalleesForCandidate(
                         selectedDefinition,
                         options.PathPatterns,
@@ -417,7 +544,7 @@ public static partial class QueryCommandRunner
                     counts.IncludesSql || DbReader.IsSqlLanguage(options.Lang) || DbReader.IsSqlLanguage(exactGraphLanguage));
                 var exactSignalForCount = reader.GetCalleesExactQuerySignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, includeSqlGraphContractSignal: effectiveSqlGraphSignal.Relevant);
                 var exactZeroHintForCount = BuildExactZeroHint(
-                    exact && reader._hasReferencesTable,
+                    selectedDefinition == null && exact && reader._hasReferencesTable,
                     () => reader.CountCallees(query, ExactZeroHintProbeLimit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false, rawKinds: options.RawKinds, includeQualifiedCommonCalls: options.IncludeQualifiedCommonCalls, includeMemberReads: options.IncludeMemberReads) > 0,
                     () => reader.CountCallees(query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false, rawKinds: options.RawKinds, includeQualifiedCommonCalls: options.IncludeQualifiedCommonCalls, includeMemberReads: options.IncludeMemberReads),
                     () => reader.GetCallees(query, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false, rawKinds: options.RawKinds, rankMode: options.RankMode, includeQualifiedCommonCalls: options.IncludeQualifiedCommonCalls, includeMemberReads: options.IncludeMemberReads),
@@ -427,15 +554,25 @@ public static partial class QueryCommandRunner
                 WriteHdlGraphContractWarningIfNeeded(options.Json, hdlGraphSignal);
                 if (counts.Count == 0)
                 {
-                    WriteGraphCountResult(reader, 0, 0, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount, exactZeroHintForCount, extraFields: payload => AddGraphContractJsonFields(payload, reader, jsonOptions, effectiveSqlGraphSignal, hdlGraphSignal));
+                    WriteGraphCountResult(reader, 0, 0, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount, exactZeroHintForCount, extraFields: payload =>
+                    {
+                        AddGraphContractJsonFields(payload, reader, jsonOptions, effectiveSqlGraphSignal, hdlGraphSignal);
+                        AddGraphIdentityJsonFields(payload, identityMetadata, jsonOptions);
+                    });
                     return CommandExitCodes.Success;
                 }
 
-                WriteGraphCountResult(reader, counts.Count, counts.FileCount, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount, extraFields: payload => AddGraphContractJsonFields(payload, reader, jsonOptions, effectiveSqlGraphSignal, hdlGraphSignal));
+                WriteGraphCountResult(reader, counts.Count, counts.FileCount, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount, extraFields: payload =>
+                {
+                    AddGraphContractJsonFields(payload, reader, jsonOptions, effectiveSqlGraphSignal, hdlGraphSignal);
+                    AddGraphIdentityJsonFields(payload, identityMetadata, jsonOptions);
+                });
                 return CommandExitCodes.Success;
             }
 
-            var results = selectedDefinition != null
+            var results = !selectorMatchesLanguage
+                ? []
+                : selectedDefinition != null
                 ? reader.GetCalleesForCandidate(
                     selectedDefinition,
                     options.Limit,
@@ -455,7 +592,7 @@ public static partial class QueryCommandRunner
             var sqlGraphSignal = NarrowSqlGraphContractSignalByLanguages(baseSqlGraphSignal, results.Select(result => result.Lang), options.Lang, exactGraphLanguage);
             var exactSignal = reader.GetCalleesExactQuerySignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, includeSqlGraphContractSignal: sqlGraphSignal.Relevant);
             var exactZeroHint = BuildExactZeroHint(
-                exact && reader._hasReferencesTable,
+                selectedDefinition == null && exact && reader._hasReferencesTable,
                 () => reader.CountCallees(query, ExactZeroHintProbeLimit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false, rawKinds: options.RawKinds, includeQualifiedCommonCalls: options.IncludeQualifiedCommonCalls, includeMemberReads: options.IncludeMemberReads) > 0,
                 () => reader.CountCallees(query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false, rawKinds: options.RawKinds, includeQualifiedCommonCalls: options.IncludeQualifiedCommonCalls, includeMemberReads: options.IncludeMemberReads),
                 () => reader.GetCallees(query, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false, rawKinds: options.RawKinds, rankMode: options.RankMode, includeQualifiedCommonCalls: options.IncludeQualifiedCommonCalls, includeMemberReads: options.IncludeMemberReads),
@@ -465,10 +602,17 @@ public static partial class QueryCommandRunner
             WriteHdlGraphContractWarningIfNeeded(options.Json, hdlGraphSignal);
             if (results.Count == 0)
             {
-                if (options.Json && TryWriteEmptyFormattedResult(options, jsonOptions))
+                if (options.Json && TryWriteEmptyFormattedResult(
+                    options,
+                    jsonOptions,
+                    extraFields: payload => AddGraphIdentityJsonFields(payload, identityMetadata, jsonOptions)))
                     return ZeroResultExitCode(options);
                 if (options.Json)
-                    WriteGraphZeroJsonResult(reader, "callees", jsonOptions, graphAvailable: reader._hasReferencesTable, exact ? exactSignal : (ExactQuerySignal?)null, exactZeroHint, queryOptions: options, extraFields: payload => AddGraphContractJsonFields(payload, reader, jsonOptions, sqlGraphSignal, hdlGraphSignal));
+                    WriteGraphZeroJsonResult(reader, "callees", jsonOptions, graphAvailable: reader._hasReferencesTable, exact ? exactSignal : (ExactQuerySignal?)null, exactZeroHint, queryOptions: options, extraFields: payload =>
+                    {
+                        AddGraphContractJsonFields(payload, reader, jsonOptions, sqlGraphSignal, hdlGraphSignal);
+                        AddGraphIdentityJsonFields(payload, identityMetadata, jsonOptions);
+                    });
                 else if (!options.Json)
                 {
                     CommandErrorWriter.WriteStderr(BuildZeroResultLine("No callees found", options));
@@ -485,7 +629,8 @@ public static partial class QueryCommandRunner
                 if (TryWriteFormattedLocations(
                     options,
                     results.Select(r => new FormattedLocation(r.Path, r.FirstLine, r.FirstColumn, $"{r.CallerName ?? "<top-level>"} -> {r.CalleeName}")),
-                    jsonOptions))
+                    jsonOptions,
+                    payload => AddGraphIdentityJsonFields(payload, identityMetadata, jsonOptions)))
                     return CommandExitCodes.Success;
                 if (options.OutputFormat == OutputFormatLsp)
                 {
@@ -518,12 +663,14 @@ public static partial class QueryCommandRunner
                         WriteGraphJsonResult(r, CliJsonSerializerContextFactory.Create(jsonOptions).CalleeResult, exactSignal, jsonOptions, extraFields: payload =>
                         {
                             AddGraphContractJsonFields(payload, reader, jsonOptions, sqlGraphSignal, hdlGraphSignal);
+                            AddGraphIdentityJsonFields(payload, identityMetadata, jsonOptions);
                             AddReferenceRankingQueryContextJson(payload, options, jsonOptions);
                         });
                     else
                         WriteJsonResult(r, CliJsonSerializerContextFactory.Create(jsonOptions).CalleeResult, jsonOptions, extraFields: payload =>
                         {
                             AddGraphContractJsonFields(payload, reader, jsonOptions, sqlGraphSignal, hdlGraphSignal);
+                            AddGraphIdentityJsonFields(payload, identityMetadata, jsonOptions);
                             AddReferenceRankingQueryContextJson(payload, options, jsonOptions);
                         });
                 }
@@ -654,20 +801,30 @@ public static partial class QueryCommandRunner
             return false;
         }
 
-        if (TryWriteBlankQueryError(options, command))
+        if (options.Selector != null && !string.IsNullOrWhiteSpace(options.Query))
+        {
+            WriteUsageError(
+                "--selector cannot be combined with a symbol query argument",
+                GetUsageLineOrThrow(command),
+                "Remove the positional/--query value and pass only the generation-bound selector emitted by inspect.");
+            exitCode = CommandExitCodes.UsageError;
+            return false;
+        }
+
+        if (options.Selector == null && TryWriteBlankQueryError(options, command))
         {
             exitCode = CommandExitCodes.UsageError;
             return false;
         }
 
-        if (string.IsNullOrWhiteSpace(options.Query))
+        if (string.IsNullOrWhiteSpace(options.Query) && string.IsNullOrWhiteSpace(options.Selector))
         {
             WriteUsageError(requiredQueryMessage, GetUsageLineOrThrow(command), querySuggestion);
             exitCode = CommandExitCodes.UsageError;
             return false;
         }
 
-        if (IsBareVerbatimQueryToken(options.Query))
+        if (options.Selector == null && IsBareVerbatimQueryToken(options.Query!))
         {
             WriteUsageError(
                 requiredQueryMessage,
@@ -685,6 +842,117 @@ public static partial class QueryCommandRunner
 
         exitCode = CommandExitCodes.Success;
         return true;
+    }
+
+    private static string? GetGraphSelectorValue(QueryCommandOptions options)
+    {
+        if (options.Selector != null)
+            return options.Selector;
+        return SymbolSelector.TryParse(options.Query, out _)
+            ? options.Query
+            : null;
+    }
+
+    private static bool TryResolveGraphSelector(
+        string command,
+        QueryCommandOptions options,
+        DbReader reader,
+        JsonSerializerOptions jsonOptions,
+        out DefinitionResult? selectedDefinition,
+        out int exitCode)
+    {
+        selectedDefinition = null;
+        exitCode = CommandExitCodes.Success;
+        var selectorValue = GetGraphSelectorValue(options);
+        if (selectorValue == null)
+            return true;
+
+        var resolution = reader.ResolveGraphSymbolSelector(selectorValue);
+        if (resolution.Status == GraphSymbolSelectorStatus.Success)
+        {
+            selectedDefinition = resolution.Definition;
+            return true;
+        }
+
+        var (message, suggestion, status, code, category) = resolution.Status switch
+        {
+            GraphSymbolSelectorStatus.GenerationRequired => (
+                $"symbol selector requires a generation fingerprint: {selectorValue}",
+                "Rerun inspect and pass its complete `id:<positive-integer>@g:<fingerprint>` selector.",
+                CommandExitCodes.UsageError,
+                CommandErrorCodes.UsageError,
+                "usage"),
+            GraphSymbolSelectorStatus.Stale => (
+                $"symbol selector is stale or belongs to another database: {selectorValue}",
+                "Rerun inspect against this database and use the current emitted selector.",
+                CommandExitCodes.NotFound,
+                CommandErrorCodes.QueryNotFound,
+                "not_found"),
+            GraphSymbolSelectorStatus.NotFound => (
+                $"symbol selector was not found in the active index: {selectorValue}",
+                "Rerun inspect and use a selector emitted by the active database.",
+                CommandExitCodes.NotFound,
+                CommandErrorCodes.QueryNotFound,
+                "not_found"),
+            _ => (
+                $"invalid symbol selector: {ConsoleUi.FormatBoundedValue(selectorValue)}",
+                "Pass a selector emitted by inspect in the form `--selector 'id:<positive-integer>@g:<fingerprint>'`.",
+                CommandExitCodes.UsageError,
+                CommandErrorCodes.UsageError,
+                "usage"),
+        };
+        exitCode = CommandErrorWriter.WriteJsonOrHuman(
+            options.Json,
+            jsonOptions,
+            message,
+            status,
+            suggestion,
+            GetUsageLineOrThrow(command),
+            errorCode: code,
+            category: category,
+            command: command);
+        return false;
+    }
+
+    private static void AddGraphIdentityJsonFields(
+        JsonObject payload,
+        GraphQueryIdentityMetadata metadata,
+        JsonSerializerOptions jsonOptions)
+    {
+        if (!metadata.Applies)
+            return;
+
+        payload["identity_scoped"] = metadata.IdentityScoped;
+        payload["identity_scope_reason"] = metadata.IdentityScopeReason;
+        if (metadata.Selected != null)
+            payload["selected_symbol"] = JsonSerializer.SerializeToNode(metadata.Selected, jsonOptions);
+        if (metadata.Candidates.Count > 0)
+        {
+            payload["candidate_count"] = metadata.Candidates.Count;
+            payload["candidates"] = new JsonArray(
+                metadata.Candidates
+                    .Select(candidate => JsonSerializer.SerializeToNode(candidate, jsonOptions))
+                    .ToArray());
+            payload["candidates_truncated"] = metadata.CandidatesTruncated;
+        }
+    }
+
+    private static void WriteGraphIdentityWarningIfNeeded(
+        string query,
+        GraphQueryIdentityMetadata metadata)
+    {
+        if (!metadata.Applies || metadata.IdentityScoped)
+            return;
+
+        CommandErrorWriter.WriteStderr(
+            $"Warning: '{query}' matches {metadata.Candidates.Count} symbol identities; results aggregate them and are not identity-scoped.");
+        foreach (var candidate in metadata.Candidates)
+        {
+            CommandErrorWriter.WriteStderr(
+                $"  candidate: {candidate.QualifiedName} ({candidate.Selector})");
+        }
+        if (metadata.CandidatesTruncated)
+            CommandErrorWriter.WriteStderr("  candidate list truncated; narrow the query or inspect it for the complete bounded candidate view.");
     }
 
     // Human-readable reference_kind label for a grouped caller/callee row. Counts
