@@ -267,7 +267,8 @@ public partial class DbWriter
                        THEN csharp_invocation_argument_count(
                            COALESCE(r.context, reference_line.context),
                            r.symbol_name,
-                           r.column_number)
+                           r.column_number,
+                           r.span_length)
                        WHEN r.reference_kind = 'call'
                        THEN csharp_unambiguous_invocation_argument_count(
                            COALESCE(r.context, reference_line.context),
@@ -407,6 +408,14 @@ public partial class DbWriter
                 FROM temp.csharp_symbol_facts AS symbol_fact
                 WHERE symbol_fact.symbol_id = {symbolAlias}.id
             )
+            """;
+
+    private static string BuildCSharpConstructorBindingSensitiveSql(string symbolAlias)
+        => $"""
+            csharp_constructor_has_binding_sensitive_parameters(
+                {symbolAlias}.signature,
+                {symbolAlias}.name,
+                {symbolAlias}.kind)
             """;
 
     private static string BuildCSharpCallableParameterCountSql(string symbolAlias)
@@ -569,7 +578,10 @@ public partial class DbWriter
             JOIN temp.csharp_symbol_facts AS constructor_type_fact
               ON constructor_type_fact.symbol_id = constructor_type.id
             WHERE constructor.kind = 'function'
-              AND constructor_fact.constructor_parameter_count IS NOT NULL
+              AND (
+                  constructor_fact.constructor_parameter_count IS NOT NULL
+                  OR {BuildCSharpConstructorBindingSensitiveSql("constructor")} = 1
+              )
         )
         INSERT INTO temp.csharp_constructor_identity_facts(
             symbol_id,
@@ -602,7 +614,10 @@ public partial class DbWriter
           ON constructor_file.id = constructor.file_id
          AND constructor_file.lang = 'csharp'
         WHERE constructor.kind = 'function'
-          AND constructor_fact.constructor_parameter_count IS NOT NULL
+          AND (
+              constructor_fact.constructor_parameter_count IS NOT NULL
+              OR {BuildCSharpConstructorBindingSensitiveSql("constructor")} = 1
+          )
           AND NOT EXISTS (
               SELECT 1
               FROM temp.csharp_constructor_identity_facts AS existing
@@ -625,6 +640,31 @@ public partial class DbWriter
                 SELECT constructor_identity_fact.type_identity
                 FROM temp.csharp_constructor_identity_facts AS constructor_identity_fact
                 WHERE constructor_identity_fact.symbol_id = {symbolAlias}.id
+            )
+            """;
+
+    private static string BuildCSharpConstructorFamilyBindingSensitiveSql(string symbolAlias)
+        => $"""
+            EXISTS (
+                SELECT 1
+                FROM symbols AS binding_sensitive_constructor
+                JOIN files AS binding_sensitive_constructor_file
+                  ON binding_sensitive_constructor_file.id =
+                     binding_sensitive_constructor.file_id
+                 AND binding_sensitive_constructor_file.lang = 'csharp'
+                JOIN temp.csharp_constructor_identity_facts AS binding_sensitive_identity
+                  ON binding_sensitive_identity.symbol_id =
+                     binding_sensitive_constructor.id
+                 AND binding_sensitive_identity.type_identity =
+                     {BuildCSharpConstructorIdentitySql(symbolAlias)} COLLATE BINARY
+                WHERE binding_sensitive_constructor.name_folded =
+                      {symbolAlias}.name_folded
+                  AND binding_sensitive_constructor.name =
+                      {symbolAlias}.name COLLATE BINARY
+                  AND binding_sensitive_constructor.kind = 'function'
+                  AND binding_sensitive_constructor.container_name =
+                      binding_sensitive_constructor.name COLLATE BINARY
+                  AND {BuildCSharpConstructorBindingSensitiveSql("binding_sensitive_constructor")} = 1
             )
             """;
 
@@ -688,9 +728,14 @@ public partial class DbWriter
                 WHEN r.reference_kind = 'instantiate'
                      AND s.kind = 'function'
                      AND s.container_name = s.name COLLATE BINARY
-                     AND {BuildCSharpConstructorParameterCountSql("s")} IS NOT NULL
+                     AND (
+                         {BuildCSharpConstructorParameterCountSql("s")} IS NOT NULL
+                         OR {BuildCSharpConstructorBindingSensitiveSql("s")} = 1
+                     )
                      AND (
                          {CSharpReferenceArgumentCountSql} IS NULL
+                         OR {BuildCSharpConstructorParameterCountSql("s")} IS NULL
+                         OR {BuildCSharpConstructorFamilyBindingSensitiveSql("s")}
                          OR {BuildCSharpConstructorParameterCountSql("s")}
                             = {CSharpReferenceArgumentCountSql}
                      )
@@ -729,9 +774,13 @@ public partial class DbWriter
                      )
                      AND (
                          (
-                             {BuildCSharpConstructorParameterCountSql("s")} IS NOT NULL
+                             (
+                                 {BuildCSharpConstructorParameterCountSql("s")} IS NOT NULL
+                                 OR {BuildCSharpConstructorBindingSensitiveSql("s")} = 1
+                             )
                              AND (
                                  {CSharpReferenceArgumentCountSql} IS NULL
+                                 OR {BuildCSharpConstructorParameterCountSql("s")} IS NULL
                                  OR {BuildCSharpConstructorParameterCountSql("s")}
                                     = {CSharpReferenceArgumentCountSql}
                              )
@@ -748,6 +797,7 @@ public partial class DbWriter
                              s.kind IN ('class', 'record')
                              AND {BuildCSharpIsValueTypeSql("s")} = 0
                              AND {BuildCSharpConstructorParameterCountSql("s")} IS NULL
+                             AND {BuildCSharpConstructorBindingSensitiveSql("s")} = 0
                              AND (
                                  {CSharpReferenceArgumentCountSql} IS NULL
                                  OR {CSharpReferenceArgumentCountSql} = 0
@@ -763,8 +813,11 @@ public partial class DbWriter
                                    AND explicit_constructor.kind = 'function'
                                    AND explicit_constructor.container_name =
                                        explicit_constructor.name COLLATE BINARY
-                                   AND {BuildCSharpConstructorParameterCountSql("explicit_constructor")}
-                                       IS NOT NULL
+                                   AND (
+                                       {BuildCSharpConstructorParameterCountSql("explicit_constructor")}
+                                           IS NOT NULL
+                                       OR {BuildCSharpConstructorBindingSensitiveSql("explicit_constructor")} = 1
+                                   )
                                    AND {BuildCSharpConstructorIdentitySql("explicit_constructor")}
                                        = {BuildCSharpTypeIdentitySql("s")} COLLATE BINARY
                              )
@@ -1509,6 +1562,7 @@ public partial class DbWriter
             type_identity,
             candidate_kind,
             constructor_parameter_count,
+            constructor_binding_sensitive,
             is_value_type,
             representative_rank) AS MATERIALIZED (
             SELECT s.id,
@@ -1518,6 +1572,7 @@ public partial class DbWriter
                    type_identity_fact.type_identity COLLATE BINARY,
                    s.kind,
                    symbol_fact.constructor_parameter_count,
+                   {BuildCSharpConstructorBindingSensitiveSql("s")},
                    symbol_fact.is_value_type,
                    ROW_NUMBER() OVER (
                        PARTITION BY s.name_folded,
@@ -1558,13 +1613,21 @@ public partial class DbWriter
             name,
             type_arity,
             type_identity,
-            constructor_parameter_count) AS MATERIALIZED (
+            constructor_parameter_count,
+            constructor_binding_sensitive,
+            constructor_family_binding_sensitive) AS MATERIALIZED (
             SELECT constructor.id,
                    unique_family.name_folded,
                    unique_family.name COLLATE BINARY,
                    unique_family.type_arity,
                    unique_family.type_identity COLLATE BINARY,
-                   constructor_fact.constructor_parameter_count
+                   constructor_fact.constructor_parameter_count,
+                   {BuildCSharpConstructorBindingSensitiveSql("constructor")},
+                   MAX({BuildCSharpConstructorBindingSensitiveSql("constructor")}) OVER (
+                       PARTITION BY unique_family.name_folded,
+                                    unique_family.name COLLATE BINARY,
+                                    unique_family.type_arity,
+                                    unique_family.type_identity COLLATE BINARY)
             FROM csharp_unique_instantiation_families AS unique_family
             CROSS JOIN symbols AS constructor INDEXED BY idx_symbols_name_folded
               ON constructor.name_folded = unique_family.name_folded
@@ -1574,7 +1637,10 @@ public partial class DbWriter
              AND constructor_file.lang = 'csharp'
             JOIN temp.csharp_symbol_facts AS constructor_fact
               ON constructor_fact.symbol_id = constructor.id
-             AND constructor_fact.constructor_parameter_count IS NOT NULL
+             AND (
+                 constructor_fact.constructor_parameter_count IS NOT NULL
+                 OR {BuildCSharpConstructorBindingSensitiveSql("constructor")} = 1
+             )
             JOIN temp.csharp_constructor_identity_facts AS constructor_identity
               ON constructor_identity.symbol_id = constructor.id
              AND constructor_identity.type_identity =
@@ -1589,7 +1655,8 @@ public partial class DbWriter
             type_arity,
             type_identity,
             has_explicit_constructor,
-            has_explicit_zero_constructor) AS MATERIALIZED (
+            has_explicit_zero_constructor,
+            has_binding_sensitive_constructor) AS MATERIALIZED (
             SELECT unique_family.name_folded,
                    unique_family.name COLLATE BINARY,
                    unique_family.type_arity,
@@ -1597,6 +1664,9 @@ public partial class DbWriter
                    MAX(constructor_member.symbol_id IS NOT NULL),
                    MAX(COALESCE(
                        constructor_member.constructor_parameter_count = 0,
+                       0)),
+                   MAX(COALESCE(
+                       constructor_member.constructor_family_binding_sensitive,
                        0))
             FROM csharp_unique_instantiation_families AS unique_family
             LEFT JOIN csharp_instantiation_constructor_members AS constructor_member
@@ -1618,6 +1688,8 @@ public partial class DbWriter
             type_identity,
             candidate_kind,
             constructor_parameter_count,
+            constructor_binding_sensitive,
+            constructor_family_binding_sensitive,
             is_value_type,
             has_explicit_constructor,
             has_explicit_zero_constructor) AS (
@@ -1628,6 +1700,8 @@ public partial class DbWriter
                    constructor_member.type_identity COLLATE BINARY,
                    'function',
                    constructor_member.constructor_parameter_count,
+                   constructor_member.constructor_binding_sensitive,
+                   constructor_member.constructor_family_binding_sensitive,
                    0,
                    1,
                    constructor_member.constructor_parameter_count = 0
@@ -1642,6 +1716,12 @@ public partial class DbWriter
                    unique_family.type_identity COLLATE BINARY,
                    type_member.candidate_kind,
                    type_member.constructor_parameter_count,
+                   type_member.constructor_binding_sensitive,
+                   MAX(
+                       type_member.constructor_binding_sensitive,
+                       COALESCE(
+                           constructor_summary.has_binding_sensitive_constructor,
+                           0)),
                    type_member.is_value_type,
                    constructor_summary.has_explicit_constructor,
                    constructor_summary.has_explicit_zero_constructor
@@ -1682,15 +1762,21 @@ public partial class DbWriter
                   unique_target.candidate_kind = 'function'
                   AND (
                       reference_fact.argument_count IS NULL
+                      OR unique_target.constructor_parameter_count IS NULL
+                      OR unique_target.constructor_family_binding_sensitive = 1
                       OR unique_target.constructor_parameter_count
                          = reference_fact.argument_count
                   )
               )
               OR (
                   unique_target.candidate_kind IN ('class', 'struct', 'record')
-                  AND unique_target.constructor_parameter_count IS NOT NULL
+                  AND (
+                      unique_target.constructor_parameter_count IS NOT NULL
+                      OR unique_target.constructor_binding_sensitive = 1
+                  )
                   AND (
                       reference_fact.argument_count IS NULL
+                      OR unique_target.constructor_parameter_count IS NULL
                       OR unique_target.constructor_parameter_count
                          = reference_fact.argument_count
                   )
@@ -1707,6 +1793,7 @@ public partial class DbWriter
                   unique_target.candidate_kind IN ('class', 'record')
                   AND unique_target.is_value_type = 0
                   AND unique_target.constructor_parameter_count IS NULL
+                  AND unique_target.constructor_binding_sensitive = 0
                   AND (
                       reference_fact.argument_count IS NULL
                       OR reference_fact.argument_count = 0

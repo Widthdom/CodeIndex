@@ -294,22 +294,13 @@ public static partial class ReferenceExtractor
             if (language != "csharp")
                 return referenceName;
 
-            for (var aliasIndex = csharpUsingAliases.Count - 1; aliasIndex >= 0; aliasIndex--)
-            {
-                var alias = csharpUsingAliases[aliasIndex];
-                if (alias.Line > lineNumber
-                    || lineNumber < alias.ScopeStartLine
-                    || lineNumber > alias.ScopeEndLine
-                    || !string.Equals(alias.AliasName, referenceName, StringComparison.Ordinal))
-                {
-                    continue;
-                }
+            var alias = FindActiveCSharpUsingAlias(referenceName, lineNumber);
+            if (alias == null)
+                return referenceName;
 
-                var targetName = GetLastQualifiedSegment(TrimLeadingCSharpGlobalQualifier(alias.TargetQualifiedName));
-                return string.IsNullOrWhiteSpace(targetName) ? referenceName : targetName;
-            }
-
-            return referenceName;
+            var targetName = GetLastQualifiedSegment(
+                TrimLeadingCSharpGlobalQualifier(alias.TargetQualifiedName));
+            return string.IsNullOrWhiteSpace(targetName) ? referenceName : targetName;
         }
 
         internal void ApplyCSharpUsingAliasReferenceNames(List<ReferenceRecord> references)
@@ -327,17 +318,98 @@ public static partial class ReferenceExtractor
                 if (!IsUnqualifiedCSharpTokenAtColumn(reference.Line, reference.Column, reference.SymbolName))
                     continue;
 
-                var resolvedName = ResolveCSharpUsingAliasReferenceName(reference.SymbolName, reference.Line);
-                if (string.Equals(resolvedName, reference.SymbolName, StringComparison.Ordinal))
+                var alias = FindActiveCSharpUsingAlias(reference.SymbolName, reference.Line);
+                if (alias == null)
                     continue;
 
-                reference.SymbolName = resolvedName;
-                reference.IsSelfReference = IsSameReferenceName(reference.ContainerName, resolvedName);
-                aliasNameChanged = true;
+                var lexicalName = reference.SymbolName;
+                var normalizedTarget = TrimLeadingCSharpGlobalQualifier(alias.TargetQualifiedName);
+                var resolvedName = GetLastQualifiedSegment(normalizedTarget);
+                if (string.IsNullOrWhiteSpace(resolvedName))
+                    continue;
+
+                var nameChanged = !string.Equals(
+                    resolvedName,
+                    reference.SymbolName,
+                    StringComparison.Ordinal);
+                if (!nameChanged && reference.ReferenceKind != "instantiate")
+                    continue;
+
+                if (reference.ReferenceKind == "instantiate")
+                {
+                    reference.TargetQualifier = GetCSharpUsingAliasTargetQualifier(
+                        normalizedTarget,
+                        resolvedName);
+                    reference.Context = BuildCSharpUsingAliasInvocationContext(
+                        reference,
+                        lexicalName);
+                }
+                if (nameChanged)
+                {
+                    reference.SymbolName = resolvedName;
+                    reference.IsSelfReference = IsSameReferenceName(reference.ContainerName, resolvedName);
+                    aliasNameChanged = true;
+                }
             }
 
             if (aliasNameChanged)
                 CompactCSharpUsingAliasReferences(references, language);
+        }
+
+        string BuildCSharpUsingAliasInvocationContext(
+            ReferenceRecord reference,
+            string lexicalName)
+        {
+            const int maxLineCount = 32;
+            const int maxContextLength = 4096;
+            var firstLine = lines[reference.Line - 1];
+            if (firstLine.Length > maxContextLength)
+                return reference.Context;
+
+            var context = new System.Text.StringBuilder(firstLine);
+            for (var lineOffset = 0;
+                 lineOffset < maxLineCount && reference.Line - 1 + lineOffset < lines.Length;
+                 lineOffset++)
+            {
+                if (lineOffset > 0)
+                {
+                    var nextLine = lines[reference.Line - 1 + lineOffset];
+                    if (context.Length + 1 + nextLine.Length > maxContextLength)
+                        break;
+                    context.Append('\n');
+                    context.Append(nextLine);
+                }
+
+                var candidate = context.ToString();
+                if (candidate.Contains("\"\"\"", StringComparison.Ordinal)
+                    || CSharpTypeReferenceArity.HasCompleteInvocationArgumentList(
+                        candidate,
+                        lexicalName,
+                        reference.Column,
+                        reference.SpanLength))
+                {
+                    return candidate;
+                }
+            }
+
+            return firstLine;
+        }
+
+        static string? GetCSharpUsingAliasTargetQualifier(
+            string normalizedTarget,
+            string targetName)
+        {
+            if (string.IsNullOrWhiteSpace(normalizedTarget)
+                || string.IsNullOrWhiteSpace(targetName)
+                || normalizedTarget.Length <= targetName.Length)
+            {
+                return null;
+            }
+
+            var separatorIndex = normalizedTarget.Length - targetName.Length - 1;
+            return separatorIndex >= 0 && normalizedTarget[separatorIndex] == '.'
+                ? normalizedTarget[..separatorIndex]
+                : null;
         }
 
         bool IsUnqualifiedCSharpTokenAtColumn(int lineNumber, int column, string symbolName)

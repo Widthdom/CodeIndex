@@ -171,6 +171,14 @@ public partial class DbContext
                 (string? context, string? identifier, long? columnNumber) =>
                     CSharpTypeReferenceArity.GetInvocationArgumentCount(context, identifier, columnNumber));
             connection.CreateFunction(
+                "csharp_invocation_argument_count",
+                (string? context, string? identifier, long? columnNumber, long? spanLength) =>
+                    CSharpTypeReferenceArity.GetInvocationArgumentCount(
+                        context,
+                        identifier,
+                        columnNumber,
+                        spanLength));
+            connection.CreateFunction(
                 "csharp_unambiguous_invocation_argument_count",
                 (string? context, string? identifier, long? columnNumber) =>
                     CSharpTypeReferenceArity.GetUnambiguousInvocationArgumentCount(context, identifier, columnNumber));
@@ -178,6 +186,13 @@ public partial class DbContext
                 "csharp_definition_is_value_type",
                 (string? signature, string? symbolKind) =>
                     CSharpTypeReferenceArity.IsValueTypeDeclaration(signature, symbolKind));
+            connection.CreateFunction(
+                "csharp_constructor_has_binding_sensitive_parameters",
+                (string? signature, string? identifier, string? symbolKind) =>
+                    CSharpTypeReferenceArity.HasBindingSensitiveConstructorParameters(
+                        signature,
+                        identifier,
+                        symbolKind));
             connection.CreateFunction(
                 "csharp_base_identifiers_json",
                 (string? signature) => JsonSerializer.Serialize(

@@ -1843,6 +1843,12 @@ marking the bundle non-identity-scoped. C# call resolution may narrow ordinary r
 overloads by positional argument count only. Named arguments, optional/default parameters,
 `params`, generic method inference, and incomplete syntax remain ambiguous. Extension receiver
 adjustment and dynamic receiver types are outside this arity helper.
+C# constructor resolution applies the same conservative contract after an unqualified `using`
+alias is normalized: keep the canonical target leaf and qualifier for identity, but anchor the
+lexical constructor token with its physical source column and span when counting positional
+arguments. A bounded multiline context may complete the balanced scan. If any constructor in the
+target family has optional/default or `params` binding, do not use argument count to narrow that
+family; named arguments, raw strings, and malformed calls likewise remain ambiguous.
 Path/line resolution must select `symbols.id` and enter the same candidate-bundle builder as
 name resolution; do not hand graph loaders only the display name. Each bounded references,
 callers, and callees section computes its own stable-order page and authoritative total.
@@ -5938,6 +5944,12 @@ candidate row を維持しつつ bundle を non-identity-scoped とし、
 parameter overload を位置引数個数だけで絞り込めます。named argument、optional/default parameter、
 `params`、generic method inference、不完全な構文は曖昧なままにします。extension の receiver
 調整と dynamic receiver の型は、この arity helper の対象外です。
+未修飾の `using` alias を正規化した後の C# constructor resolution にも、同じ保守的な契約を
+適用します。identity には canonical な target leaf と qualifier を保持し、位置引数を数える際は
+物理 source column と span で字句上の constructor token を特定します。上限付きの multiline
+context で balanced scan を完結できます。target family 内に optional/default または `params`
+binding を持つ constructor が1つでもあれば、引数個数でその family を絞り込まないでください。
+named argument、raw string、不正な call も同様に曖昧なままにします。
 path/line resolution は `symbols.id` を select し、name resolution と同じ
 candidate-bundle builder に入れてください。graph loader に display name だけを渡しては
 なりません。上限付きの references、callers、callees section は、それぞれ安定順序の page と
