@@ -145,6 +145,13 @@
     "path": "\u003CGIT_EXECUTABLE\u003E",
     "executable": true
   },
+  "github_cli_executable": {
+    "source": "normalized",
+    "accepted": true,
+    "reason": "accepted",
+    "path": "\u003CGH_EXECUTABLE\u003E",
+    "executable": true
+  },
   "extractors": {
     "plugin_assembly_count": 0,
     "pattern_config_count": 0,

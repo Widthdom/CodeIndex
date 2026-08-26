@@ -78,6 +78,7 @@ public partial class McpServer
             status.GraphSupportedLanguages = ReferenceExtractor.GetSupportedLanguages(status.ProjectRoot).OrderBy(l => l).ToList();
             status.Extractors = ExtractorPluginRegistry.GetStatusSnapshot(status.ProjectRoot);
             status.GitExecutable = GitHelper.GetGitExecutableStatus();
+            status.GitHubCliExecutable = GitHubCliExecutableResolver.GetStatus();
             var postExtractionHookSnapshot = PostExtractionHookRunner.DiscoverDefaultMetadata();
             var postExtractionHooks = postExtractionHookSnapshot.Hooks;
             if (postExtractionHookSnapshot.Diagnostics.Count > 0)
@@ -85,6 +86,7 @@ public partial class McpServer
             var trustOverrides = ExtractorPluginRegistry.GetAcceptedTrustOverrides(status.ProjectRoot)
                 .Concat(postExtractionHookSnapshot.TrustOverrides)
                 .Concat(GitHelper.GetAcceptedTrustOverrides(status.GitExecutable))
+                .Concat(GitHubCliExecutableResolver.GetAcceptedTrustOverrides(status.GitHubCliExecutable))
                 .ToList();
             if (trustOverrides.Count > 0)
                 status.TrustOverrides = trustOverrides;

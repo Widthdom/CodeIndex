@@ -942,6 +942,46 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunStatus_Json_ReportsRejectedGitHubCliEnvironmentOverride_Issue5184()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_status_gh_5184");
+        lock (TestConsoleLock.Gate)
+        {
+            using var env = EnvironmentVariableScope.Capture(
+                GitHubCliExecutableResolver.ExecutableEnvironmentVariable);
+            try
+            {
+                var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+                env.Set(GitHubCliExecutableResolver.ExecutableEnvironmentVariable, "gh");
+
+                var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                    ["--db", dbPath, "--json"],
+                    _jsonOptions));
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Empty(stderr);
+                using var document = JsonDocument.Parse(stdout);
+                var githubCliExecutable = document.RootElement.GetProperty("github_cli_executable");
+                Assert.Equal(
+                    "environment_override",
+                    githubCliExecutable.GetProperty("source").GetString());
+                Assert.False(githubCliExecutable.GetProperty("accepted").GetBoolean());
+                Assert.Equal("path_not_absolute", githubCliExecutable.GetProperty("reason").GetString());
+                if (document.RootElement.TryGetProperty("trust_overrides", out var trustOverrides))
+                {
+                    Assert.DoesNotContain(
+                        trustOverrides.EnumerateArray(),
+                        item => item.GetProperty("kind").GetString() == "github_cli_executable");
+                }
+            }
+            finally
+            {
+                TestProjectHelper.DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
     public void RunStatus_Json_CapsSymbolKindCountsAndNames_3134()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_status_symbol_kind_caps_3134");
@@ -1963,6 +2003,22 @@ public partial class QueryCommandRunnerTests
         Assert.Contains("Trusted Git executable selection (git_executable)", stdout);
         Assert.Contains("git --version", stdout);
         Assert.Contains(GitHelper.GitExecutableEnvironmentVariable, stdout);
+    }
+
+    [Fact]
+    public void RunStatus_Explain_PrintsGitHubCliExecutableDescriptionWithoutDatabase_Issue5184()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+            ["--explain", "github_cli_executable"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Contains(
+            "Trusted GitHub CLI executable selection (github_cli_executable)",
+            stdout);
+        Assert.Contains("gh --version", stdout);
+        Assert.Contains(GitHubCliExecutableResolver.ExecutableEnvironmentVariable, stdout);
     }
 
     [Fact]

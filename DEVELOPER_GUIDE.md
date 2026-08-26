@@ -1365,7 +1365,7 @@ On startup, `cdidx` walks up from the current directory looking for `.cdidx-vers
 
 ### Release freshness and upgrade checks
 
-`cdidx --check-updates` and `cdidx status --check-updates` query the GitHub latest-release endpoint through `UpdateChecker`, using the same 24-hour cache and `CDIDX_DISABLE_UPDATE_CHECK=1` opt-out as the `--version` hint. `cdidx upgrade --check-only` reuses that check. `cdidx upgrade` is intentionally a thin wrapper around the signed release installer: it downloads `sha256sums.txt` and `install.sh` into a private temporary directory, independently verifies both exact files with `gh attestation verify` pinned to `github.com/Widthdom/CodeIndex/.github/workflows/release.yml` and `refs/tags/<selected-version>`, and only then trusts the manifest checksum and starts the installer. Missing or failed provenance blocks execution by default; `CDIDX_VERIFY_POLICY=compat` is the explicit audited opt-in. Upgrade JSON distinguishes the mechanism from the observed result through `verification_policy`, `manifest_provenance_verified`, `installer_provenance_verified`, `installer_verification_status`, and `provenance_audit_code`; check-only reports `not_attempted`, success reports `verified`, a strict blocked failure reports `verification_failed`, and a compat bypass reports `compat_bypass` plus `compat_provenance_bypass`. Invalid policy values return the normal structured usage-error JSON when `--json` is selected. After verification, the command checks that the current binary directory is writable, sets `CDIDX_INSTALL_DIR` to that directory, and runs the selected release installer.
+`cdidx --check-updates` and `cdidx status --check-updates` query the GitHub latest-release endpoint through `UpdateChecker`, using the same 24-hour cache and `CDIDX_DISABLE_UPDATE_CHECK=1` opt-out as the `--version` hint. `cdidx upgrade --check-only` reuses that check. `cdidx upgrade` is intentionally a thin wrapper around the signed release installer: it downloads `sha256sums.txt` and `install.sh` into a private temporary directory, independently verifies both exact files with `gh attestation verify` pinned to `github.com/Widthdom/CodeIndex/.github/workflows/release.yml` and `refs/tags/<selected-version>`, and only then trusts the manifest checksum and starts the installer. The verifier is selected only from validated known installation paths or the `CDIDX_GH_EXECUTABLE` override; the override must be an absolute `gh` path (`gh.exe` on Windows) that resolves to a canonical target whose regular-file/image, owner, write mode or ACL, ancestor, executable, and bounded `gh --version` checks all pass. PATH order and the current directory never select the verifier, and an invalid explicit override fails closed instead of falling back. Missing or failed provenance blocks execution by default; `CDIDX_VERIFY_POLICY=compat` is the explicit audited opt-in and reports an unverified bypass rather than verified provenance. Upgrade JSON distinguishes the mechanism from the observed result through `verification_policy`, `manifest_provenance_verified`, `installer_provenance_verified`, `installer_verification_status`, and `provenance_audit_code`; check-only reports `not_attempted`, success reports `verified`, a strict blocked failure reports `verification_failed`, and a compat bypass reports `compat_bypass` plus `compat_provenance_bypass`. Invalid policy values return the normal structured usage-error JSON when `--json` is selected. After verification, the command checks that the current binary directory is writable, sets `CDIDX_INSTALL_DIR` to that directory, and runs the selected release installer.
 
 Upgrade installer and git subprocesses scrub the inherited process environment
 before launch. They forward only the shared subprocess allowlist needed for
@@ -5386,8 +5386,13 @@ endpoint を確認します。`cdidx upgrade --check-only` はこの check を�
 `github.com/Widthdom/CodeIndex/.github/workflows/release.yml` と
 `refs/tags/<selected-version>` に固定した `gh attestation verify` で独立に検証してから
 manifest checksum を信頼し installer を起動します。既定では verifier 欠如または
-provenance 失敗時に実行を拒否し、`CDIDX_VERIFY_POLICY=compat` だけが監査対象の明示的
-opt-in です。upgrade JSON は `verification_policy`、`manifest_provenance_verified`、
+provenance 失敗時に実行を拒否します。verifier は検証済みの既知 install path、または
+`CDIDX_GH_EXECUTABLE` override からだけ選択されます。override は絶対 `gh` path
+（Windows では `gh.exe`）でなければならず、canonical な target に解決したうえで regular file / image、owner、write mode または ACL、
+ancestor、executable、上限付き `gh --version` の全検証を通過する必要があります。PATH 順序や
+current directory が verifier を選ぶことはなく、無効な明示 override は fallback せず fail closed
+します。`CDIDX_VERIFY_POLICY=compat` だけが監査対象の明示的 opt-in で、verified provenance と
+表示せず未検証 bypass を報告します。upgrade JSON は `verification_policy`、`manifest_provenance_verified`、
 `installer_provenance_verified`、`installer_verification_status`、
 `provenance_audit_code` で method と実測結果を分離し、check-only は `not_attempted`、
 成功は `verified`、strict で中断した失敗は `verification_failed`、compat bypass は

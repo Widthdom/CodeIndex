@@ -72,6 +72,7 @@ internal static class EnvironmentVariableInventory
         Item("CDIDX_GITHUB_TOKEN", "github", SensitivitySecret, "security", "GitHub submission disabled", "no", "GitHub token used for explicit suggestion issue submission and authenticated read-only duplicate preflight.", Location("src/CodeIndex/Cli/GitHubIssueReporter.cs", 35, "GitHubIssueReporter")),
         Item("CDIDX_GITHUB_SUBMIT_TIMEOUT_SECONDS", "github", SensitivityPublic, "performance", "10", "no", "GitHub suggestion submission timeout in seconds.", Location("src/CodeIndex/Cli/GitHubIssueReporter.cs", 53, "GitHubIssueReporter")),
         Item(GitHubHttpClientFactory.ProxyDefaultCredentialsEnvironmentVariable, "github", SensitivityPublic, "security", "disabled", "no", "Allow default proxy credentials for GitHub HTTP calls.", Location("src/CodeIndex/Cli/GitHubHttpClientFactory.cs", 8, "GitHubHttpClientFactory")),
+        Item(GitHubCliExecutableResolver.ExecutableEnvironmentVariable, "github", SensitivityPublic, "security", "validated known installation path", "no", "Override the trusted GitHub CLI attestation verifier with a validated absolute path.", Location("src/CodeIndex/Cli/GitHubCliExecutableResolver.cs", 9, "GitHubCliExecutableResolver")),
 
         Item(GitHelper.GitExecutableEnvironmentVariable, "git", SensitivityPublic, "security", "validated known installation path", "no", "Override the trusted Git executable with a validated absolute path.", Location("src/CodeIndex/Cli/GitHelper.cs", 65, "GitHelper")),
 
@@ -198,6 +199,9 @@ internal static class EnvironmentVariableInventory
 
         if (name == global::CodeIndex.SubprocessEnvironmentPolicy.TestEnvironmentPrefix + "*")
             return "only non-empty variables with the exact prefix are copied into isolated worker subprocesses";
+
+        if (name == GitHubCliExecutableResolver.ExecutableEnvironmentVariable)
+            return "invalid or unsafe executable paths fail closed and are reported by status.github_cli_executable";
 
         return category switch
         {

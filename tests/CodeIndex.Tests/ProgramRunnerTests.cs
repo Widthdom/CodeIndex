@@ -2218,6 +2218,23 @@ public class ProgramRunnerTests
         Assert.Equal("no", gitExecutable.ConfigFileSupported);
         Assert.Contains("fail closed", gitExecutable.InvalidValueBehavior, StringComparison.OrdinalIgnoreCase);
 
+        var githubCliExecutable = Assert.Contains(
+            GitHubCliExecutableResolver.ExecutableEnvironmentVariable,
+            byName);
+        Assert.Equal(EnvironmentVariableInventory.DomainTrustBoundary, githubCliExecutable.Domain);
+        Assert.Equal("github", githubCliExecutable.Category);
+        Assert.Equal(EnvironmentVariableInventory.SensitivityPublic, githubCliExecutable.Sensitivity);
+        Assert.Equal("security", githubCliExecutable.Policy);
+        Assert.Equal("no", githubCliExecutable.ConfigFileSupported);
+        Assert.Contains(
+            "fail closed",
+            githubCliExecutable.InvalidValueBehavior,
+            StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(
+            "status.github_cli_executable",
+            githubCliExecutable.InvalidValueBehavior,
+            StringComparison.Ordinal);
+
         var updateDisable = Assert.Contains(UpdateChecker.DisableEnvVar, byName);
         Assert.Equal(EnvironmentVariableInventory.DomainUpdateLogging, updateDisable.Domain);
         Assert.Contains("1 or true", updateDisable.InvalidValueBehavior, StringComparison.Ordinal);
@@ -3978,24 +3995,156 @@ exit 7
     [Fact]
     public void CreateUpgradeAttestationStartInfo_PinsReleaseWorkflowAndTag_Issue4603()
     {
-        var assetPath = Path.GetFullPath(TestProjectHelper.CreateTempFilePath("cdidx-attestation", ".txt"));
+        if (OperatingSystem.IsWindows())
+            return;
 
-        var startInfo = ProgramRunner.CreateUpgradeAttestationStartInfo(assetPath, "v9.9.9");
+        var root = TestProjectHelper.CreateTempProject("cdidx-attestation");
+        var assetPath = Path.Combine(root, "asset.txt");
+        var ghPath = Path.Combine(root, "gh");
+        File.WriteAllText(assetPath, "asset");
+        File.WriteAllText(ghPath, "#!/bin/sh\nprintf 'gh version 2.99.0\\n'\n");
+        File.SetUnixFileMode(
+            ghPath,
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        using var env = EnvironmentVariableScope.Capture(
+            GitHubCliExecutableResolver.ExecutableEnvironmentVariable);
+        var oldProbe = GitHubCliExecutableResolver.VersionProbeForTesting;
+        env.Set(GitHubCliExecutableResolver.ExecutableEnvironmentVariable, ghPath);
+        GitHubCliExecutableResolver.VersionProbeForTesting = (_, _) => true;
+        try
+        {
+            var startInfo = ProgramRunner.CreateUpgradeAttestationStartInfo(assetPath, "v9.9.9");
 
-        Assert.Equal("gh", startInfo.FileName);
-        Assert.Equal(
-            [
-                "attestation",
-                "verify",
-                assetPath,
-                "-R",
-                "Widthdom/CodeIndex",
-                "--signer-workflow",
-                "github.com/Widthdom/CodeIndex/.github/workflows/release.yml",
-                "--source-ref",
-                "refs/tags/v9.9.9",
-            ],
-            startInfo.ArgumentList);
+            Assert.True(TrustedExecutableValidator.TryResolveRealUnixPath(ghPath, out var canonicalGhPath));
+            Assert.Equal(canonicalGhPath, startInfo.FileName);
+            Assert.Equal(
+                [
+                    "attestation",
+                    "verify",
+                    assetPath,
+                    "-R",
+                    "Widthdom/CodeIndex",
+                    "--signer-workflow",
+                    "github.com/Widthdom/CodeIndex/.github/workflows/release.yml",
+                    "--source-ref",
+                    "refs/tags/v9.9.9",
+                ],
+                startInfo.ArgumentList);
+        }
+        finally
+        {
+            GitHubCliExecutableResolver.VersionProbeForTesting = oldProbe;
+            TestProjectHelper.DeleteDirectory(root);
+        }
+    }
+
+    [Fact]
+    public void RunUpgrade_StrictPolicy_BlocksBeforeInstallerWhenTrustedGitHubCliIsUnavailable_Issue5184()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        lock (TestConsoleLock.Gate)
+        {
+            using var env = EnvironmentVariableScope.Capture(
+                "XDG_CACHE_HOME",
+                UpdateChecker.DisableEnvVar,
+                "CDIDX_VERIFY_POLICY",
+                GitHubCliExecutableResolver.ExecutableEnvironmentVariable);
+            var cacheRoot = TestProjectHelper.CreateTempProject("cdidx_update_cache");
+            var markerPath = TestProjectHelper.CreateTempFilePath("cdidx_strict_gh_5184", ".marker");
+            env.Set("XDG_CACHE_HOME", cacheRoot);
+            env.Set(UpdateChecker.DisableEnvVar, null);
+            env.Set("CDIDX_VERIFY_POLICY", null);
+            env.Set(GitHubCliExecutableResolver.ExecutableEnvironmentVariable, "gh");
+            WriteFreshUpdateCheckCache(cacheRoot, "v9.9.9");
+
+            var installerScript = $"#!/bin/sh\nprintf installed > '{markerPath}'\nexit 0\n";
+            var installerSha256 = Convert.ToHexString(
+                    SHA256.HashData(Encoding.UTF8.GetBytes(installerScript)))
+                .ToLowerInvariant();
+            var checksumManifest = $"{installerSha256}  install.sh\n";
+            var previousFactory = ProgramRunner.UpgradeHttpClientFactory;
+            ProgramRunner.UpgradeHttpClientFactory = () => new HttpClient(
+                new UpgradeAssetResponseHandler(checksumManifest, installerScript, _ => { }))
+            {
+                Timeout = Timeout.InfiniteTimeSpan,
+            };
+
+            try
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                    ["upgrade"],
+                    appVersion: "1.10.0"));
+
+                Assert.Equal(CommandExitCodes.InstallError, exitCode);
+                Assert.Empty(stdout);
+                Assert.Contains("installer execution is blocked", stderr, StringComparison.Ordinal);
+                Assert.Contains("Could not resolve a trusted GitHub CLI executable", stderr, StringComparison.Ordinal);
+                Assert.False(File.Exists(markerPath));
+            }
+            finally
+            {
+                ProgramRunner.UpgradeHttpClientFactory = previousFactory;
+                TestProjectHelper.DeleteFile(markerPath);
+                TestProjectHelper.DeleteDirectory(cacheRoot);
+            }
+        }
+    }
+
+    [Fact]
+    public void RunUpgrade_CompatPolicy_WarnsWithoutClaimingVerificationWhenTrustedGitHubCliIsUnavailable_Issue5184()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        lock (TestConsoleLock.Gate)
+        {
+            using var env = EnvironmentVariableScope.Capture(
+                "XDG_CACHE_HOME",
+                UpdateChecker.DisableEnvVar,
+                "CDIDX_VERIFY_POLICY",
+                GitHubCliExecutableResolver.ExecutableEnvironmentVariable);
+            var cacheRoot = TestProjectHelper.CreateTempProject("cdidx_update_cache");
+            var markerPath = TestProjectHelper.CreateTempFilePath("cdidx_compat_gh_5184", ".marker");
+            env.Set("XDG_CACHE_HOME", cacheRoot);
+            env.Set(UpdateChecker.DisableEnvVar, null);
+            env.Set("CDIDX_VERIFY_POLICY", "compat");
+            env.Set(GitHubCliExecutableResolver.ExecutableEnvironmentVariable, "gh");
+            WriteFreshUpdateCheckCache(cacheRoot, "v9.9.9");
+
+            var installerScript = $"#!/bin/sh\nprintf installed > '{markerPath}'\nexit 0\n";
+            var installerSha256 = Convert.ToHexString(
+                    SHA256.HashData(Encoding.UTF8.GetBytes(installerScript)))
+                .ToLowerInvariant();
+            var checksumManifest = $"{installerSha256}  install.sh\n";
+            var previousFactory = ProgramRunner.UpgradeHttpClientFactory;
+            ProgramRunner.UpgradeHttpClientFactory = () => new HttpClient(
+                new UpgradeAssetResponseHandler(checksumManifest, installerScript, _ => { }))
+            {
+                Timeout = Timeout.InfiniteTimeSpan,
+            };
+
+            try
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                    ["upgrade"],
+                    appVersion: "1.10.0"));
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Empty(stdout);
+                Assert.Contains("no trusted GitHub CLI verifier was available", stderr, StringComparison.Ordinal);
+                Assert.Contains("was not independently verified", stderr, StringComparison.Ordinal);
+                Assert.DoesNotContain("Verified independent release provenance", stderr, StringComparison.Ordinal);
+                Assert.True(File.Exists(markerPath));
+            }
+            finally
+            {
+                ProgramRunner.UpgradeHttpClientFactory = previousFactory;
+                TestProjectHelper.DeleteFile(markerPath);
+                TestProjectHelper.DeleteDirectory(cacheRoot);
+            }
+        }
     }
 
     [Fact]
