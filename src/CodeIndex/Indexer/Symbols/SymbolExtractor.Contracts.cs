@@ -14,7 +14,11 @@ public static partial class SymbolExtractor
     // lexical token spans, and unambiguous positional arity are persisted after version 15.
     // バージョン 16 (#5189) は version 15 適用後の既存 index に対して C# constructor call を
     // 再抽出し、canonical alias target、字句 token span、曖昧でない位置引数 arity を永続化する。
-    public const int CSharpContractVersion = 16;
+    // Version 17 (#5192) re-extracts C# symbols so test-method taxonomy from
+    // multiline attribute blocks is persisted for existing indexes.
+    // バージョン 17 (#5192) は既存 index の C# symbol を再抽出し、複数行の
+    // attribute block から得た test method taxonomy を永続化する。
+    public const int CSharpContractVersion = 17;
     public const int DockerfileContractVersion = 2;
     public const int MakefileContractVersion = 2;
     public const int StyleAndXamlContractVersion = 2;

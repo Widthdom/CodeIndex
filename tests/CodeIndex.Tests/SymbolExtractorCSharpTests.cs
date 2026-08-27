@@ -525,6 +525,227 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_ClassifiesMultilineTestAttributeOwnership_Issue5192_Regression1961()
+    {
+        var content = """"
+            [assembly: Xunit.Theory]
+            [module: Xunit.Fact]
+
+            namespace Demo.Tests;
+
+            [System.AttributeUsage(System.AttributeTargets.Field)]
+            public sealed class FieldFactAttribute : System.Attribute { }
+
+            [System.AttributeUsage(System.AttributeTargets.Constructor)]
+            public sealed class ConstructorFactAttribute : System.Attribute { }
+
+            [System.AttributeUsage(System.AttributeTargets.Property)]
+            public sealed class IndexerFactAttribute : System.Attribute
+            {
+                public IndexerFactAttribute(string marker) { }
+            }
+
+            [System.AttributeUsage(System.AttributeTargets.Method)]
+            public sealed class MetadataAttribute<TLeft, TRight> : System.Attribute { }
+
+            public sealed class Fact { }
+
+            public class MultilineAttributeTests
+            {
+                [Theory]
+                [InlineData(
+                    1,
+                    2,
+                    "closing ] and fake [Fact]",
+                    @"verbatim ] and fake [Theory]",
+                    """raw ] and fake [Test]""",
+                    $"interpolated ] {1 + 2} and fake [TestMethod]",
+                    ']')]
+                [InlineData(
+                    3,
+                    4,
+                    "second multiline data",
+                    @"second verbatim value",
+                    """second raw value""",
+                    $"second interpolated {3 + 4}",
+                    '[')]
+                public void MultilineInlineData(int left, int right, string normal, string verbatim, string raw, string interpolated, char bracket) { }
+
+                [Xunit.TheoryAttribute,
+                    InlineData(3)]
+                public void QualifiedTheoryInMultiAttributeSection(int value) { }
+
+                [Fact]
+                // ownership survives a line comment
+                [Trait(
+                    "category",
+                    "fast")]
+                /* ownership also survives a block comment */
+                public void CommentsAndMultipleAttributes() { }
+
+                [TestMethod]
+                public void MsTestMethod() { }
+
+                [DataTestMethod]
+                public void MsDataTestMethod() { }
+
+                [NUnit.Framework.Test]
+                public void NUnitTestMethod() { }
+
+                [NUnit.Framework.TestCase(
+                    4)]
+                public void NUnitTestCaseMethod(int value) { }
+
+                [NUnit.Framework.TestCaseSource(
+                    nameof(Cases))]
+                public void NUnitTestCaseSourceMethod(int value) { }
+
+                [Fact] public void SameLineFact() { }
+
+                [method: Fact]
+                public void ExplicitMethodTargetFact() { }
+
+                [Fact] public void FirstMemberBeforeBoundary() { }
+                public void FollowingMemberBoundary() { }
+
+                [Obsolete(
+                    "Theory ] [Fact]")]
+                public void NonTestMultilineAttribute() { }
+
+                [Obsolete("Fact")]
+                public void LiteralNameDoesNotSpoof() { }
+
+                [return: Xunit.Theory]
+                public int ReturnTargetDoesNotClassify() => 0;
+
+                [Fact] public int AttributedProperty { get; }
+                public void MemberAfterAttributedProperty() { }
+
+                [FieldFact]
+                [System.Obsolete(
+                    "const field marker")]
+                public const int AttributedConstField = 1;
+
+                [FieldFact]
+                [System.Obsolete(
+                    "readonly field marker")]
+                public static readonly int AttributedReadonlyField = 2;
+
+                [ConstructorFact]
+                [System.Obsolete(
+                    "constructor marker")]
+                public MultilineAttributeTests() { }
+
+                [ConstructorFact]
+                [System.Obsolete(
+                    "partial constructor marker")]
+                partial MultilineAttributeTests();
+
+                [IndexerFact(
+                    "indexer marker")]
+                public int this[int index] => index;
+
+                [Metadata<
+                    string,
+                    Fact>]
+                public void GenericAttributeTypeArgumentDoesNotSpoofTest() { }
+
+                public int[] CollectionExpression =>
+                [
+                    Fact
+                ]; public void CollectionExpressionDoesNotSpoofTest() { }
+
+                public int[][] NestedCollectionInitializer =
+                {
+                    [
+                        Fact
+                    ]
+                }; public void NestedCollectionInitializerDoesNotSpoofTest() { }
+
+                public static int Fact => 1;
+                public static int[] Cases => [4];
+            }
+            """";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var expectedTestMethods = new[]
+        {
+            "MultilineInlineData",
+            "QualifiedTheoryInMultiAttributeSection",
+            "CommentsAndMultipleAttributes",
+            "MsTestMethod",
+            "MsDataTestMethod",
+            "NUnitTestMethod",
+            "NUnitTestCaseMethod",
+            "NUnitTestCaseSourceMethod",
+            "SameLineFact",
+            "ExplicitMethodTargetFact",
+            "FirstMemberBeforeBoundary",
+        };
+        var expectedNonTestMethods = new[]
+        {
+            "FollowingMemberBoundary",
+            "NonTestMultilineAttribute",
+            "LiteralNameDoesNotSpoof",
+            "ReturnTargetDoesNotClassify",
+            "MemberAfterAttributedProperty",
+            "MultilineAttributeTests",
+            "CollectionExpressionDoesNotSpoofTest",
+            "GenericAttributeTypeArgumentDoesNotSpoofTest",
+            "NestedCollectionInitializerDoesNotSpoofTest",
+        };
+
+        Assert.All(
+            expectedTestMethods,
+            name => Assert.Contains(symbols, symbol => symbol.Kind == "test.method" && symbol.Name == name));
+        Assert.All(
+            expectedNonTestMethods,
+            name => Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == name));
+        Assert.DoesNotContain(
+            symbols,
+            symbol => expectedNonTestMethods.Contains(symbol.Name, StringComparer.Ordinal)
+                && symbol.Kind == "test.method");
+        Assert.Contains(
+            symbols,
+            symbol => symbol.Kind == "field" && symbol.Name == "AttributedConstField");
+        Assert.Contains(
+            symbols,
+            symbol => symbol.Kind == "field" && symbol.Name == "AttributedReadonlyField");
+        Assert.Contains(
+            symbols,
+            symbol => symbol.Kind == "function"
+                && symbol.Signature?.Contains("this[int index]", StringComparison.Ordinal) == true);
+        Assert.DoesNotContain(
+            symbols,
+            symbol => symbol.Kind == "test.method"
+                && symbol.Signature?.Contains("this[int index]", StringComparison.Ordinal) == true);
+    }
+
+    [Fact]
+    public void Extract_CSharp_TestAttributeBudgetsFailClosed_Issue5192()
+    {
+        var tooManyLines = "public class LineBudget\n{\n    [Fact]\n"
+            + string.Concat(Enumerable.Repeat("    // padding\n", 128))
+            + "    public void BeyondLineBudget() { }\n}";
+        var tooManyItems = "public class ItemBudget\n{\n    ["
+            + string.Join(", ", Enumerable.Repeat("Obsolete", 64))
+            + ", Fact]\n    public void BeyondItemBudget() { }\n}";
+        var tooLongName = "public class NameBudget\n{\n    ["
+            + new string('A', 512)
+            + "Fact]\n    public void BeyondNameBudget() { }\n}";
+
+        Assert.Contains(
+            SymbolExtractor.Extract(1, "csharp", tooManyLines),
+            symbol => symbol.Kind == "function" && symbol.Name == "BeyondLineBudget");
+        Assert.Contains(
+            SymbolExtractor.Extract(1, "csharp", tooManyItems),
+            symbol => symbol.Kind == "function" && symbol.Name == "BeyondItemBudget");
+        Assert.Contains(
+            SymbolExtractor.Extract(1, "csharp", tooLongName),
+            symbol => symbol.Kind == "function" && symbol.Name == "BeyondNameBudget");
+    }
+
+    [Fact]
     public void Extract_CSharp_NormalizesUnicodeEscapedIdentifierNames()
     {
         const string content = "namespace Demo.\\u004eames;\n\n"
