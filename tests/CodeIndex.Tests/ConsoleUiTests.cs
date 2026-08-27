@@ -2108,6 +2108,8 @@ public class ConsoleUiTests
         Assert.Contains("--log-retain-count <n>", output);
         Assert.Contains("--log-max-size-mb <n>", output);
         Assert.Contains("--limit <n>, --top <n>", output);
+        Assert.Contains("--output <path> (-o: report/suggestions only)", output);
+        Assert.DoesNotContain("--output, -o <path>", output);
         Assert.DoesNotContain("Commands:", output);
         Assert.DoesNotContain("Examples:", output);
     }
