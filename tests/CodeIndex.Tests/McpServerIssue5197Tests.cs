@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
 using CodeIndex.Cli;
 using CodeIndex.Database;
+using CodeIndex.Mcp;
 
 namespace CodeIndex.Tests;
 
@@ -52,6 +53,21 @@ public partial class McpServerTests
         Assert.Equal(nodeCount, expandedCycle["node_count"]!.GetValue<int>());
         Assert.Equal(nodeCount, expandedCycle["nodes_returned"]!.GetValue<int>());
         Assert.False(expanded["display_truncated"]!.GetValue<bool>());
+        Assert.True(MatchesSchema(expanded, depsSchema, depsSchema), expanded.ToJsonString());
+
+        var schemaBoundaryPayload = expanded.DeepClone();
+        var schemaBoundaryNodes = new JsonArray(Enumerable
+            .Range(0, McpServer.MaxMcpPaginationOffset + 1)
+            .Select(index => (JsonNode?)JsonValue.Create($"src/SchemaBoundary{index:D5}.cs"))
+            .ToArray());
+        schemaBoundaryPayload["cycles"]![0]!["nodes"] = schemaBoundaryNodes;
+        schemaBoundaryPayload["largest_component"]!["nodes"] = schemaBoundaryNodes.DeepClone();
+        Assert.Equal(
+            QueryCommandRunner.MaxDependencyCycleGraphBudget,
+            depsSchema["$defs"]!["dependency_cycle"]!["properties"]!["nodes"]!["maxItems"]!.GetValue<int>());
+        Assert.True(
+            MatchesSchema(schemaBoundaryPayload, depsSchema, depsSchema),
+            schemaBoundaryPayload.ToJsonString());
     }
 
     [Fact]

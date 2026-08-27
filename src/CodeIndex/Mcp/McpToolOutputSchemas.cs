@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using CodeIndex.Cli;
 using CodeIndex.Database;
 
 namespace CodeIndex.Mcp;
@@ -69,6 +70,8 @@ internal static class McpToolOutputSchemas
         {
             ["row"] = RowSchema(),
             ["rows"] = ArraySchema(Reference("row")),
+            ["dependency_cycle"] = DependencyCycleSchema(),
+            ["dependency_cycles"] = ArraySchema(Reference("dependency_cycle")),
             ["warning"] = new JsonObject
             {
                 ["oneOf"] = new JsonArray
@@ -396,8 +399,9 @@ internal static class McpToolOutputSchemas
         => new()
         {
             ["edges"] = Reference("rows"),
-            ["cycles"] = Reference("rows"),
-            ["cycle_summaries"] = Reference("rows"),
+            ["cycles"] = Reference("dependency_cycles"),
+            ["cycle_summaries"] = Reference("dependency_cycles"),
+            ["largest_component"] = Nullable(Reference("dependency_cycle")),
             ["graph"] = new JsonObject
             {
                 ["type"] = "object",
@@ -412,6 +416,21 @@ internal static class McpToolOutputSchemas
                 ["additionalProperties"] = Reference("open_value_0"),
             },
             ["format"] = StringSchema(),
+        };
+
+    private static JsonObject DependencyCycleSchema()
+        => new()
+        {
+            ["type"] = "object",
+            ["properties"] = new JsonObject
+            {
+                ["nodes"] = ArraySchema(
+                    StringSchema(),
+                    QueryCommandRunner.MaxDependencyCycleGraphBudget),
+            },
+            ["maxProperties"] = MaxSchemaObjectProperties,
+            ["propertyNames"] = StringSchema(),
+            ["additionalProperties"] = Reference("open_value_0"),
         };
 
     private static JsonObject LanguagesProperties()
@@ -637,11 +656,14 @@ internal static class McpToolOutputSchemas
         => new() { ["type"] = "null" };
 
     private static JsonObject ArraySchema(JsonObject itemSchema)
+        => ArraySchema(itemSchema, MaxSchemaArrayItems);
+
+    private static JsonObject ArraySchema(JsonObject itemSchema, int maxItems)
         => new()
         {
             ["type"] = "array",
             ["items"] = itemSchema,
-            ["maxItems"] = MaxSchemaArrayItems,
+            ["maxItems"] = maxItems,
         };
 
     private static JsonObject Nullable(JsonObject schema)

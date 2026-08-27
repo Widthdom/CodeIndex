@@ -1228,8 +1228,11 @@ public static partial class QueryCommandRunner
         var referenceCounts = new long[cycleNodes.Count];
         var classifiedReferenceCounts = new long[cycleNodes.Count];
         var evidenceByLanguage = CreateDependencyCycleEvidenceMaps(cycleNodes.Count);
+        var evidenceByOrigin = CreateDependencyCycleEvidenceMaps(cycleNodes.Count);
         var evidenceByResolutionState = CreateDependencyCycleEvidenceMaps(cycleNodes.Count);
         var evidenceByReferenceKind = CreateDependencyCycleEvidenceMaps(cycleNodes.Count);
+        var evidenceByTargetKind = CreateDependencyCycleEvidenceMaps(cycleNodes.Count);
+        var evidenceBySuppressionReason = CreateDependencyCycleEvidenceMaps(cycleNodes.Count);
         foreach (var edge in edges)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -1243,8 +1246,11 @@ public static partial class QueryCommandRunner
             {
                 classifiedReferenceCounts[sourceComponent] += evidence.ReferenceCount;
                 AddDependencyCycleEvidenceCount(evidenceByLanguage[sourceComponent], evidence.SourceLanguage, evidence.ReferenceCount);
+                AddDependencyCycleEvidenceCount(evidenceByOrigin[sourceComponent], evidence.Origin, evidence.ReferenceCount);
                 AddDependencyCycleEvidenceCount(evidenceByResolutionState[sourceComponent], evidence.ResolutionState, evidence.ReferenceCount);
                 AddDependencyCycleEvidenceCount(evidenceByReferenceKind[sourceComponent], evidence.ReferenceKind, evidence.ReferenceCount);
+                AddDependencyCycleEvidenceCount(evidenceByTargetKind[sourceComponent], evidence.TargetKind, evidence.ReferenceCount);
+                AddDependencyCycleEvidenceCount(evidenceBySuppressionReason[sourceComponent], evidence.SuppressionReason, evidence.ReferenceCount);
             }
         }
 
@@ -1256,8 +1262,11 @@ public static partial class QueryCommandRunner
                 new DependencyCycleEvidenceBreakdown(
                     classifiedReferenceCounts[componentIndex],
                     ToDependencyCycleEvidenceCounts(evidenceByLanguage[componentIndex]),
+                    ToDependencyCycleEvidenceCounts(evidenceByOrigin[componentIndex]),
                     ToDependencyCycleEvidenceCounts(evidenceByResolutionState[componentIndex]),
-                    ToDependencyCycleEvidenceCounts(evidenceByReferenceKind[componentIndex]))))
+                    ToDependencyCycleEvidenceCounts(evidenceByReferenceKind[componentIndex]),
+                    ToDependencyCycleEvidenceCounts(evidenceByTargetKind[componentIndex]),
+                    ToDependencyCycleEvidenceCounts(evidenceBySuppressionReason[componentIndex]))))
             .OrderByDescending(static component => component.ReferenceCount)
             .ThenByDescending(static component => component.InternalEdgeCount)
             .ThenByDescending(static component => component.Nodes.Count)
@@ -1373,8 +1382,11 @@ public static partial class QueryCommandRunner
             ["classified_reference_count"] = evidence.ClassifiedReferenceCount,
             ["classification_complete"] = evidence.ClassifiedReferenceCount == component.ReferenceCount,
             ["by_source_language"] = BuildDependencyCycleEvidenceCountsJson(evidence.BySourceLanguage, "source_language"),
+            ["by_origin"] = BuildDependencyCycleEvidenceCountsJson(evidence.ByOrigin, "origin"),
             ["by_resolution_state"] = BuildDependencyCycleEvidenceCountsJson(evidence.ByResolutionState, "resolution_state"),
             ["by_reference_kind"] = BuildDependencyCycleEvidenceCountsJson(evidence.ByReferenceKind, "reference_kind"),
+            ["by_target_kind"] = BuildDependencyCycleEvidenceCountsJson(evidence.ByTargetKind, "target_kind"),
+            ["by_suppression_reason"] = BuildDependencyCycleEvidenceCountsJson(evidence.BySuppressionReason, "suppression_reason"),
         };
     }
 
@@ -1403,10 +1415,13 @@ public static partial class QueryCommandRunner
     internal sealed record DependencyCycleEvidenceBreakdown(
         long ClassifiedReferenceCount,
         IReadOnlyList<DependencyCycleEvidenceCount> BySourceLanguage,
+        IReadOnlyList<DependencyCycleEvidenceCount> ByOrigin,
         IReadOnlyList<DependencyCycleEvidenceCount> ByResolutionState,
-        IReadOnlyList<DependencyCycleEvidenceCount> ByReferenceKind)
+        IReadOnlyList<DependencyCycleEvidenceCount> ByReferenceKind,
+        IReadOnlyList<DependencyCycleEvidenceCount> ByTargetKind,
+        IReadOnlyList<DependencyCycleEvidenceCount> BySuppressionReason)
     {
-        internal static readonly DependencyCycleEvidenceBreakdown Empty = new(0, [], [], []);
+        internal static readonly DependencyCycleEvidenceBreakdown Empty = new(0, [], [], [], [], [], []);
     }
 
     internal sealed record DependencyCycleAnalysis(

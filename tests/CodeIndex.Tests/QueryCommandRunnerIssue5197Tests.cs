@@ -140,6 +140,45 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunDeps_CycleSummaryIncludesEveryAdvertisedEvidenceDimension_Issue5197()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_deps_cycle_evidence_5197");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        InsertFileWithSymbolsAndReferences(dbPath, "src/EvidenceA.cs", ["EvidenceA"], ["EvidenceB"]);
+        InsertFileWithSymbolsAndReferences(dbPath, "src/EvidenceB.cs", ["EvidenceB"], ["EvidenceA"]);
+        SetCycleReferenceResolution(dbPath, "src/EvidenceA.cs", "src/EvidenceB.cs", "unresolved");
+        SetCycleReferenceResolution(dbPath, "src/EvidenceB.cs", "src/EvidenceA.cs", "resolved");
+        MarkDependencyGraphReady(dbPath);
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+            ["--db", dbPath, "--json", "--cycles", "--summary-only", "--limit", "1", "--lang", "csharp"],
+            _jsonOptions));
+
+        using var document = ParseJsonOutput(stdout);
+        var evidence = Assert.Single(document.RootElement
+            .GetProperty("cycle_summaries")
+            .EnumerateArray())
+            .GetProperty("retained_evidence");
+        var origin = Assert.Single(evidence.GetProperty("by_origin").EnumerateArray());
+        var targetKind = Assert.Single(evidence.GetProperty("by_target_kind").EnumerateArray());
+        var suppressionReasons = evidence.GetProperty("by_suppression_reason")
+            .EnumerateArray()
+            .ToDictionary(
+                static item => item.GetProperty("suppression_reason").GetString()!,
+                static item => item.GetProperty("reference_count").GetInt64(),
+                StringComparer.Ordinal);
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Equal("symbol_name_match", origin.GetProperty("origin").GetString());
+        Assert.Equal(2, origin.GetProperty("reference_count").GetInt64());
+        Assert.Equal("symbol", targetKind.GetProperty("target_kind").GetString());
+        Assert.Equal(2, targetKind.GetProperty("reference_count").GetInt64());
+        Assert.Equal(1, suppressionReasons["csharp_non_authoritative_qualified_call"]);
+        Assert.Equal(1, suppressionReasons["unavailable"]);
+    }
+
+    [Fact]
     public void RunDeps_JsonGraphCursorPageReportsReturnedNodeOmissionSeparatelyFromLargestComponent_Issue5197()
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_deps_graph_page_5197");

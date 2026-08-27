@@ -27,6 +27,12 @@
             "reference_count": 3
           }
         ],
+        "by_origin": [
+          {
+            "origin": "symbol_name_match",
+            "reference_count": 3
+          }
+        ],
         "by_resolution_state": [
           {
             "resolution_state": "resolved",
@@ -36,6 +42,18 @@
         "by_reference_kind": [
           {
             "reference_kind": "type_reference",
+            "reference_count": 3
+          }
+        ],
+        "by_target_kind": [
+          {
+            "target_kind": "symbol",
+            "reference_count": 3
+          }
+        ],
+        "by_suppression_reason": [
+          {
+            "suppression_reason": "unavailable",
             "reference_count": 3
           }
         ]
@@ -96,6 +114,12 @@
           "reference_count": 3
         }
       ],
+      "by_origin": [
+        {
+          "origin": "symbol_name_match",
+          "reference_count": 3
+        }
+      ],
       "by_resolution_state": [
         {
           "resolution_state": "resolved",
@@ -105,6 +129,18 @@
       "by_reference_kind": [
         {
           "reference_kind": "type_reference",
+          "reference_count": 3
+        }
+      ],
+      "by_target_kind": [
+        {
+          "target_kind": "symbol",
+          "reference_count": 3
+        }
+      ],
+      "by_suppression_reason": [
+        {
+          "suppression_reason": "unavailable",
           "reference_count": 3
         }
       ]
