@@ -1465,6 +1465,29 @@ public class ProgramRunnerTests
         Assert.Contains("Usage: cdidx search", stderr, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("definition", "csv")]
+    [InlineData("definition", "tsv")]
+    [InlineData("definition", "qf")]
+    [InlineData("symbols", "lsp")]
+    [InlineData("symbols", "sarif")]
+    public void RunQuery_FieldsWithProjectionIncompatibleFormat_ReturnsUsageError_Issue5190(
+        string command,
+        string format)
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+            [command, "Needle", "--format", format, "--fields", "path,name"],
+            appVersion: "1.10.0"));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Empty(stdout);
+        Assert.Contains(
+            $"--fields cannot be combined with projection-incompatible --format {format}",
+            stderr,
+            StringComparison.Ordinal);
+        Assert.Contains($"Usage: cdidx {command}", stderr, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Run_TestExtractor_PrintsIsolatedSymbols()
     {

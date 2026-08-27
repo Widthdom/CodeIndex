@@ -84,6 +84,24 @@ internal static partial class JsonEnvelopeWrapper
         "family_members_next_cursor",
     ];
 
+    private static readonly string[] BodyContentCompanionProjectionFields =
+    [
+        "body_start_line",
+        "body_end_line",
+        "body_content_start_line",
+        "body_content_end_line",
+        "body_content_next_start_line",
+        "body_content_truncated",
+        "body_requested_start_line",
+        "body_requested_end_line",
+        "body_effective_start_line",
+        "body_effective_end_line",
+        "body_content_truncation_reasons",
+        "body_content_recovery",
+        "content_omitted",
+        "content_omitted_reason",
+    ];
+
     internal static bool ShouldAutoWrapBoundedResponse(string command, string[] args)
     {
         if (!BoundedResponseCommands.Contains(command)
@@ -1069,6 +1087,24 @@ internal static partial class JsonEnvelopeWrapper
             return ExtractOutlineSymbols(outlinePayload);
         if (command == "unused" && rawResults.FirstOrDefault() is JsonObject unusedPayload)
             return ExtractUnusedSymbols(unusedPayload);
+        if (command is "references" or "callers" or "callees"
+            && rawResults.FirstOrDefault() is JsonObject graphPayload)
+        {
+            var primaryCollection = command switch
+            {
+                "references" => "references",
+                "callers" => "callers",
+                _ => "callees",
+            };
+            if (graphPayload[primaryCollection] is JsonArray)
+            {
+                var extraction = ExtractNestedCollection(graphPayload, primaryCollection);
+                var identityContext = ExtractGraphIdentityResponseContext(command, graphPayload);
+                return identityContext is null
+                    ? extraction
+                    : extraction with { Context = MergeResponseContexts(extraction.Context, identityContext) };
+            }
+        }
         if (command == "impact" && rawResults.FirstOrDefault() is JsonObject impactPayload)
         {
             var requestedCollection = SelectRequestedCollection(controls.Fields, "callers", "file_impacts", "definitions");
@@ -1140,6 +1176,7 @@ internal static partial class JsonEnvelopeWrapper
                      "candidates",
                      "candidates_truncated",
                      "identity_warning",
+                     "reference_graph_incomplete_reasons",
                  })
         {
             if (source.TryGetPropertyValue(field, out var value))
@@ -2442,24 +2479,37 @@ internal static partial class JsonEnvelopeWrapper
                                && ProjectionFieldRegistry.GetCompactFields(command) is { } defaults
                                ? defaults
                                : null);
-            if (selected is null || primaryCollection is null)
+            if (selected is null)
                 return selected;
+            if (primaryCollection is null)
+                return PreserveBodyContentCompanionFields(selected);
             var dotted = selected
                 .Where(field => field.StartsWith(primaryCollection + ".", StringComparison.Ordinal))
                 .Select(field => field[(primaryCollection.Length + 1)..])
                 .ToList();
             if (dotted.Count > 0)
-                return PreservePartialFamilyContinuationFields(
-                    dotted,
-                    command,
-                    groupedSymbolsRequest);
+                return PreserveBodyContentCompanionFields(
+                    PreservePartialFamilyContinuationFields(
+                        dotted,
+                        command,
+                        groupedSymbolsRequest));
             if (selected.Contains(primaryCollection, StringComparer.Ordinal))
                 return null;
-            return PreservePartialFamilyContinuationFields(
-                selected.Where(field => !field.Contains('.')).ToList(),
-                command,
-                groupedSymbolsRequest);
+            return PreserveBodyContentCompanionFields(
+                PreservePartialFamilyContinuationFields(
+                    selected.Where(field => !field.Contains('.')).ToList(),
+                    command,
+                    groupedSymbolsRequest));
         }
+
+        private static IReadOnlyList<string> PreserveBodyContentCompanionFields(
+            IReadOnlyList<string> selected)
+            => selected.Any(field => field is "body" or "body_content")
+                ? selected
+                    .Concat(BodyContentCompanionProjectionFields)
+                    .Distinct(StringComparer.Ordinal)
+                    .ToArray()
+                : selected;
 
         private static IReadOnlyList<string> PreservePartialFamilyContinuationFields(
             IReadOnlyList<string> selected,

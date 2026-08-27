@@ -150,6 +150,15 @@ internal static partial class JsonEnvelopeWrapper
         Func<string[], int> runInner)
     {
         command = CanonicalizeCommandName(command);
+        if (!ProgramRunner.TryValidateOutputFormatOptions(
+                [command, .. args],
+                out var outputFormatError,
+                out var outputFormatHint,
+                out var outputFormatUsage))
+        {
+            CommandErrorWriter.Write(outputFormatError, outputFormatHint, outputFormatUsage);
+            return CommandExitCodes.UsageError;
+        }
         if (IsBoundedResponseRequest(command, args))
             return RunBoundedResponse(command, args, appVersion, jsonOptions, runInner);
 

@@ -103,6 +103,132 @@ public sealed class JsonEnvelopeWrapperIssue4585Tests
                 Assert.Equal(0, root.GetProperty("metadata").GetProperty("result_count").GetInt32());
                 Assert.Equal(0, root.GetProperty("metadata").GetProperty("total_count").GetInt32());
             }
+
+            var projectedGraphCases = new (string Command, string Query, string Fields)[]
+            {
+                ("references", "Helper", "path,symbol_name,reference_kind,line"),
+                ("callers", "Helper", "path,caller_name,callee_name,first_line"),
+                ("callees", "Call", "path,caller_name,callee_name,first_line"),
+            };
+            foreach (var testCase in projectedGraphCases)
+            {
+                var nonEmptyArgs = new[]
+                {
+                    testCase.Command, testCase.Query, "--exact-name", "--json",
+                    "--lang", "csharp", "--fields", testCase.Fields, "--db", dbPath,
+                };
+                var (nonEmptyExitCode, nonEmptyStdout, nonEmptyStderr) = CaptureConsole(() =>
+                    ProgramRunner.Run(nonEmptyArgs, _jsonOptions, "1.0.0-test"));
+
+                Assert.Equal(CommandExitCodes.Success, nonEmptyExitCode);
+                Assert.Equal(string.Empty, nonEmptyStderr);
+                using var nonEmptyDocument = JsonDocument.Parse(nonEmptyStdout);
+                var nonEmptyRoot = nonEmptyDocument.RootElement;
+                Assert.True(
+                    nonEmptyRoot.GetProperty("results").GetArrayLength() > 0,
+                    $"{testCase.Command}: {nonEmptyStdout}");
+                Assert.Equal(
+                    nonEmptyRoot.GetProperty("results").GetArrayLength(),
+                    nonEmptyRoot.GetProperty("metadata").GetProperty("returned_count").GetInt32());
+                Assert.DoesNotContain(
+                    nonEmptyRoot.GetProperty("results").EnumerateArray(),
+                    result => result.EnumerateObject().Count() == 0);
+
+                var emptyArgs = new[]
+                {
+                    testCase.Command, "DefinitelyNoSuchSymbol", "--exact-name", "--json",
+                    "--fields", testCase.Fields, "--db", dbPath,
+                };
+                var (emptyExitCode, emptyStdout, emptyStderr) = CaptureConsole(() =>
+                    ProgramRunner.Run(emptyArgs, _jsonOptions, "1.0.0-test"));
+
+                Assert.Equal(CommandExitCodes.Success, emptyExitCode);
+                Assert.Equal(string.Empty, emptyStderr);
+                using var emptyDocument = JsonDocument.Parse(emptyStdout);
+                var emptyRoot = emptyDocument.RootElement;
+                Assert.Empty(emptyRoot.GetProperty("results").EnumerateArray());
+                Assert.Equal(0, emptyRoot.GetProperty("metadata").GetProperty("result_count").GetInt32());
+                Assert.Equal(0, emptyRoot.GetProperty("metadata").GetProperty("returned_count").GetInt32());
+                Assert.Equal(0, emptyRoot.GetProperty("metadata").GetProperty("total_count").GetInt32());
+            }
+
+            var strictArgs = new[]
+            {
+                "callees", "DefinitelyNoSuchSymbol", "--exact-name", "--strict-not-found", "--json",
+                "--fields", "path,caller_name,callee_name,first_line", "--db", dbPath,
+            };
+            var (strictExitCode, strictStdout, strictStderr) = CaptureConsole(() =>
+                ProgramRunner.Run(strictArgs, _jsonOptions, "1.0.0-test"));
+
+            Assert.Equal(CommandExitCodes.NotFound, strictExitCode);
+            Assert.Equal(string.Empty, strictStderr);
+            using var strictDocument = JsonDocument.Parse(strictStdout);
+            Assert.Empty(strictDocument.RootElement.GetProperty("results").EnumerateArray());
+            Assert.Equal(0, strictDocument.RootElement.GetProperty("metadata").GetProperty("total_count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData("reference_definition_lookup_symbol_budget_exceeded", false)]
+    [InlineData(DbReader.DynamicReferenceGraphContractStaleReason, true)]
+    public void BoundedProjection_DegradedGraphZeroPreservesIncompleteReasons_Issue5190(
+        string expectedReason,
+        bool staleDynamicContract)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("bounded_graph_degraded_reason_5190");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                staleDynamicContract ? "src/app.cr" : "src/app.py",
+                staleDynamicContract ? "crystal" : "python",
+                staleDynamicContract ? "def helper(value)\n  value\nend\n" : "def app():\n    pass\n");
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.MarkGraphReady();
+                writer.MarkIssuesReady();
+                if (staleDynamicContract)
+                {
+                    writer.SetMeta(DbContext.GetSymbolExtractorVersionMetaKey("crystal"), "2");
+                }
+                else
+                {
+                    using var command = db.Connection.CreateCommand();
+                    command.CommandText = """
+                        INSERT INTO file_issues (file_id, kind, line, message, severity)
+                        SELECT id, 'reference_definition_lookup_symbol_budget_exceeded', 0, 'synthetic cap hit', 'warning'
+                        FROM files
+                        WHERE path = 'src/app.py'
+                        """;
+                    Assert.Equal(1, command.ExecuteNonQuery());
+                }
+            }
+
+            foreach (var commandName in new[] { "callers", "callees" })
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                    [commandName, "DefinitelyNoSuchSymbol", "--exact-name", "--fields", "path,caller_name,callee_name,first_line", "--db", dbPath],
+                    _jsonOptions,
+                    "1.0.0-test"));
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                using var document = JsonDocument.Parse(stdout);
+                Assert.Empty(document.RootElement.GetProperty("results").EnumerateArray());
+                var context = document.RootElement.GetProperty("metadata").GetProperty("response_context");
+                Assert.False(context.GetProperty("reference_graph_complete").GetBoolean());
+                Assert.Contains(
+                    expectedReason,
+                    context.GetProperty("reference_graph_incomplete_reasons")
+                        .EnumerateArray()
+                        .Select(reason => reason.GetString()));
+            }
         }
         finally
         {
@@ -312,17 +438,32 @@ public sealed class JsonEnvelopeWrapperIssue4585Tests
             using (var statsDocument = JsonDocument.Parse(statsStdout))
                 Assert.Equal("status", statsDocument.RootElement.GetProperty("metadata").GetProperty("command").GetString());
 
-            using var input = new StringReader("[\"definition\",\"Target\",\"--fields\",\"file,line\",\"--limit\",\"1\",\"--max-json-bytes\",\"4096\"]\n");
-            using var capture = ConsoleCapture.StartWithInput(input, captureOut: true, captureError: true);
-            var batchExitCode = ProgramRunner.Run(["batch", "--db", dbPath], _jsonOptions, "1.0.0-test");
-            var batchStdout = capture.Out!.ToString()!;
-            var batchStderr = capture.Error!.ToString()!;
+            using (var input = new StringReader("[\"definition\",\"Target\",\"--fields\",\"file,line\",\"--limit\",\"1\",\"--max-json-bytes\",\"4096\"]\n"))
+            using (var capture = ConsoleCapture.StartWithInput(input, captureOut: true, captureError: true))
+            {
+                var batchExitCode = ProgramRunner.Run(["batch", "--db", dbPath], _jsonOptions, "1.0.0-test");
+                var batchStdout = capture.Out!.ToString()!;
+                var batchStderr = capture.Error!.ToString()!;
 
-            Assert.Equal(CommandExitCodes.Success, batchExitCode);
-            Assert.Equal(string.Empty, batchStderr);
-            using var batchDocument = JsonDocument.Parse(batchStdout);
-            Assert.Equal("definition", batchDocument.RootElement.GetProperty("metadata").GetProperty("command").GetString());
-            Assert.Equal(1, batchDocument.RootElement.GetProperty("results").GetArrayLength());
+                Assert.Equal(CommandExitCodes.Success, batchExitCode);
+                Assert.Equal(string.Empty, batchStderr);
+                using var batchDocument = JsonDocument.Parse(batchStdout);
+                Assert.Equal("definition", batchDocument.RootElement.GetProperty("metadata").GetProperty("command").GetString());
+                Assert.Equal(1, batchDocument.RootElement.GetProperty("results").GetArrayLength());
+            }
+
+            using (var input = new StringReader("[\"definition\",\"Target\",\"--format\",\"csv\",\"--fields\",\"file,line\"]\n"))
+            using (var capture = ConsoleCapture.StartWithInput(input, captureOut: true, captureError: true))
+            {
+                var batchExitCode = ProgramRunner.Run(["batch", "--db", dbPath], _jsonOptions, "1.0.0-test");
+
+                Assert.Equal(CommandExitCodes.UsageError, batchExitCode);
+                Assert.Equal(string.Empty, capture.Out!.ToString());
+                Assert.Contains(
+                    "--fields cannot be combined with projection-incompatible --format csv",
+                    capture.Error!.ToString(),
+                    StringComparison.Ordinal);
+            }
         }
         finally
         {
@@ -341,7 +482,9 @@ public sealed class JsonEnvelopeWrapperIssue4585Tests
                 dbPath,
                 "src/Body.cs",
                 "csharp",
-                "public sealed class BodyTarget { public void Run() { var marker = 42; } }");
+                "public sealed class BodyTarget\n{\n"
+                + string.Join('\n', Enumerable.Range(1, 40).Select(index => $"    public void Run{index}() {{ var marker{index} = {index}; }}"))
+                + "\n}");
 
             foreach (var fields in new[] { "body", "body_content", "all" })
             {
@@ -364,6 +507,20 @@ public sealed class JsonEnvelopeWrapperIssue4585Tests
                     using var document = JsonDocument.Parse(stdout);
                     var result = Assert.Single(document.RootElement.GetProperty("results").EnumerateArray());
                     Assert.Contains("marker", result.GetProperty("body_content").GetString(), StringComparison.Ordinal);
+                    Assert.True(result.GetProperty("body_content_truncated").GetBoolean());
+                    Assert.True(result.TryGetProperty("body_content_start_line", out _));
+                    Assert.True(result.TryGetProperty("body_content_end_line", out _));
+                    Assert.True(result.TryGetProperty("body_content_next_start_line", out _));
+                    Assert.True(result.TryGetProperty("body_requested_start_line", out _));
+                    Assert.True(result.TryGetProperty("body_requested_end_line", out _));
+                    Assert.True(result.TryGetProperty("body_effective_start_line", out _));
+                    Assert.True(result.TryGetProperty("body_effective_end_line", out _));
+                    Assert.Contains(
+                        result.GetProperty("body_content_truncation_reasons").EnumerateArray(),
+                        reason => reason.GetString() == "body_line_cap");
+                    Assert.True(result.TryGetProperty("body_content_recovery", out _));
+                    Assert.True(result.GetProperty("content_omitted").GetBoolean());
+                    Assert.Equal("body_content_field", result.GetProperty("content_omitted_reason").GetString());
                 }
             }
         }
