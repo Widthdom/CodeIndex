@@ -618,6 +618,14 @@ public static partial class QueryCommandRunner
                 "Use `cdidx deps --cycles --graph-budget <n>`.");
             return CommandExitCodes.UsageError;
         }
+        if (options.IncludeAllDependencyCycleNodes && !options.DependencyCycles)
+        {
+            WriteUsageError(
+                "deps --all-cycle-nodes requires --cycles.",
+                GetUsageLineOrThrow("deps"),
+                "Use `cdidx deps --cycles --json --all-cycle-nodes`.");
+            return CommandExitCodes.UsageError;
+        }
 
         var reverse = cmdArgs.Any(static arg => arg == "--reverse");
         var cycleCursorBaseFingerprint = BuildDependencyCycleCursorFingerprint(options, reverse);
@@ -717,7 +725,10 @@ public static partial class QueryCommandRunner
                             zeroSymbolFilter,
                             payload =>
                             {
-                                AddDependencyCycleAnalysisJsonFields(payload, zeroAnalysis);
+                                AddDependencyCycleAnalysisJsonFields(
+                                    payload,
+                                    zeroAnalysis,
+                                    includeAllNodes: options.IncludeAllDependencyCycleNodes);
                                 AddDependencyGraphAvailabilityJsonFields(payload, reader._hasReferencesTable);
                             });
                         return writeExitCode == CommandExitCodes.Success ? ZeroResultExitCode(options) : writeExitCode;
@@ -726,10 +737,16 @@ public static partial class QueryCommandRunner
                     {
                         var payload = new JsonObject { ["count"] = 0 };
                         if (options.SummaryOnly)
+                        {
                             payload["summary_only"] = true;
+                            payload["cycle_summaries"] = new JsonArray();
+                        }
                         else
                             payload["cycles"] = new JsonArray();
-                        AddDependencyCycleAnalysisJsonFields(payload, zeroAnalysis);
+                        AddDependencyCycleAnalysisJsonFields(
+                            payload,
+                            zeroAnalysis,
+                            includeAllNodes: options.IncludeAllDependencyCycleNodes);
                         AddDependencySchemaJsonFields(payload, reader, options, jsonOptions, zeroSqlGraphSignal, zeroSymbolFilter);
                         AddDependencyGraphAvailabilityJsonFields(payload, reader._hasReferencesTable);
                         AddFreshnessHint(payload, reader);
@@ -869,11 +886,17 @@ public static partial class QueryCommandRunner
                 {
                     var payload = new JsonObject { ["count"] = 0 };
                     if (options.SummaryOnly)
+                    {
                         payload["summary_only"] = true;
+                        payload["cycle_summaries"] = new JsonArray();
+                    }
                     else
                         payload["cycles"] = new JsonArray();
                     if (dependencyCycleAnalysis != null)
-                        AddDependencyCycleAnalysisJsonFields(payload, dependencyCycleAnalysis);
+                        AddDependencyCycleAnalysisJsonFields(
+                            payload,
+                            dependencyCycleAnalysis,
+                            includeAllNodes: options.IncludeAllDependencyCycleNodes);
                     AddDependencySchemaJsonFields(payload, reader, options, jsonOptions, sqlGraphSignal, symbolFilter.Summary);
                     AddFreshnessHint(payload, reader);
                     WriteGraphLiveness("deps", "write_output", options, depsFormat, rows: outputEdges.Count, cycleCount: 0, machineReadable: machineReadable);
@@ -901,7 +924,12 @@ public static partial class QueryCommandRunner
                     options,
                     sqlGraphSignal,
                     symbolFilter.Summary,
-                    dependencyCycleAnalysis == null ? null : payload => AddDependencyCycleAnalysisJsonFields(payload, dependencyCycleAnalysis));
+                    dependencyCycleAnalysis == null
+                        ? null
+                        : payload => AddDependencyCycleAnalysisJsonFields(
+                            payload,
+                            dependencyCycleAnalysis,
+                            includeAllNodes: options.IncludeAllDependencyCycleNodes));
                 if ((depsFormat is OutputFormatDot or OutputFormatGraphMl) && dependencyCycleAnalysis is { Truncated: true })
                     CommandErrorWriter.WriteStderr(BuildDependencyCycleTruncationWarning(dependencyCycleAnalysis));
                 return writeExitCode;
@@ -917,12 +945,22 @@ public static partial class QueryCommandRunner
                     payload["summary_only"] = true;
                 if (options.DependencyCycles)
                 {
-                    if (!options.SummaryOnly)
-                        payload["cycles"] = dependencyCycleAnalysis == null
-                            ? new JsonArray()
-                            : BuildDependencyCyclesJson(dependencyCycleAnalysis.Components, dependencyCycleAnalysis.PageOffset);
                     if (dependencyCycleAnalysis != null)
-                        AddDependencyCycleAnalysisJsonFields(payload, dependencyCycleAnalysis);
+                    {
+                        payload[options.SummaryOnly ? "cycle_summaries" : "cycles"] = BuildDependencyCyclesJson(
+                            dependencyCycleAnalysis.Components,
+                            dependencyCycleAnalysis.PageOffset,
+                            options.IncludeAllDependencyCycleNodes);
+                    }
+                    else if (!options.SummaryOnly)
+                    {
+                        payload["cycles"] = new JsonArray();
+                    }
+                    if (dependencyCycleAnalysis != null)
+                        AddDependencyCycleAnalysisJsonFields(
+                            payload,
+                            dependencyCycleAnalysis,
+                            includeAllNodes: options.IncludeAllDependencyCycleNodes);
                 }
                 else if (!options.SummaryOnly)
                     payload["edges"] = JsonSerializer.SerializeToNode(outputEdges, CliJsonSerializerContextFactory.Create(jsonOptions).ListFileDependencyResult);
@@ -1146,6 +1184,10 @@ public static partial class QueryCommandRunner
                 nodeToComponent[node] = componentIndex;
         var internalEdgeCounts = new int[cycleNodes.Count];
         var referenceCounts = new long[cycleNodes.Count];
+        var classifiedReferenceCounts = new long[cycleNodes.Count];
+        var evidenceByLanguage = CreateDependencyCycleEvidenceMaps(cycleNodes.Count);
+        var evidenceByResolutionState = CreateDependencyCycleEvidenceMaps(cycleNodes.Count);
+        var evidenceByReferenceKind = CreateDependencyCycleEvidenceMaps(cycleNodes.Count);
         foreach (var edge in edges)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -1155,19 +1197,47 @@ public static partial class QueryCommandRunner
                 continue;
             internalEdgeCounts[sourceComponent]++;
             referenceCounts[sourceComponent] += edge.ReferenceCount;
+            foreach (var evidence in edge.Evidence ?? [])
+            {
+                classifiedReferenceCounts[sourceComponent] += evidence.ReferenceCount;
+                AddDependencyCycleEvidenceCount(evidenceByLanguage[sourceComponent], evidence.SourceLanguage, evidence.ReferenceCount);
+                AddDependencyCycleEvidenceCount(evidenceByResolutionState[sourceComponent], evidence.ResolutionState, evidence.ReferenceCount);
+                AddDependencyCycleEvidenceCount(evidenceByReferenceKind[sourceComponent], evidence.ReferenceKind, evidence.ReferenceCount);
+            }
         }
 
         return cycleNodes
             .Select((component, componentIndex) => new DependencyCycleComponent(
                 component,
                 internalEdgeCounts[componentIndex],
-                referenceCounts[componentIndex]))
+                referenceCounts[componentIndex],
+                new DependencyCycleEvidenceBreakdown(
+                    classifiedReferenceCounts[componentIndex],
+                    ToDependencyCycleEvidenceCounts(evidenceByLanguage[componentIndex]),
+                    ToDependencyCycleEvidenceCounts(evidenceByResolutionState[componentIndex]),
+                    ToDependencyCycleEvidenceCounts(evidenceByReferenceKind[componentIndex]))))
             .OrderByDescending(static component => component.ReferenceCount)
             .ThenByDescending(static component => component.InternalEdgeCount)
             .ThenByDescending(static component => component.Nodes.Count)
             .ThenBy(static component => component.Nodes[0], StringComparer.Ordinal)
             .ToList();
     }
+
+    private static Dictionary<string, long>[] CreateDependencyCycleEvidenceMaps(int count)
+        => Enumerable.Range(0, count)
+            .Select(static _ => new Dictionary<string, long>(StringComparer.Ordinal))
+            .ToArray();
+
+    private static void AddDependencyCycleEvidenceCount(Dictionary<string, long> counts, string? value, int referenceCount)
+    {
+        var key = string.IsNullOrEmpty(value) ? "unavailable" : value;
+        counts[key] = counts.GetValueOrDefault(key) + referenceCount;
+    }
+
+    private static List<DependencyCycleEvidenceCount> ToDependencyCycleEvidenceCounts(Dictionary<string, long> counts)
+        => counts.OrderBy(static pair => pair.Key, StringComparer.Ordinal)
+            .Select(static pair => new DependencyCycleEvidenceCount(pair.Key, pair.Value))
+            .ToList();
 
     private static List<FileDependencyResult> FilterEdgesToComponents(
         IReadOnlyList<FileDependencyResult> edges,
@@ -1188,23 +1258,70 @@ public static partial class QueryCommandRunner
 
     internal static JsonArray BuildDependencyCyclesJson(
         IReadOnlyList<DependencyCycleComponent> components,
-        int pageOffset)
+        int pageOffset,
+        bool includeAllNodes = false,
+        bool mcpArguments = false)
     {
         var array = new JsonArray();
         for (var i = 0; i < components.Count; i++)
-        {
-            var component = components[i];
-            array.Add(new JsonObject
-            {
-                ["rank"] = pageOffset + i + 1,
-                ["length"] = component.Nodes.Count,
-                ["internal_edge_count"] = component.InternalEdgeCount,
-                ["reference_count"] = component.ReferenceCount,
-                ["nodes"] = new JsonArray(component.Nodes.Select(node => JsonValue.Create(node)).ToArray<JsonNode?>())
-            });
-        }
+            array.Add(BuildDependencyCycleComponentJson(components[i], pageOffset + i + 1, includeAllNodes, mcpArguments));
         return array;
     }
+
+    private static JsonObject BuildDependencyCycleComponentJson(
+        DependencyCycleComponent component,
+        int rank,
+        bool includeAllNodes,
+        bool mcpArguments)
+    {
+        var materializationLimit = includeAllNodes ? component.Nodes.Count : DefaultDependencyCycleNodeLimit;
+        var returnedNodes = component.Nodes.Take(materializationLimit).ToList();
+        var nodesTruncated = returnedNodes.Count < component.Nodes.Count;
+        var payload = new JsonObject
+        {
+            ["rank"] = rank,
+            ["length"] = component.Nodes.Count,
+            ["node_count"] = component.Nodes.Count,
+            ["internal_edge_count"] = component.InternalEdgeCount,
+            ["reference_count"] = component.ReferenceCount,
+            ["nodes"] = new JsonArray(returnedNodes.Select(node => JsonValue.Create(node)).ToArray<JsonNode?>()),
+            ["nodes_returned"] = returnedNodes.Count,
+            ["nodes_truncated"] = nodesTruncated,
+            ["nodes_omitted_count"] = component.Nodes.Count - returnedNodes.Count,
+            ["node_limit"] = includeAllNodes ? null : DefaultDependencyCycleNodeLimit,
+            ["retained_evidence"] = BuildDependencyCycleEvidenceBreakdownJson(component),
+        };
+        if (nodesTruncated)
+        {
+            payload["node_expansion"] = mcpArguments
+                ? "Set includeAllCycleNodes=true to return every file path in this component."
+                : "Rerun with --all-cycle-nodes to return every file path in this component.";
+        }
+        return payload;
+    }
+
+    private static JsonObject BuildDependencyCycleEvidenceBreakdownJson(DependencyCycleComponent component)
+    {
+        var evidence = component.EvidenceBreakdown ?? DependencyCycleEvidenceBreakdown.Empty;
+        return new JsonObject
+        {
+            ["retained_reference_count"] = component.ReferenceCount,
+            ["classified_reference_count"] = evidence.ClassifiedReferenceCount,
+            ["classification_complete"] = evidence.ClassifiedReferenceCount == component.ReferenceCount,
+            ["by_source_language"] = BuildDependencyCycleEvidenceCountsJson(evidence.BySourceLanguage, "source_language"),
+            ["by_resolution_state"] = BuildDependencyCycleEvidenceCountsJson(evidence.ByResolutionState, "resolution_state"),
+            ["by_reference_kind"] = BuildDependencyCycleEvidenceCountsJson(evidence.ByReferenceKind, "reference_kind"),
+        };
+    }
+
+    private static JsonArray BuildDependencyCycleEvidenceCountsJson(
+        IReadOnlyList<DependencyCycleEvidenceCount> counts,
+        string key)
+        => new(counts.Select(count => (JsonNode?)new JsonObject
+        {
+            [key] = count.Value,
+            ["reference_count"] = count.ReferenceCount,
+        }).ToArray());
 
     internal static JsonArray BuildDependencyCyclesJson(IReadOnlyList<List<string>> cycles)
         => BuildDependencyCyclesJson(
@@ -1214,7 +1331,19 @@ public static partial class QueryCommandRunner
     internal sealed record DependencyCycleComponent(
         List<string> Nodes,
         int InternalEdgeCount,
-        long ReferenceCount);
+        long ReferenceCount,
+        DependencyCycleEvidenceBreakdown? EvidenceBreakdown = null);
+
+    internal sealed record DependencyCycleEvidenceCount(string Value, long ReferenceCount);
+
+    internal sealed record DependencyCycleEvidenceBreakdown(
+        long ClassifiedReferenceCount,
+        IReadOnlyList<DependencyCycleEvidenceCount> BySourceLanguage,
+        IReadOnlyList<DependencyCycleEvidenceCount> ByResolutionState,
+        IReadOnlyList<DependencyCycleEvidenceCount> ByReferenceKind)
+    {
+        internal static readonly DependencyCycleEvidenceBreakdown Empty = new(0, [], [], []);
+    }
 
     internal sealed record DependencyCycleAnalysis(
         List<FileDependencyResult> Edges,
@@ -1235,6 +1364,8 @@ public static partial class QueryCommandRunner
         string RankingMode)
     {
         public List<List<string>> Cycles => Components.Select(static component => component.Nodes).ToList();
+        public DependencyCycleComponent? LargestComponent { get; init; }
+        public int LargestComponentRank { get; init; }
     }
 
     internal static DependencyCycleAnalysis AnalyzeDependencyCycles(
@@ -1268,6 +1399,13 @@ public static partial class QueryCommandRunner
             ? FormatDependencyCycleCursor(new DependencyCycleCursor(nextOffset, cursorFingerprint))
             : null;
 
+        var largestComponentEntry = allComponents
+            .Select((component, index) => (Component: component, Rank: index + 1))
+            .OrderByDescending(static entry => entry.Component.Nodes.Count)
+            .ThenByDescending(static entry => entry.Component.InternalEdgeCount)
+            .ThenByDescending(static entry => entry.Component.ReferenceCount)
+            .ThenBy(static entry => entry.Component.Nodes[0], StringComparer.Ordinal)
+            .FirstOrDefault();
         return new DependencyCycleAnalysis(
             outputEdges,
             components,
@@ -1284,10 +1422,18 @@ public static partial class QueryCommandRunner
             hasMore,
             nextCursor,
             DependencyCycleDetectionMode,
-            DependencyCycleRankingMode);
+            DependencyCycleRankingMode)
+        {
+            LargestComponent = largestComponentEntry.Component,
+            LargestComponentRank = largestComponentEntry.Rank,
+        };
     }
 
-    internal static void AddDependencyCycleAnalysisJsonFields(JsonObject payload, DependencyCycleAnalysis analysis, bool mcpArguments = false)
+    internal static void AddDependencyCycleAnalysisJsonFields(
+        JsonObject payload,
+        DependencyCycleAnalysis analysis,
+        bool mcpArguments = false,
+        bool includeAllNodes = false)
     {
         payload["truncated"] = analysis.Truncated;
         payload["termination_reason"] = analysis.TerminationReason;
@@ -1310,8 +1456,28 @@ public static partial class QueryCommandRunner
         payload["returned_count"] = analysis.Components.Count;
         payload["has_more"] = analysis.HasMore;
         payload["next_cursor"] = analysis.NextCursor;
-        payload["next_step_flags"] = BuildDependencyCycleNextStepFlagsJson(analysis, mcpArguments);
+        var displayTruncated = !includeAllNodes && HasTruncatedDependencyCycleNodeDisplay(analysis);
+        payload["display_truncated"] = displayTruncated;
+        payload["display_truncation_reason"] = displayTruncated ? "component_node_limit" : null;
+        payload["node_materialization_mode"] = includeAllNodes ? "complete" : "bounded_sample";
+        payload["node_materialization_limit"] = includeAllNodes ? null : DefaultDependencyCycleNodeLimit;
+        payload["cycle_grouping_mode"] = "file";
+        payload["cycle_grouping_applied"] = false;
+        payload["cycle_grouping_reason"] = "file_level_scc";
+        if (analysis.LargestComponent != null)
+        {
+            payload["largest_component"] = BuildDependencyCycleComponentJson(
+                analysis.LargestComponent,
+                analysis.LargestComponentRank,
+                includeAllNodes,
+                mcpArguments);
+        }
+        payload["next_step_flags"] = BuildDependencyCycleNextStepFlagsJson(analysis, mcpArguments, includeAllNodes);
     }
+
+    private static bool HasTruncatedDependencyCycleNodeDisplay(DependencyCycleAnalysis analysis)
+        => analysis.Components.Any(static component => component.Nodes.Count > DefaultDependencyCycleNodeLimit)
+           || analysis.LargestComponent is { Nodes.Count: > DefaultDependencyCycleNodeLimit };
 
     private static string BuildDependencyCycleTruncationSummary(DependencyCycleAnalysis analysis)
         => analysis.TruncatedReason == "page_limit"
@@ -1320,7 +1486,7 @@ public static partial class QueryCommandRunner
 
     private static string BuildDependencyCycleTruncationWarning(DependencyCycleAnalysis analysis)
     {
-        var nextSteps = BuildDependencyCycleNextStepFlags(analysis, mcpArguments: false);
+        var nextSteps = BuildDependencyCycleNextStepFlags(analysis, mcpArguments: false, includeAllNodes: false);
         var nextStepsText = nextSteps.Count == 0
             ? string.Empty
             : $" Next steps: {string.Join(", ", nextSteps)}.";
@@ -1348,16 +1514,23 @@ public static partial class QueryCommandRunner
 
     private static JsonArray BuildDependencyCycleNextStepFlagsJson(
         DependencyCycleAnalysis analysis,
-        bool mcpArguments)
-        => new(BuildDependencyCycleNextStepFlags(analysis, mcpArguments)
+        bool mcpArguments,
+        bool includeAllNodes)
+        => new(BuildDependencyCycleNextStepFlags(analysis, mcpArguments, includeAllNodes)
             .Select(flag => JsonValue.Create(flag))
             .ToArray<JsonNode?>());
 
     private static List<string> BuildDependencyCycleNextStepFlags(
         DependencyCycleAnalysis analysis,
-        bool mcpArguments)
+        bool mcpArguments,
+        bool includeAllNodes)
     {
         var flags = new List<string>();
+        if (!includeAllNodes && HasTruncatedDependencyCycleNodeDisplay(analysis))
+        {
+            flags.Add(mcpArguments ? "includeAllCycleNodes=true" : "--all-cycle-nodes");
+            flags.Add(mcpArguments ? "path=[\"<pattern>\"]" : "--path <pattern>");
+        }
         if (analysis.HasMore && analysis.NextCursor != null)
             flags.Add(mcpArguments ? $"cursor={analysis.NextCursor}" : $"--cursor {analysis.NextCursor}");
         if (analysis.TruncatedReason == "graph_edge_budget")
@@ -1495,7 +1668,7 @@ public static partial class QueryCommandRunner
         }
     }
 
-    private static DependencySymbolFilterResult ApplyDependencySymbolFilters(IReadOnlyList<FileDependencyResult> edges, QueryCommandOptions options)
+    internal static DependencySymbolFilterResult ApplyDependencySymbolFilters(IReadOnlyList<FileDependencyResult> edges, QueryCommandOptions options)
     {
         var applied = options.DependencySuppressNoise || options.DependencySymbols.Count > 0 || options.DependencySymbolFamilies.Count > 0;
         if (!applied)
@@ -1523,9 +1696,7 @@ public static partial class QueryCommandRunner
         var symbolsAfter = 0;
         long referencesBefore = 0;
         long referencesAfter = 0;
-        var headingEdgesAffected = 0;
-        var headingEdgesRemoved = 0;
-        long headingReferencesRemoved = 0;
+        var suppressionReasons = new Dictionary<string, (int EdgesAffected, int EdgesRemoved, long ReferencesRemoved)>(StringComparer.Ordinal);
         foreach (var edge in edges)
         {
             referencesBefore += edge.ReferenceCount;
@@ -1536,19 +1707,27 @@ public static partial class QueryCommandRunner
             var referenceCount = edge.ReferenceCount;
             if (options.DependencySuppressNoise && edgeEvidence.Count > 0)
             {
-                keptEvidence = edgeEvidence
-                    .Where(static evidence => evidence.Origin != "markdown_heading_name_match")
+                var removedEvidenceByReason = edgeEvidence
+                    .Select(static evidence => (Evidence: evidence, Reason: GetDependencySuppressionReason(evidence)))
+                    .Where(static item => item.Reason != null)
+                    .GroupBy(static item => item.Reason!, StringComparer.Ordinal)
                     .ToList();
-                var removedReferenceCount = edgeEvidence
-                    .Where(static evidence => evidence.Origin == "markdown_heading_name_match")
-                    .Sum(static evidence => (long)evidence.ReferenceCount);
+                keptEvidence = edgeEvidence
+                    .Where(static evidence => GetDependencySuppressionReason(evidence) == null)
+                    .ToList();
+                var removedReferenceCount = removedEvidenceByReason
+                    .Sum(static group => group.Sum(static item => (long)item.Evidence.ReferenceCount));
                 if (removedReferenceCount > 0)
                 {
-                    headingEdgesAffected++;
-                    headingReferencesRemoved += removedReferenceCount;
                     referenceCount = (int)Math.Max(0L, edge.ReferenceCount - removedReferenceCount);
-                    if (referenceCount == 0)
-                        headingEdgesRemoved++;
+                    foreach (var group in removedEvidenceByReason)
+                    {
+                        var previous = suppressionReasons.GetValueOrDefault(group.Key);
+                        suppressionReasons[group.Key] = (
+                            previous.EdgesAffected + 1,
+                            previous.EdgesRemoved + (referenceCount == 0 ? 1 : 0),
+                            previous.ReferencesRemoved + group.Sum(static item => (long)item.Evidence.ReferenceCount));
+                    }
                 }
             }
 
@@ -1572,16 +1751,14 @@ public static partial class QueryCommandRunner
                 keptEvidence));
         }
 
-        IReadOnlyList<DependencySuppressionReasonSummary> suppressionReasons =
-            headingReferencesRemoved > 0
-                ? [
-                    new DependencySuppressionReasonSummary(
-                        Reason: "markdown_heading_name_match",
-                        EdgesAffected: headingEdgesAffected,
-                        EdgesRemoved: headingEdgesRemoved,
-                        ReferencesRemoved: headingReferencesRemoved),
-                ]
-                : [];
+        var suppressionReasonSummaries = suppressionReasons
+            .OrderBy(static pair => pair.Key, StringComparer.Ordinal)
+            .Select(static pair => new DependencySuppressionReasonSummary(
+                pair.Key,
+                pair.Value.EdgesAffected,
+                pair.Value.EdgesRemoved,
+                pair.Value.ReferencesRemoved))
+            .ToList();
         return new DependencySymbolFilterResult(
             filteredEdges,
             new DependencySymbolFilterSummary(
@@ -1595,8 +1772,12 @@ public static partial class QueryCommandRunner
                 SymbolsAfter: symbolsAfter,
                 ReferencesBefore: referencesBefore,
                 ReferencesAfter: referencesAfter,
-                SuppressionReasons: suppressionReasons));
+                SuppressionReasons: suppressionReasonSummaries));
     }
+
+    private static string? GetDependencySuppressionReason(FileDependencyEvidence evidence)
+        => evidence.SuppressionReason
+           ?? (evidence.Origin == "markdown_heading_name_match" ? "markdown_heading_name_match" : null);
 
     private static bool KeepDependencySymbol(
         string symbol,
@@ -1674,7 +1855,7 @@ public static partial class QueryCommandRunner
         payload["note"] = "symbol_references table is missing in this index (legacy or read-only DB). Zero result is degraded, not authoritative.";
     }
 
-    private static void AddDependencySymbolFilterJsonFields(JsonObject payload, DependencySymbolFilterSummary symbolFilter, JsonSerializerOptions jsonOptions)
+    internal static void AddDependencySymbolFilterJsonFields(JsonObject payload, DependencySymbolFilterSummary symbolFilter, JsonSerializerOptions jsonOptions)
     {
         if (!symbolFilter.Applied)
             return;
@@ -1720,9 +1901,11 @@ public static partial class QueryCommandRunner
         {
             ["source_language"] = item.SourceLanguage,
             ["origin"] = item.Origin,
+            ["resolution_state"] = item.ResolutionState,
             ["reference_kind"] = item.ReferenceKind,
             ["target_kind"] = item.TargetKind,
             ["reference_count"] = item.ReferenceCount,
+            ["suppression_reason"] = item.SuppressionReason,
         }).ToArray());
 
     private static bool DepsEmitsJson(QueryCommandOptions options, string depsFormat)
@@ -1737,9 +1920,9 @@ public static partial class QueryCommandRunner
             "deps",
             "Use --summary-only, reduce --limit, or increase --max-json-bytes.");
 
-    private sealed record DependencySymbolFilterResult(List<FileDependencyResult> Edges, DependencySymbolFilterSummary Summary);
+    internal sealed record DependencySymbolFilterResult(List<FileDependencyResult> Edges, DependencySymbolFilterSummary Summary);
 
-    private sealed record DependencySymbolFilterSummary(
+    internal sealed record DependencySymbolFilterSummary(
         bool Applied,
         bool SuppressNoise,
         IReadOnlyList<string> Symbols,
@@ -1752,7 +1935,7 @@ public static partial class QueryCommandRunner
         long ReferencesAfter,
         IReadOnlyList<DependencySuppressionReasonSummary> SuppressionReasons);
 
-    private sealed record DependencySuppressionReasonSummary(
+    internal sealed record DependencySuppressionReasonSummary(
         string Reason,
         int EdgesAffected,
         int EdgesRemoved,
@@ -2052,7 +2235,7 @@ public static partial class QueryCommandRunner
         return false;
     }
 
-    private static List<FileDependencyResult> OrderWorkspaceCycleCandidates(
+    internal static List<FileDependencyResult> OrderWorkspaceCycleCandidates(
         IEnumerable<FileDependencyResult> results,
         int limit)
         => results
@@ -2066,9 +2249,9 @@ public static partial class QueryCommandRunner
             .Take(limit)
             .ToList();
 
-    private static bool HasRetainedDependencyEvidence(FileDependencyResult result)
+    internal static bool HasRetainedDependencyEvidence(FileDependencyResult result)
         => result.Evidence is not { Count: > 0 }
-           || result.Evidence.Any(static evidence => evidence.Origin != "markdown_heading_name_match");
+           || result.Evidence.Any(static evidence => GetDependencySuppressionReason(evidence) == null);
 
     internal static List<string> BuildWorkspaceDependencyDatabaseList(QueryCommandOptions options)
     {

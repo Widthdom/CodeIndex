@@ -151,6 +151,7 @@ public static partial class QueryCommandRunner
         private bool mapSummaryOnly;
         private bool dependencyCycles;
         private int dependencyCycleGraphBudget = DefaultDependencyCycleGraphBudget;
+        private bool includeAllDependencyCycleNodes;
         private bool dependencySuppressNoise;
         private List<string> dependencySymbols = [];
         private List<string> dependencySymbolFamilies = [];
@@ -537,6 +538,7 @@ public static partial class QueryCommandRunner
                 MapSummaryOnly = mapSummaryOnly,
                 DependencyCycles = dependencyCycles,
                 DependencyCycleGraphBudget = dependencyCycleGraphBudget,
+                IncludeAllDependencyCycleNodes = includeAllDependencyCycleNodes,
                 DependencySuppressNoise = dependencySuppressNoise,
                 DependencySymbols = dependencySymbols,
                 DependencySymbolFamilies = dependencySymbolFamilies,

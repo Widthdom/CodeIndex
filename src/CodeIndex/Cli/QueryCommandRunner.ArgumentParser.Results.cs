@@ -62,6 +62,9 @@ public static partial class QueryCommandRunner
                 case "--cycles":
                     dependencyCycles = true;
                     break;
+                case "--all-cycle-nodes":
+                    includeAllDependencyCycleNodes = true;
+                    break;
                 case "--suppress-noise":
                     dependencySuppressNoise = true;
                     break;

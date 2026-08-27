@@ -2962,7 +2962,10 @@ public class FileDependencyEvidence
 {
     public string SourceLanguage { get; set; } = string.Empty;
     public string Origin { get; set; } = string.Empty;
+    public string ResolutionState { get; set; } = string.Empty;
     public string ReferenceKind { get; set; } = string.Empty;
     public string TargetKind { get; set; } = string.Empty;
     public int ReferenceCount { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? SuppressionReason { get; set; }
 }

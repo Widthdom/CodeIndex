@@ -41,8 +41,16 @@ public partial class DbReader
                                THEN 'markdown_heading_name_match'
                            ELSE 'symbol_name_match'
                        END AS origin,
+                       " + _expressions.ResolutionState + @" AS resolution_state,
                        r.reference_kind AS raw_reference_kind,
-                       CASE WHEN s.kind = 'heading' THEN 'heading' ELSE 'symbol' END AS target_kind
+                       CASE WHEN s.kind = 'heading' THEN 'heading' ELSE 'symbol' END AS target_kind,
+                       CASE
+                           WHEN src.lang = 'markdown' AND s.kind = 'heading' AND NOT " + _expressions.MarkdownExplicitLink + @"
+                               THEN 'markdown_heading_name_match'
+                           WHEN " + _expressions.CSharpNonAuthoritativeQualifiedCall + @"
+                               THEN 'csharp_non_authoritative_qualified_call'
+                           ELSE NULL
+                       END AS suppression_reason
                 FROM candidate_edges
                 JOIN files src ON src.path = candidate_edges.source_path
                 JOIN symbol_references r ON r.file_id = src.id
@@ -82,16 +90,20 @@ public partial class DbReader
                        target_path,
                        source_lang,
                        origin,
+                       resolution_state,
                        raw_reference_kind,
                        target_kind,
+                       suppression_reason,
                        COUNT(DISTINCT reference_id) AS evidence_reference_count
                 FROM candidate_symbols
                 GROUP BY source_path,
                          target_path,
                          source_lang,
                          origin,
+                         resolution_state,
                          raw_reference_kind,
-                         target_kind
+                         target_kind,
+                         suppression_reason
             ),");
         }
 
@@ -103,11 +115,13 @@ public partial class DbReader
                        target_path,
                        source_lang || char(31) ||
                        origin || char(31) ||
+                       resolution_state || char(31) ||
                        raw_reference_kind || char(31) ||
                        target_kind || char(31) ||
+                       COALESCE(suppression_reason, '') || char(31) ||
                        evidence_reference_count AS evidence_item
                 FROM edge_evidence_rows
-                ORDER BY source_path, target_path, source_lang, origin, raw_reference_kind, target_kind
+                 ORDER BY source_path, target_path, source_lang, origin, resolution_state, raw_reference_kind, target_kind, suppression_reason
             ),
             edge_evidence_payloads AS (
                 SELECT source_path,
