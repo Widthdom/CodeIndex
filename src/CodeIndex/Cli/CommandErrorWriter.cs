@@ -6,7 +6,6 @@ namespace CodeIndex.Cli;
 
 internal static class CommandErrorWriter
 {
-    internal const string DefaultHint = "Run '<cmd> --help' for usage information.";
     internal const string ResponseBudgetCategory = "response_budget";
     internal const string MinimumResponseBytesUnavailableBeforeMaterialization = "normal_payload_not_materialized";
     internal const string MinimumResponseBytesUncertainRuntimeEnvelope = "runtime_metadata_or_embedded_budget_varies_between_invocations";
@@ -22,11 +21,25 @@ internal static class CommandErrorWriter
     internal static void WriteWarning(string message)
         => WriteStderr($"Warning: {message}");
 
-    internal static void Write(string message, string? hint = null, string? usage = null, string? errorCode = null)
+    internal static string BuildUsageHint(string? canonicalCommand = null)
+    {
+        var command = canonicalCommand != null
+            && CliCommandMetadata.PublicCommandNames.Contains(canonicalCommand, StringComparer.Ordinal)
+                ? $"cdidx {canonicalCommand}"
+                : "cdidx";
+        return $"Run `{command} --help` for usage information.";
+    }
+
+    internal static void Write(
+        string message,
+        string? hint = null,
+        string? usage = null,
+        string? errorCode = null,
+        string? command = null)
     {
         var prefix = errorCode is null ? "Error" : $"Error [{errorCode}]";
         WriteStderr($"{prefix}: {message}");
-        WriteStderr($"Hint: {hint ?? DefaultHint}");
+        WriteStderr($"Hint: {hint ?? BuildUsageHint(command)}");
         if (usage != null)
             WriteStderr(FormatUsage(usage));
     }
@@ -36,9 +49,10 @@ internal static class CommandErrorWriter
         int exitCode,
         string? hint = null,
         string? usage = null,
-        string? errorCode = null)
+        string? errorCode = null,
+        string? command = null)
     {
-        Write(message, hint, usage, errorCode);
+        Write(message, hint, usage, errorCode, command);
         return exitCode;
     }
 
@@ -75,7 +89,7 @@ internal static class CommandErrorWriter
             return exitCode;
         }
 
-        Write(message, exitCode, hint, usage, errorCode);
+        Write(message, exitCode, hint, usage, errorCode, command);
         return exitCode;
     }
 
@@ -97,7 +111,7 @@ internal static class CommandErrorWriter
             new CommandErrorJsonResult(
                 "error",
                 message,
-                hint ?? DefaultHint,
+                hint ?? BuildUsageHint(command),
                 resolvedErrorCode,
                 path,
                 resolvedCategory,
