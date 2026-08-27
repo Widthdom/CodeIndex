@@ -51,7 +51,10 @@ internal static partial class ExportImportCommandRunner
                     UnknownExtensionFileSampleTruncated: manifest.UnknownExtensionFileSampleTruncated,
                     IndexComplete: manifest.IndexComplete,
                     IndexIncompleteReasons: manifest.IndexIncompleteReasons,
-                    Scope: manifest.Scope),
+                    Scope: manifest.Scope,
+                    PathRedactionRequested: manifest.PathRedactionRequested,
+                    PathRedactionComplete: manifest.PathRedactionComplete,
+                    PathRedactionOmittedCategories: manifest.PathRedactionOmittedCategories),
                 CliJsonSerializerContextFactory.Create(jsonOptions).ImportDryRunResult));
         }
         else
@@ -98,7 +101,10 @@ internal static partial class ExportImportCommandRunner
                     UnknownExtensionFileSampleTruncated: manifest.UnknownExtensionFileSampleTruncated,
                     IndexComplete: manifest.IndexComplete,
                     IndexIncompleteReasons: manifest.IndexIncompleteReasons,
-                    Scope: manifest.Scope),
+                    Scope: manifest.Scope,
+                    PathRedactionRequested: manifest.PathRedactionRequested,
+                    PathRedactionComplete: manifest.PathRedactionComplete,
+                    PathRedactionOmittedCategories: manifest.PathRedactionOmittedCategories),
                 jsonOptions));
         }
         else

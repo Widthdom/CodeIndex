@@ -367,10 +367,18 @@ internal static class SolutionProjectResolver
     private static DotNetProjectInfo? MatchProject(IReadOnlyList<DotNetProjectInfo> projects, string requested)
     {
         var trimmed = requested.Trim();
+        var absoluteRequested = Path.IsPathFullyQualified(trimmed)
+            ? Path.GetFullPath(trimmed)
+            : null;
         return projects.FirstOrDefault(project =>
             string.Equals(project.Name, trimmed, StringComparison.OrdinalIgnoreCase)
             || string.Equals(project.ProjectPath, trimmed.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase)
-            || string.Equals(Path.GetFileName(project.ProjectPath), trimmed, StringComparison.OrdinalIgnoreCase));
+            || string.Equals(Path.GetFileName(project.ProjectPath), trimmed, StringComparison.OrdinalIgnoreCase)
+            || absoluteRequested != null
+            && string.Equals(
+                Path.GetFullPath(Path.Combine(project.DirectoryPath, Path.GetFileName(project.ProjectPath))),
+                absoluteRequested,
+                StringComparison.OrdinalIgnoreCase));
     }
 
     private static IEnumerable<string> EnumerateFilesUsingIndexerPolicy(

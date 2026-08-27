@@ -58,6 +58,21 @@ Development contracts:
 
 Portable archive trust is scope-aware. Unfiltered exports set `scope.represents_entire_source_database` and preserve completeness, indexed-HEAD, run, and unknown-extension metadata. Filtered exports normalize only the archive snapshot to `index_complete=false` with `partial_archive`, remove source-wide HEAD/run provenance, and omit unavailable unknown-extension summaries. Import repeats that normalization for legacy manifests without scope metadata, while current full-snapshot manifests preserve trust. Scoped indexing of a partial archive falls back to a full workspace scan before it may clear `partial_archive`.
 
+Portable archive path privacy is opt-in for compatibility. Default exports retain
+`manifest.project_root`, the snapshot's `indexed_project_root`, requested scope
+values, and resolved success paths. `--redact-paths` must operate only on the
+private copied snapshot: resolve and apply scope first, delete the copied project
+root, replace absolute POSIX/Windows/file-URI scope values and persisted
+path-sample values with `[redacted]`, then run `VACUUM` before computing
+`database_sha256`. Successful manifest and export JSON must keep
+`path_redaction_requested`, `path_redaction_complete`, and bounded stable
+`path_redaction_omitted_categories` synchronized. Redacted success output must
+not repeat the resolved archive, database, or source-root paths. Repository-relative
+indexed paths, source content, hashes, readiness, and commit provenance are not
+redaction targets. Import derives its destination project root from the destination
+DB path/current directory and must tolerate an absent source root in both execution
+and dry-run modes.
+
 Checkpoint plan drift detection covers DB/WAL/SHM content changes and sidecar appearance or disappearance through the final pre-publication validation. The plan's `uncertainty` value records the remaining post-validation race; copied outputs are independently hash-verified against the plan before atomic publication. DB/WAL/SHM candidates must pass native regular-file type validation before hashing so Unix FIFOs cannot block planning. `metadata_policy` reports `owner_only_files_and_directories` on POSIX and the actually inherited `inherited_windows_acls` policy on Windows. A database payload whose output name collides with `manifest.txt`, including filesystem-equivalent casing, makes the plan not ready and is rejected before mutation.
 
 ## Filesystem Permissions
@@ -4244,6 +4259,19 @@ net9 CI lane に合わせる場合は `FRAMEWORK=net9.0 make test` を使いま�
 | Fold backfill の preview / recovery | `backfill-fold --dry-run`; `backfill-fold --checkpoint`; MCP `backfill_fold` の `dry_run: true` または `force: true` | dry-run は DB を変更せず FoldReady stamp も書かずに、rewrite 対象の folded-key row をプレビューします。CLI preflight でmutation不要と判断された場合でもsnapshotを明示的に保存するには `--checkpoint` を使います。既定の完了済みno-opはcheckpoint artifactを作りません。MCP も同じ preview を受け付け、stored version / fingerprint が current に見える場合でも suspicious な fold metadata や row state を復旧するため `force: true` を受け付けます。non-dry-run rewrite は中断後に resume でき、完了済み row update は durable に残り、最終 FoldReady metadata は verification 成功後にだけ stamp されます。MCP response は `progress.rows_done`、`progress.rows_total`、`progress.fraction` を含みます。 |
 
 portable archive の trust は scope を考慮します。filter なし export は `scope.represents_entire_source_database` を設定し、completeness、indexed-HEAD、run、unknown-extension metadata を維持します。filter 済み export は archive snapshot だけを `index_complete=false` / `partial_archive` に正規化し、source 全体に対する HEAD / run provenance を削除して、未計測の unknown-extension summary を省略します。scope metadata がない legacy manifest は import 時に同じ正規化を行い、現行の full-snapshot manifest は trust を維持します。partial archive に対する scoped index は `partial_archive` を解除する前に full workspace scan へ fallback します。
+
+portable archive の path privacy は互換性のため opt-in です。既定 export は
+`manifest.project_root`、snapshot の `indexed_project_root`、指定 scope value、解決済み
+success path を保持します。`--redact-paths` は private な copy 済み snapshot だけを変更します。
+最初に scope を解決・適用し、copy 側の project root を削除して、POSIX / Windows /
+file URI 形式の絶対 scope value と永続化済み path sample を `[redacted]` に置換します。
+その後 `VACUUM` を実行してから `database_sha256` を計算します。成功時の manifest と
+export JSON では `path_redaction_requested`、`path_redaction_complete`、上限付きで安定した
+`path_redaction_omitted_categories` を同期させます。redacted success output は解決済み
+archive / database / source-root path を再表示してはいけません。repository-relative な
+indexed path、source content、hash、readiness、commit provenance は redaction 対象外です。
+import は destination DB path / current directory から destination project root を導出し、
+source root がない archive を execution / dry-run の双方で許容する必要があります。
 
 checkpoint plan の drift 検出は、publish 前の最終検証までに起きる DB/WAL/SHM content の変更と sidecar の出現・消失を対象にします。plan の `uncertainty` 値は最終検証後に残る race を記録し、copy 済み output は atomic publish 前に plan の hash と個別に照合されます。DB/WAL/SHM 候補は hash 読み取り前に native regular-file type validation を通すため、Unix FIFO が plan 作成を停止させることはありません。`metadata_policy` は POSIX では `owner_only_files_and_directories`、Windows では実際に継承される `inherited_windows_acls` policy を報告します。database payload の output 名が filesystem 上で同一の大小文字を含め `manifest.txt` と衝突する場合、plan は not ready となり、変更前に拒否されます。
 

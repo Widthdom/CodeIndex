@@ -18,6 +18,8 @@ internal static partial class ExportImportCommandRunner
         SqliteConnection connection,
         string appVersion,
         ArchiveExportScopeResult scope,
+        bool pathRedactionRequested,
+        string[] pathRedactionOmittedCategories,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -71,7 +73,10 @@ internal static partial class ExportImportCommandRunner
                 ? null
                 : string.Equals(indexCompleteness, "complete", StringComparison.Ordinal),
             IndexIncompleteReasons: indexIncompleteReasons,
-            Scope: scope);
+            Scope: scope,
+            PathRedactionRequested: pathRedactionRequested,
+            PathRedactionComplete: pathRedactionRequested,
+            PathRedactionOmittedCategories: pathRedactionOmittedCategories);
     }
 
     private static void AddTextEntry(ZipArchive archive, string name, string content)

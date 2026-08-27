@@ -731,7 +731,7 @@ internal static class CliFlagSchema
             new() { Name = "--debounce", ValuePlaceholder = "<ms>", Description = "Watch only: coalesce file events after 0..60000 ms of quiet (default 500)", PrimaryCommands = Set("index") },
             new() { Name = "--watch-pending-path-limit", ValuePlaceholder = "<n>", Description = "Watch only: changed-path queue limit (1..262144); invalid CDIDX_INDEX_WATCH_PENDING_PATH_LIMIT warns and uses the documented effective value", PrimaryCommands = Set("index") },
             new() { Name = "--output", ShortName = "-o", ValuePlaceholder = "<path>", ValueKind = CliOptionValueKind.FilePath, Description = "Report bundle or suggestions export output path", PrimaryCommands = Set("report", "suggestions") },
-            new() { Name = "--redact-paths", Description = "Redact machine-specific paths (the default for recovery/config JSON and reports)", PrimaryCommands = Set(RecoveryPathCommands.Concat(["status", "report"]).ToArray()) },
+            new() { Name = "--redact-paths", Description = "Redact machine-specific paths; opt in for portable archives (the default for recovery/config JSON and reports)", PrimaryCommands = Set(RecoveryPathCommands.Concat(["status", "report", "export"]).ToArray()) },
             new() { Name = "--no-log", Description = "Exclude global tool log from bundle", PrimaryCommands = Set("report") },
             new() { Name = "--include-args", Description = "Include args in bundle log", PrimaryCommands = Set("report") },
             new() { Name = "--log-lines", ValuePlaceholder = "<n>", Description = "Number of log lines to include in bundle (clamped to 2000)", PrimaryCommands = Set("report") },

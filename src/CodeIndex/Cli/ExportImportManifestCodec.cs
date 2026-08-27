@@ -174,10 +174,60 @@ internal static class ExportImportManifestCodec
         if (!TryValidateIncompleteReasons(manifest, out message))
             return false;
 
+        if (!TryValidatePathRedaction(manifest, out message))
+            return false;
+
         if (manifest.Scope != null)
         {
             if (!TryValidateScope(manifest.Scope, out message))
                 return false;
+        }
+
+        message = string.Empty;
+        return true;
+    }
+
+    private static bool TryValidatePathRedaction(
+        ExportImportCommandRunner.ExportManifest manifest,
+        out string message)
+    {
+        if (manifest.PathRedactionComplete && !manifest.PathRedactionRequested)
+        {
+            message = "path_redaction_complete requires path_redaction_requested";
+            return false;
+        }
+
+        var categories = manifest.PathRedactionOmittedCategories;
+        if (categories == null)
+        {
+            message = string.Empty;
+            return true;
+        }
+        if (!manifest.PathRedactionRequested && categories.Length > 0)
+        {
+            message = "path_redaction_omitted_categories requires path_redaction_requested";
+            return false;
+        }
+        if (categories.Length > ExportImportCommandRunner.MaxArchivePathRedactionCategories)
+        {
+            message = $"path_redaction_omitted_categories exceeds the manifest limit of {ExportImportCommandRunner.MaxArchivePathRedactionCategories}";
+            return false;
+        }
+
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var category in categories)
+        {
+            if (string.IsNullOrWhiteSpace(category)
+                || category.Length > ExportImportCommandRunner.MaxArchivePathRedactionCategoryChars)
+            {
+                message = "path_redaction_omitted_categories contains an invalid category";
+                return false;
+            }
+            if (!seen.Add(category))
+            {
+                message = "path_redaction_omitted_categories contains a duplicate category";
+                return false;
+            }
         }
 
         message = string.Empty;
