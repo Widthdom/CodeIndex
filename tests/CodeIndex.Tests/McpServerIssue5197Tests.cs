@@ -55,6 +55,21 @@ public partial class McpServerTests
     }
 
     [Fact]
+    public void ToolsCall_DepsRejectsSummaryOnlyJsonGraphCombination_Issue5197()
+    {
+        var request = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"deps","arguments":{"cycles":true,"summaryOnly":true,"format":"json-graph"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var result = response["result"]!;
+
+        Assert.True(result["isError"]!.GetValue<bool>());
+        Assert.Contains(
+            "'summaryOnly' is not supported with format='json-graph'",
+            result["content"]![0]!["text"]!.GetValue<string>(),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ToolsCall_DepsNoiseSuppressionPreservesResolvedCSharpCalls_Issue5197()
     {
         var writer = new DbWriter(_db.Connection);

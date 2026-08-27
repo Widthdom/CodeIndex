@@ -45,6 +45,8 @@ public partial class McpServer
             return CreateToolErrorResponse(id, "'cursor' requires 'cycles=true'.");
         if ((suppressNoise || summaryOnly || includeAllCycleNodes) && !cyclesOnly)
             return CreateToolErrorResponse(id, "'suppressNoise', 'summaryOnly', and 'includeAllCycleNodes' require 'cycles=true'.");
+        if (summaryOnly && format == "json-graph")
+            return CreateToolErrorResponse(id, "'summaryOnly' is not supported with format='json-graph' because summary mode does not emit graph-shaped nodes or edges.");
         if (cursorValue != null && !QueryCommandRunner.TryParseDependencyCycleCursor(cursorValue, out _))
             return CreateToolErrorResponse(id, "'cursor' must be an opaque dependency-cycle next_cursor returned by deps.");
 
