@@ -199,7 +199,14 @@ public static partial class ConsoleUi
         var placeholder = flag.CommandValueDomains.Count > 0
             ? "<command-specific-value>"
             : flag.GetValuePlaceholder(string.Empty);
-        return placeholder is null ? names : $"{names} {placeholder}";
+        if (flag.ShortName is null || flag.ShortNameCommands is null)
+            return placeholder is null ? names : $"{names} {placeholder}";
+
+        var token = placeholder is null ? flag.Name : $"{flag.Name} {placeholder}";
+        var aliasCommands = string.Join(
+            '/',
+            flag.ShortNameCommands.OrderBy(command => command, StringComparer.Ordinal));
+        return $"{token} ({flag.ShortName}: {aliasCommands} only)";
     }
 
     private static string FormatRelatedOptionTokens(string command, params string[] flagNames) =>

@@ -17,6 +17,9 @@ namespace CodeIndex.Tests;
 [Collection("Console sensitive")]
 public class CliFlagSchemaTests
 {
+    private static readonly IReadOnlySet<string> CompletionGlobalFlags =
+        new HashSet<string>(["--quiet", "--silent", "--no-progress"], StringComparer.Ordinal);
+
     [Fact]
     public void AllCommands_MatchesCliCommandCatalog()
     {
@@ -47,6 +50,20 @@ public class CliFlagSchemaTests
                 Assert.True(known.Contains(command), $"{flag.Name} AlsoAcceptedBy references unknown subcommand '{command}'");
             foreach (var command in flag.CompletionSubcommands.Keys)
                 Assert.True(known.Contains(command), $"{flag.Name} CompletionSubcommands references unknown command '{command}'");
+            foreach (var command in flag.ParentCompletionCommands)
+            {
+                Assert.True(known.Contains(command), $"{flag.Name} ParentCompletionCommands references unknown command '{command}'");
+                Assert.True(flag.CompletionSubcommands.ContainsKey(command), $"{flag.Name} keeps parent completion for '{command}' without a nested applicability entry");
+            }
+            if (flag.ShortNameCommands is not null)
+            {
+                Assert.NotNull(flag.ShortName);
+                foreach (var command in flag.ShortNameCommands)
+                {
+                    Assert.True(known.Contains(command), $"{flag.Name} ShortNameCommands references unknown command '{command}'");
+                    Assert.True(flag.PrimaryCommands.Contains(command), $"{flag.Name} exposes its short name for non-primary command '{command}'");
+                }
+            }
         }
     }
 
@@ -187,6 +204,195 @@ public class CliFlagSchemaTests
         Assert.Empty(helpError);
         foreach (var option in expectedOptions)
             Assert.Contains(option, helpOutput, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DedicatedCommandOptionInventoriesMatchSchemaHelpAndParsers_Issue5194()
+    {
+        var expectedByContext = new Dictionary<(string Command, string? Nested), string[]>
+        {
+            [("lsp", null)] = ["--db"],
+            [("workspace", null)] = ["--json"],
+            [("workspace", "list")] = ["--json"],
+            [("workspace", "status")] = ["--json", "--check"],
+            [("workspace", "use")] = ["--json"],
+            [("workspace", "current")] = ["--json"],
+            [("workspace", "clear")] = ["--json"],
+            [("workspace", "deactivate")] = ["--json"],
+            [("config", null)] = [],
+            [("config", "show")] = ["--json", "--show-paths"],
+            [("diff", null)] =
+            [
+                "--json", "--summary-only", "--detailed", "--data-only", "--include-telemetry",
+                "--include-content", "--max-json-bytes", "--limit", "--offset", "--cursor",
+            ],
+            [("import", null)] =
+            [
+                "--db", "--prune-paths", "--no-backup", "--dry-run", "--check", "--limit", "--offset", "--json",
+            ],
+            [("export", null)] =
+            [
+                "--db", "--json", "--overwrite", "--lang", "--path", "--exclude-path", "--project", "--solution", "--exclude-tests",
+            ],
+            [("export", "ctags")] =
+            [
+                "--output", "--db", "--json", "--lang", "--path", "--exclude-path", "--exclude-tests", "--include-generated",
+            ],
+        };
+
+        foreach (var ((command, nested), expected) in expectedByContext)
+        {
+            var actual = CliFlagSchema.GetCompletionFlagsForCommand(command, nested)
+                .Select(flag => flag.Name)
+                .Where(name => !CompletionGlobalFlags.Contains(name))
+                .ToHashSet(StringComparer.Ordinal);
+            AssertOptionSet(expected, actual, $"schema context {command}{(nested is null ? string.Empty : $" {nested}")}");
+        }
+
+        foreach (var commandGroup in expectedByContext.GroupBy(entry => entry.Key.Command, StringComparer.Ordinal))
+        {
+            var expected = commandGroup.SelectMany(entry => entry.Value).ToHashSet(StringComparer.Ordinal);
+            var accepted = CliFlagSchema.GetAcceptedFlagNamesForCommand(commandGroup.Key)
+                .Where(name => !CompletionGlobalFlags.Contains(name))
+                .ToHashSet(StringComparer.Ordinal);
+            AssertOptionSet(expected, accepted, $"accepted schema inventory for {commandGroup.Key}");
+
+            var (printed, help, error) = ConsoleCapture.Capture(() =>
+                ConsoleUi.PrintCommandUsage(commandGroup.Key) ? 1 : 0);
+            Assert.Equal(1, printed);
+            Assert.Empty(error);
+            var documented = Regex.Matches(help, @"--[a-z][a-z0-9-]*")
+                .Select(match => match.Value)
+                .Where(name => name != "--help")
+                .ToHashSet(StringComparer.Ordinal);
+            AssertOptionSet(expected, documented, $"authoritative help inventory for {commandGroup.Key}");
+        }
+
+        var jsonOptions = ProgramRunner.CreateDefaultJsonOptions();
+        var (_, _, lspError) = ConsoleCapture.Capture(() =>
+            ProgramRunner.Run(["lsp", "--db"], appVersion: "1.10.0"));
+        Assert.DoesNotContain("--db is not supported for lsp", lspError, StringComparison.Ordinal);
+
+        var (_, _, workspaceJsonError) = ConsoleCapture.Capture(() =>
+            WorkspaceCommandRunner.Run(["list", "--json"], jsonOptions));
+        Assert.Empty(workspaceJsonError);
+        var (_, _, workspaceCheckError) = ConsoleCapture.Capture(() =>
+            WorkspaceCommandRunner.Run(["status", "--check"], jsonOptions));
+        Assert.DoesNotContain("only valid", workspaceCheckError, StringComparison.OrdinalIgnoreCase);
+        var (invalidWorkspaceCheck, _, _) = ConsoleCapture.Capture(() =>
+            WorkspaceCommandRunner.Run(["list", "--check"], jsonOptions));
+        Assert.Equal(CommandExitCodes.UsageError, invalidWorkspaceCheck);
+
+        var (configShowExitCode, _, configShowError) = ConsoleCapture.Capture(() =>
+            CdidxConfigFile.RunShow(["--json", "--show-paths"], jsonOptions));
+        Assert.Equal(CommandExitCodes.Success, configShowExitCode);
+        Assert.Empty(configShowError);
+
+        foreach (var option in expectedByContext[("diff", null)])
+        {
+            var parsed = DiffCommandOptionsParser.Parse(["left.db", "right.db", option], DiffCommandRunner.MaxDiffLimit);
+            Assert.DoesNotContain("does not support option", parsed.ParseError ?? string.Empty, StringComparison.Ordinal);
+        }
+        var conflictingDiffModes = DiffCommandOptionsParser.Parse(
+            ["left.db", "right.db", "--data-only", "--include-telemetry"],
+            DiffCommandRunner.MaxDiffLimit);
+        Assert.Contains("cannot be combined", conflictingDiffModes.ParseError, StringComparison.Ordinal);
+        var conflictingDiffPaging = DiffCommandOptionsParser.Parse(
+            ["left.db", "right.db", "--json", "--detailed", "--cursor", "cursor", "--offset", "0"],
+            DiffCommandRunner.MaxDiffLimit);
+        Assert.Contains("--cursor cannot be combined with --offset", conflictingDiffPaging.ParseError, StringComparison.Ordinal);
+
+        foreach (var option in expectedByContext[("import", null)])
+        {
+            var (_, stdout, stderr) = ConsoleCapture.Capture(() =>
+                ExportImportCommandRunner.RunImport([option], jsonOptions));
+            Assert.DoesNotContain($"unknown import option `{option}`", stdout + stderr, StringComparison.Ordinal);
+        }
+
+        foreach (var option in expectedByContext[("export", null)])
+        {
+            var (_, stdout, stderr) = ConsoleCapture.Capture(() =>
+                ExportImportCommandRunner.RunExport([option], jsonOptions, "1.10.0"));
+            Assert.DoesNotContain($"unknown export option `{option}`", stdout + stderr, StringComparison.Ordinal);
+        }
+
+        foreach (var option in expectedByContext[("export", "ctags")])
+        {
+            var args = CliFlagSchema.GetFlag("export", option)!.IsValueBearing
+                ? new[] { "ctags", option }
+                : new[] { "ctags", option, "--issue5194-probe" };
+            var (_, stdout, stderr) = ConsoleCapture.Capture(() =>
+                ExportImportCommandRunner.RunExport(args, jsonOptions, "1.10.0"));
+            Assert.DoesNotContain($"unknown ctags export option `{option}`", stdout + stderr, StringComparison.Ordinal);
+        }
+
+        var output = CliFlagSchema.GetFlag("export", "--output");
+        Assert.NotNull(output);
+        Assert.Null(output!.GetShortName("export"));
+        Assert.Equal("-o", output.GetShortName("report"));
+        Assert.Equal(CliOptionValueKind.FilePath, output.GetValueKind("export", "ctags"));
+        Assert.Equal(CliOptionValueKind.FilePath, CliFlagSchema.GetValueKindForCommand("lsp", "--db"));
+        Assert.Equal(CliOptionValueKind.Language, CliFlagSchema.GetValueKindForCommand("export", "--lang"));
+        Assert.False(CliFlagSchema.GetFlag("workspace", "--json")!.IsValueBearing);
+
+        var (_, ctagsAliasOutput, ctagsAliasError) = ConsoleCapture.Capture(() =>
+            ExportImportCommandRunner.RunExport(["ctags", "-o"], jsonOptions, "1.10.0"));
+        Assert.Contains("unknown ctags export option `-o`", ctagsAliasOutput + ctagsAliasError, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DedicatedCommandContextsRenderExactlyAcrossAllShells_Issue5194()
+    {
+        (string Command, string? Nested)[] contexts =
+        [
+            ("lsp", null),
+            ("workspace", null),
+            ("workspace", "list"),
+            ("workspace", "status"),
+            ("workspace", "use"),
+            ("workspace", "current"),
+            ("workspace", "clear"),
+            ("workspace", "deactivate"),
+            ("config", null),
+            ("config", "show"),
+            ("diff", null),
+            ("import", null),
+            ("export", null),
+            ("export", "ctags"),
+        ];
+
+        foreach (var shell in new[] { "bash", "zsh", "fish", "powershell" })
+        {
+            var script = ConsoleCompletionRenderer.GetCompletionScript(shell);
+            foreach (var (command, nested) in contexts)
+            {
+                var expected = CliFlagSchema.GetCompletionFlagsForCommand(command, nested)
+                    .Select(flag => flag.Name)
+                    .Where(name => !CompletionGlobalFlags.Contains(name));
+                var actual = ExtractContextLongFlags(script, shell, command, nested);
+                actual.ExceptWith(CompletionGlobalFlags);
+                AssertOptionSet(
+                    expected,
+                    actual,
+                    $"{shell} completion context {command}{(nested is null ? string.Empty : $" {nested}")}");
+            }
+        }
+    }
+
+    [Fact]
+    public void PowerShellHooksStatusRetainsItsExactFallback_Issue5194()
+    {
+        var expected = CliFlagSchema.GetCompletionFlagsForCommand("hooks", "status")
+            .Select(flag => flag.Name)
+            .Where(name => !CompletionGlobalFlags.Contains(name));
+        var actual = ExtractPowerShellContextLongFlags(
+            ConsoleCompletionRenderer.GetCompletionScript("powershell"),
+            "hooks",
+            "status");
+        actual.Remove("--help");
+        actual.ExceptWith(CompletionGlobalFlags);
+
+        AssertOptionSet(expected, actual, "PowerShell completion context hooks status");
     }
 
     [Fact]
@@ -464,6 +670,8 @@ public class CliFlagSchemaTests
             {
                 if (flag.CompletionSubcommands.TryGetValue(command, out var nestedSubcommands))
                 {
+                    if (flag.ParentCompletionCommands.Contains(command))
+                        expected.Add((name, command));
                     foreach (var nestedSubcommand in nestedSubcommands)
                         expected.Add((name, $"{command}:{nestedSubcommand}"));
                 }
@@ -746,6 +954,123 @@ public class CliFlagSchemaTests
         return value!;
     }
 
+    private static void AssertOptionSet(
+        IEnumerable<string> expected,
+        IReadOnlySet<string> actual,
+        string label)
+    {
+        var expectedSet = expected.ToHashSet(StringComparer.Ordinal);
+        Assert.True(
+            expectedSet.SetEquals(actual),
+            $"{label} drifted. Missing: {string.Join(", ", expectedSet.Except(actual).OrderBy(value => value, StringComparer.Ordinal))}. "
+            + $"Unexpected: {string.Join(", ", actual.Except(expectedSet).OrderBy(value => value, StringComparer.Ordinal))}.");
+    }
+
+    private static HashSet<string> ExtractContextLongFlags(
+        string script,
+        string shell,
+        string command,
+        string? nested)
+    {
+        var flags = shell switch
+        {
+            "bash" => ExtractBashContextLongFlags(script, command, nested),
+            "zsh" => ExtractZshContextLongFlags(script, command, nested),
+            "fish" => ExtractFishContextLongFlags(script, command, nested),
+            "powershell" => ExtractPowerShellContextLongFlags(script, command, nested),
+            _ => throw new ArgumentOutOfRangeException(nameof(shell), shell, "Unknown shell"),
+        };
+        flags.Remove("--help");
+        return flags;
+    }
+
+    private static HashSet<string> ExtractBashContextLongFlags(
+        string script,
+        string command,
+        string? nested)
+    {
+        var condition = nested is null
+            ? @"\[\s*""\$cmd""\s*=\s*""" + Regex.Escape(command) + @"""\s*\]"
+            : @"\[\s*""\$cmd""\s*=\s*""" + Regex.Escape(command) + @"""\s*\]\s*&&\s*\[\s*""\$nested""\s*=\s*""" + Regex.Escape(nested) + @"""\s*\]";
+        var match = Regex.Match(
+            script,
+            @"(?:if|elif)\s*" + condition + @"\s*;\s*then\s*\n\s*COMPREPLY=\(\$\(compgen\s+-W\s+""(?<flags>[^""]*)""");
+        if (!match.Success && nested is not null)
+            return ExtractBashContextLongFlags(script, command, nested: null);
+        Assert.True(match.Success, $"bash completion branch not found for {command} {nested}");
+        return Regex.Matches(match.Groups["flags"].Value, @"--[a-z][a-z0-9-]*")
+            .Select(flag => flag.Value)
+            .ToHashSet(StringComparer.Ordinal);
+    }
+
+    private static HashSet<string> ExtractZshContextLongFlags(
+        string script,
+        string command,
+        string? nested)
+    {
+        var condition = @"\$subcmd\s*==\s*" + Regex.Escape(command);
+        if (nested is not null)
+            condition += @"\s*&&\s*\$nested\s*==\s*" + Regex.Escape(nested);
+        var match = Regex.Match(
+            script,
+            @"(?:if|elif)\s+\[\[\s*" + condition + @"\s*\]\];\s*then(?<branch>.*?)(?=\n\s*(?:elif|else|fi)\b)",
+            RegexOptions.Singleline);
+        if (!match.Success && nested is not null)
+            return ExtractZshContextLongFlags(script, command, nested: null);
+        Assert.True(match.Success, $"zsh completion branch not found for {command} {nested}");
+        return Regex.Matches(match.Groups["branch"].Value, @"'(?<flag>--[a-z][a-z0-9-]*)\[")
+            .Select(flag => flag.Groups["flag"].Value)
+            .ToHashSet(StringComparer.Ordinal);
+    }
+
+    private static HashSet<string> ExtractFishContextLongFlags(
+        string script,
+        string command,
+        string? nested)
+    {
+        var result = new HashSet<string>(StringComparer.Ordinal);
+        var exactContext = nested is null
+            ? $"__fish_cdidx_using_context {command}'"
+            : $"__fish_cdidx_using_context {command} {nested}'";
+        var commandPattern = new Regex(@"__fish_cdidx_using_command\s+(?<list>[^;']+)");
+        foreach (var line in script.Split('\n'))
+        {
+            var flag = Regex.Match(line, @"\s-l\s+(?<name>[a-z][a-z0-9-]*)\b");
+            if (!flag.Success)
+                continue;
+            if (line.Contains(exactContext, StringComparison.Ordinal))
+            {
+                result.Add("--" + flag.Groups["name"].Value);
+                continue;
+            }
+
+            var commandMatch = commandPattern.Match(line);
+            if (!commandMatch.Success)
+                continue;
+            var commands = commandMatch.Groups["list"].Value.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (Array.IndexOf(commands, command) >= 0)
+                result.Add("--" + flag.Groups["name"].Value);
+        }
+        return result;
+    }
+
+    private static HashSet<string> ExtractPowerShellContextLongFlags(
+        string script,
+        string command,
+        string? nested)
+    {
+        var pattern = nested is null
+            ? @"'" + Regex.Escape(command) + @"'\s*\{\s*\$flags\s*=\s*@\((?<flags>[^)]*)\)\s*\}"
+            : @"(?:if|}\s*elseif)\s*\(\$subcmd\s*-eq\s*'" + Regex.Escape(command) + @"'\s*-and\s*\$nested\s*-eq\s*'" + Regex.Escape(nested) + @"'\)\s*\{\s*\$flags\s*=\s*@\((?<flags>[^)]*)\)";
+        var match = Regex.Match(script, pattern, RegexOptions.Singleline | RegexOptions.IgnoreCase);
+        if (!match.Success && nested is not null)
+            return ExtractPowerShellContextLongFlags(script, command, nested: null);
+        Assert.True(match.Success, $"PowerShell completion branch not found for {command} {nested}");
+        return Regex.Matches(match.Groups["flags"].Value, @"--[a-z][a-z0-9-]*")
+            .Select(flag => flag.Value)
+            .ToHashSet(StringComparer.Ordinal);
+    }
+
     private static SortedSet<string> ExtractBashSubcommandFlags(string script, string subcommand)
     {
         // Each per-command branch looks like:
@@ -768,15 +1093,17 @@ public class CliFlagSchemaTests
     {
         var result = new HashSet<(string, string)>();
         var commandPattern = new Regex(@"__fish_cdidx_using_command\s+(?<list>[^;']+)[^']*'(?<rest>.+?)-l\s+(?<flag>[a-z][a-z0-9-]*)\b");
-        var contextPattern = new Regex(@"__fish_cdidx_using_context\s+(?<command>[^\s']+)\s+(?<nested>[^\s']+)'(?<rest>.+?)-l\s+(?<flag>[a-z][a-z0-9-]*)\b");
+        var contextPattern = new Regex(@"__fish_cdidx_using_context\s+(?<command>[^\s']+)(?:\s+(?<nested>[^\s']+))?'(?<rest>.+?)-l\s+(?<flag>[a-z][a-z0-9-]*)\b");
         foreach (var line in script.Split('\n'))
         {
             var contextMatch = contextPattern.Match(line);
             if (contextMatch.Success)
             {
+                var command = contextMatch.Groups["command"].Value;
+                var nested = contextMatch.Groups["nested"].Value;
                 result.Add((
                     contextMatch.Groups["flag"].Value,
-                    $"{contextMatch.Groups["command"].Value}:{contextMatch.Groups["nested"].Value}"));
+                    nested.Length == 0 ? command : $"{command}:{nested}"));
             }
 
             var commandMatch = commandPattern.Match(line);

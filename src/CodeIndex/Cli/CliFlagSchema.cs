@@ -86,6 +86,7 @@ internal sealed record CliFlag
 {
     public required string Name { get; init; }
     public string? ShortName { get; init; }
+    public IReadOnlySet<string>? ShortNameCommands { get; init; }
     public string? ValuePlaceholder { get; init; }
     public CliOptionValueKind ValueKind { get; init; } = CliOptionValueKind.FreeText;
     public required string Description { get; init; }
@@ -104,6 +105,14 @@ internal sealed record CliFlag
     public IReadOnlyList<string> SupplementalCompletionValues { get; init; } = [];
     public IReadOnlyDictionary<string, IReadOnlySet<string>> CompletionSubcommands { get; init; } =
         new Dictionary<string, IReadOnlySet<string>>(StringComparer.Ordinal);
+    /// <summary>
+    /// Commands whose parent/default operation should keep this flag when
+    /// <see cref="CompletionSubcommands"/> also narrows nested verbs.
+    /// <see cref="CompletionSubcommands"/> で nested verb を絞る場合でも、このフラグを
+    /// parent / default operation に残す command 集合。
+    /// </summary>
+    public IReadOnlySet<string> ParentCompletionCommands { get; init; } =
+        new HashSet<string>(StringComparer.Ordinal);
 
     /// <summary>
     /// Commands for which this flag is "primary" — accepted by the parser AND surfaced
@@ -138,12 +147,20 @@ internal sealed record CliFlag
         || CommandValuePlaceholders.Count > 0;
     public bool AppliesTo(string command) => PrimaryCommands.Contains(command);
     public bool IsAcceptedBy(string command) => AppliesTo(command) || AlsoAcceptedBy.Contains(command);
+    public string? GetShortName(string command) =>
+        ShortName is not null
+        && (ShortNameCommands is null || ShortNameCommands.Contains(command))
+            ? ShortName
+            : null;
     public bool AppliesToCompletionContext(string command, string? subcommand)
     {
         if (!AppliesTo(command))
             return false;
-        return !CompletionSubcommands.TryGetValue(command, out var allowedSubcommands)
-               || subcommand is not null && allowedSubcommands.Contains(subcommand);
+        if (!CompletionSubcommands.TryGetValue(command, out var allowedSubcommands))
+            return true;
+        return subcommand is null
+            ? ParentCompletionCommands.Contains(command)
+            : allowedSubcommands.Contains(subcommand);
     }
 
     public string GetDescription(string command) =>
@@ -233,13 +250,13 @@ internal static class CliFlagSchema
     private static readonly string[] PathFilterCommands =
     [
         "search", "definition", "goto", "references", "callers", "callees", "symbols", "files",
-        "find", "map", "inspect", "deps", "impact", "unused", "hotspots", "validate",
+        "find", "map", "inspect", "deps", "impact", "unused", "hotspots", "validate", "export",
     ];
 
     private static readonly string[] ExcludeFilterCommands =
     [
         "search", "definition", "goto", "references", "callers", "callees", "symbols", "files",
-        "find", "map", "inspect", "validate", "deps", "impact", "unused", "hotspots",
+        "find", "map", "inspect", "validate", "deps", "impact", "unused", "hotspots", "export",
     ];
 
     private static readonly string[] CountCommands =
@@ -270,14 +287,14 @@ internal static class CliFlagSchema
     private static readonly string[] UnusedFilterCommands = ["unused"];
     private static readonly string[] BoundedProjectionCommands =
         ProjectionFieldRegistry.SupportedCommands.ToArray();
-    private static readonly string[] CursorCommands = ["search", "outline", "unused", "deps", "inspect", .. BoundedProjectionCommands];
+    private static readonly string[] CursorCommands = ["search", "outline", "unused", "deps", "inspect", "diff", .. BoundedProjectionCommands];
     private static readonly string[] AllResultCommands = ["goto", "find", "unused"];
 
     private static readonly string[] SinceCommands = ["search", "definition", "symbols", "files", "suggestions"];
     private static readonly string[] ByteFormatCommands = ["files", "map"];
     private static readonly string[] EntrypointConfidenceCommands = ["map"];
     private static readonly string[] MapSectionCommands = ["map"];
-    private static readonly string[] SummaryOnlyCommands = ["map", "search", "recipes", "audit", "symbols", "files", "deps", "unused", "hotspots", "languages", "suggestions"];
+    private static readonly string[] SummaryOnlyCommands = ["map", "search", "recipes", "audit", "symbols", "files", "deps", "unused", "hotspots", "languages", "suggestions", "diff"];
     private static readonly string[] DependencyCycleCommands = ["deps"];
     private static readonly string[] LanguagesFilterCommands = ["languages"];
 
@@ -320,6 +337,7 @@ internal static class CliFlagSchema
         "index", "backfill-fold", "optimize", "search", "definition", "goto", "references", "callers", "callees",
         "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status",
         "validate", "deps", "impact", "unused", "hotspots", "suggestions", "languages", "db", "vacuum", "report", "batch", "mcp",
+        "lsp", "export", "import",
     ];
 
     private static readonly string[] WorkspaceDbCommands = ["deps"];
@@ -343,6 +361,7 @@ internal static class CliFlagSchema
         "index", "backfill-fold", "optimize", "vacuum", "search", "recipes", "audit", "definition", "goto", "references", "callers", "callees",
         "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status",
         "validate", "validate-config", "deps", "impact", "unused", "hotspots", "suggestions", "languages", "db", "report", "upgrade", "doctor", "license",
+        "workspace", "config", "diff", "export", "import",
     ];
 
     private static readonly string[] PrettyCommands =
@@ -428,7 +447,16 @@ internal static class CliFlagSchema
             new() { Name = "--immutable", Description = "Alias for --read-only", PrimaryCommands = Set(ReadOnlyDbCommands), Safety = CliOptionSafety.ReadOnly },
             new() { Name = "--workspace-db", ValuePlaceholder = "<path>", ValueKind = CliOptionValueKind.FilePath, Description = "Additional workspace member database path for dependency aggregation; repeat up to 7 distinct additional DBs", PrimaryCommands = Set(WorkspaceDbCommands) },
             new() { Name = "--data-dir", ValuePlaceholder = "<dir>", ValueKind = CliOptionValueKind.DirectoryPath, Description = "Directory containing codeindex.db; overrides CDIDX_DATA_DIR/XDG/workspace defaults", PrimaryCommands = Set(DataDirCommands), Safety = CliOptionSafety.Scope },
-            new() { Name = "--json", Description = "JSON output; search/symbols/files/validate also accept --json=array for a single JSON array", PrimaryCommands = Set(JsonCommands.Concat(["hooks"]).ToArray()) },
+            new()
+            {
+                Name = "--json",
+                Description = "JSON output; search/symbols/files/validate also accept --json=array for a single JSON array",
+                PrimaryCommands = Set(JsonCommands.Concat(["hooks"]).ToArray()),
+                CompletionSubcommands = new Dictionary<string, IReadOnlySet<string>>(StringComparer.Ordinal)
+                {
+                    ["config"] = Set("show"),
+                },
+            },
             new() { Name = "--json-summary", Description = "Batch: emit one typed result/error record per input plus a final summary", PrimaryCommands = Set("batch") },
             new() { Name = "--include-raw-streams", Description = "Batch JSON-summary: attach bounded child stdout/stderr to failed records", PrimaryCommands = Set("batch") },
             new() { Name = "--max-input-lines", ValuePlaceholder = "<n>", Description = $"Batch: input-line budget (default {QueryCommandRunner.BatchDefaultInputLines}, max {QueryCommandRunner.BatchMaxInputLines})", PrimaryCommands = Set("batch") },
@@ -453,11 +481,11 @@ internal static class CliFlagSchema
             new() { Name = "--notify", ValueDomain = Values(["auto", "bell", "osc9", "desktop", "none"]), Description = "Signal long index completion; desktop currently emits OSC 9 terminal notification", PrimaryCommands = Set("index") },
             new() { Name = "--slow-query-ms", ValuePlaceholder = "<n>", Description = "Log profiled SQL statements at or above this millisecond threshold", PrimaryCommands = Set(ProfileCommands) },
             new() { Name = "--trace", ValueDomain = Values(["none", "stderr", "file"]), Description = "Emit one structured JSON query trace line to stderr or a daily log file", PrimaryCommands = Set(TraceCommands), Safety = CliOptionSafety.Diagnostics },
-            new() { Name = "--limit", ValuePlaceholder = "<n>", Description = "Max results", PrimaryCommands = Set(LimitCapableCommands.Concat(new[] { "suggestions" }).ToArray()) },
+            new() { Name = "--limit", ValuePlaceholder = "<n>", Description = "Max results", PrimaryCommands = Set(LimitCapableCommands.Concat(new[] { "suggestions", "diff", "import" }).ToArray()) },
             new() { Name = "--max-results", ValuePlaceholder = "<n>", Description = "Search alias for --limit", PrimaryCommands = Set("search") },
             new() { Name = "--top", ValuePlaceholder = "<n>", Description = "Max results", PrimaryCommands = Set(LimitCapableCommands) },
-            new() { Name = "--offset", ValuePlaceholder = "<n>", Description = "Suggestions: skip this many filtered rows before output", PrimaryCommands = Set("suggestions") },
-            new() { Name = "--lang", ValuePlaceholder = "<lang>", ValueKind = CliOptionValueKind.Language, Description = "Filter by a registered language, alias, or extension-like spelling", PrimaryCommands = Set(LangCapableCommands), AlsoAcceptedBy = Set("suggestions") },
+            new() { Name = "--offset", ValuePlaceholder = "<n>", Description = "Skip this many rows before paged diff, import preview, or suggestion output", PrimaryCommands = Set("suggestions", "diff", "import") },
+            new() { Name = "--lang", ValuePlaceholder = "<lang>", ValueKind = CliOptionValueKind.Language, Description = "Filter by a registered language, alias, or extension-like spelling", PrimaryCommands = Set(LangCapableCommands.Concat(["export"]).ToArray()), AlsoAcceptedBy = Set("suggestions") },
             new() { Name = "--allow-unknown-lang", Description = "Allow an unregistered plugin language ID and preserve its exact spelling", PrimaryCommands = Set(LangCapableCommands) },
             new() { Name = "--language", ValuePlaceholder = "<lang>", ValueKind = CliOptionValueKind.Language, Description = "Suggestions: filter by language; languages: look up one language by canonical name or recognized language spelling", PrimaryCommands = Set("suggestions", "languages") },
             new() { Name = "--extension", ValuePlaceholder = "<ext>", Description = "Languages: look up language support by extension or recognized filename pattern", PrimaryCommands = Set(LanguagesFilterCommands) },
@@ -474,6 +502,11 @@ internal static class CliFlagSchema
                     ["hooks"] = "Repository/worktree directory used to resolve Git metadata for the managed hook",
                 },
                 PrimaryCommands = Set(PathFilterCommands.Concat(new[] { "index", "hooks" }).ToArray()),
+                CompletionSubcommands = new Dictionary<string, IReadOnlySet<string>>(StringComparer.Ordinal)
+                {
+                    ["export"] = Set(),
+                },
+                ParentCompletionCommands = Set("export"),
                 CommandValuePlaceholders = new Dictionary<string, string>(StringComparer.Ordinal)
                 {
                     ["hooks"] = "<path>",
@@ -484,10 +517,32 @@ internal static class CliFlagSchema
                 },
                 Safety = CliOptionSafety.Scope,
             },
-            new() { Name = "--solution", ValuePlaceholder = "<path>", ValueKind = CliOptionValueKind.FilePath, Description = "Solution file used to resolve --project", PrimaryCommands = Set(PathFilterCommands.Concat(new[] { "index" }).ToArray()), Safety = CliOptionSafety.Scope },
+            new()
+            {
+                Name = "--solution",
+                ValuePlaceholder = "<path>",
+                ValueKind = CliOptionValueKind.FilePath,
+                Description = "Solution file used to resolve --project",
+                PrimaryCommands = Set(PathFilterCommands.Concat(new[] { "index" }).ToArray()),
+                CompletionSubcommands = new Dictionary<string, IReadOnlySet<string>>(StringComparer.Ordinal)
+                {
+                    ["export"] = Set(),
+                },
+                ParentCompletionCommands = Set("export"),
+                Safety = CliOptionSafety.Scope,
+            },
             new() { Name = "--exclude-path", ValuePlaceholder = "<glob>", ValueKind = CliOptionValueKind.PathPattern, Description = "Exclude path", PrimaryCommands = Set(ExcludeFilterCommands) },
             new() { Name = "--exclude-tests", Description = "Exclude tests", PrimaryCommands = Set(ExcludeFilterCommands) },
-            new() { Name = "--include-generated", Description = "Include generated files", PrimaryCommands = Set(ExcludeFilterCommands) },
+            new()
+            {
+                Name = "--include-generated",
+                Description = "Include generated files; export supports it only for ctags",
+                PrimaryCommands = Set(ExcludeFilterCommands),
+                CompletionSubcommands = new Dictionary<string, IReadOnlySet<string>>(StringComparer.Ordinal)
+                {
+                    ["export"] = Set("ctags"),
+                },
+            },
             new() { Name = "--generated", Description = "Files alias for --include-generated", PrimaryCommands = Set("files") },
             new() { Name = "--kind", ValuePlaceholder = "<kind>", ValueKind = CliOptionValueKind.SymbolKind, Description = "Filter by kind", PrimaryCommands = Set(KindCommands) },
             new() { Name = "--severity", ValueDomain = Values(["info", "warning", "error"]), Description = "Validate: filter validation issues by severity", PrimaryCommands = Set(SeverityCommands) },
@@ -521,6 +576,8 @@ internal static class CliFlagSchema
                 PrimaryCommands = Set(MapSectionCommands),
             },
             new() { Name = "--summary-only", Description = "Map/Diff/Recipes/Audit/Files/Symbols/Deps/Hotspots/Languages: return only aggregate summary fields where supported", PrimaryCommands = Set(SummaryOnlyCommands) },
+            new() { Name = "--detailed", Description = "Diff: compare deterministic row-level records", PrimaryCommands = Set("diff") },
+            new() { Name = "--include-content", Description = "Diff detailed JSON: include indexed content instead of redacted hashes", PrimaryCommands = Set("diff") },
             new() { Name = "--data-only", Description = "Diff: include indexed data and schema in identity while excluding readiness/provenance and volatile telemetry", PrimaryCommands = Set("diff") },
             new() { Name = "--include-telemetry", Description = "Diff: include volatile index-run and FTS maintenance telemetry in identity", PrimaryCommands = Set("diff") },
             new() { Name = "--cycles", Description = "Deps: return deterministically ranked dependency SCCs with stable pagination", PrimaryCommands = Set(DependencyCycleCommands) },
@@ -590,9 +647,20 @@ internal static class CliFlagSchema
             new() { Name = "--description", ValuePlaceholder = "<text>", Description = "Suggestions add: local suggestion description", PrimaryCommands = Set("suggestions") },
             new() { Name = "--title", ValuePlaceholder = "<title>", Description = "Suggestions add: optional issue-draft title source", PrimaryCommands = Set("suggestions") },
             new() { Name = "--evidence-path", ValuePlaceholder = "<path>", ValueKind = CliOptionValueKind.FilePath, Description = "Suggestions add: repository-relative evidence path; repeat for multiple paths", PrimaryCommands = Set("suggestions") },
-            new() { Name = "--overwrite", Description = "Portable archive, report bundle, or suggestions export: atomically replace an existing output file", PrimaryCommands = Set("export", "report", "suggestions") },
+            new()
+            {
+                Name = "--overwrite",
+                Description = "Portable archive, report bundle, or suggestions export: atomically replace an existing output file",
+                PrimaryCommands = Set("export", "report", "suggestions"),
+                CompletionSubcommands = new Dictionary<string, IReadOnlySet<string>>(StringComparer.Ordinal)
+                {
+                    ["export"] = Set(),
+                },
+                ParentCompletionCommands = Set("export"),
+            },
             new() { Name = "--restore", ValuePlaceholder = "<id>", Description = "DB restore-backups: select a managed backup ID to validate and restore atomically", PrimaryCommands = Set("db") },
             new() { Name = "--no-backup", Description = "Import/DB restore: explicitly skip creating managed rollback material before replacement", PrimaryCommands = Set("import", "db") },
+            new() { Name = "--prune-paths", Description = "Import: remove indexed rows whose source paths are absent after replacement", PrimaryCommands = Set("import") },
             new() { Name = "--body", Description = "Include definition snippets and graph call-site evidence in JSON-capable result rows", PrimaryCommands = Set(BodyCommands) },
             new() { Name = "--body-start", ValuePlaceholder = "<line>", Description = "Inspect: start definition body slice at this 1-based source line", PrimaryCommands = Set(InspectFieldCommands) },
             new() { Name = "--body-lines", ValuePlaceholder = "<n>", Description = "Inspect: return at most this many definition body lines", PrimaryCommands = Set(InspectFieldCommands) },
@@ -630,7 +698,7 @@ internal static class CliFlagSchema
             new() { Name = "--env-domain", ValuePlaceholder = "<domain>", Description = "Doctor full environment inventory: filter by exact domain", PrimaryCommands = Set("doctor") },
             new() { Name = "--env-category", ValuePlaceholder = "<category>", Description = "Doctor full environment inventory: filter by exact category", PrimaryCommands = Set("doctor") },
             new() { Name = "--env-sensitivity", ValuePlaceholder = "<sensitivity>", Description = "Doctor full environment inventory: filter by exact sensitivity", PrimaryCommands = Set("doctor") },
-            new() { Name = "--max-json-bytes", ValuePlaceholder = "<n>", Description = "Bound emitted JSON bytes; bounded responses omit whole rows with recovery metadata, including schema-valid audit SARIF", PrimaryCommands = Set("search", "definition", "find", "status", "references", "callers", "callees", "excerpt", "inspect", "outline", "impact", "recipes", "audit", "map", "files", "symbols", "deps", "hotspots", "languages", "unused", "doctor", "suggestions") },
+            new() { Name = "--max-json-bytes", ValuePlaceholder = "<n>", Description = "Bound emitted JSON bytes; bounded responses omit whole rows with recovery metadata, including schema-valid audit SARIF", PrimaryCommands = Set("search", "definition", "find", "status", "references", "callers", "callees", "excerpt", "inspect", "outline", "impact", "recipes", "audit", "map", "files", "symbols", "deps", "hotspots", "languages", "unused", "doctor", "suggestions", "diff") },
             new() { Name = "--next-steps", Description = "Search: print inspect/excerpt follow-up commands for top hits", PrimaryCommands = Set("search") },
             new() { Name = "--exclude-comments", Description = "Search: suppress comment-only matches after origin classification", PrimaryCommands = Set("search") },
             new() { Name = "--exclude-strings", Description = "Search: suppress string, regex, and help-text matches after origin classification", PrimaryCommands = Set("search") },
@@ -673,7 +741,16 @@ internal static class CliFlagSchema
                 },
             },
             new() { Name = "--group-by-name", Description = "Hotspots: collapse same-name rows; JSON keeps capped paths plus full definition details", PrimaryCommands = Set("hotspots") },
-            new() { Name = "--check", Description = "Verify status freshness/readiness; doctor integrations fails on warning or error", PrimaryCommands = Set("status", "doctor") },
+            new()
+            {
+                Name = "--check",
+                Description = "Verify status/workspace freshness, fail doctor integrations on diagnostics, or preview an import",
+                PrimaryCommands = Set("status", "doctor", "workspace", "import"),
+                CompletionSubcommands = new Dictionary<string, IReadOnlySet<string>>(StringComparer.Ordinal)
+                {
+                    ["workspace"] = Set("status"),
+                },
+            },
             new() { Name = "--config", Description = "Print effective configuration with source attribution", PrimaryCommands = Set("status") },
             new() { Name = "--stale-after", ValuePlaceholder = "<duration>", Description = "Status: freshness age threshold (e.g. 30m, 2h, 7d)", PrimaryCommands = Set("status") },
             new() { Name = "--explain", ValuePlaceholder = "<field>", Description = "Explain one visible status field", PrimaryCommands = Set("status") },
@@ -692,14 +769,23 @@ internal static class CliFlagSchema
             {
                 Name = "--dry-run",
                 Description = "Preview without writing; hooks supports install and uninstall",
-                PrimaryCommands = Set("index", "hooks", "backfill-fold", "optimize", "vacuum"),
+                PrimaryCommands = Set("index", "hooks", "backfill-fold", "optimize", "vacuum", "import"),
                 CompletionSubcommands = new Dictionary<string, IReadOnlySet<string>>(StringComparer.Ordinal)
                 {
                     ["hooks"] = Set("install", "uninstall"),
                 },
                 Safety = CliOptionSafety.Preview,
             },
-            new() { Name = "--show-paths", Description = "Show resolved local paths in maintenance diagnostics, recovery commands, or status --config output", PrimaryCommands = Set(RecoveryPathCommands.Concat(["index", "backfill-fold", "optimize", "vacuum", "db", "status"]).ToArray()) },
+            new()
+            {
+                Name = "--show-paths",
+                Description = "Show resolved local paths in maintenance diagnostics, recovery commands, status --config, or config show output",
+                PrimaryCommands = Set(RecoveryPathCommands.Concat(["index", "backfill-fold", "optimize", "vacuum", "db", "status", "config"]).ToArray()),
+                CompletionSubcommands = new Dictionary<string, IReadOnlySet<string>>(StringComparer.Ordinal)
+                {
+                    ["config"] = Set("show"),
+                },
+            },
             new() { Name = "--dry-run-path-limit", ValuePlaceholder = "<n>", Description = "Dry run only: candidate path processing limit (1..1000000); explicit invalid values fail before database setup", PrimaryCommands = Set("index") },
             new() { Name = "--checkpoint", Description = "Create a DB checkpoint even when backfill preflight is already complete", PrimaryCommands = Set("backfill-fold") },
             new() { Name = "--no-checkpoint", Description = "Skip the automatic DB checkpoint before a required backfill mutation", PrimaryCommands = Set("backfill-fold") },
@@ -730,7 +816,25 @@ internal static class CliFlagSchema
             new() { Name = "--watch", Description = "Continuous reindex on file changes (rejects --commits / --changed-between / --files / --dry-run)", PrimaryCommands = Set("index") },
             new() { Name = "--debounce", ValuePlaceholder = "<ms>", Description = "Watch only: coalesce file events after 0..60000 ms of quiet (default 500)", PrimaryCommands = Set("index") },
             new() { Name = "--watch-pending-path-limit", ValuePlaceholder = "<n>", Description = "Watch only: changed-path queue limit (1..262144); invalid CDIDX_INDEX_WATCH_PENDING_PATH_LIMIT warns and uses the documented effective value", PrimaryCommands = Set("index") },
-            new() { Name = "--output", ShortName = "-o", ValuePlaceholder = "<path>", ValueKind = CliOptionValueKind.FilePath, Description = "Report bundle or suggestions export output path", PrimaryCommands = Set("report", "suggestions") },
+            new()
+            {
+                Name = "--output",
+                ShortName = "-o",
+                ShortNameCommands = Set("report", "suggestions"),
+                ValuePlaceholder = "<path>",
+                ValueKind = CliOptionValueKind.FilePath,
+                Description = "Report bundle, suggestions export, or ctags output path",
+                CommandDescriptions = new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["report"] = "Report bundle or suggestions export output path",
+                    ["suggestions"] = "Report bundle or suggestions export output path",
+                },
+                PrimaryCommands = Set("report", "suggestions", "export"),
+                CompletionSubcommands = new Dictionary<string, IReadOnlySet<string>>(StringComparer.Ordinal)
+                {
+                    ["export"] = Set("ctags"),
+                },
+            },
             new() { Name = "--redact-paths", Description = "Redact machine-specific paths; opt in for portable archives (the default for recovery/config JSON and reports)", PrimaryCommands = Set(RecoveryPathCommands.Concat(["status", "report", "export"]).ToArray()) },
             new() { Name = "--no-log", Description = "Exclude global tool log from bundle", PrimaryCommands = Set("report") },
             new() { Name = "--include-args", Description = "Include args in bundle log", PrimaryCommands = Set("report") },
