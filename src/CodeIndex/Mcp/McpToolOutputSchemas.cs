@@ -177,6 +177,7 @@ internal static class McpToolOutputSchemas
                 RequiredSchema("edges"),
                 RequiredSchema("graph"),
                 RequiredSchema("cycles"),
+                RequiredSchema("cycle_summaries"),
             },
             _ => null,
         };
@@ -396,6 +397,7 @@ internal static class McpToolOutputSchemas
         {
             ["edges"] = Reference("rows"),
             ["cycles"] = Reference("rows"),
+            ["cycle_summaries"] = Reference("rows"),
             ["graph"] = new JsonObject
             {
                 ["type"] = "object",

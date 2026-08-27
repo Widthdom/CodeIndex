@@ -102,6 +102,11 @@ public partial class QueryCommandRunnerTests
             Assert.Contains(edge.GetProperty("target").GetString(), graphNodeIds);
         });
         Assert.True(jsonGraph.GetProperty("display_truncated").GetBoolean());
+        Assert.Equal(nodeCount, jsonGraph.GetProperty("returned_node_count").GetInt32());
+        Assert.Equal(
+            QueryCommandRunner.DefaultDependencyCycleNodeLimit,
+            jsonGraph.GetProperty("returned_nodes_materialized").GetInt32());
+        Assert.Equal(5, jsonGraph.GetProperty("returned_nodes_omitted_count").GetInt32());
 
         var (expandedGraphExitCode, expandedGraphStdout, expandedGraphStderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
             ["--db", dbPath, "--cycles", "--format", "json-graph", "--all-cycle-nodes", "--limit", "1", "--lang", "csharp"],
@@ -132,6 +137,48 @@ public partial class QueryCommandRunnerTests
         Assert.Equal(CommandExitCodes.Success, budgetExitCode);
         Assert.Contains("graph edge budget reached", budgetStderr);
         Assert.DoesNotContain("--all-cycle-nodes", budgetStderr);
+    }
+
+    [Fact]
+    public void RunDeps_JsonGraphCursorPageReportsReturnedNodeOmissionSeparatelyFromLargestComponent_Issue5197()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_deps_graph_page_5197");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        InsertDependencyCycle(dbPath, "Largest", QueryCommandRunner.DefaultDependencyCycleNodeLimit + 5);
+        InsertDependencyCycle(dbPath, "Paged", QueryCommandRunner.DefaultDependencyCycleNodeLimit + 2);
+        MarkDependencyGraphReady(dbPath);
+
+        var (firstExitCode, firstStdout, firstStderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+            ["--db", dbPath, "--cycles", "--format", "json-graph", "--limit", "1", "--lang", "csharp"],
+            _jsonOptions));
+        using var firstDocument = ParseJsonOutput(firstStdout);
+        var cursor = firstDocument.RootElement.GetProperty("next_cursor").GetString();
+
+        Assert.Equal(CommandExitCodes.Success, firstExitCode);
+        Assert.Equal(string.Empty, firstStderr);
+        Assert.False(string.IsNullOrEmpty(cursor));
+
+        var (secondExitCode, secondStdout, secondStderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+            ["--db", dbPath, "--cycles", "--format", "json-graph", "--limit", "1", "--cursor", cursor!, "--lang", "csharp"],
+            _jsonOptions));
+        using var secondDocument = ParseJsonOutput(secondStdout);
+        var secondPage = secondDocument.RootElement;
+
+        Assert.Equal(CommandExitCodes.Success, secondExitCode);
+        Assert.Equal(string.Empty, secondStderr);
+        Assert.Equal(
+            QueryCommandRunner.DefaultDependencyCycleNodeLimit + 2,
+            secondPage.GetProperty("returned_node_count").GetInt32());
+        Assert.Equal(
+            QueryCommandRunner.DefaultDependencyCycleNodeLimit,
+            secondPage.GetProperty("returned_nodes_materialized").GetInt32());
+        Assert.Equal(2, secondPage.GetProperty("returned_nodes_omitted_count").GetInt32());
+        Assert.Equal(
+            QueryCommandRunner.DefaultDependencyCycleNodeLimit,
+            secondPage.GetProperty("nodes").GetArrayLength());
+        Assert.Equal(
+            5,
+            secondPage.GetProperty("largest_component").GetProperty("nodes_omitted_count").GetInt32());
     }
 
     [Fact]
@@ -219,6 +266,18 @@ public partial class QueryCommandRunnerTests
         using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
         var writer = new DbWriter(db.Connection);
         writer.SetMeta(DbContext.ReferenceIdentityContractVersionMetaKey, persistedContractVersion);
+    }
+
+    private static void InsertDependencyCycle(string dbPath, string prefix, int nodeCount)
+    {
+        for (var index = 0; index < nodeCount; index++)
+        {
+            InsertFileWithSymbolsAndReferences(
+                dbPath,
+                $"src/{prefix}{index:D2}.cs",
+                [$"{prefix}{index:D2}"],
+                [$"{prefix}{(index + 1) % nodeCount:D2}"]);
+        }
     }
 
     private static void SetCycleReferenceResolution(

@@ -76,6 +76,7 @@ internal static class CliContractManifest
         new("references", "references.json"),
         new("impact", "impact.json"),
         new("excerpt", "excerpt.json"),
+        new("deps-cycles-summary", "deps-cycles-summary.json"),
         new("suggestions-compact", "suggestions-compact.json"),
     ];
 

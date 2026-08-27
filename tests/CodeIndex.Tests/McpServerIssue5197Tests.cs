@@ -38,8 +38,13 @@ public partial class McpServerTests
         Assert.True(summary["display_truncated"]!.GetValue<bool>());
         Assert.Contains("includeAllCycleNodes=true", nextStepFlags);
 
+        var toolsListResponse = _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":3,"method":"tools/list","params":{"format":"full","names":"deps"}}""")!)!;
+        var depsSchema = Assert.Single(toolsListResponse["result"]!["tools"]!.AsArray())!["outputSchema"]!.AsObject();
+        Assert.True(MatchesSchema(summary, depsSchema, depsSchema), summary.ToJsonString());
+
         var expandedRequest = JsonNode.Parse(
-            """{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"deps","arguments":{"cycles":true,"includeAllCycleNodes":true,"limit":1,"lang":"csharp"}}}""")!;
+            """{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"deps","arguments":{"cycles":true,"includeAllCycleNodes":true,"limit":1,"lang":"csharp"}}}""")!;
         var expandedResponse = _server.HandleMessage(expandedRequest)!;
         var expanded = expandedResponse["result"]!["structuredContent"]!;
         var expandedCycle = Assert.Single(expanded["cycles"]!.AsArray())!;

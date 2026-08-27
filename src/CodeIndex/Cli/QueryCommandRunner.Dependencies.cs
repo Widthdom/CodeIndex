@@ -1520,6 +1520,15 @@ public static partial class QueryCommandRunner
         payload["returned_count"] = analysis.Components.Count;
         payload["has_more"] = analysis.HasMore;
         payload["next_cursor"] = analysis.NextCursor;
+        var returnedNodeCount = analysis.Components.Sum(static component => component.Nodes.Count);
+        var returnedNodesMaterialized = includeAllNodes
+            ? returnedNodeCount
+            : analysis.Components.Sum(static component => Math.Min(
+                component.Nodes.Count,
+                DefaultDependencyCycleNodeLimit));
+        payload["returned_node_count"] = returnedNodeCount;
+        payload["returned_nodes_materialized"] = returnedNodesMaterialized;
+        payload["returned_nodes_omitted_count"] = returnedNodeCount - returnedNodesMaterialized;
         var displayTruncated = !includeAllNodes && HasTruncatedDependencyCycleNodeDisplay(analysis);
         payload["display_truncated"] = displayTruncated;
         payload["display_truncation_reason"] = displayTruncated ? "component_node_limit" : null;
