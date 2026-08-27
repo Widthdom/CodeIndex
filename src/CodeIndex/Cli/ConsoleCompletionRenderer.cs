@@ -164,24 +164,19 @@ internal static class ConsoleCompletionRenderer
         sb.Append($"                COMPREPLY=($(compgen -W \"{string.Join(' ', GetNestedSubcommandNames("hooks"))}\" -- \"$cur\"))\n");
         sb.Append("                return\n");
         sb.Append("            fi\n");
-        for (var i = 0; i < EnumeratedCompletionCommands.Length; i++)
+        var wroteCompletionBranch = false;
+        foreach (var command in EnumeratedCompletionCommands)
         {
-            var command = EnumeratedCompletionCommands[i];
-            var keyword = i == 0 ? "if" : "elif";
-            if (command == "hooks")
+            foreach (var subcommand in GetCompletionContextSubcommands(command))
             {
-                sb.Append($"            {keyword} [ \"$cmd\" = \"hooks\" ] && [ \"$nested\" = \"install\" ]; then\n");
-                sb.Append($"                COMPREPLY=($(compgen -W \"{BuildBashFlagList("hooks", "install")}\" -- \"$cur\"))\n");
-                sb.Append("            elif [ \"$cmd\" = \"hooks\" ] && [ \"$nested\" = \"uninstall\" ]; then\n");
-                sb.Append($"                COMPREPLY=($(compgen -W \"{BuildBashFlagList("hooks", "uninstall")}\" -- \"$cur\"))\n");
-                sb.Append("            elif [ \"$cmd\" = \"hooks\" ]; then\n");
-                sb.Append($"                COMPREPLY=($(compgen -W \"{BuildBashFlagList("hooks", "status")}\" -- \"$cur\"))\n");
+                sb.Append($"            {(wroteCompletionBranch ? "elif" : "if")} [ \"$cmd\" = \"{command}\" ] && [ \"$nested\" = \"{subcommand}\" ]; then\n");
+                sb.Append($"                COMPREPLY=($(compgen -W \"{BuildBashFlagList(command, subcommand)}\" -- \"$cur\"))\n");
+                wroteCompletionBranch = true;
             }
-            else
-            {
-                sb.Append($"            {keyword} [ \"$cmd\" = \"{command}\" ]; then\n");
-                sb.Append($"                COMPREPLY=($(compgen -W \"{BuildBashFlagList(command)}\" -- \"$cur\"))\n");
-            }
+
+            sb.Append($"            {(wroteCompletionBranch ? "elif" : "if")} [ \"$cmd\" = \"{command}\" ]; then\n");
+            sb.Append($"                COMPREPLY=($(compgen -W \"{BuildBashFlagList(command)}\" -- \"$cur\"))\n");
+            wroteCompletionBranch = true;
         }
         sb.Append("            else\n");
         sb.Append($"                COMPREPLY=($(compgen -W \"{BuildBashGenericFlagList()}\" -- \"$cur\"))\n");
@@ -202,8 +197,8 @@ internal static class ConsoleCompletionRenderer
         foreach (var flag in CliFlagSchema.GetCompletionFlagsForCommand(command, subcommand))
         {
             tokens.Add(flag.Name);
-            if (flag.ShortName is not null)
-                tokens.Add(flag.ShortName);
+            if (flag.GetShortName(command) is { } shortName)
+                tokens.Add(shortName);
         }
         tokens.Add("--help");
         if (command == "find")
@@ -226,8 +221,8 @@ internal static class ConsoleCompletionRenderer
                 if (seen.Add(flag.Name))
                 {
                     tokens.Add(flag.Name);
-                    if (flag.ShortName is not null)
-                        tokens.Add(flag.ShortName);
+                    if (flag.GetShortName(command) is { } shortName)
+                        tokens.Add(shortName);
                 }
             }
         }
@@ -417,8 +412,8 @@ internal static class ConsoleCompletionRenderer
         string? subcommand = null)
     {
         yield return FormatZshArgument(flag.Name, flag, langs, kinds, command, subcommand);
-        if (flag.ShortName is not null)
-            yield return FormatZshArgument(flag.ShortName, flag, langs, kinds, command, subcommand);
+        if (flag.GetShortName(command ?? string.Empty) is { } shortName)
+            yield return FormatZshArgument(shortName, flag, langs, kinds, command, subcommand);
     }
 
     private static string FormatZshArgument(
@@ -541,7 +536,9 @@ internal static class ConsoleCompletionRenderer
         foreach (var flag in CliFlagSchema.GetTopLevelCompletionFlags())
         {
             var name = flag.Name.TrimStart('-');
-            var shortName = flag.ShortName is null ? "" : $" -s {flag.ShortName.TrimStart('-')}";
+            var shortName = flag.GetShortName(string.Empty) is not { } topLevelShortName
+                ? ""
+                : $" -s {topLevelShortName.TrimStart('-')}";
             var requiresArg = flag.IsValueBearing ? " -r" : "";
             var valueKind = flag.GetValueKind(string.Empty);
             var argSpec = valueKind switch
@@ -603,6 +600,16 @@ internal static class ConsoleCompletionRenderer
             {
                 if (flag.CompletionSubcommands.TryGetValue(command, out var nestedSubcommands))
                 {
+                    if (flag.ParentCompletionCommands.Contains(command))
+                    {
+                        lines.Add(BuildFishFlagCompletion(
+                            flag,
+                            $"__fish_cdidx_using_context {command}",
+                            command,
+                            subcommand: null,
+                            langs,
+                            kinds));
+                    }
                     foreach (var nestedSubcommand in nestedSubcommands.OrderBy(value => value, StringComparer.Ordinal))
                     {
                         lines.Add(BuildFishFlagCompletion(
@@ -664,7 +671,9 @@ internal static class ConsoleCompletionRenderer
     {
         var name = flag.Name.TrimStart('-');
         var requiresArg = flag.IsValueBearing ? " -r" : "";
-        var shortName = flag.ShortName is null ? "" : $" -s {flag.ShortName.TrimStart('-')}";
+        var shortName = flag.GetShortName(command) is not { } commandShortName
+            ? ""
+            : $" -s {commandShortName.TrimStart('-')}";
         var description = name switch
         {
             "group-by-name" => "Collapse same-name rows across files",
@@ -797,13 +806,29 @@ internal static class ConsoleCompletionRenderer
         sb.AppendLine("            return");
         sb.AppendLine("        }");
         sb.AppendLine("    }");
-        sb.AppendLine("    if ($subcmd -eq 'hooks' -and $nested -eq 'install') {");
-        sb.AppendLine($"        $flags = @({FormatPowerShellArray(BuildPowerShellFlagList("hooks", "install"))})");
-        sb.AppendLine("    } elseif ($subcmd -eq 'hooks' -and $nested -eq 'uninstall') {");
-        sb.AppendLine($"        $flags = @({FormatPowerShellArray(BuildPowerShellFlagList("hooks", "uninstall"))})");
-        sb.AppendLine("    } elseif ($subcmd -eq 'hooks') {");
-        sb.AppendLine($"        $flags = @({FormatPowerShellArray(BuildPowerShellFlagList("hooks", "status"))})");
-        sb.AppendLine("    } else {");
+        var wroteNestedPowerShellBranch = false;
+        foreach (var command in EnumeratedCompletionCommands)
+        {
+            foreach (var subcommand in GetCompletionContextSubcommands(command))
+            {
+                sb.AppendLine($"    {(wroteNestedPowerShellBranch ? "} elseif" : "if")} ($subcmd -eq '{EscapePowerShellSingleQuoted(command)}' -and $nested -eq '{EscapePowerShellSingleQuoted(subcommand)}') {{");
+                sb.AppendLine($"        $flags = @({FormatPowerShellArray(BuildPowerShellFlagList(command, subcommand))})");
+                wroteNestedPowerShellBranch = true;
+            }
+        }
+        if (wroteNestedPowerShellBranch)
+        {
+            // hooks/status shares the parent schema inventory, but hooks is intentionally
+            // excluded from the generic command switch below. Preserve its exact fallback
+            // after emitting the schema-restricted install/uninstall branches.
+            // hooks/status は親 schema の inventory を共有する一方、下の汎用 command switch
+            // から hooks 自体は意図的に除外される。schema 制約付きの install/uninstall branch
+            // の後に、status 用の正確な fallback を維持する。
+            sb.AppendLine("    } elseif ($subcmd -eq 'hooks' -and $nested -eq 'status') {");
+            sb.AppendLine($"        $flags = @({FormatPowerShellArray(BuildPowerShellFlagList("hooks", "status"))})");
+        }
+        if (wroteNestedPowerShellBranch)
+            sb.AppendLine("    } else {");
         sb.AppendLine("        switch ($subcmd) {");
         foreach (var command in EnumeratedCompletionCommands)
         {
@@ -812,7 +837,8 @@ internal static class ConsoleCompletionRenderer
         }
         sb.AppendLine($"            default {{ $flags = @({FormatPowerShellArray(BuildPowerShellGenericFlagList())}) }}");
         sb.AppendLine("        }");
-        sb.AppendLine("    }");
+        if (wroteNestedPowerShellBranch)
+            sb.AppendLine("    }");
         sb.AppendLine("    $flags | Where-Object { $_.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { New-CdidxCompletion $_ 'ParameterName' }");
         sb.Append("}");
         return sb.ToString();
@@ -824,8 +850,8 @@ internal static class ConsoleCompletionRenderer
         foreach (var flag in CliFlagSchema.GetCompletionFlagsForCommand(command, subcommand))
         {
             tokens.Add(flag.Name);
-            if (flag.ShortName is not null)
-                tokens.Add(flag.ShortName);
+            if (flag.GetShortName(command) is { } shortName)
+                tokens.Add(shortName);
         }
         tokens.Add("--help");
         if (command == "find")
@@ -839,8 +865,8 @@ internal static class ConsoleCompletionRenderer
         foreach (var flag in CliFlagSchema.GetHelpFlagsForCommand(command).Where(flag => flag.IsValueBearing))
         {
             names.Add(flag.Name);
-            if (flag.ShortName is not null)
-                names.Add(flag.ShortName);
+            if (flag.GetShortName(command) is { } shortName)
+                names.Add(shortName);
         }
         return names;
     }
@@ -894,8 +920,8 @@ internal static class ConsoleCompletionRenderer
         foreach (var flag in CliFlagSchema.GetTopLevelCompletionFlags())
         {
             tokens.Add(flag.Name);
-            if (flag.ShortName is not null)
-                tokens.Add(flag.ShortName);
+            if (flag.GetShortName(string.Empty) is { } shortName)
+                tokens.Add(shortName);
         }
         return tokens;
     }
@@ -913,8 +939,8 @@ internal static class ConsoleCompletionRenderer
                 if (seen.Add(flag.Name))
                 {
                     tokens.Add(flag.Name);
-                    if (flag.ShortName is not null)
-                        tokens.Add(flag.ShortName);
+                    if (flag.GetShortName(command) is { } shortName)
+                        tokens.Add(shortName);
                 }
             }
         }
