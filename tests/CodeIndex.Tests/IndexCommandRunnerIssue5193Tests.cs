@@ -17,6 +17,7 @@ public partial class IndexCommandRunnerTests
             using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
                 db.InitializeSchema();
 
+            SqliteConnection.ClearAllPools();
             var bytesBefore = File.ReadAllBytes(dbPath);
             string? writesBefore;
             using (var db = new DbContext(DbOpenIntent.QueryOnly, dbPath))
@@ -70,6 +71,7 @@ public partial class IndexCommandRunnerTests
                 }
             }
 
+            SqliteConnection.ClearAllPools();
             Assert.Equal(bytesBefore, File.ReadAllBytes(dbPath));
             using (var db = new DbContext(DbOpenIntent.QueryOnly, dbPath))
             {
