@@ -1540,8 +1540,29 @@ public static partial class QueryCommandRunner
         bool resultsOnly,
         bool includeRecipeQuerySelectors)
     {
+        var args = BuildSearchRecipeCompactReplayArguments(
+            recipeSelector,
+            options,
+            cursor,
+            resultsOnly,
+            includeRecipeQuerySelectors);
+        return ExcerptRecoveryCommandFormatter.RenderDisplayCommandForCurrentShell(args);
+    }
+
+    private static List<string> BuildSearchRecipeCompactReplayArguments(
+        string recipeSelector,
+        QueryCommandOptions options,
+        string? cursor,
+        bool resultsOnly,
+        bool includeRecipeQuerySelectors)
+    {
         var args = new List<string>();
-        options.InvocationContext.AddRecipeCommandPrefix(args, recipeSelector);
+        options.InvocationContext.AddRecipeCommandPrefix(
+            args,
+            recipeSelector,
+            resultsOnly
+                ? RecipeReplayOutputCapability.ResultsOnlyNdjson
+                : RecipeReplayOutputCapability.Default);
         if (resultsOnly)
         {
             args.Add("--json=ndjson");
@@ -1556,10 +1577,33 @@ public static partial class QueryCommandRunner
             AddReplayValueOption(args, "--cursor", cursor);
         AddReplayValueOption(args, "--limit", options.Limit.ToString(CultureInfo.InvariantCulture));
         AddSearchRecipeCompactReplayOptions(args, options, includeRecipeQuerySelectors);
-        var command = string.Join(" ", args.Select(QuoteReplayShellArg));
-        return resultsOnly && !options.MaxJsonBytes.HasValue
-            ? command + " --max-json-bytes <bytes>"
-            : command;
+        if (resultsOnly && !options.MaxJsonBytes.HasValue)
+            AddReplayValueOption(args, "--max-json-bytes", "<bytes>");
+        return args;
+    }
+
+    internal static (
+        IReadOnlyList<string> Argv,
+        string PosixSh,
+        string PowerShell,
+        string CurrentShell) BuildSearchRecipeCompactReplayCommandForTests(
+            string recipeSelector,
+            QueryCommandOptions options,
+            string? cursor,
+            bool resultsOnly,
+            bool includeRecipeQuerySelectors)
+    {
+        var argv = BuildSearchRecipeCompactReplayArguments(
+            recipeSelector,
+            options,
+            cursor,
+            resultsOnly,
+            includeRecipeQuerySelectors);
+        return (
+            argv,
+            ExcerptRecoveryCommandFormatter.RenderDisplayCommand(argv, RecoveryCommandShell.PosixSh),
+            ExcerptRecoveryCommandFormatter.RenderDisplayCommand(argv, RecoveryCommandShell.PowerShell),
+            ExcerptRecoveryCommandFormatter.RenderDisplayCommandForCurrentShell(argv));
     }
 
     private static void AddSearchRecipeCompactReplayOptions(

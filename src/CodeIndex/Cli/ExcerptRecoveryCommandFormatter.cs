@@ -79,6 +79,9 @@ internal static class ExcerptRecoveryCommandFormatter
             : rendered;
     }
 
+    internal static string RenderDisplayCommandForCurrentShell(IReadOnlyList<string> argv)
+        => RenderDisplayCommand(argv, ResolveCurrentShell());
+
     private static List<string> BuildArgv(
         string path,
         int startLine,

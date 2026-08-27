@@ -1435,7 +1435,7 @@ cdidx search --recipe risky-code --show-excluded --json      # include recipe sc
 cdidx search --recipe risky-code/raw-diagnostic-echo --format compact --limit 20  # summary-first compact JSON with next_cursor
 cdidx search --recipe risky-code/raw-diagnostic-echo --format sarif --limit 20    # bounded SARIF audit findings
 cdidx search --recipe risky-code/raw-diagnostic-echo --format compact --cursor <next_cursor>
-cdidx audit risky-code --results-only --search-fields path,line,query_name,recipe --json=ndjson --max-json-bytes 65536  # minimal audit rows
+cdidx search --recipe risky-code --results-only --search-fields path,line,query_name,recipe --json=ndjson --max-json-bytes 65536  # minimal audit rows
 cdidx search --recipe risky-code --format count --summary-only --max-json-bytes 20000  # compact recipe counts
 cdidx search --named-query pack="dotnet pack" --named-query push="nuget push" --format compact  # named ad hoc batch with compact snippets
 cdidx search "catch (Exception" --group-by file --count --json    # rank broad audit hits by file
@@ -5142,7 +5142,7 @@ cdidx search --recipe risky-code --show-excluded --json      # recipe scope / ex
 cdidx search --recipe risky-code/raw-diagnostic-echo --format compact --limit 20  # summary-first compact JSON と next_cursor
 cdidx search --recipe risky-code/raw-diagnostic-echo --format sarif --limit 20    # 上限付き SARIF audit finding
 cdidx search --recipe risky-code/raw-diagnostic-echo --format compact --cursor <next_cursor>
-cdidx audit risky-code --results-only --search-fields path,line,query_name,recipe --json=ndjson --max-json-bytes 65536  # 最小限の audit row
+cdidx search --recipe risky-code --results-only --search-fields path,line,query_name,recipe --json=ndjson --max-json-bytes 65536  # 最小限の audit row
 cdidx search --recipe risky-code --format count --summary-only --max-json-bytes 20000  # compact な recipe count
 cdidx search --named-query pack="dotnet pack" --named-query push="nuget push" --format compact  # 名前付き ad hoc batch と compact snippet
 cdidx search "catch (Exception" --group-by file --count --json    # 広い audit hit を file 別にランク付け
