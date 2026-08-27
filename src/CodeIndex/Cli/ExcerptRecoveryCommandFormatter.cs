@@ -1,6 +1,8 @@
 using CodeIndex.Database;
 using CodeIndex.Diagnostics;
+using System.Diagnostics;
 using System.Globalization;
+using System.Runtime.InteropServices;
 
 namespace CodeIndex.Cli;
 
@@ -78,6 +80,9 @@ internal static class ExcerptRecoveryCommandFormatter
             ? "& " + rendered
             : rendered;
     }
+
+    internal static string RenderDisplayCommandForCurrentShell(IReadOnlyList<string> argv)
+        => RenderDisplayCommand(argv, ResolveCurrentShell());
 
     private static List<string> BuildArgv(
         string path,
@@ -182,7 +187,118 @@ internal static class ExcerptRecoveryCommandFormatter
             StringComparison.OrdinalIgnoreCase);
 
     private static RecoveryCommandShell ResolveCurrentShell()
-        => OperatingSystem.IsWindows() ? RecoveryCommandShell.PowerShell : RecoveryCommandShell.PosixSh;
+        => ResolveShell(
+            TryGetParentProcessName(),
+            OperatingSystem.IsWindows(),
+            hasMsysEnvironment: !string.IsNullOrWhiteSpace(CdidxEnvironment.GetEnvironmentVariable("MSYSTEM")));
+
+    internal static RecoveryCommandShell ResolveShell(
+        string? parentProcessName,
+        bool isWindows,
+        bool hasMsysEnvironment)
+    {
+        var normalizedParent = Path.GetFileNameWithoutExtension(parentProcessName?.Replace('\\', '/') ?? string.Empty)
+            .ToLowerInvariant();
+        if (normalizedParent is "pwsh" or "powershell" or "powershell_ise")
+            return RecoveryCommandShell.PowerShell;
+        if (normalizedParent is "sh" or "bash" or "zsh" or "dash" or "ksh" or "fish" or "git-bash")
+            return RecoveryCommandShell.PosixSh;
+
+        if (hasMsysEnvironment)
+            return RecoveryCommandShell.PosixSh;
+        return isWindows ? RecoveryCommandShell.PowerShell : RecoveryCommandShell.PosixSh;
+    }
+
+    private static string? TryGetParentProcessName()
+    {
+        try
+        {
+            var parentProcessId = OperatingSystem.IsWindows()
+                ? TryGetWindowsParentProcessId(Environment.ProcessId)
+                : GetParentProcessId();
+            if (!parentProcessId.HasValue || parentProcessId.Value <= 0)
+                return null;
+
+            using var parent = Process.GetProcessById(parentProcessId.Value);
+            return parent.ProcessName;
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            return null;
+        }
+    }
+
+    private static int? TryGetWindowsParentProcessId(int processId)
+    {
+        if (!OperatingSystem.IsWindows())
+            return null;
+
+        var snapshot = CreateToolhelp32Snapshot(SnapshotProcesses, 0);
+        if (snapshot == InvalidHandleValue)
+            return null;
+
+        try
+        {
+            var entry = new ProcessEntry32
+            {
+                Size = (uint)Marshal.SizeOf<ProcessEntry32>(),
+            };
+            if (!Process32First(snapshot, ref entry))
+                return null;
+
+            do
+            {
+                if (entry.ProcessId == processId)
+                    return checked((int)entry.ParentProcessId);
+            }
+            while (Process32Next(snapshot, ref entry));
+            return null;
+        }
+        finally
+        {
+            CloseHandle(snapshot);
+        }
+    }
+
+    private const uint SnapshotProcesses = 0x00000002;
+    private static readonly IntPtr InvalidHandleValue = new(-1);
+
+    [DllImport("libc")]
+    private static extern int getppid();
+
+    private static int GetParentProcessId() => getppid();
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr CreateToolhelp32Snapshot(uint flags, uint processId);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool Process32First(IntPtr snapshot, ref ProcessEntry32 entry);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool Process32Next(IntPtr snapshot, ref ProcessEntry32 entry);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CloseHandle(IntPtr handle);
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct ProcessEntry32
+    {
+        internal uint Size;
+        internal uint Usage;
+        internal uint ProcessId;
+        internal IntPtr DefaultHeapId;
+        internal uint ModuleId;
+        internal uint Threads;
+        internal uint ParentProcessId;
+        internal int BasePriority;
+        internal uint Flags;
+
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
+        internal string ExecutableFile;
+    }
 
     private static string FormatShell(RecoveryCommandShell shell)
         => shell == RecoveryCommandShell.PowerShell ? "powershell" : "posix-sh";

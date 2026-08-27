@@ -12446,7 +12446,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunAudit_RecipeReplayCommandsRetainPublicCommandContext_Issue4875()
+    public void RunAudit_RecipeReplayCommandsUseCapabilityAppropriatePublicCommandContext_Issues4875And5191()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_audit_command_context");
         try
@@ -12512,12 +12512,21 @@ public partial class QueryCommandRunnerTests
                 .Select(item => item.GetString())
                 .ToArray();
             Assert.NotEmpty(nextCommands);
+            var resultsOnlyReplay = Assert.Single(
+                nextCommands,
+                command => command?.Contains("--results-only", StringComparison.Ordinal) == true);
+            Assert.StartsWith(
+                "cdidx search --recipe risky-code/raw-diagnostic-echo",
+                resultsOnlyReplay,
+                StringComparison.Ordinal);
+            Assert.Contains("--json=ndjson", resultsOnlyReplay, StringComparison.Ordinal);
+            var commandContextReplays = nextCommands
+                .Where(command => command != resultsOnlyReplay)
+                .ToArray();
+            Assert.NotEmpty(commandContextReplays);
             Assert.All(
-                nextCommands,
+                commandContextReplays,
                 command => Assert.StartsWith("cdidx audit risky-code/raw-diagnostic-echo", command, StringComparison.Ordinal));
-            Assert.DoesNotContain(
-                nextCommands,
-                command => command?.Contains("cdidx search --recipe", StringComparison.Ordinal) == true);
         }
         finally
         {

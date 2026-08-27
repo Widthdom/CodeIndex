@@ -36,7 +36,8 @@ public static partial class QueryCommandRunner
                 commandName,
                 commandName,
                 RecipeNameIsPositional: false,
-                StructuredMachineUsageErrors: false),
+                StructuredMachineUsageErrors: false,
+                SupportsRecipeResultsOnlyNdjson: false),
             jsonOptions);
 
     private static bool TryWriteParseError(
@@ -417,7 +418,8 @@ public static partial class QueryCommandRunner
                 commandName,
                 commandName,
                 RecipeNameIsPositional: false,
-                StructuredMachineUsageErrors: false),
+                StructuredMachineUsageErrors: false,
+                SupportsRecipeResultsOnlyNdjson: false),
             cmdArgs,
             supportedOptions,
             queryLiteral: queryLiteral,

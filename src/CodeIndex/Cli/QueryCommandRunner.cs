@@ -247,21 +247,46 @@ public sealed record SearchNamedQuery(string Name, string Query);
 
 public readonly record struct DependencyCycleCursor(int Offset, string Fingerprint);
 
+internal enum RecipeReplayOutputCapability
+{
+    Default,
+    ResultsOnlyNdjson,
+}
+
 internal sealed record QueryCommandInvocationContext(
     string CommandName,
     string UsageCommandName,
     string ValidationCommandName,
     bool RecipeNameIsPositional,
-    bool StructuredMachineUsageErrors)
+    bool StructuredMachineUsageErrors,
+    bool SupportsRecipeResultsOnlyNdjson)
 {
     internal static QueryCommandInvocationContext Search { get; } =
-        new("search", "search", "search", RecipeNameIsPositional: false, StructuredMachineUsageErrors: false);
+        new(
+            "search",
+            "search",
+            "search",
+            RecipeNameIsPositional: false,
+            StructuredMachineUsageErrors: false,
+            SupportsRecipeResultsOnlyNdjson: true);
 
     internal static QueryCommandInvocationContext Recipes { get; } =
-        new("recipes", "recipes", "recipes", RecipeNameIsPositional: false, StructuredMachineUsageErrors: false);
+        new(
+            "recipes",
+            "recipes",
+            "recipes",
+            RecipeNameIsPositional: false,
+            StructuredMachineUsageErrors: false,
+            SupportsRecipeResultsOnlyNdjson: false);
 
     internal static QueryCommandInvocationContext Audit { get; } =
-        new("audit", "audit", "search", RecipeNameIsPositional: true, StructuredMachineUsageErrors: true);
+        new(
+            "audit",
+            "audit",
+            "search",
+            RecipeNameIsPositional: true,
+            StructuredMachineUsageErrors: true,
+            SupportsRecipeResultsOnlyNdjson: false);
 
     internal string UsageLine =>
         ConsoleUi.GetUsageLine(UsageCommandName)
@@ -284,11 +309,18 @@ internal sealed record QueryCommandInvocationContext(
     internal string RecipeCursorSelectorSyntax =>
         RecipeNameIsPositional ? "cdidx audit <recipe>/<query>" : "--recipe <recipe>/<query>";
 
-    internal void AddRecipeCommandPrefix(List<string> args, string recipeSelector)
+    internal void AddRecipeCommandPrefix(
+        List<string> args,
+        string recipeSelector,
+        RecipeReplayOutputCapability outputCapability = RecipeReplayOutputCapability.Default)
     {
+        var replayContext = outputCapability == RecipeReplayOutputCapability.ResultsOnlyNdjson
+            && !SupportsRecipeResultsOnlyNdjson
+                ? Search
+                : this;
         args.Add("cdidx");
-        args.Add(CommandName);
-        if (!RecipeNameIsPositional)
+        args.Add(replayContext.CommandName);
+        if (!replayContext.RecipeNameIsPositional)
             args.Add("--recipe");
         args.Add(recipeSelector);
     }
