@@ -31,38 +31,75 @@ internal static class CSharpTypeReferenceArity
         string? context,
         string? symbolName,
         long? columnNumber)
+        => GetInvocationArgumentCount(context, symbolName, columnNumber, spanLength: null);
+
+    internal static int? GetInvocationArgumentCount(
+        string? context,
+        string? symbolName,
+        long? columnNumber,
+        long? spanLength)
     {
         if (string.IsNullOrWhiteSpace(context) || string.IsNullOrWhiteSpace(symbolName))
             return null;
 
-        var occurrence = FindClosestIdentifierOccurrence(context, symbolName, columnNumber);
+        var occurrence = FindInvocationIdentifierOccurrence(
+            context,
+            symbolName,
+            columnNumber,
+            spanLength);
         if (occurrence < 0)
             return null;
 
-        var cursor = occurrence + symbolName.Length;
-        if (!SkipCSharpTrivia(context, ref cursor))
-            return null;
-        if (cursor < context.Length && context[cursor] == '<')
-        {
-            if (!TryCountTopLevelTypeArguments(
-                    context,
-                    cursor,
-                    out _,
-                    out var closeAngleIndex))
-            {
-                return null;
-            }
-
-            cursor = closeAngleIndex + 1;
-            if (!SkipCSharpTrivia(context, ref cursor))
-                return null;
-        }
-
-        return cursor < context.Length
-               && context[cursor] == '('
-               && TryCountTopLevelParameters(context, cursor, out var count)
+        return TryFindInvocationOpenParenthesis(
+                   context,
+                   occurrence,
+                   ReadIdentifierLength(context, occurrence),
+                   out var openParenthesis)
+               && TryAnalyzeTopLevelParameters(
+                   context,
+                   openParenthesis,
+                   rejectAmbiguousArgumentExpressions: true,
+                   out var count,
+                   out var hasNamedArgument,
+                   out _,
+                   out _,
+                   out _,
+                   out _)
+               && !hasNamedArgument
             ? count
             : null;
+    }
+
+    internal static bool HasCompleteInvocationArgumentList(
+        string? context,
+        string? symbolName,
+        long? columnNumber,
+        long? spanLength)
+    {
+        if (string.IsNullOrWhiteSpace(context) || string.IsNullOrWhiteSpace(symbolName))
+            return false;
+
+        var occurrence = FindInvocationIdentifierOccurrence(
+            context,
+            symbolName,
+            columnNumber,
+            spanLength);
+        return occurrence >= 0
+               && TryFindInvocationOpenParenthesis(
+                   context,
+                   occurrence,
+                   ReadIdentifierLength(context, occurrence),
+                   out var openParenthesis)
+               && TryAnalyzeTopLevelParameters(
+                   context,
+                   openParenthesis,
+                   rejectAmbiguousArgumentExpressions: true,
+                   out _,
+                   out _,
+                   out _,
+                   out _,
+                   out _,
+                   out _);
     }
 
     internal static int? GetUnambiguousInvocationArgumentCount(
@@ -89,12 +126,15 @@ internal static class CSharpTypeReferenceArity
         return TryAnalyzeTopLevelParameters(
                    context,
                    cursor,
+                   rejectAmbiguousArgumentExpressions: true,
                    out var count,
                    out var hasNamedArgument,
+                   out var hasTopLevelColon,
                    out _,
                    out _,
                    out var hasAngleBrackets)
                && !hasNamedArgument
+               && !hasTopLevelColon
                && !hasAngleBrackets
             ? count
             : null;
@@ -139,7 +179,9 @@ internal static class CSharpTypeReferenceArity
             return TryAnalyzeTopLevelParameters(
                        signature,
                        cursor,
+                       rejectAmbiguousArgumentExpressions: false,
                        out var count,
+                       out _,
                        out _,
                        out var hasOptionalDefault,
                        out var hasBindingSensitiveModifier,
@@ -171,6 +213,20 @@ internal static class CSharpTypeReferenceArity
     }
 
     internal static int? GetConstructorParameterCount(
+        string? signature,
+        string? symbolName,
+        string? symbolKind)
+        => AnalyzeConstructorParameters(signature, symbolName, symbolKind) is { BindingSensitive: false } analysis
+            ? analysis.Count
+            : null;
+
+    internal static bool HasBindingSensitiveConstructorParameters(
+        string? signature,
+        string? symbolName,
+        string? symbolKind)
+        => AnalyzeConstructorParameters(signature, symbolName, symbolKind) is { BindingSensitive: true };
+
+    private static ConstructorParameterAnalysis? AnalyzeConstructorParameters(
         string? signature,
         string? symbolName,
         string? symbolKind)
@@ -230,13 +286,32 @@ internal static class CSharpTypeReferenceArity
             }
 
             if (cursor < signature.Length && signature[cursor] == '(')
-                return TryCountTopLevelParameters(signature, cursor, out var count) ? count : null;
+            {
+                return TryAnalyzeTopLevelParameters(
+                    signature,
+                    cursor,
+                    rejectAmbiguousArgumentExpressions: false,
+                    out var count,
+                    out _,
+                    out _,
+                    out var hasOptionalDefault,
+                    out var hasBindingSensitiveModifier,
+                    out _)
+                    ? new ConstructorParameterAnalysis(
+                        count,
+                        hasOptionalDefault || hasBindingSensitiveModifier)
+                    : null;
+            }
             if (typeDeclaration)
                 return null;
         }
 
         return null;
     }
+
+    private readonly record struct ConstructorParameterAnalysis(
+        int Count,
+        bool BindingSensitive);
 
     internal static bool IsValueTypeDeclaration(string? signature, string? symbolKind)
         => string.Equals(symbolKind, "struct", StringComparison.Ordinal)
@@ -355,6 +430,279 @@ internal static class CSharpTypeReferenceArity
         }
 
         return -1;
+    }
+
+    private static int FindInvocationIdentifierOccurrence(
+        string text,
+        string canonicalIdentifier,
+        long? columnNumber,
+        long? spanLength)
+    {
+        var recordedOccurrence = -1;
+        var hasRecordedInvocation = columnNumber is > 0 and <= int.MaxValue
+            && spanLength is > 0 and <= int.MaxValue
+            && TryReadIdentifierAtRecordedSpan(
+                text,
+                (int)columnNumber.Value - 1,
+                (int)spanLength.Value,
+                out recordedOccurrence)
+            && TryFindInvocationOpenParenthesis(
+                text,
+                recordedOccurrence,
+                ReadIdentifierLength(text, recordedOccurrence),
+                out _);
+        if (hasRecordedInvocation)
+            return recordedOccurrence;
+
+        var canonicalOccurrence = FindClosestObjectCreationIdentifierOccurrence(
+            text,
+            canonicalIdentifier,
+            columnNumber);
+        if (canonicalOccurrence >= 0)
+            return canonicalOccurrence;
+
+        return spanLength is > 0 and <= int.MaxValue
+            ? FindUniqueObjectCreationIdentifierBySpan(text, (int)spanLength.Value)
+            : -1;
+    }
+
+    private static int FindClosestObjectCreationIdentifierOccurrence(
+        string text,
+        string identifier,
+        long? columnNumber)
+    {
+        var expectedIndex = columnNumber is > 0 and <= int.MaxValue
+            ? (int)columnNumber.Value - 1
+            : int.MaxValue;
+        var bestIndex = -1;
+        var bestDistance = int.MaxValue;
+        for (var searchAt = 0; searchAt <= text.Length - identifier.Length;)
+        {
+            var occurrence = text.IndexOf(identifier, searchAt, StringComparison.Ordinal);
+            if (occurrence < 0)
+                break;
+            searchAt = occurrence + Math.Max(1, identifier.Length);
+            if (!IsIdentifierOccurrence(text, occurrence, identifier.Length)
+                || occurrence > expectedIndex
+                || !IsObjectCreationIdentifier(text, occurrence))
+            {
+                continue;
+            }
+
+            var distance = expectedIndex == int.MaxValue
+                ? occurrence
+                : expectedIndex - occurrence;
+            if (distance < bestDistance)
+            {
+                bestIndex = occurrence;
+                bestDistance = distance;
+            }
+        }
+
+        if (bestIndex >= 0)
+            return bestIndex;
+
+        for (var searchAt = 0; searchAt <= text.Length - identifier.Length;)
+        {
+            var occurrence = text.IndexOf(identifier, searchAt, StringComparison.Ordinal);
+            if (occurrence < 0)
+                break;
+            if (IsIdentifierOccurrence(text, occurrence, identifier.Length)
+                && IsObjectCreationIdentifier(text, occurrence))
+            {
+                return occurrence;
+            }
+            searchAt = occurrence + Math.Max(1, identifier.Length);
+        }
+
+        return -1;
+    }
+
+    private static bool TryReadIdentifierAtRecordedSpan(
+        string text,
+        int recordedStart,
+        int recordedLength,
+        out int identifierStart)
+    {
+        identifierStart = -1;
+        if ((uint)recordedStart >= (uint)text.Length
+            || recordedLength <= 0
+            || recordedLength > text.Length - recordedStart)
+        {
+            return false;
+        }
+
+        identifierStart = text[recordedStart] == '@' ? recordedStart + 1 : recordedStart;
+        var identifierLength = recordedLength - (identifierStart - recordedStart);
+        return identifierLength > 0
+               && IsIdentifierStart(text[identifierStart])
+               && ReadIdentifierLength(text, identifierStart) == identifierLength;
+    }
+
+    private static int FindUniqueObjectCreationIdentifierBySpan(string text, int spanLength)
+    {
+        var uniqueOccurrence = -1;
+        for (var cursor = 0; cursor < text.Length;)
+        {
+            if (text[cursor] is '"' or '\'')
+            {
+                if (text[cursor] == '"'
+                    && cursor + 2 < text.Length
+                    && text[cursor + 1] == '"'
+                    && text[cursor + 2] == '"')
+                {
+                    return -1;
+                }
+
+                cursor = SkipQuotedLiteral(text, cursor, text[cursor]) + 1;
+                continue;
+            }
+            if (text[cursor] == '/' && cursor + 1 < text.Length)
+            {
+                if (text[cursor + 1] == '/')
+                {
+                    cursor = SkipLineComment(text, cursor);
+                    continue;
+                }
+                if (text[cursor + 1] == '*')
+                {
+                    cursor = SkipBlockComment(text, cursor) + 1;
+                    continue;
+                }
+            }
+
+            var tokenStart = cursor;
+            var identifierStart = text[cursor] == '@' ? cursor + 1 : cursor;
+            if (identifierStart >= text.Length || !IsIdentifierStart(text[identifierStart]))
+            {
+                cursor++;
+                continue;
+            }
+
+            var identifierLength = ReadIdentifierLength(text, identifierStart);
+            cursor = identifierStart + identifierLength;
+            if (cursor - tokenStart != spanLength
+                || !IsObjectCreationIdentifier(text, identifierStart))
+            {
+                continue;
+            }
+
+            if (uniqueOccurrence >= 0)
+                return -1;
+            uniqueOccurrence = identifierStart;
+        }
+
+        return uniqueOccurrence;
+    }
+
+    private static bool IsObjectCreationIdentifier(string text, int identifierStart)
+    {
+        var cursor = identifierStart;
+        if (cursor > 0 && text[cursor - 1] == '@')
+            cursor--;
+        if (!SkipCSharpTriviaBackward(text, ref cursor))
+            return false;
+
+        while (cursor > 0 && text[cursor - 1] == '.')
+        {
+            cursor--;
+            if (!SkipCSharpTriviaBackward(text, ref cursor)
+                || !SkipTypeIdentifierBackward(text, ref cursor)
+                || !SkipCSharpTriviaBackward(text, ref cursor))
+            {
+                return false;
+            }
+        }
+
+        if (cursor >= 2 && text[cursor - 2] == ':' && text[cursor - 1] == ':')
+        {
+            cursor -= 2;
+            if (!SkipCSharpTriviaBackward(text, ref cursor)
+                || !SkipTypeIdentifierBackward(text, ref cursor)
+                || !SkipCSharpTriviaBackward(text, ref cursor))
+            {
+                return false;
+            }
+        }
+
+        const string keyword = "new";
+        var keywordStart = cursor - keyword.Length;
+        return keywordStart >= 0
+               && text.AsSpan(keywordStart, keyword.Length).SequenceEqual(keyword)
+               && IsIdentifierOccurrence(text, keywordStart, keyword.Length)
+               && TryFindInvocationOpenParenthesis(
+                   text,
+                   identifierStart,
+                   ReadIdentifierLength(text, identifierStart),
+                   out _);
+    }
+
+    private static bool SkipTypeIdentifierBackward(string text, ref int cursor)
+    {
+        if (cursor > 0 && text[cursor - 1] == '>')
+        {
+            var angleDepth = 1;
+            cursor--;
+            while (cursor > 0 && angleDepth > 0)
+            {
+                cursor--;
+                angleDepth += text[cursor] switch
+                {
+                    '>' => 1,
+                    '<' => -1,
+                    _ => 0,
+                };
+            }
+            if (angleDepth != 0 || !SkipCSharpTriviaBackward(text, ref cursor))
+                return false;
+        }
+
+        var identifierEnd = cursor;
+        while (cursor > 0 && IsIdentifierPart(text[cursor - 1]))
+            cursor--;
+        if (cursor > 0 && text[cursor - 1] == '@')
+            cursor--;
+        return cursor < identifierEnd;
+    }
+
+    private static bool TryFindInvocationOpenParenthesis(
+        string text,
+        int identifierStart,
+        int identifierLength,
+        out int openParenthesis)
+    {
+        openParenthesis = -1;
+        var cursor = identifierStart + identifierLength;
+        if (!SkipCSharpTrivia(text, ref cursor))
+            return false;
+        if (cursor < text.Length && text[cursor] == '<')
+        {
+            if (!TryCountTopLevelTypeArguments(
+                    text,
+                    cursor,
+                    out _,
+                    out var closeAngleIndex))
+            {
+                return false;
+            }
+
+            cursor = closeAngleIndex + 1;
+            if (!SkipCSharpTrivia(text, ref cursor))
+                return false;
+        }
+
+        if (cursor >= text.Length || text[cursor] != '(')
+            return false;
+        openParenthesis = cursor;
+        return true;
+    }
+
+    private static int ReadIdentifierLength(string text, int identifierStart)
+    {
+        var cursor = identifierStart;
+        while (cursor < text.Length && IsIdentifierPart(text[cursor]))
+            cursor++;
+        return cursor - identifierStart;
     }
 
     private static bool ContainsIdentifier(string text, string identifier, int endExclusive)
@@ -522,7 +870,12 @@ internal static class CSharpTypeReferenceArity
             if (c == '/' && i + 1 < text.Length)
             {
                 if (text[i + 1] == '/')
-                    return false;
+                {
+                    i = SkipLineComment(text, i) - 1;
+                    if (i >= text.Length)
+                        return false;
+                    continue;
+                }
                 if (text[i + 1] == '*')
                 {
                     i = SkipBlockComment(text, i);
@@ -582,7 +935,9 @@ internal static class CSharpTypeReferenceArity
         => TryAnalyzeTopLevelParameters(
             text,
             openParenthesis,
+            rejectAmbiguousArgumentExpressions: false,
             out count,
+            out _,
             out _,
             out _,
             out _,
@@ -591,13 +946,16 @@ internal static class CSharpTypeReferenceArity
     private static bool TryAnalyzeTopLevelParameters(
         string text,
         int openParenthesis,
+        bool rejectAmbiguousArgumentExpressions,
         out int count,
+        out bool hasNamedArgument,
         out bool hasTopLevelColon,
         out bool hasTopLevelEquals,
         out bool hasBindingSensitiveModifier,
         out bool hasAngleBrackets)
     {
         count = 0;
+        hasNamedArgument = false;
         hasTopLevelColon = false;
         hasTopLevelEquals = false;
         hasBindingSensitiveModifier = false;
@@ -608,6 +966,7 @@ internal static class CSharpTypeReferenceArity
         var angleDepth = 0;
         var hasItemContent = false;
         var hasTopLevelSeparator = false;
+        var itemStart = openParenthesis + 1;
         for (var i = openParenthesis + 1; i < text.Length; i++)
         {
             var c = text[i];
@@ -622,6 +981,12 @@ internal static class CSharpTypeReferenceArity
                 {
                     return false;
                 }
+                if (rejectAmbiguousArgumentExpressions
+                    && c == '"'
+                    && IsInterpolatedStringQuote(text, i))
+                {
+                    return false;
+                }
 
                 i = SkipQuotedLiteral(text, i, c);
                 if (i >= text.Length)
@@ -632,7 +997,12 @@ internal static class CSharpTypeReferenceArity
             if (c == '/' && i + 1 < text.Length)
             {
                 if (text[i + 1] == '/')
-                    return false;
+                {
+                    i = SkipLineComment(text, i) - 1;
+                    if (i >= text.Length)
+                        return false;
+                    continue;
+                }
                 if (text[i + 1] == '*')
                 {
                     i = SkipBlockComment(text, i);
@@ -674,6 +1044,15 @@ internal static class CSharpTypeReferenceArity
                     hasItemContent = true;
                     break;
                 case '<':
+                    if (rejectAmbiguousArgumentExpressions
+                        && angleDepth == 0
+                        && !HasStrongGenericExpressionPrefix(text, i))
+                    {
+                        // Relational expressions and unqualified generic inference are
+                        // indistinguishable to this lightweight scanner. Do not let a
+                        // comparison hide an outer argument separator.
+                        return false;
+                    }
                     hasAngleBrackets = true;
                     angleDepth++;
                     hasItemContent = true;
@@ -691,12 +1070,14 @@ internal static class CSharpTypeReferenceArity
                     count++;
                     hasItemContent = false;
                     hasTopLevelSeparator = true;
+                    itemStart = i + 1;
                     break;
                 case ':' when parenthesisDepth == 0
                                   && bracketDepth == 0
                                   && braceDepth == 0
                                   && angleDepth == 0:
                     hasTopLevelColon = true;
+                    hasNamedArgument |= IsNamedArgumentPrefix(text, itemStart, i);
                     hasItemContent = true;
                     break;
                 case '=' when parenthesisDepth == 0
@@ -716,9 +1097,11 @@ internal static class CSharpTypeReferenceArity
                         while (identifierEnd < text.Length && IsIdentifierPart(text[identifierEnd]))
                             identifierEnd++;
                         var identifier = text.AsSpan(i, identifierEnd - i);
+                        var escapedIdentifier = i > 0 && text[i - 1] == '@';
                         hasBindingSensitiveModifier |= bracketDepth == 0
-                            ? identifier.SequenceEqual("params".AsSpan())
-                              || identifier.SequenceEqual("this".AsSpan())
+                            ? !escapedIdentifier
+                              && (identifier.SequenceEqual("params".AsSpan())
+                                  || identifier.SequenceEqual("this".AsSpan()))
                             : identifier.SequenceEqual("Optional".AsSpan())
                               || identifier.SequenceEqual("OptionalAttribute".AsSpan())
                               || identifier.SequenceEqual("DefaultParameterValue".AsSpan())
@@ -731,6 +1114,69 @@ internal static class CSharpTypeReferenceArity
         }
 
         return false;
+    }
+
+    private static bool IsInterpolatedStringQuote(string text, int quoteIndex)
+        => quoteIndex > 0
+           && (text[quoteIndex - 1] == '$'
+               || (quoteIndex > 1
+                   && text[quoteIndex - 1] == '@'
+                   && text[quoteIndex - 2] == '$'));
+
+    private static bool HasStrongGenericExpressionPrefix(string text, int openAngleIndex)
+    {
+        // Qualified generic members (`Factory.Create<T>`) and object creation
+        // (`new List<T>`) are sufficiently distinct from relational expressions. Bare
+        // `Create<T>` remains conservative because generic inference is outside this
+        // arity helper's contract.
+        if (openAngleIndex <= 0 || !IsIdentifierPart(text[openAngleIndex - 1]))
+            return false;
+
+        var identifierStart = openAngleIndex - 1;
+        while (identifierStart > 0 && IsIdentifierPart(text[identifierStart - 1]))
+            identifierStart--;
+        if (identifierStart > 0 && text[identifierStart - 1] == '@')
+            identifierStart--;
+
+        var prefixCursor = identifierStart;
+        if (!SkipCSharpTriviaBackward(text, ref prefixCursor))
+            return false;
+        if (prefixCursor > 0 && text[prefixCursor - 1] == '.')
+            return true;
+        if (prefixCursor >= 2
+            && text[prefixCursor - 2] == ':'
+            && text[prefixCursor - 1] == ':')
+        {
+            return true;
+        }
+
+        const string keyword = "new";
+        var keywordStart = prefixCursor - keyword.Length;
+        return keywordStart >= 0
+               && text.AsSpan(keywordStart, keyword.Length).SequenceEqual(keyword)
+               && IsIdentifierOccurrence(text, keywordStart, keyword.Length);
+    }
+
+    private static bool IsNamedArgumentPrefix(string text, int itemStart, int colonIndex)
+    {
+        if ((colonIndex > 0 && text[colonIndex - 1] == ':')
+            || (colonIndex + 1 < text.Length && text[colonIndex + 1] == ':'))
+        {
+            return false;
+        }
+
+        var cursor = itemStart;
+        if (!SkipCSharpTrivia(text, ref cursor) || cursor >= colonIndex)
+            return false;
+        if (text[cursor] == '@')
+            cursor++;
+        if (cursor >= colonIndex || !IsIdentifierStart(text[cursor]))
+            return false;
+
+        cursor++;
+        while (cursor < colonIndex && IsIdentifierPart(text[cursor]))
+            cursor++;
+        return SkipCSharpTrivia(text, ref cursor) && cursor == colonIndex;
     }
 
     private static int SkipQuotedLiteral(string text, int quoteIndex, char quote)
@@ -761,6 +1207,12 @@ internal static class CSharpTypeReferenceArity
     {
         var closeIndex = text.IndexOf("*/", slashIndex + 2, StringComparison.Ordinal);
         return closeIndex < 0 ? text.Length : closeIndex + 1;
+    }
+
+    private static int SkipLineComment(string text, int slashIndex)
+    {
+        var newlineIndex = text.IndexOf('\n', slashIndex + 2);
+        return newlineIndex < 0 ? text.Length : newlineIndex + 1;
     }
 
     private static bool IsDelegateDeclarationName(
@@ -820,8 +1272,8 @@ internal static class CSharpTypeReferenceArity
 
             if (text[cursor + 1] == '/')
             {
-                cursor = text.Length;
-                return false;
+                cursor = SkipLineComment(text, cursor);
+                continue;
             }
 
             if (text[cursor + 1] != '*')
@@ -835,6 +1287,24 @@ internal static class CSharpTypeReferenceArity
             }
 
             cursor = closeIndex + 2;
+        }
+
+        return true;
+    }
+
+    private static bool SkipCSharpTriviaBackward(string text, ref int cursor)
+    {
+        while (cursor > 0)
+        {
+            while (cursor > 0 && char.IsWhiteSpace(text[cursor - 1]))
+                cursor--;
+            if (cursor < 2 || text[cursor - 2] != '*' || text[cursor - 1] != '/')
+                return true;
+
+            var openIndex = text.LastIndexOf("/*", cursor - 2, StringComparison.Ordinal);
+            if (openIndex < 0)
+                return false;
+            cursor = openIndex;
         }
 
         return true;
