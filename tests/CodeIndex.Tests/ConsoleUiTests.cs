@@ -66,7 +66,7 @@ public class ConsoleUiTests
     [Fact]
     public void CompletionRenderer_UtilityCommandsExcludeQueryFlags_Issue4427()
     {
-        foreach (var command in new[] { "completions", "license", "export", "import", "batch", "mcp", "lsp" })
+        foreach (var command in new[] { "completions", "license", "import", "batch", "mcp", "lsp" })
         {
             var expected = CliFlagSchema.GetCompletionFlagsForCommand(command).Select(flag => flag.Name).ToHashSet(StringComparer.Ordinal);
             Assert.DoesNotContain("--body", expected);
@@ -74,6 +74,14 @@ public class ConsoleUiTests
             Assert.DoesNotContain("--kind", expected);
             Assert.DoesNotContain("--lang", expected);
         }
+
+        var export = CliFlagSchema.GetCompletionFlagsForCommand("export")
+            .Select(flag => flag.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        Assert.Contains("--lang", export);
+        Assert.DoesNotContain("--body", export);
+        Assert.DoesNotContain("--exact", export);
+        Assert.DoesNotContain("--kind", export);
     }
 
     [Fact]
@@ -1220,11 +1228,11 @@ public class ConsoleUiTests
         Assert.Contains("case '--color' '--palette' '--metrics' '--log-format' '--log-retain-count' '--log-max-size-mb'", fish, StringComparison.Ordinal);
         Assert.Contains("__fish_cdidx_using_context suggestions update' -l status -r -a 'draft open_in_upstream resolved_in_upstream wont_fix duplicate superseded'", fish, StringComparison.Ordinal);
         Assert.Contains("__fish_cdidx_using_command suggestions; and not __fish_cdidx_using_context suggestions update' -l status -r -a 'all draft submitted_pending_triage", fish, StringComparison.Ordinal);
-        var fishJson = fish.Split('\n').Single(line => Regex.IsMatch(line, @"\s-l json(?:\s|$)"));
+        var fishJson = fish.Split('\n').Where(line => Regex.IsMatch(line, @"\s-l json(?:\s|$)")).ToArray();
         var fishPretty = fish.Split('\n').Single(line =>
             line.Contains("__fish_cdidx_using_command", StringComparison.Ordinal)
             && Regex.IsMatch(line, @"\s-l pretty(?:\s|$)"));
-        Assert.Contains("validate-config", fishJson, StringComparison.Ordinal);
+        Assert.Contains(fishJson, line => line.Contains("validate-config", StringComparison.Ordinal));
         Assert.DoesNotContain("validate-config", fishPretty, StringComparison.Ordinal);
 
         var powershell = ConsoleCompletionRenderer.GetCompletionScript("powershell");
@@ -1329,7 +1337,7 @@ public class ConsoleUiTests
         var fish = ConsoleCompletionRenderer.GetCompletionScript("fish");
         var powershell = ConsoleCompletionRenderer.GetCompletionScript("powershell");
 
-        foreach (var expected in new[] { "hooks) COMPREPLY=($(compgen -W \"install uninstall status\"", "workspace) COMPREPLY=($(compgen -W \"list status use current clear deactivate\"", "config) COMPREPLY=($(compgen -W \"show\"", "db) COMPREPLY=($(compgen -W \"integrity schema prune checkpoint checkpoints restore restore-backups\"" })
+        foreach (var expected in new[] { "hooks) COMPREPLY=($(compgen -W \"install uninstall status\"", "workspace) COMPREPLY=($(compgen -W \"list status use current clear deactivate", "config) COMPREPLY=($(compgen -W \"show\"", "db) COMPREPLY=($(compgen -W \"integrity schema prune checkpoint checkpoints restore restore-backups\"" })
             Assert.Contains(expected, bash);
 
         foreach (var expected in new[] { "'install:install subcommand'", "'list:list subcommand'", "'clear:clear subcommand'", "'deactivate:deactivate subcommand'", "'show:show subcommand'", "'schema:schema subcommand'", "'prune:prune subcommand'" })
@@ -1898,8 +1906,13 @@ public class ConsoleUiTests
     {
         var flags = new SortedSet<string>(StringComparer.Ordinal);
         var pattern = new Regex($@"__fish_cdidx_using_command\s+(?<list>[^;']+)[^']*'\s+-l\s+(?<flag>[a-z][a-z0-9-]*)\b");
+        var parentContextPattern = new Regex($@"__fish_cdidx_using_context\s+{Regex.Escape(subcommand)}'\s+-l\s+(?<flag>[a-z][a-z0-9-]*)\b");
         foreach (var line in script.Split('\n'))
         {
+            var parentContextMatch = parentContextPattern.Match(line);
+            if (parentContextMatch.Success)
+                flags.Add(parentContextMatch.Groups["flag"].Value);
+
             var match = pattern.Match(line);
             if (!match.Success)
                 continue;

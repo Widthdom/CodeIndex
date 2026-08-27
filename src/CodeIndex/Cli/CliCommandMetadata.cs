@@ -39,7 +39,7 @@ internal static class CliCommandMetadata
         ]);
 
     internal static IReadOnlySet<string> OptionalSubcommandCommands { get; } =
-        new[] { "recipes", "suggestions" }.ToFrozenSet(StringComparer.Ordinal);
+        new[] { "recipes", "suggestions", "workspace", "export" }.ToFrozenSet(StringComparer.Ordinal);
 
     // These commands render process-static metadata and must not discover or parse
     // project configuration. validate-config owns malformed-config reporting so it
