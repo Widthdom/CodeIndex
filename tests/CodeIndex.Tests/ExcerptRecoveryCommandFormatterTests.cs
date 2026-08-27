@@ -190,4 +190,29 @@ public class ExcerptRecoveryCommandFormatterTests
             ["cdidx"],
             ExcerptRecoveryCommandFormatter.ResolveInvocationPrefix(null, assemblyPath));
     }
+
+    [Theory]
+    [InlineData("pwsh", false, true, false, true)]
+    [InlineData("PowerShell.EXE", false, false, false, true)]
+    [InlineData("bash", true, false, true, false)]
+    [InlineData("git-bash.exe", true, false, false, false)]
+    [InlineData("testhost", true, true, false, false)]
+    [InlineData("testhost", false, false, true, true)]
+    [InlineData("testhost", true, false, false, true)]
+    [InlineData("testhost", false, false, false, false)]
+    public void ResolveShell_PrefersInvokingShellOverOperatingSystem_Issue5191(
+        string parentProcessName,
+        bool isWindows,
+        bool hasMsysEnvironment,
+        bool hasPowerShellEnvironment,
+        bool expectPowerShell)
+    {
+        Assert.Equal(
+            expectPowerShell ? RecoveryCommandShell.PowerShell : RecoveryCommandShell.PosixSh,
+            ExcerptRecoveryCommandFormatter.ResolveShell(
+                parentProcessName,
+                isWindows,
+                hasMsysEnvironment,
+                hasPowerShellEnvironment));
+    }
 }
