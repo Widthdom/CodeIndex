@@ -1695,7 +1695,7 @@ public class DatabaseTests : IDisposable
             candidateSql,
             StringComparison.Ordinal);
         Assert.Equal(
-            14,
+            15,
             candidateSql.Split(
                 "FROM temp.reference_graph_dirty_references AS dirty_reference",
                 StringSplitOptions.None).Length - 1);

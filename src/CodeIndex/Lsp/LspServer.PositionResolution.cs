@@ -26,16 +26,23 @@ internal sealed partial class LspServer : IDisposable
             if (positionDefinitions.Count > 0)
                 return positionDefinitions;
 
-            var localReferenceTargets = ResolveReferenceTargetsAtPosition(context);
+            var localReferenceTargets = ResolveReferenceTargetsAtPosition(
+                context,
+                out var authoritativeUnresolved);
+            if (authoritativeUnresolved)
+                return [];
             return localReferenceTargets.Count == 0 ? localDefinitions : localReferenceTargets;
         }
 
         var workspaceDefinitions = _reader.GetDefinitions(context.Token, DefaultLimit, exact: true);
-        if (workspaceDefinitions.Count > 1)
+        if (workspaceDefinitions.Count > 1
+            || workspaceDefinitions.Any(IsCSharpLexicalLocalFunctionCandidate))
         {
             var referenceTargets = ResolveReferenceTargetsAtPosition(context);
             if (referenceTargets.Count > 0)
                 return referenceTargets;
+            if (workspaceDefinitions.All(IsCSharpLexicalLocalFunctionCandidate))
+                return [];
         }
         return workspaceDefinitions;
     }
@@ -49,19 +56,40 @@ internal sealed partial class LspServer : IDisposable
             if (positionDefinitions.Count == 1)
                 return _reader.GetReferencesForDefinition(positionDefinitions[0], DefaultLimit);
 
-            var localReferenceTarget = ResolveReferenceTargetAtPosition(context);
-            if (localReferenceTarget != null)
-                return _reader.GetReferencesForDefinition(localReferenceTarget, DefaultLimit);
+            var localReferenceTargets = ResolveReferenceTargetsAtPosition(
+                context,
+                out var authoritativeUnresolved);
+            if (localReferenceTargets.Count == 1)
+                return _reader.GetReferencesForDefinition(localReferenceTargets[0], DefaultLimit);
+            if (localReferenceTargets.Count > 1
+                && localReferenceTargets.All(IsCSharpLexicalLocalFunctionCandidate))
+            {
+                return GetReferencesForCSharpLexicalLocalFunctionTargets(localReferenceTargets);
+            }
+            if (authoritativeUnresolved)
+                return [];
 
-            return _reader.AnalyzeSymbol(context.Token, DefaultLimit, pathPatterns: [context.IndexedPath], exact: true).References;
+            return _reader.SearchReferences(
+                context.Token,
+                DefaultLimit,
+                pathPatterns: [context.IndexedPath],
+                exact: true);
         }
 
         var workspaceDefinitions = _reader.GetDefinitions(context.Token, DefaultLimit, exact: true);
-        if (workspaceDefinitions.Count > 1)
+        if (workspaceDefinitions.Count > 1
+            || workspaceDefinitions.Any(IsCSharpLexicalLocalFunctionCandidate))
         {
-            var referenceTarget = ResolveReferenceTargetAtPosition(context);
-            if (referenceTarget != null)
-                return _reader.GetReferencesForDefinition(referenceTarget, DefaultLimit);
+            var referenceTargets = ResolveReferenceTargetsAtPosition(context);
+            if (referenceTargets.Count == 1)
+                return _reader.GetReferencesForDefinition(referenceTargets[0], DefaultLimit);
+            if (referenceTargets.Count > 1
+                && referenceTargets.All(IsCSharpLexicalLocalFunctionCandidate))
+            {
+                return GetReferencesForCSharpLexicalLocalFunctionTargets(referenceTargets);
+            }
+            if (workspaceDefinitions.All(IsCSharpLexicalLocalFunctionCandidate))
+                return [];
         }
 
         if (workspaceDefinitions.Count == 0 || !HasSingleLspDefinitionTarget(workspaceDefinitions))
@@ -77,6 +105,11 @@ internal sealed partial class LspServer : IDisposable
     }
 
     private List<DefinitionResult> ResolveReferenceTargetsAtPosition(PositionTokenContext context)
+        => ResolveReferenceTargetsAtPosition(context, out _);
+
+    private List<DefinitionResult> ResolveReferenceTargetsAtPosition(
+        PositionTokenContext context,
+        out bool authoritativeUnresolved)
     {
         var resolution = _reader.GetReferencePositionResolution(
             context.IndexedPath,
@@ -84,6 +117,13 @@ internal sealed partial class LspServer : IDisposable
             context.Line + 1,
             context.StartCharacter + 1,
             MaxReferencePositionCandidates);
+        // Only extraction-owned shadow/incomplete markers are authoritative negative evidence;
+        // ordinary zero-candidate rows still need the legacy same-name fallback.
+        // extraction所有のshadow/incomplete markerだけを権威ある否定根拠とし、通常の候補0件rowは
+        // 従来どおり同名fallbackを許可する。
+        authoritativeUnresolved = resolution.IdentityAvailable
+            && !resolution.CandidatesTruncated
+            && resolution.ExplicitNegativeEvidence;
         if (!resolution.IdentityAvailable || resolution.CandidatesTruncated)
             return [];
 
@@ -120,6 +160,22 @@ internal sealed partial class LspServer : IDisposable
             return onlyDefinition == null ? [] : [onlyDefinition];
         }
 
+        // Generic candidate paths exclude lexical local functions, so a persisted all-local
+        // candidate set is the winning lexical overload family even without invocation arity.
+        // 汎用candidate経路は字句local functionを除外するため、全候補がlocalなら、invocation
+        // arityが無いmethod groupでも永続化済み集合が勝者の字句overload familyとなる。
+        if (resolution.Candidates.Count > 0
+            && resolution.Candidates.All(candidate =>
+                IsCSharpLexicalLocalFunctionCandidate(candidate.Definition)))
+        {
+            return resolution.Candidates
+                .Select(candidate => _reader.GetDefinitionForSymbol(candidate.Definition))
+                .OfType<DefinitionResult>()
+                .OrderBy(definition => definition.Path, StringComparer.Ordinal)
+                .ThenBy(definition => definition.StartLine)
+                .ToList();
+        }
+
         var typeFamilyKeys = resolution.Candidates
             .Select(candidate =>
                 LogicalPartialSymbolGrouper.TryBuildTypeFamilyKeyForReferenceResolution(
@@ -147,6 +203,31 @@ internal sealed partial class LspServer : IDisposable
             .ThenBy(definition => definition.StartLine)
             .ToList();
     }
+
+    private static bool IsCSharpLexicalLocalFunctionCandidate(SymbolResult definition) =>
+        string.Equals(definition.Lang, "csharp", StringComparison.OrdinalIgnoreCase)
+        && definition.Kind == "function"
+        && (definition.ContainerKind is "function" or "test.method" or "lambda" or "property"
+            || (definition.ContainerKind == null
+                && definition.ContainerName == null
+                && definition.ContainerQualifiedName == null));
+
+    private IReadOnlyList<ReferenceResult> GetReferencesForCSharpLexicalLocalFunctionTargets(
+        IReadOnlyList<DefinitionResult> definitions) =>
+        definitions
+            .SelectMany(definition =>
+                _reader.GetReferencesForDefinition(definition, DefaultLimit))
+            .GroupBy(reference => (
+                reference.Path,
+                reference.Line,
+                reference.Column,
+                reference.ReferenceKind))
+            .Select(group => group.First())
+            .OrderBy(reference => reference.Path, StringComparer.Ordinal)
+            .ThenBy(reference => reference.Line)
+            .ThenBy(reference => reference.Column)
+            .Take(DefaultLimit)
+            .ToList();
 
     private bool TryGetCSharpInvocationArgumentCount(PositionTokenContext context, out int argumentCount)
     {
