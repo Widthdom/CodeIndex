@@ -33,14 +33,18 @@ public partial class DbReader
 
     private DependencyCycleQueryExpressions BuildDependencyCycleQueryExpressions(DependencyQueryRequest request)
     {
+        var hasCurrentReferenceIdentityContract = HasCurrentReferenceIdentityContractForRead();
         var markdownExplicitLink = _referenceColumns.Contains("target_qualifier")
             ? "(src.lang = 'markdown' AND r.reference_kind = 'reference' AND r.target_qualifier IS NOT NULL AND dst.path = markdown_resolve_path(src.path, r.target_qualifier))"
             : "0 = 1";
-        var resolvedCSharpNonTarget = _referenceColumns.Contains("target_symbol_id")
+        var resolvedCSharpNonTarget = hasCurrentReferenceIdentityContract
+                                      && _referenceColumns.Contains("target_symbol_id")
             ? "(r.resolution_state = 'resolved' AND r.target_symbol_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM symbols confirmed_target WHERE confirmed_target.id = r.target_symbol_id AND confirmed_target.file_id = dst.id))"
             : "0 = 1";
-        var csharpNonAuthoritativeQualifiedCall = _referenceColumns.Contains("target_qualifier")
+        var csharpNonAuthoritativeQualifiedCall = hasCurrentReferenceIdentityContract
+                                                   && _referenceColumns.Contains("target_qualifier")
                                                    && _referenceColumns.Contains("resolution_state")
+                                                   && _referenceColumns.Contains("target_symbol_id")
             ? "(src.lang = 'csharp' AND r.reference_kind = 'call' AND r.target_qualifier IS NOT NULL AND (COALESCE(r.resolution_state, 'unresolved') NOT IN ('resolved', 'resolved_group') OR "
               + resolvedCSharpNonTarget
               + "))"
@@ -62,7 +66,7 @@ public partial class DbReader
                 ? " WHERE suppression_reason IS NULL"
                 : string.Empty,
             request.Reverse ? "dst" : "src",
-            _referenceColumns.Contains("resolution_state")
+            hasCurrentReferenceIdentityContract && _referenceColumns.Contains("resolution_state")
                 ? "COALESCE(r.resolution_state, 'unavailable')"
                 : "'unavailable'");
     }

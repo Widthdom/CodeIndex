@@ -907,7 +907,9 @@ public static partial class QueryCommandRunner
                 {
                     CommandErrorWriter.WriteStderr(BuildZeroResultLine("No dependency cycles found", options));
                     if (dependencyCycleAnalysis is { Truncated: true })
-                        CommandErrorWriter.WriteStderr(BuildDependencyCycleTruncationWarning(dependencyCycleAnalysis));
+                        CommandErrorWriter.WriteStderr(BuildDependencyCycleTruncationWarning(
+                            dependencyCycleAnalysis,
+                            options.IncludeAllDependencyCycleNodes));
                     WriteSqlGraphContractWarningIfNeeded(json: false, sqlGraphSignal, reader, options);
                 }
                 return ZeroResultExitCode(options);
@@ -915,9 +917,20 @@ public static partial class QueryCommandRunner
 
             if (depsFormat is OutputFormatDot or OutputFormatGraphMl or OutputFormatJsonGraph)
             {
-                WriteGraphLiveness("deps", "write_output", options, depsFormat, rows: outputEdges.Count, cycleCount: cycles.Count, machineReadable: machineReadable);
+                var graphEdges = outputEdges;
+                IReadOnlyList<string>? graphNodes = null;
+                if (dependencyCycleAnalysis != null)
+                {
+                    var graphProjection = BuildDependencyCycleGraphProjection(
+                        outputEdges,
+                        dependencyCycleAnalysis.Components,
+                        options.IncludeAllDependencyCycleNodes);
+                    graphEdges = graphProjection.Edges;
+                    graphNodes = graphProjection.Nodes;
+                }
+                WriteGraphLiveness("deps", "write_output", options, depsFormat, rows: graphEdges.Count, cycleCount: cycles.Count, machineReadable: machineReadable);
                 var writeExitCode = WriteDependencyGraph(
-                    outputEdges,
+                    graphEdges,
                     depsFormat,
                     jsonOptions,
                     reader,
@@ -929,9 +942,23 @@ public static partial class QueryCommandRunner
                         : payload => AddDependencyCycleAnalysisJsonFields(
                             payload,
                             dependencyCycleAnalysis,
-                            includeAllNodes: options.IncludeAllDependencyCycleNodes));
-                if ((depsFormat is OutputFormatDot or OutputFormatGraphMl) && dependencyCycleAnalysis is { Truncated: true })
-                    CommandErrorWriter.WriteStderr(BuildDependencyCycleTruncationWarning(dependencyCycleAnalysis));
+                            includeAllNodes: options.IncludeAllDependencyCycleNodes),
+                    graphNodes);
+                if (depsFormat is OutputFormatDot or OutputFormatGraphMl)
+                {
+                    if (dependencyCycleAnalysis != null
+                        && !options.IncludeAllDependencyCycleNodes
+                        && HasTruncatedReturnedDependencyCycleNodeDisplay(dependencyCycleAnalysis))
+                    {
+                        CommandErrorWriter.WriteStderr(BuildDependencyCycleGraphDisplayWarning(dependencyCycleAnalysis));
+                    }
+                    if (dependencyCycleAnalysis is { Truncated: true })
+                    {
+                        CommandErrorWriter.WriteStderr(BuildDependencyCycleTruncationWarning(
+                            dependencyCycleAnalysis,
+                            options.IncludeAllDependencyCycleNodes));
+                    }
+                }
                 return writeExitCode;
             }
 
@@ -980,7 +1007,9 @@ public static partial class QueryCommandRunner
                         : string.Empty;
                     CommandErrorWriter.WriteStderr($"({cycles.Count} dependency cycles{truncationNote})");
                     if (dependencyCycleAnalysis is { Truncated: true })
-                        CommandErrorWriter.WriteStderr(BuildDependencyCycleTruncationWarning(dependencyCycleAnalysis));
+                        CommandErrorWriter.WriteStderr(BuildDependencyCycleTruncationWarning(
+                            dependencyCycleAnalysis,
+                            options.IncludeAllDependencyCycleNodes));
                     WriteSqlGraphContractWarningIfNeeded(json: false, sqlGraphSignal, reader, options);
                     return CommandExitCodes.Success;
                 }
@@ -1269,6 +1298,28 @@ public static partial class QueryCommandRunner
             .ToList();
     }
 
+    private sealed record DependencyCycleGraphProjection(
+        List<FileDependencyResult> Edges,
+        IReadOnlyList<string> Nodes);
+
+    private static DependencyCycleGraphProjection BuildDependencyCycleGraphProjection(
+        IReadOnlyList<FileDependencyResult> edges,
+        IReadOnlyList<DependencyCycleComponent> components,
+        bool includeAllNodes)
+    {
+        var nodes = components
+            .SelectMany(component => includeAllNodes
+                ? component.Nodes
+                : component.Nodes.Take(DefaultDependencyCycleNodeLimit))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        var nodeSet = nodes.ToHashSet(StringComparer.Ordinal);
+        var projectedEdges = edges
+            .Where(edge => nodeSet.Contains(edge.SourcePath) && nodeSet.Contains(edge.TargetPath))
+            .ToList();
+        return new DependencyCycleGraphProjection(projectedEdges, nodes);
+    }
+
     internal static JsonArray BuildDependencyCyclesJson(
         IReadOnlyList<DependencyCycleComponent> components,
         int pageOffset,
@@ -1489,17 +1540,35 @@ public static partial class QueryCommandRunner
     }
 
     private static bool HasTruncatedDependencyCycleNodeDisplay(DependencyCycleAnalysis analysis)
-        => analysis.Components.Any(static component => component.Nodes.Count > DefaultDependencyCycleNodeLimit)
+        => HasTruncatedReturnedDependencyCycleNodeDisplay(analysis)
            || analysis.LargestComponent is { Nodes.Count: > DefaultDependencyCycleNodeLimit };
+
+    private static bool HasTruncatedReturnedDependencyCycleNodeDisplay(DependencyCycleAnalysis analysis)
+        => analysis.Components.Any(static component => component.Nodes.Count > DefaultDependencyCycleNodeLimit);
+
+    private static string BuildDependencyCycleGraphDisplayWarning(DependencyCycleAnalysis analysis)
+    {
+        var truncatedComponents = analysis.Components
+            .Where(static component => component.Nodes.Count > DefaultDependencyCycleNodeLimit)
+            .ToList();
+        var omittedNodeCount = truncatedComponents.Sum(
+            static component => component.Nodes.Count - DefaultDependencyCycleNodeLimit);
+        var componentLabel = truncatedComponents.Count == 1 ? "component" : "components";
+        return $"Warning: dependency cycle graph presentation is limited to {DefaultDependencyCycleNodeLimit} nodes per component; "
+               + $"{omittedNodeCount} nodes are omitted across {truncatedComponents.Count} returned {componentLabel}. "
+               + "SCC analysis metrics remain unchanged; rerun with --all-cycle-nodes for complete graph output.";
+    }
 
     private static string BuildDependencyCycleTruncationSummary(DependencyCycleAnalysis analysis)
         => analysis.TruncatedReason == "page_limit"
             ? $"page complete: showing ranked cycles {analysis.PageOffset + 1}-{analysis.PageOffset + analysis.Components.Count}"
             : $"partial analysis: graph edge budget reached after {analysis.GraphEdgeCount} edges";
 
-    private static string BuildDependencyCycleTruncationWarning(DependencyCycleAnalysis analysis)
+    private static string BuildDependencyCycleTruncationWarning(
+        DependencyCycleAnalysis analysis,
+        bool includeAllNodes)
     {
-        var nextSteps = BuildDependencyCycleNextStepFlags(analysis, mcpArguments: false, includeAllNodes: false);
+        var nextSteps = BuildDependencyCycleNextStepFlags(analysis, mcpArguments: false, includeAllNodes);
         var nextStepsText = nextSteps.Count == 0
             ? string.Empty
             : $" Next steps: {string.Join(", ", nextSteps)}.";
@@ -1962,12 +2031,16 @@ public static partial class QueryCommandRunner
         QueryCommandOptions options,
         SqlGraphContractSignal sqlGraphSignal,
         DependencySymbolFilterSummary symbolFilter,
-        Action<JsonObject>? addExtraJsonFields = null)
+        Action<JsonObject>? addExtraJsonFields = null,
+        IReadOnlyList<string>? explicitNodes = null)
     {
         switch (format)
         {
             case OutputFormatDot:
                 Console.WriteLine("digraph deps {");
+                if (explicitNodes != null)
+                    foreach (var node in explicitNodes)
+                        Console.WriteLine($"  \"{EscapeDot(node)}\";");
                 foreach (var edge in edges)
                     Console.WriteLine($"  \"{EscapeDot(edge.SourcePath)}\" -> \"{EscapeDot(edge.TargetPath)}\" [label=\"{edge.ReferenceCount}\"];");
                 Console.WriteLine("}");
@@ -1975,14 +2048,23 @@ public static partial class QueryCommandRunner
             case OutputFormatGraphMl:
                 Console.WriteLine("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
                 Console.WriteLine("<graphml xmlns=\"http://graphml.graphdrawing.org/xmlns\"><graph edgedefault=\"directed\">");
-                foreach (var node in edges.SelectMany(edge => new[] { edge.SourcePath, edge.TargetPath }).Distinct(StringComparer.Ordinal))
+                foreach (var node in explicitNodes
+                         ?? edges.SelectMany(edge => new[] { edge.SourcePath, edge.TargetPath }).Distinct(StringComparer.Ordinal).ToList())
                     Console.WriteLine($"<node id=\"{System.Security.SecurityElement.Escape(node)}\" />");
                 foreach (var edge in edges)
                     Console.WriteLine($"<edge source=\"{System.Security.SecurityElement.Escape(edge.SourcePath)}\" target=\"{System.Security.SecurityElement.Escape(edge.TargetPath)}\"><data key=\"references\">{edge.ReferenceCount}</data></edge>");
                 Console.WriteLine("</graph></graphml>");
                 return CommandExitCodes.Success;
             case OutputFormatJsonGraph:
-                return WriteDependencyJsonGraph(edges, jsonOptions, reader, options, sqlGraphSignal, symbolFilter, addExtraJsonFields);
+                return WriteDependencyJsonGraph(
+                    edges,
+                    jsonOptions,
+                    reader,
+                    options,
+                    sqlGraphSignal,
+                    symbolFilter,
+                    addExtraJsonFields,
+                    explicitNodes);
             default:
                 return CommandExitCodes.Success;
         }
@@ -1995,16 +2077,20 @@ public static partial class QueryCommandRunner
         QueryCommandOptions options,
         SqlGraphContractSignal sqlGraphSignal,
         DependencySymbolFilterSummary symbolFilter,
-        Action<JsonObject>? addExtraJsonFields = null)
+        Action<JsonObject>? addExtraJsonFields = null,
+        IReadOnlyList<string>? explicitNodes = null)
     {
-        var seenNodes = new HashSet<string>(StringComparer.Ordinal);
-        var nodes = new List<string>();
-        foreach (var edge in edges)
+        var nodes = explicitNodes?.ToList() ?? [];
+        if (explicitNodes == null)
         {
-            if (seenNodes.Add(edge.SourcePath))
-                nodes.Add(edge.SourcePath);
-            if (seenNodes.Add(edge.TargetPath))
-                nodes.Add(edge.TargetPath);
+            var seenNodes = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var edge in edges)
+            {
+                if (seenNodes.Add(edge.SourcePath))
+                    nodes.Add(edge.SourcePath);
+                if (seenNodes.Add(edge.TargetPath))
+                    nodes.Add(edge.TargetPath);
+            }
         }
 
         var payload = new JsonObject { ["count"] = edges.Count };

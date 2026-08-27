@@ -82,6 +82,56 @@ public partial class QueryCommandRunnerTests
         Assert.Contains("(1 dependency cycles)", expandedHumanStderr);
         Assert.Contains("src/Node54.cs", expandedHumanStdout);
         Assert.DoesNotContain("nodes omitted", expandedHumanStdout);
+
+        var (jsonGraphExitCode, jsonGraphStdout, jsonGraphStderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+            ["--db", dbPath, "--cycles", "--format", "json-graph", "--limit", "1", "--lang", "csharp"],
+            _jsonOptions));
+        using var jsonGraphDocument = ParseJsonOutput(jsonGraphStdout);
+        var jsonGraph = jsonGraphDocument.RootElement;
+        var graphNodes = jsonGraph.GetProperty("nodes").EnumerateArray().ToArray();
+        var graphNodeIds = graphNodes
+            .Select(static node => node.GetProperty("id").GetString())
+            .ToHashSet(StringComparer.Ordinal);
+        Assert.Equal(CommandExitCodes.Success, jsonGraphExitCode);
+        Assert.Equal(string.Empty, jsonGraphStderr);
+        Assert.Equal(QueryCommandRunner.DefaultDependencyCycleNodeLimit, graphNodes.Length);
+        Assert.DoesNotContain("src/Node54.cs", graphNodeIds);
+        Assert.All(jsonGraph.GetProperty("edges").EnumerateArray(), edge =>
+        {
+            Assert.Contains(edge.GetProperty("source").GetString(), graphNodeIds);
+            Assert.Contains(edge.GetProperty("target").GetString(), graphNodeIds);
+        });
+        Assert.True(jsonGraph.GetProperty("display_truncated").GetBoolean());
+
+        var (expandedGraphExitCode, expandedGraphStdout, expandedGraphStderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+            ["--db", dbPath, "--cycles", "--format", "json-graph", "--all-cycle-nodes", "--limit", "1", "--lang", "csharp"],
+            _jsonOptions));
+        using var expandedGraphDocument = ParseJsonOutput(expandedGraphStdout);
+        Assert.Equal(CommandExitCodes.Success, expandedGraphExitCode);
+        Assert.Equal(string.Empty, expandedGraphStderr);
+        Assert.Equal(nodeCount, expandedGraphDocument.RootElement.GetProperty("nodes").GetArrayLength());
+        Assert.Equal(nodeCount, expandedGraphDocument.RootElement.GetProperty("edges").GetArrayLength());
+        Assert.False(expandedGraphDocument.RootElement.GetProperty("display_truncated").GetBoolean());
+
+        foreach (var graphFormat in new[] { "dot", "graphml" })
+        {
+            var (graphExitCode, graphStdout, graphStderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+                ["--db", dbPath, "--cycles", "--format", graphFormat, "--limit", "1", "--lang", "csharp"],
+                _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, graphExitCode);
+            Assert.Contains("src/Node49.cs", graphStdout);
+            Assert.DoesNotContain("src/Node54.cs", graphStdout);
+            Assert.Contains("limited to 50 nodes per component", graphStderr);
+            Assert.Contains("5 nodes are omitted across 1 returned component", graphStderr);
+            Assert.Contains("--all-cycle-nodes", graphStderr);
+        }
+
+        var (budgetExitCode, _, budgetStderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+            ["--db", dbPath, "--cycles", "--all-cycle-nodes", "--graph-budget", "10", "--limit", "1", "--lang", "csharp"],
+            _jsonOptions));
+        Assert.Equal(CommandExitCodes.Success, budgetExitCode);
+        Assert.Contains("graph edge budget reached", budgetStderr);
+        Assert.DoesNotContain("--all-cycle-nodes", budgetStderr);
     }
 
     [Fact]
@@ -123,6 +173,52 @@ public partial class QueryCommandRunnerTests
         Assert.Equal(2, reason.GetProperty("edges_affected").GetInt32());
         Assert.Equal(2, reason.GetProperty("edges_removed").GetInt32());
         Assert.Equal(2, reason.GetProperty("references_removed").GetInt64());
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("0")]
+    public void RunDeps_CSharpNoiseSuppressionFailsClosedWithoutCurrentIdentityContract_Issue5197(
+        string? persistedContractVersion)
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_deps_stale_identity_cycle_5197");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        InsertFileWithSymbolsAndReferences(dbPath, "src/StaleA.cs", ["StaleA"], ["StaleB"]);
+        InsertFileWithSymbolsAndReferences(dbPath, "src/StaleB.cs", ["StaleB"], ["StaleA"]);
+        SetCycleReferenceResolution(dbPath, "src/StaleA.cs", "src/StaleB.cs", "unresolved");
+        SetCycleReferenceResolution(dbPath, "src/StaleB.cs", "src/StaleA.cs", "unresolved");
+        MarkDependencyGraphReady(dbPath);
+        SetReferenceIdentityContractVersion(dbPath, persistedContractVersion);
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+            ["--db", dbPath, "--json", "--cycles", "--suppress-noise", "--limit", "10", "--lang", "csharp"],
+            _jsonOptions));
+
+        using var document = ParseJsonOutput(stdout);
+        var json = document.RootElement;
+        var cycle = Assert.Single(json.GetProperty("cycles").EnumerateArray());
+        var nodes = cycle.GetProperty("nodes").EnumerateArray().Select(static node => node.GetString()).ToArray();
+        var resolution = Assert.Single(cycle
+            .GetProperty("retained_evidence")
+            .GetProperty("by_resolution_state")
+            .EnumerateArray());
+        var symbolFilter = json.GetProperty("symbol_filter");
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Equal(["src/StaleA.cs", "src/StaleB.cs"], nodes);
+        Assert.Equal("unavailable", resolution.GetProperty("resolution_state").GetString());
+        Assert.Equal(2, resolution.GetProperty("reference_count").GetInt64());
+        Assert.Equal(2, symbolFilter.GetProperty("references_before").GetInt64());
+        Assert.Equal(2, symbolFilter.GetProperty("references_after").GetInt64());
+        Assert.False(symbolFilter.TryGetProperty("suppression_reasons", out _));
+    }
+
+    private static void SetReferenceIdentityContractVersion(string dbPath, string? persistedContractVersion)
+    {
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+        var writer = new DbWriter(db.Connection);
+        writer.SetMeta(DbContext.ReferenceIdentityContractVersionMetaKey, persistedContractVersion);
     }
 
     private static void SetCycleReferenceResolution(
