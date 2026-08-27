@@ -583,7 +583,10 @@ reports the resolved archive and database paths. Use `--redact-paths` before
 sharing an archive outside the source machine. This opt-in mode removes the
 project root from both manifest and snapshot, replaces absolute POSIX, Windows,
 or file-URI scope values and unknown-extension path samples with `[redacted]`,
-then vacuums the copied snapshot before computing `database_sha256`. Indexed
+including the grouped samples exposed by `status`. Malformed or over-budget
+path-sample metadata is removed from the private copy instead of being retained
+under a completed-redaction claim. The exporter then vacuums the copied snapshot
+once before computing `database_sha256`. Indexed
 repository-relative paths, source text, hashes, readiness, and commit provenance
 are retained. Export JSON and the manifest expose `path_redaction_requested`,
 `path_redaction_complete`, and `path_redaction_omitted_categories`; top-level
@@ -4302,7 +4305,9 @@ stamp、readiness state、unknown-extension summary、export scope が含まれ�
 database path を報告します。source machine の外へ共有する前に `--redact-paths` を指定してください。
 この opt-in mode は manifest と snapshot の両方から project root を除去し、scope と
 unknown-extension path sample に含まれる POSIX / Windows / file URI 形式の絶対 path を
-`[redacted]` に置換してから、copy 済み snapshot を vacuum し、その後で
+`[redacted]` に置換し、`status` が公開する group 別 sample も同様に処理します。不正または
+上限超過の path-sample metadata は redaction 完了と報告したまま保持せず、private copy から
+削除します。その後 copy 済み snapshot を一度だけ vacuum し、
 `database_sha256` を計算します。repository-relative な indexed path、source text、hash、
 readiness、commit provenance は維持します。export JSON と manifest は
 `path_redaction_requested`、`path_redaction_complete`、

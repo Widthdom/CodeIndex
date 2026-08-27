@@ -186,6 +186,7 @@ internal static partial class ExportImportCommandRunner
                     appVersion,
                     redaction.Scope,
                     scopeOptions.RedactPaths,
+                    redaction.Complete,
                     redaction.OmittedCategories,
                     cancellationToken);
             }
@@ -202,6 +203,7 @@ internal static partial class ExportImportCommandRunner
                     appVersion,
                     redaction.Scope,
                     scopeOptions.RedactPaths,
+                    redaction.Complete,
                     redaction.OmittedCategories,
                     cancellationToken);
             }

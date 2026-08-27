@@ -98,6 +98,9 @@ public class ExportImportCommandRunnerIssue5195Tests
             Assert.Contains(
                 manifest.GetProperty("path_redaction_omitted_categories").EnumerateArray(),
                 category => category.GetString() == "unknown_extension_files");
+            Assert.Contains(
+                manifest.GetProperty("path_redaction_omitted_categories").EnumerateArray(),
+                category => category.GetString() == "unknown_extension_groups");
             Assert.Equal("[redacted]", manifest.GetProperty("unknown_extension_files")[0].GetString());
             Assert.Equal("[redacted]", manifest.GetProperty("unknown_extension_files")[1].GetString());
             Assert.Equal("docs/relative.baz", manifest.GetProperty("unknown_extension_files")[2].GetString());
@@ -110,6 +113,14 @@ public class ExportImportCommandRunnerIssue5195Tests
                 Assert.Equal("[redacted]", paths.RootElement[1].GetString());
                 Assert.Equal("docs/relative.baz", paths.RootElement[2].GetString());
             }
+            var groups = UnknownExtensionClassifier.DeserializeGroups(
+                ReadMetaValue(extractedDb, DbContext.UnknownExtensionGroupsMetaKey));
+            Assert.NotNull(groups);
+            var groupedSamples = groups.SelectMany(group => group.SamplePaths).ToArray();
+            Assert.DoesNotContain(posixSample, groupedSamples);
+            Assert.DoesNotContain(windowsSample, groupedSamples);
+            Assert.Equal(2, groupedSamples.Count(path => path == "[redacted]"));
+            Assert.Contains("docs/relative.baz", groupedSamples);
             Assert.DoesNotContain(projectRoot, Encoding.UTF8.GetString(File.ReadAllBytes(extractedDb)), StringComparison.Ordinal);
             Assert.Equal(
                 Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(extractedDb))).ToLowerInvariant(),
@@ -167,6 +178,70 @@ public class ExportImportCommandRunnerIssue5195Tests
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
             TestProjectHelper.DeleteDirectory(importRoot);
+        }
+    }
+
+    [Fact]
+    public void RunExportArchive_RedactsLargeListsAndDeletesUnsafePathMetadata_Issue5195()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("export_unsafe_path_metadata_5195");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var largePaths = Enumerable.Range(0, 400)
+                .Select(index => @"C:\" + new string('\\', 120) + $"secret-{index}.foo")
+                .ToArray();
+            var largePathsJson = JsonStringListCodec.Serialize(largePaths);
+            Assert.True(largePathsJson.Length > 64 * 1024);
+
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.SetMeta(DbContext.UnknownExtensionFilePathsMetaKey, largePathsJson);
+                writer.SetMeta(
+                    DbContext.UnknownExtensionGroupsMetaKey,
+                    "[{\"extension\":\".foo\",\"sample_paths\":[\"/Users/alice/group-secret.foo\"]");
+                writer.SetMeta(
+                    DbContext.WorkspaceVerificationPendingPathsMetaKey,
+                    JsonStringListCodec.Serialize(
+                        ["/" + new string('x', JsonStringListCodec.MaxRawJsonCharacters)]));
+            }
+            SqliteConnection.ClearAllPools();
+
+            var archivePath = Path.Combine(projectRoot, "unsafe-metadata.cdidx.zip");
+            var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
+                ExportImportCommandRunner.RunExport(
+                    [archivePath, "--db", dbPath, "--redact-paths", "--json"],
+                    jsonOptions,
+                    "test"));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var result = JsonDocument.Parse(stdout);
+            Assert.True(result.RootElement.GetProperty("path_redaction_complete").GetBoolean());
+            var categories = result.RootElement
+                .GetProperty("path_redaction_omitted_categories")
+                .EnumerateArray();
+            Assert.Contains(categories, category => category.GetString() == "unknown_extension_files");
+            Assert.Contains(categories, category => category.GetString() == "unknown_extension_groups");
+            Assert.Contains(categories, category => category.GetString() == "workspace_pending_paths");
+
+            var extractedDb = ExtractDatabase(projectRoot, archivePath, "unsafe-metadata.db");
+            var redactedPaths = JsonStringListCodec.Deserialize(
+                ReadMetaValue(extractedDb, DbContext.UnknownExtensionFilePathsMetaKey));
+            Assert.NotNull(redactedPaths);
+            Assert.Equal(largePaths.Length, redactedPaths.Count);
+            Assert.All(redactedPaths, path => Assert.Equal("[redacted]", path));
+            Assert.Null(ReadMetaValue(extractedDb, DbContext.UnknownExtensionGroupsMetaKey));
+            Assert.Null(ReadMetaValue(extractedDb, DbContext.WorkspaceVerificationPendingPathsMetaKey));
+            var extractedBytes = Encoding.UTF8.GetString(File.ReadAllBytes(extractedDb));
+            Assert.DoesNotContain("group-secret.foo", extractedBytes, StringComparison.Ordinal);
+            Assert.DoesNotContain("secret-0.foo", extractedBytes, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }
 
@@ -240,6 +315,10 @@ public class ExportImportCommandRunnerIssue5195Tests
             DbContext.UnknownExtensionDiagnosticsVersion.ToString(System.Globalization.CultureInfo.InvariantCulture));
         writer.SetMeta(DbContext.UnknownExtensionFileCountMetaKey, paths.Length.ToString(System.Globalization.CultureInfo.InvariantCulture));
         writer.SetMeta(DbContext.UnknownExtensionFilePathsMetaKey, JsonSerializer.Serialize(paths));
+        var classification = UnknownExtensionClassifier.Classify(paths);
+        writer.SetMeta(
+            DbContext.UnknownExtensionGroupsMetaKey,
+            UnknownExtensionClassifier.SerializeGroups(classification.Groups));
         writer.SetMeta(DbContext.UnknownExtensionFilesTruncatedMetaKey, bool.FalseString);
         writer.SetMeta(
             DbContext.UnknownExtensionFilePathLimitMetaKey,

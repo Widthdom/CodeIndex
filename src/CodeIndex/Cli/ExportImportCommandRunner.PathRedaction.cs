@@ -1,4 +1,3 @@
-using System.Text.Json;
 using CodeIndex.Database;
 using Microsoft.Data.Sqlite;
 
@@ -8,6 +7,7 @@ internal static partial class ExportImportCommandRunner
 {
     private readonly record struct ArchivePathRedactionResult(
         ArchiveExportScopeResult Scope,
+        bool Complete,
         string[] OmittedCategories);
 
     private static ArchivePathRedactionResult ApplyArchivePathRedaction(
@@ -17,7 +17,7 @@ internal static partial class ExportImportCommandRunner
         CancellationToken cancellationToken)
     {
         if (!redactPaths)
-            return new ArchivePathRedactionResult(scope, []);
+            return new ArchivePathRedactionResult(scope, Complete: false, []);
 
         cancellationToken.ThrowIfCancellationRequested();
         var omittedCategories = new HashSet<string>(StringComparer.Ordinal);
@@ -40,6 +40,10 @@ internal static partial class ExportImportCommandRunner
                 DbContext.UnknownExtensionFilePathsMetaKey,
                 "unknown_extension_files",
                 omittedCategories);
+            RedactPersistedUnknownExtensionGroups(
+                connection,
+                transaction,
+                omittedCategories);
             RedactPersistedPathList(
                 connection,
                 transaction,
@@ -59,6 +63,7 @@ internal static partial class ExportImportCommandRunner
         cancellationToken.ThrowIfCancellationRequested();
         return new ArchivePathRedactionResult(
             redactedScope,
+            Complete: true,
             omittedCategories.Order(StringComparer.Ordinal).ToArray());
     }
 
@@ -119,27 +124,81 @@ internal static partial class ExportImportCommandRunner
         HashSet<string> omittedCategories)
     {
         var raw = ReadMetaString(connection, key, transaction);
-        if (string.IsNullOrWhiteSpace(raw) || raw.Length > MaxImportManifestBytes)
+        if (raw == null)
             return;
 
-        string[]? paths;
-        try
+        var paths = JsonStringListCodec.Deserialize(raw);
+        if (paths == null)
         {
-            paths = JsonSerializer.Deserialize<string[]>(raw);
-        }
-        catch (JsonException)
-        {
+            DeletePersistedPathMetadata(connection, transaction, key);
+            omittedCategories.Add(category);
             return;
         }
-        if (paths == null || !paths.Any(LooksLikeMachineAbsolutePath))
-            return;
 
         var redacted = RedactArchivePathValues(paths, category, omittedCategories);
+        UpdatePersistedPathMetadata(
+            connection,
+            transaction,
+            key,
+            JsonStringListCodec.Serialize(redacted));
+    }
+
+    private static void RedactPersistedUnknownExtensionGroups(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        HashSet<string> omittedCategories)
+    {
+        var raw = ReadMetaString(connection, DbContext.UnknownExtensionGroupsMetaKey, transaction);
+        if (raw == null)
+            return;
+
+        var groups = UnknownExtensionClassifier.DeserializeGroups(raw);
+        if (groups == null)
+        {
+            DeletePersistedPathMetadata(connection, transaction, DbContext.UnknownExtensionGroupsMetaKey);
+            omittedCategories.Add("unknown_extension_groups");
+            return;
+        }
+
+        foreach (var group in groups)
+        {
+            group.SamplePaths = RedactArchivePathValues(
+                    group.SamplePaths,
+                    "unknown_extension_groups",
+                    omittedCategories)
+                .ToList();
+        }
+
+        UpdatePersistedPathMetadata(
+            connection,
+            transaction,
+            DbContext.UnknownExtensionGroupsMetaKey,
+            UnknownExtensionClassifier.SerializeGroups(groups));
+    }
+
+    private static void UpdatePersistedPathMetadata(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        string key,
+        string value)
+    {
         using var update = connection.CreateCommand();
         update.Transaction = transaction;
         update.CommandText = "UPDATE codeindex_meta SET value = @value WHERE key = @key";
-        SqliteCommandPolicy.Add(update, "@value", JsonSerializer.Serialize(redacted));
+        SqliteCommandPolicy.Add(update, "@value", value);
         SqliteCommandPolicy.Add(update, "@key", key);
         update.ExecuteNonQuery();
+    }
+
+    private static void DeletePersistedPathMetadata(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        string key)
+    {
+        using var delete = connection.CreateCommand();
+        delete.Transaction = transaction;
+        delete.CommandText = "DELETE FROM codeindex_meta WHERE key = @key";
+        SqliteCommandPolicy.Add(delete, "@key", key);
+        delete.ExecuteNonQuery();
     }
 }

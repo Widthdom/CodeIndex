@@ -63,7 +63,9 @@ Portable archive path privacy is opt-in for compatibility. Default exports retai
 values, and resolved success paths. `--redact-paths` must operate only on the
 private copied snapshot: resolve and apply scope first, delete the copied project
 root, replace absolute POSIX/Windows/file-URI scope values and persisted
-path-sample values with `[redacted]`, then run `VACUUM` before computing
+flat and grouped path-sample values with `[redacted]`, and fail closed by deleting
+malformed or over-budget path metadata from the copy. Run exactly one final
+`VACUUM` after scope and redaction before computing
 `database_sha256`. Successful manifest and export JSON must keep
 `path_redaction_requested`, `path_redaction_complete`, and bounded stable
 `path_redaction_omitted_categories` synchronized. Redacted success output must
@@ -4265,7 +4267,9 @@ portable archive の path privacy は互換性のため opt-in です。既定 e
 success path を保持します。`--redact-paths` は private な copy 済み snapshot だけを変更します。
 最初に scope を解決・適用し、copy 側の project root を削除して、POSIX / Windows /
 file URI 形式の絶対 scope value と永続化済み path sample を `[redacted]` に置換します。
-その後 `VACUUM` を実行してから `database_sha256` を計算します。成功時の manifest と
+flat / group 別 sample の両方を対象とし、不正または上限超過の path metadata は fail-closed
+として copy から削除します。scope と redaction の後に最終 `VACUUM` を一度だけ実行してから
+`database_sha256` を計算します。成功時の manifest と
 export JSON では `path_redaction_requested`、`path_redaction_complete`、上限付きで安定した
 `path_redaction_omitted_categories` を同期させます。redacted success output は解決済み
 archive / database / source-root path を再表示してはいけません。repository-relative な

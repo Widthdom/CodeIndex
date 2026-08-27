@@ -19,6 +19,7 @@ internal static partial class ExportImportCommandRunner
         string appVersion,
         ArchiveExportScopeResult scope,
         bool pathRedactionRequested,
+        bool pathRedactionComplete,
         string[] pathRedactionOmittedCategories,
         CancellationToken cancellationToken)
     {
@@ -75,7 +76,7 @@ internal static partial class ExportImportCommandRunner
             IndexIncompleteReasons: indexIncompleteReasons,
             Scope: scope,
             PathRedactionRequested: pathRedactionRequested,
-            PathRedactionComplete: pathRedactionRequested,
+            PathRedactionComplete: pathRedactionComplete,
             PathRedactionOmittedCategories: pathRedactionOmittedCategories);
     }
 
