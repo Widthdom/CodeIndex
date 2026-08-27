@@ -274,12 +274,15 @@ public static partial class IndexCommandRunner
             var ftsOptimization = status.MaintenanceGuidance.FtsOptimization;
             var writesSinceOptimize = ftsOptimization.ObservedWrites;
             stopwatch.Stop();
+            var displayDbPath = showPaths
+                ? dbPath
+                : MaintenanceDatabaseErrorClassifier.FormatPathForOutput(errorDbPath, showPaths: false);
 
             var result = new OptimizeFtsPreviewJsonResult
             {
                 Status = "dry_run",
                 DryRun = true,
-                DbPath = dbPath,
+                DbPath = displayDbPath,
                 WritesSinceOptimizeBefore = checked((int)Math.Min(writesSinceOptimize, int.MaxValue)),
                 WritesSinceOptimizeAfter = checked((int)Math.Min(writesSinceOptimize, int.MaxValue)),
                 ElapsedMs = stopwatch.ElapsedMilliseconds,
@@ -336,7 +339,7 @@ public static partial class IndexCommandRunner
             else
             {
                 CommandOutputWriter.WriteLine("FTS5 optimize preview (read-only; no changes made).");
-                CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("DB", dbPath, indent: "  "));
+                CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("DB", displayDbPath, indent: "  "));
                 CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("DB size", ConsoleUi.FormatBytes(result.DbSizeBytes ?? 0), indent: "  "));
                 CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Core size", ConsoleUi.FormatBytes(result.CoreTableSizeBytes ?? 0), indent: "  "));
                 CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("FTS size", ConsoleUi.FormatBytes(result.FtsSizeBytes ?? 0), indent: "  "));

@@ -205,6 +205,9 @@ public static partial class IndexCommandRunner
         var requestedDbPath = dbPath;
         dbPath = DbPathResolver.NormalizeDbPath(dbPath);
         var resolvedDbPath = Path.GetFullPath(dbPath);
+        var diagnosticDbPath = string.IsNullOrWhiteSpace(options.DbPathInput)
+            ? resolvedDbPath
+            : options.DbPathInput;
         var databaseExistedBeforeIndex = File.Exists(LongPath.EnsureWindowsPrefix(resolvedDbPath));
 
         if (!options.Json && !options.Quiet)
@@ -215,9 +218,11 @@ public static partial class IndexCommandRunner
                     options.ShowPaths)
                 : Path.GetFullPath(options.ProjectPath!);
             var databaseDisplayPath = options.OptimizeOnly
-                ? MaintenanceDatabaseErrorClassifier.FormatPathForOutput(
-                    resolvedDbPath,
-                    options.ShowPaths)
+                ? options.ShowPaths
+                    ? resolvedDbPath
+                    : MaintenanceDatabaseErrorClassifier.FormatPathForOutput(
+                        diagnosticDbPath,
+                        showPaths: false)
                 : resolvedDbPath;
             ConsoleUi.PrintBanner();
             CommandOutputWriter.WriteLine();
@@ -235,6 +240,7 @@ public static partial class IndexCommandRunner
                 options.ProjectPath,
                 options.DryRun,
                 showPaths: options.ShowPaths,
+                diagnosticDbPath: diagnosticDbPath,
                 queryOnlyDbPath: options.DryRun ? requestedDbPath : null);
 
         bool ignoreCase;
@@ -679,6 +685,9 @@ public sealed class IndexCommandOptions
     public bool ShowHelp { get; init; }
     public string? ProjectPath { get; init; }
     public string? DbPath { get; init; }
+    // Retain the exact --db token only for maintenance display; DbPath remains the stable I/O path.
+    // maintenance 表示専用に --db の元表記を保持し、I/O には引き続き安定した DbPath を使う。
+    internal string? DbPathInput { get; init; }
     public string? DataDir { get; init; }
     public bool Rebuild { get; init; }
     public bool Verbose { get; init; }

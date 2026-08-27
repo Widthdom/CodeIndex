@@ -71,6 +71,7 @@ public class CommandErrorWriterTests
     [InlineData("/Users/alice/private/codeindex.db")]
     [InlineData("/Users/alice/private/review-missing.db")]
     [InlineData(@"C:\Users\alice\private\codeindex.db")]
+    [InlineData(@"\\server\share\private\codeindex.db")]
     [InlineData("file:///Users/alice/private/codeindex.db?immutable=1")]
     public void MaintenanceClassifier_RedactsPlatformAbsolutePathsUnlessExplicitlyEnabled_Issue4856(
         string dbPath)

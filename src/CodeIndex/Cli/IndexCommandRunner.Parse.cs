@@ -371,6 +371,7 @@ public static partial class IndexCommandRunner
             // オプション解析の境界で絶対化し、以降の cwd 変化で相対パス計算が崩れないようにする。
             ProjectPath = AbsolutizePathOption(projectPath),
             DbPath = AbsolutizeDbPathOption(dbPath),
+            DbPathInput = dbPath,
             DataDir = AbsolutizePathOption(dataDir),
             Rebuild = rebuild,
             Verbose = verbose,
