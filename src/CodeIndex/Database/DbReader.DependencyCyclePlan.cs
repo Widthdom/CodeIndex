@@ -37,7 +37,7 @@ public partial class DbReader
             ? "(src.lang = 'markdown' AND r.reference_kind = 'reference' AND r.target_qualifier IS NOT NULL AND dst.path = markdown_resolve_path(src.path, r.target_qualifier))"
             : "0 = 1";
         var resolvedCSharpNonTarget = _referenceColumns.Contains("target_symbol_id")
-            ? "(r.resolution_state = 'resolved' AND r.target_symbol_id IS NOT NULL AND r.target_symbol_id <> s.id)"
+            ? "(r.resolution_state = 'resolved' AND r.target_symbol_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM symbols confirmed_target WHERE confirmed_target.id = r.target_symbol_id AND confirmed_target.file_id = dst.id))"
             : "0 = 1";
         var csharpNonAuthoritativeQualifiedCall = _referenceColumns.Contains("target_qualifier")
                                                    && _referenceColumns.Contains("resolution_state")

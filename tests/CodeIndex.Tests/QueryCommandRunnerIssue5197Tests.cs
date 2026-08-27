@@ -66,6 +66,22 @@ public partial class QueryCommandRunnerTests
         Assert.Equal("complete", expandedJson.GetProperty("node_materialization_mode").GetString());
         Assert.Equal(nodeCount, expandedCycle.GetProperty("nodes_returned").GetInt32());
         Assert.False(expandedCycle.GetProperty("nodes_truncated").GetBoolean());
+
+        var (humanExitCode, humanStdout, humanStderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+            ["--db", dbPath, "--cycles", "--limit", "1", "--lang", "csharp"],
+            _jsonOptions));
+        Assert.Equal(CommandExitCodes.Success, humanExitCode);
+        Assert.Contains("(1 dependency cycles)", humanStderr);
+        Assert.Contains("5 nodes omitted; rerun with --all-cycle-nodes", humanStdout);
+        Assert.DoesNotContain("src/Node54.cs", humanStdout);
+
+        var (expandedHumanExitCode, expandedHumanStdout, expandedHumanStderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+            ["--db", dbPath, "--cycles", "--all-cycle-nodes", "--limit", "1", "--lang", "csharp"],
+            _jsonOptions));
+        Assert.Equal(CommandExitCodes.Success, expandedHumanExitCode);
+        Assert.Contains("(1 dependency cycles)", expandedHumanStderr);
+        Assert.Contains("src/Node54.cs", expandedHumanStdout);
+        Assert.DoesNotContain("nodes omitted", expandedHumanStdout);
     }
 
     [Fact]
@@ -76,7 +92,7 @@ public partial class QueryCommandRunnerTests
         InsertFileWithSymbolsAndReferences(dbPath, "src/FallbackA.cs", ["FallbackA"], ["FallbackB"]);
         InsertFileWithSymbolsAndReferences(dbPath, "src/FallbackB.cs", ["FallbackB"], ["FallbackA"]);
         InsertFileWithSymbolsAndReferences(dbPath, "src/ResolvedA.cs", ["ResolvedA"], ["ResolvedB"]);
-        InsertFileWithSymbolsAndReferences(dbPath, "src/ResolvedB.cs", ["ResolvedB"], ["ResolvedA"]);
+        InsertFileWithSymbolsAndReferences(dbPath, "src/ResolvedB.cs", ["ResolvedB", "ResolvedB"], ["ResolvedA"]);
         InsertFileWithSymbolsAndReferences(dbPath, "src/ResolvedBDecoy.cs", ["ResolvedB"], ["ResolvedA"]);
         SetCycleReferenceResolution(dbPath, "src/FallbackA.cs", "src/FallbackB.cs", "unresolved");
         SetCycleReferenceResolution(dbPath, "src/FallbackB.cs", "src/FallbackA.cs", "resolved");

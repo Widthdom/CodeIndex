@@ -974,7 +974,7 @@ public static partial class QueryCommandRunner
                 if (options.DependencyCycles)
                 {
                     foreach (var cycle in cycles)
-                        Console.WriteLine(string.Join(" -> ", cycle.Concat([cycle[0]])));
+                        Console.WriteLine(BuildDependencyCycleHumanLine(cycle, options.IncludeAllDependencyCycleNodes));
                     var truncationNote = dependencyCycleAnalysis is { Truncated: true }
                         ? $"; {BuildDependencyCycleTruncationSummary(dependencyCycleAnalysis)}"
                         : string.Empty;
@@ -995,6 +995,19 @@ public static partial class QueryCommandRunner
             }
             return CommandExitCodes.Success;
         }, cancellationToken: cancellationToken);
+    }
+
+    private static string BuildDependencyCycleHumanLine(
+        IReadOnlyList<string> cycle,
+        bool includeAllNodes)
+    {
+        var materializationLimit = includeAllNodes ? cycle.Count : DefaultDependencyCycleNodeLimit;
+        var returnedNodes = cycle.Take(materializationLimit).ToList();
+        if (returnedNodes.Count == cycle.Count)
+            return string.Join(" -> ", returnedNodes.Concat([returnedNodes[0]]));
+
+        return string.Join(" -> ", returnedNodes)
+               + $" -> ... ({cycle.Count - returnedNodes.Count} nodes omitted; rerun with --all-cycle-nodes)";
     }
 
     private static void WriteDependencyCycleCursorMismatchError()

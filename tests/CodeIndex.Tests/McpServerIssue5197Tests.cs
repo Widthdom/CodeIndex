@@ -64,7 +64,7 @@ public partial class McpServerTests
         InsertDependencyReferences(writer, fallbackBId, ["McpFallbackA"]);
         InsertDependencySymbols(writer, resolvedAId, ["McpResolvedA"]);
         InsertDependencyReferences(writer, resolvedAId, ["McpResolvedB"]);
-        InsertDependencySymbols(writer, resolvedBId, ["McpResolvedB"]);
+        InsertDependencySymbols(writer, resolvedBId, ["McpResolvedB", "McpResolvedB"]);
         InsertDependencyReferences(writer, resolvedBId, ["McpResolvedA"]);
         InsertDependencySymbols(writer, resolvedBDecoyId, ["McpResolvedB"]);
         InsertDependencyReferences(writer, resolvedBDecoyId, ["McpResolvedA"]);
@@ -85,6 +85,7 @@ public partial class McpServerTests
         Assert.Equal(["src/McpResolvedA.cs", "src/McpResolvedB.cs"], nodes);
         Assert.Equal("csharp_non_authoritative_qualified_call", reason["reason"]!.GetValue<string>());
         Assert.Equal(2, reason["references_removed"]!.GetValue<long>());
+        Assert.True(cycle["retained_evidence"]!["classification_complete"]!.GetValue<bool>());
         Assert.True(payload["analysis_complete"]!.GetValue<bool>());
     }
 
