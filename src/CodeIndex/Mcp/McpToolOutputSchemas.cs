@@ -408,8 +408,12 @@ internal static class McpToolOutputSchemas
                 ["required"] = StringArray("nodes", "edges"),
                 ["properties"] = new JsonObject
                 {
-                    ["nodes"] = Reference("rows"),
-                    ["edges"] = Reference("rows"),
+                    ["nodes"] = ArraySchema(
+                        Reference("row"),
+                        QueryCommandRunner.MaxDependencyCycleGraphBudget),
+                    ["edges"] = ArraySchema(
+                        Reference("row"),
+                        QueryCommandRunner.MaxDependencyCycleGraphBudget),
                 },
                 ["maxProperties"] = MaxSchemaObjectProperties,
                 ["propertyNames"] = StringSchema(),

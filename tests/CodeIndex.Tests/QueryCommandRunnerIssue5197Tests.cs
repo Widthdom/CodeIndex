@@ -221,6 +221,37 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunDeps_CycleCursorRejectsEvidenceOnlyGraphChanges_Issue5197()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_deps_cycle_evidence_cursor_5197");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        InsertDependencyCycle(dbPath, "First", 2);
+        InsertDependencyCycle(dbPath, "Second", 2);
+        SetCycleReferenceResolution(dbPath, "src/First00.cs", "src/First01.cs", "resolved");
+        MarkDependencyGraphReady(dbPath);
+
+        var (firstExitCode, firstStdout, firstStderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+            ["--db", dbPath, "--json", "--cycles", "--limit", "1", "--lang", "csharp"],
+            _jsonOptions));
+        using var firstDocument = ParseJsonOutput(firstStdout);
+        var cursor = firstDocument.RootElement.GetProperty("next_cursor").GetString();
+
+        Assert.Equal(CommandExitCodes.Success, firstExitCode);
+        Assert.Equal(string.Empty, firstStderr);
+        Assert.False(string.IsNullOrEmpty(cursor));
+
+        SetCycleReferenceResolution(dbPath, "src/First00.cs", "src/First01.cs", "ambiguous");
+
+        var (secondExitCode, secondStdout, secondStderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+            ["--db", dbPath, "--json", "--cycles", "--limit", "1", "--cursor", cursor!, "--lang", "csharp"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, secondExitCode);
+        Assert.Equal(string.Empty, secondStdout);
+        Assert.Contains("cursor does not match", secondStderr, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RunDeps_CSharpNoiseSuppressionRemovesOnlyNonAuthoritativeQualifiedCalls_Issue5197()
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_deps_csharp_cycle_noise_5197");

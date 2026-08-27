@@ -130,7 +130,15 @@ public partial class McpServer
                     sqlGraphSignalPaths,
                     lang);
             var payload = new JsonObject { ["count"] = cyclesOnly ? cycles.Count : results.Count };
-            if (cyclesOnly)
+            if (cyclesOnly && format == "json-graph")
+            {
+                var graphProjection = QueryCommandRunner.BuildDependencyCycleGraphProjection(
+                    cycleAnalysis!.Edges,
+                    cycleAnalysis.Components,
+                    includeAllCycleNodes);
+                payload["graph"] = BuildJsonGraphPayload(graphProjection.Edges, graphProjection.Nodes);
+            }
+            else if (cyclesOnly)
             {
                 payload[summaryOnly ? "cycle_summaries" : "cycles"] = QueryCommandRunner.BuildDependencyCyclesJson(
                     cycleAnalysis!.Components,
@@ -175,11 +183,18 @@ public partial class McpServer
         });
     }
 
-    private static JsonObject BuildJsonGraphPayload(IReadOnlyList<FileDependencyResult> edges)
+    private static JsonObject BuildJsonGraphPayload(
+        IReadOnlyList<FileDependencyResult> edges,
+        IReadOnlyList<string>? projectedNodes = null)
     {
         var nodes = new JsonArray();
         var seenNodes = new HashSet<string>(StringComparer.Ordinal);
         var graphEdges = new JsonArray();
+        foreach (var node in projectedNodes ?? [])
+        {
+            if (seenNodes.Add(node))
+                nodes.Add(new JsonObject { ["id"] = node });
+        }
         foreach (var edge in edges)
         {
             if (seenNodes.Add(edge.SourcePath))

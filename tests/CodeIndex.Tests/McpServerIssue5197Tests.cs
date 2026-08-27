@@ -44,6 +44,28 @@ public partial class McpServerTests
         var depsSchema = Assert.Single(toolsListResponse["result"]!["tools"]!.AsArray())!["outputSchema"]!.AsObject();
         Assert.True(MatchesSchema(summary, depsSchema, depsSchema), summary.ToJsonString());
 
+        var jsonGraphRequest = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"deps","arguments":{"cycles":true,"format":"json-graph","limit":1,"lang":"csharp"}}}""")!;
+        var jsonGraphResponse = _server.HandleMessage(jsonGraphRequest)!;
+        var jsonGraph = jsonGraphResponse["result"]!["structuredContent"]!;
+        var graph = jsonGraph["graph"]!;
+        var graphNodes = graph["nodes"]!.AsArray();
+        var graphNodeIds = graphNodes
+            .Select(node => node!["id"]!.GetValue<string>())
+            .ToHashSet(StringComparer.Ordinal);
+
+        Assert.Null(jsonGraph["cycles"]);
+        Assert.Equal(QueryCommandRunner.DefaultDependencyCycleNodeLimit, graphNodes.Count);
+        Assert.All(graph["edges"]!.AsArray(), edge =>
+        {
+            Assert.Contains(edge!["source"]!.GetValue<string>(), graphNodeIds);
+            Assert.Contains(edge["target"]!.GetValue<string>(), graphNodeIds);
+        });
+        Assert.Equal(nodeCount, jsonGraph["returned_node_count"]!.GetValue<int>());
+        Assert.Equal(QueryCommandRunner.DefaultDependencyCycleNodeLimit, jsonGraph["returned_nodes_materialized"]!.GetValue<int>());
+        Assert.Equal(5, jsonGraph["returned_nodes_omitted_count"]!.GetValue<int>());
+        Assert.True(MatchesSchema(jsonGraph, depsSchema, depsSchema), jsonGraph.ToJsonString());
+
         var expandedRequest = JsonNode.Parse(
             """{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"deps","arguments":{"cycles":true,"includeAllCycleNodes":true,"limit":1,"lang":"csharp"}}}""")!;
         var expandedResponse = _server.HandleMessage(expandedRequest)!;
@@ -65,6 +87,12 @@ public partial class McpServerTests
         Assert.Equal(
             QueryCommandRunner.MaxDependencyCycleGraphBudget,
             depsSchema["$defs"]!["dependency_cycle"]!["properties"]!["nodes"]!["maxItems"]!.GetValue<int>());
+        Assert.Equal(
+            QueryCommandRunner.MaxDependencyCycleGraphBudget,
+            depsSchema["$defs"]!["tool_result"]!["properties"]!["graph"]!["properties"]!["nodes"]!["maxItems"]!.GetValue<int>());
+        Assert.Equal(
+            QueryCommandRunner.MaxDependencyCycleGraphBudget,
+            depsSchema["$defs"]!["tool_result"]!["properties"]!["graph"]!["properties"]!["edges"]!["maxItems"]!.GetValue<int>());
         Assert.True(
             MatchesSchema(schemaBoundaryPayload, depsSchema, depsSchema),
             schemaBoundaryPayload.ToJsonString());

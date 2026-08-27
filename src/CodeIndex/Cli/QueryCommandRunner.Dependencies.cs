@@ -1307,11 +1307,11 @@ public static partial class QueryCommandRunner
             .ToList();
     }
 
-    private sealed record DependencyCycleGraphProjection(
+    internal sealed record DependencyCycleGraphProjection(
         List<FileDependencyResult> Edges,
         IReadOnlyList<string> Nodes);
 
-    private static DependencyCycleGraphProjection BuildDependencyCycleGraphProjection(
+    internal static DependencyCycleGraphProjection BuildDependencyCycleGraphProjection(
         IReadOnlyList<FileDependencyResult> edges,
         IReadOnlyList<DependencyCycleComponent> components,
         bool includeAllNodes)
@@ -1702,6 +1702,26 @@ public static partial class QueryCommandRunner
             AppendDependencyCycleGraphHashValue(hash, edge.TargetDb);
             AppendDependencyCycleGraphHashValue(hash, edge.TargetPath);
             AppendDependencyCycleGraphHashValue(hash, edge.ReferenceCount.ToString(CultureInfo.InvariantCulture));
+            var evidence = (edge.Evidence ?? [])
+                .OrderBy(static item => item.SourceLanguage, StringComparer.Ordinal)
+                .ThenBy(static item => item.Origin, StringComparer.Ordinal)
+                .ThenBy(static item => item.ResolutionState, StringComparer.Ordinal)
+                .ThenBy(static item => item.ReferenceKind, StringComparer.Ordinal)
+                .ThenBy(static item => item.TargetKind, StringComparer.Ordinal)
+                .ThenBy(static item => item.SuppressionReason, StringComparer.Ordinal)
+                .ThenBy(static item => item.ReferenceCount)
+                .ToArray();
+            AppendDependencyCycleGraphHashValue(hash, evidence.Length.ToString(CultureInfo.InvariantCulture));
+            foreach (var item in evidence)
+            {
+                AppendDependencyCycleGraphHashValue(hash, item.SourceLanguage);
+                AppendDependencyCycleGraphHashValue(hash, item.Origin);
+                AppendDependencyCycleGraphHashValue(hash, item.ResolutionState);
+                AppendDependencyCycleGraphHashValue(hash, item.ReferenceKind);
+                AppendDependencyCycleGraphHashValue(hash, item.TargetKind);
+                AppendDependencyCycleGraphHashValue(hash, item.SuppressionReason);
+                AppendDependencyCycleGraphHashValue(hash, item.ReferenceCount.ToString(CultureInfo.InvariantCulture));
+            }
         }
 
         var digest = hash.GetHashAndReset();
