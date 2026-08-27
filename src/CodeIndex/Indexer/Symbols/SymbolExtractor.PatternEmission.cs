@@ -55,7 +55,7 @@ public static partial class SymbolExtractor
             return kind;
 
         if (context.Language == "csharp"
-            && context.Pattern.Kind == "function"
+            && context.Kind == "function"
             && context.IsCSharpTestMethod)
         {
             kind = "test.method";

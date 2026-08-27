@@ -525,13 +525,19 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_CSharp_ClassifiesMultilineTestAttributeOwnership_Issue5192()
+    public void Extract_CSharp_ClassifiesMultilineTestAttributeOwnership_Issue5192_Regression1961()
     {
         var content = """"
             [assembly: Xunit.Theory]
             [module: Xunit.Fact]
 
             namespace Demo.Tests;
+
+            [System.AttributeUsage(System.AttributeTargets.Field)]
+            public sealed class FieldFactAttribute : System.Attribute { }
+
+            [System.AttributeUsage(System.AttributeTargets.Constructor)]
+            public sealed class ConstructorFactAttribute : System.Attribute { }
 
             public class MultilineAttributeTests
             {
@@ -544,6 +550,14 @@ public partial class SymbolExtractorTests
                     """raw ] and fake [Test]""",
                     $"interpolated ] {1 + 2} and fake [TestMethod]",
                     ']')]
+                [InlineData(
+                    3,
+                    4,
+                    "second multiline data",
+                    @"second verbatim value",
+                    """second raw value""",
+                    $"second interpolated {3 + 4}",
+                    '[')]
                 public void MultilineInlineData(int left, int right, string normal, string verbatim, string raw, string interpolated, char bracket) { }
 
                 [Xunit.TheoryAttribute,
@@ -596,6 +610,27 @@ public partial class SymbolExtractorTests
                 [Fact] public int AttributedProperty { get; }
                 public void MemberAfterAttributedProperty() { }
 
+                [FieldFact]
+                [System.Obsolete(
+                    "const field marker")]
+                public const int AttributedConstField = 1;
+
+                [FieldFact]
+                [System.Obsolete(
+                    "readonly field marker")]
+                public static readonly int AttributedReadonlyField = 2;
+
+                [ConstructorFact]
+                [System.Obsolete(
+                    "constructor marker")]
+                public MultilineAttributeTests() { }
+
+                public int[] CollectionExpression =>
+                [
+                    Fact
+                ]; public void CollectionExpressionDoesNotSpoofTest() { }
+
+                public static int Fact => 1;
                 public static int[] Cases => [4];
             }
             """";
@@ -622,6 +657,8 @@ public partial class SymbolExtractorTests
             "LiteralNameDoesNotSpoof",
             "ReturnTargetDoesNotClassify",
             "MemberAfterAttributedProperty",
+            "MultilineAttributeTests",
+            "CollectionExpressionDoesNotSpoofTest",
         };
 
         Assert.All(
@@ -634,6 +671,12 @@ public partial class SymbolExtractorTests
             symbols,
             symbol => expectedNonTestMethods.Contains(symbol.Name, StringComparer.Ordinal)
                 && symbol.Kind == "test.method");
+        Assert.Contains(
+            symbols,
+            symbol => symbol.Kind == "field" && symbol.Name == "AttributedConstField");
+        Assert.Contains(
+            symbols,
+            symbol => symbol.Kind == "field" && symbol.Name == "AttributedReadonlyField");
     }
 
     [Fact]

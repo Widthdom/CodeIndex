@@ -161,6 +161,7 @@ public static partial class SymbolExtractor
         private bool _sectionTargetIgnored;
         private bool _itemNameFinalized;
         private bool _budgetExceeded;
+        private bool _canStartAttributePrefix = true;
         private int _bracketDepth;
         private int _parenthesisDepth;
         private int _blockLineCount;
@@ -178,9 +179,16 @@ public static partial class SymbolExtractor
 
             if (!_inAttributeSection && !_pendingAttributePrefix)
             {
-                if (firstNonWhitespace >= sanitizedLine.Length
-                    || sanitizedLine[firstNonWhitespace] != '[')
+                if (firstNonWhitespace >= sanitizedLine.Length)
                 {
+                    return false;
+                }
+
+                if (sanitizedLine[firstNonWhitespace] != '['
+                    || !_canStartAttributePrefix)
+                {
+                    _canStartAttributePrefix =
+                        CanStartCSharpAttributePrefixAfter(sanitizedLine);
                     return false;
                 }
 
@@ -212,6 +220,8 @@ public static partial class SymbolExtractor
                     var isAttributedDeclaration = !_budgetExceeded
                         && _pendingAttributePrefix
                         && _blockHasTestAttribute;
+                    _canStartAttributePrefix =
+                        CanStartCSharpAttributePrefixAfter(sanitizedLine);
                     ResetBlock();
                     return isAttributedDeclaration;
                 }
@@ -290,6 +300,23 @@ public static partial class SymbolExtractor
             }
 
             return false;
+        }
+
+        private static bool CanStartCSharpAttributePrefixAfter(string sanitizedLine)
+        {
+            var trimmed = sanitizedLine.AsSpan().Trim();
+            if (trimmed.Length == 0)
+                return false;
+
+            // A declaration attribute may begin at the file start or after a completed
+            // declaration/statement/body. A bracket-led line following an expression
+            // continuation (`=>`, `=`, `return`, an argument list, and so on) is instead
+            // a collection expression and must not create attribute ownership.
+            // declaration attribute は file 先頭または完了した宣言・statement・body の後に
+            // 開始できる。expression continuation 後の行頭 bracket は collection expression
+            // なので、attribute 所有権を作らない。
+            return trimmed[0] == '#'
+                || trimmed[^1] is ';' or '{' or '}';
         }
 
         private void StartSection()

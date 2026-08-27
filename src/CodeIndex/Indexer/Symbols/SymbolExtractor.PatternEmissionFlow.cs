@@ -45,7 +45,8 @@ public static partial class SymbolExtractor
             && IsCSharpTestMethod(
                 attributedDeclarationLines,
                 i,
-                pattern.Kind == "function");
+                shapedSymbol.Kind == "function"
+                    && shapedSymbol.RawReturnType != null);
         ref var scanState = ref extraction.ScanState;
         ref var pendingRecordPrimaryComponents = ref extraction.PendingRecordPrimaryComponents;
         ref var recordPrimaryComponentParentIndex = ref extraction.RecordPrimaryComponentParentIndex;

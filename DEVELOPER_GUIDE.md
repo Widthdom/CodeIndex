@@ -1294,7 +1294,10 @@ block rather than from the immediately preceding physical line. The bounded scan
 reuses the C# lexical masking pass, so multiline attribute arguments and consecutive
 attribute lists are supported while brackets and test-like names in comments or
 normal, verbatim, raw, interpolated, and character literals are ignored. Explicit
-`return:`, `assembly:`, and `module:` targets do not classify a method.
+`return:`, `assembly:`, and `module:` targets do not classify a method. A declaration-
+context gate rejects bracket-led collection expressions, and only shaped method
+declarations with return types can receive the test taxonomy; fields and constructors
+consume their attribute ownership without being reclassified.
 
 `SymbolKindCatalog.CompatibilityKindFamilies` maps both `typealias` and
 `type_parameter` to the broad `type` family for consumers that only understand
@@ -5375,7 +5378,9 @@ block 全体から判定します。上限付き scanner は C# の字句 maskin
 複数行の attribute 引数と連続する attribute list を扱いつつ、comment、通常文字列、
 verbatim 文字列、raw 文字列、interpolated 文字列、文字 literal 内の bracket や test 風の
 名前を無視します。明示的な `return:`、`assembly:`、`module:` target は method を
-`test.method` に分類しません。
+`test.method` に分類しません。declaration context gate は行頭 bracket の collection
+expression を拒否し、return type を持つ shaped method declaration だけが test taxonomy
+を受け取ります。field と constructor は attribute 所有権を消費しますが、再分類しません。
 
 古い粗い taxonomy だけを理解する consumer 向けに、
 `SymbolKindCatalog.CompatibilityKindFamilies` は `typealias` と
