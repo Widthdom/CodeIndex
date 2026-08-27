@@ -9857,6 +9857,55 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_UpdateMode_WithChangedBetween_ReconcilesCodeOwnersAcrossBranchSwitch_Issue5198()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            RunGit(projectRoot, "init");
+            var githubDirectory = Path.Combine(projectRoot, ".github");
+            Directory.CreateDirectory(githubDirectory);
+            var primaryPath = Path.Combine(githubDirectory, "CODEOWNERS");
+            File.WriteAllText(primaryPath, "/src/** @main-owner\n");
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "initial codeowners");
+            RunGit(projectRoot, "branch", "before-codeowners-switch");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var initialChecksum = ReadIndexedChecksum(dbPath, ".github/CODEOWNERS");
+            Assert.NotNull(initialChecksum);
+
+            RunGit(projectRoot, "switch", "-c", "codeowners-feature");
+            File.WriteAllText(primaryPath, "/src/** @feature-owner\n");
+            File.WriteAllText(Path.Combine(projectRoot, "CODEOWNERS"), "* @root-owner\n");
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "change codeowners");
+            RunGit(projectRoot, "branch", "after-codeowners-switch");
+
+            var (featureExitCode, featureJson) = RunAndCaptureJson(
+                [projectRoot, "--changed-between", "before-codeowners-switch", "after-codeowners-switch", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, featureExitCode);
+            Assert.Equal("success", featureJson.GetProperty("status").GetString());
+            Assert.NotEqual(initialChecksum, ReadIndexedChecksum(dbPath, ".github/CODEOWNERS"));
+            Assert.Contains("CODEOWNERS", ReadIndexedPaths(dbPath));
+
+            RunGit(projectRoot, "switch", "before-codeowners-switch");
+            var (returnExitCode, returnJson) = RunAndCaptureJson(
+                [projectRoot, "--changed-between", "after-codeowners-switch", "before-codeowners-switch", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, returnExitCode);
+            Assert.Equal("success", returnJson.GetProperty("status").GetString());
+            Assert.Equal(initialChecksum, ReadIndexedChecksum(dbPath, ".github/CODEOWNERS"));
+            Assert.DoesNotContain("CODEOWNERS", ReadIndexedPaths(dbPath));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_UpdateMode_WithChangedBetween_FallsBackToFullScanWhenIgnoreFilesChange()
     {
         var projectRoot = CreateTempProject();

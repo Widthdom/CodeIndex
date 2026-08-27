@@ -97,6 +97,67 @@ public partial class SymbolExtractorTests
         Assert.Equal(
             SymbolExtractor.ApplicationManifestContractVersion,
             SymbolExtractor.GetContractVersion("app_manifest"));
+        Assert.Contains("codeowners", supported);
+        Assert.Equal(
+            SymbolExtractor.CodeOwnersContractVersion,
+            SymbolExtractor.GetContractVersion("codeowners"));
+    }
+
+    [Fact]
+    public void Extract_CodeOwners_PreservesOrderedRulesOwnersAndBoundedDiagnostics_Issue5198()
+    {
+        var content = string.Join(
+            "\r\n",
+            "  # comment",
+            string.Empty,
+            "   ",
+            "\t/src/**\t@org/team @user\towner@example.com",
+            "/src/special/**",
+            @"\#literal @escaped",
+            "/src/** @later",
+            "!unsupported @owner",
+            "[ab].txt @owner",
+            "bad-owner @") + "\r\n";
+
+        var symbols = SymbolExtractor.Extract(1, "codeowners", content);
+        var rules = symbols.Where(symbol => symbol.Kind == "rule").ToList();
+
+        Assert.Equal(["/src/**", "/src/special/**", "#literal", "/src/**"], rules.Select(rule => rule.Name));
+        Assert.Equal([4, 5, 6, 7], rules.Select(rule => rule.Line));
+        Assert.All(rules, rule => Assert.Equal("ownership_rule", rule.SubKind));
+        Assert.Contains(rules, rule => rule.Name == "/src/special/**" && rule.Signature == "/src/special/**");
+
+        var owners = symbols.Where(symbol => symbol.Kind == "property").ToList();
+        Assert.Equal(
+            ["@org/team", "@user", "owner@example.com", "@escaped", "@later"],
+            owners.Select(owner => owner.Name));
+        Assert.All(owners, owner => Assert.Equal("owner", owner.SubKind));
+        Assert.Contains(owners, owner => owner.Name == "@org/team" && owner.ContainerName == "/src/**");
+
+        var diagnostics = symbols.Where(symbol => symbol.Kind == "extraction_diagnostic").ToList();
+        Assert.Equal(2, diagnostics.Count);
+        Assert.Contains(diagnostics, diagnostic => diagnostic.Name == "codeowners_unsupported_pattern");
+        Assert.Contains(diagnostics, diagnostic => diagnostic.Name == "codeowners_invalid_owner");
+    }
+
+    [Fact]
+    public void Extract_CodeOwners_BoundsOwnerAndLinePayloads_Issue5198()
+    {
+        var owners = string.Join(' ', Enumerable.Range(0, SymbolExtractor.CodeOwnersMaxOwnersPerRule + 1).Select(index => $"@owner{index}"));
+        var oversizedLine = new string('x', SymbolExtractor.CodeOwnersMaxRuleLineLength + 1);
+        var symbols = SymbolExtractor.Extract(1, "codeowners", $"/bounded/** {owners}\n{oversizedLine}\n");
+
+        Assert.Single(symbols, symbol => symbol.Kind == "rule" && symbol.Name == "/bounded/**");
+        Assert.Equal(
+            SymbolExtractor.CodeOwnersMaxOwnersPerRule,
+            symbols.Count(symbol => symbol.Kind == "property" && symbol.ContainerName == "/bounded/**"));
+        Assert.Contains(
+            symbols,
+            symbol => symbol.Kind == "extraction_diagnostic" && symbol.Name == "codeowners_owner_budget_exceeded");
+        Assert.Contains(
+            symbols,
+            symbol => symbol.Kind == "extraction_diagnostic" && symbol.Name == "codeowners_rule_line_too_long");
+        Assert.True(symbols.Count(symbol => symbol.Kind == "extraction_diagnostic") <= 2);
     }
 
     [Fact]

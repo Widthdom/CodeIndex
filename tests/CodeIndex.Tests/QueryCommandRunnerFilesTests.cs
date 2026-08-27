@@ -408,6 +408,101 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunCodeOwners_FullAndIncrementalIndexingSupportsDiscoverySearchSymbolsOutlineAndStatus_Issue5198()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_codeowners_issue5198");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            Directory.CreateDirectory(Path.Combine(projectRoot, ".github"));
+            Directory.CreateDirectory(Path.Combine(projectRoot, "docs"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, ".github", "CODEOWNERS"),
+                "# highest-precedence candidate\r\n/src/** @org/team owner@example.com\r\n/src/special/**\r\n/src/** @later\r\n");
+            File.WriteAllText(Path.Combine(projectRoot, "CODEOWNERS"), "* @root\n");
+            File.WriteAllText(Path.Combine(projectRoot, "docs", "CODEOWNERS"), "/docs/** @docs\n");
+
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--db", dbPath, "--json", "--quiet"],
+                _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+
+            var (filesExitCode, filesStdout, filesStderr) = CaptureConsole(() => QueryCommandRunner.RunFiles(
+                ["--db", dbPath, "--lang", "codeowners", "--json=array"],
+                _jsonOptions));
+            using var filesDocument = ParseJsonOutput(filesStdout);
+            Assert.Equal(CommandExitCodes.Success, filesExitCode);
+            Assert.Equal(string.Empty, filesStderr);
+            Assert.Equal(
+                [".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"],
+                filesDocument.RootElement.EnumerateArray()
+                    .Select(file => file.GetProperty("path").GetString())
+                    .OrderBy(path => path, StringComparer.Ordinal));
+
+            AssertSearchesPath(dbPath, "@org/team", ".github/CODEOWNERS");
+            AssertSearchesPath(dbPath, "owner@example.com", ".github/CODEOWNERS");
+
+            var (symbolsExitCode, symbolsStdout, symbolsStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--lang", "codeowners", "--path", ".github/CODEOWNERS", "--json=array"],
+                _jsonOptions));
+            using var symbolsDocument = ParseJsonOutput(symbolsStdout);
+            var symbols = symbolsDocument.RootElement.EnumerateArray().ToList();
+            Assert.Equal(CommandExitCodes.Success, symbolsExitCode);
+            Assert.Equal(string.Empty, symbolsStderr);
+            Assert.Equal(3, symbols.Count(symbol => symbol.GetProperty("kind").GetString() == "rule"));
+            Assert.Contains(
+                symbols,
+                symbol => symbol.GetProperty("kind").GetString() == "property"
+                    && symbol.GetProperty("name").GetString() == "@org/team"
+                    && symbol.GetProperty("container_name").GetString() == "/src/**");
+
+            var (outlineExitCode, outlineStdout, outlineStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                [".github/CODEOWNERS", "--db", dbPath, "--json"],
+                _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, outlineExitCode);
+            Assert.Equal(string.Empty, outlineStderr);
+            Assert.Contains("/src/**", outlineStdout, StringComparison.Ordinal);
+            Assert.Contains("@org/team", outlineStdout, StringComparison.Ordinal);
+
+            var (statusExitCode, statusStdout, statusStderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbPath, "--json"],
+                _jsonOptions));
+            using var statusDocument = ParseJsonOutput(statusStdout);
+            Assert.Equal(CommandExitCodes.Success, statusExitCode);
+            Assert.Equal(string.Empty, statusStderr);
+            Assert.Equal(0, statusDocument.RootElement.GetProperty("unknown_extension_file_count").GetInt64());
+
+            File.WriteAllText(Path.Combine(projectRoot, "CODEOWNERS"), "* @updated-root\n");
+            var (updateExitCode, _, updateStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--db", dbPath, "--files", "CODEOWNERS", "--json", "--quiet"],
+                _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.Equal(string.Empty, updateStderr);
+            AssertSearchesPath(dbPath, "@updated-root", "CODEOWNERS");
+
+            File.Delete(Path.Combine(projectRoot, "docs", "CODEOWNERS"));
+            var (deleteExitCode, _, deleteStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--db", dbPath, "--files", "docs/CODEOWNERS", "--json", "--quiet"],
+                _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, deleteExitCode);
+            Assert.Equal(string.Empty, deleteStderr);
+
+            var (deletedFilesExitCode, deletedFilesStdout, deletedFilesStderr) = CaptureConsole(() => QueryCommandRunner.RunFiles(
+                ["--db", dbPath, "--path", "docs/CODEOWNERS", "--json=array"],
+                _jsonOptions));
+            using var deletedFilesDocument = ParseJsonOutput(deletedFilesStdout);
+            Assert.Equal(CommandExitCodes.Success, deletedFilesExitCode);
+            Assert.Equal(string.Empty, deletedFilesStderr);
+            Assert.Empty(deletedFilesDocument.RootElement.EnumerateArray());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void IndexAndDryRun_ZshCompletionCompdefIsShellAndQueryable_Issue5165()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_zsh_compdef_issue5165");

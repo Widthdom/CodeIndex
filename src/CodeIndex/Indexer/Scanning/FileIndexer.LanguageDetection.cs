@@ -287,6 +287,7 @@ public partial class FileIndexer
         var capacity = LangMap.Count
             + DisplayOnlyLanguageExtensions.Length
             + FileNameMap.Count
+            + RepositoryRelativePathMap.Length
             + FileNamePrefixMap.Length
             + pluginExtensions.Count
             + languageMapOverrides.Count;
@@ -320,6 +321,8 @@ public partial class FileIndexer
             TryAddPattern(pattern, lang, LanguagePatternKind.Extension, "built_in");
         foreach (var (name, lang) in FileNameMap)
             TryAddPattern(name, lang, LanguagePatternKind.ExactFilename, "built_in");
+        foreach (var (path, lang) in RepositoryRelativePathMap)
+            TryAddPattern(path, lang, LanguagePatternKind.ExactFilename, "built_in");
         // Surface suffixed variants like Dockerfile.dev / Makefile.am as `<Prefix><suffix>` entries
         // so `cdidx languages` and the MCP listing reflect what TryDetectLanguage actually handles.
         // Dockerfile.dev / Makefile.am のようなサフィックス付き変種も `<Prefix><suffix>` 形で
@@ -493,6 +496,15 @@ public partial class FileIndexer
             return !string.Equals(extension, ".h", StringComparison.OrdinalIgnoreCase);
 
         var fileName = Path.GetFileName(filePath);
+        if (string.Equals(language, "codeowners", StringComparison.Ordinal)
+            && string.Equals(fileName, "CODEOWNERS", StringComparison.OrdinalIgnoreCase))
+        {
+            // The scan result already proved that this exact path is one of the supported
+            // repository-relative locations, so content loading may reuse that decision.
+            // scan result が supported repository-relative path であることを証明済みなので、
+            // content loading はその判定を再利用できる。
+            return true;
+        }
         if (TryGetExactFileNameLanguage(fileName, ignoreCase: true, out var nameLanguage))
             return string.Equals(language, nameLanguage, StringComparison.Ordinal);
 
@@ -537,6 +549,19 @@ public partial class FileIndexer
                     LanguageMapOverrideDetectionSource,
                     LanguageDetectionConfidence.High)
                 : new LanguageDetectionResult(FileProbeStatus.Supported, overrideLang);
+        }
+
+        // Location-scoped special files are checked before filename-only rules. Indexing passes
+        // projectRoot, so arbitrary nested CODEOWNERS files do not inherit GitHub semantics.
+        // location scoped special file は filename-only rule より先に判定する。indexing path は
+        // projectRoot を渡すため、任意の nested CODEOWNERS に GitHub semantics を付与しない。
+        if (TryGetRepositoryRelativePathLanguage(
+                filePath,
+                projectRoot,
+                fileNameIgnoreCase,
+                out var repositoryPathLanguage))
+        {
+            return new LanguageDetectionResult(FileProbeStatus.Supported, repositoryPathLanguage);
         }
 
         // Exact filename matching beats built-in extension lookup so manifest-style filenames
@@ -678,6 +703,51 @@ public partial class FileIndexer
         }
 
         language = string.Empty;
+        return false;
+    }
+
+    private static bool TryGetRepositoryRelativePathLanguage(
+        string filePath,
+        string? projectRoot,
+        bool ignoreCase,
+        out string language)
+    {
+        language = string.Empty;
+        var comparison = ignoreCase ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        string relativePath;
+        if (string.IsNullOrWhiteSpace(projectRoot))
+        {
+            // The public compatibility helper has no repository-root context. Preserve useful
+            // exact-filename detection there, while the indexing path below remains location-aware.
+            // public compatibility helper には repository root context がないため filename を
+            // 認識する。indexing path は下記の projectRoot 分岐で location-aware のままにする。
+            if (string.Equals(Path.GetFileName(filePath), "CODEOWNERS", comparison))
+            {
+                language = "codeowners";
+                return true;
+            }
+            return false;
+        }
+
+        try
+        {
+            relativePath = Path.GetRelativePath(projectRoot, filePath).Replace('\\', '/');
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException)
+        {
+            return false;
+        }
+
+        if (relativePath == ".." || relativePath.StartsWith("../", StringComparison.Ordinal))
+            return false;
+
+        foreach (var (path, pathLanguage) in RepositoryRelativePathMap)
+        {
+            if (!string.Equals(relativePath, path, comparison))
+                continue;
+            language = pathLanguage;
+            return true;
+        }
         return false;
     }
 
