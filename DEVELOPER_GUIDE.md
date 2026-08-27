@@ -1693,6 +1693,15 @@ unqualified name receive a global candidate only when that name is unique in the
 symbol set. Otherwise they remain `ambiguous` or `unresolved`, and dependency queries do not
 fall back to a same-name edge.
 
+C# unqualified calls and method groups that match local-function declarations resolve against
+the narrowest complete lexical block inside the enclosing callable. Declaration order is not a
+visibility gate; overloads from the winning block remain candidates and normal call-arity
+filtering selects among them. Parameters, local values, and delegate-valued bindings shadow
+local functions before graph resolution, while sibling blocks and unrelated enclosing
+callables cannot contribute local candidates. Incomplete callable or block-range evidence stays
+`unresolved` instead of falling back to a file-wide same-name edge. The persisted target
+identity is shared by references, callers, inspect, impact, and LSP definition/reference reads.
+
 C# type-reference resolution uses `LogicalPartialSymbolGrouper` for declarations that have a
 valid logical partial-family identity. Full and scoped refreshes persist the same stable
 `family:` target key used by grouped symbol discovery, so multiple physical declarations in one
@@ -2516,6 +2525,8 @@ Runtime diagnostic subcontracts:
 `references` already prefixes each human-readable row with `reference_kind`, and `callers` does the same for its grouped caller rows. When one grouped container mixes kinds (for example `call` and `subscribe` on the same event member), the human-readable label joins the distinct kinds with `+` (for example `call+subscribe`) instead of collapsing to a single preferred label, and the reference-kind column widens dynamically to fit the longest label in the batch so mixed rows do not overrun the neighbouring column. JSON output for `callers` and `callees` keeps the scalar `reference_kind` for back-compat (it reports the preferred summary kind `instantiate` > `subscribe` > `MIN(call)`) and adds a sorted `reference_kinds` array plus a `has_mixed_reference_kinds` bool so consumers can detect mixed containers without trusting a single collapsed label. This lets terminal users distinguish `call` / `instantiate` / `subscribe` / mixed without re-running the command with `--json` and lets AI clients answer mixed-kind questions without chasing a second `--exact` query.
 
 For `references`, `callers`, and `callees`, an explicit `--snippet-lines` is valid only with `--body` and text or JSON result output. Location-only formats and `--count` reject the option before opening the database so a requested snippet length is never silently ignored or recorded in replay/query context without being applied. Explicitness comes from the argument parser, so option-like literals passed through `--query` or after `--` remain queries. Bounded JSON projection also removes the snippet-only control from its internal count replay, preserving clean stderr, total counts, and cursors for visible body excerpts.
+
+Bounded `--fields` output is a generic JSON projection contract and can be combined only with `--format json` or `--format compact`; projection-incompatible formats such as CSV, TSV, quickfix, LSP, and SARIF are rejected with `E010_USAGE_ERROR` before the database is opened. For `references`, `callers`, and `callees`, a collection-bearing zero-result document is unwrapped authoritatively so an empty collection remains empty and its result, returned, and total counts remain zero. Selecting `body` or `body_content` automatically retains the companion start/end, requested/effective range, truncation flag/reasons, next-start, omission, and recovery fields. A byte budget omits the whole row or returns `E028_RESPONSE_BUDGET_TOO_SMALL` rather than stripping those companion fields.
 
 Graph body mode keeps the established `body_*` definition/container excerpt and adds an independent `callsite_*` excerpt for `references`, `callers`, `callees`, and graph-backed `impact` rows. The call-site window is read from indexed source and centered on the deterministic `first_reference`: grouped rows choose the lowest source position, while an individual reference selects itself. `callsite_line`, available persisted `callsite_column` / `callsite_length`, `callsite_selection`, `callsite_reference_count`, and `callsite_omitted_reference_count` make that choice explicit; legacy rows omit a coordinate or span that was not indexed. The content/range fields mirror the body contract through requested/effective ranges, `line_width_cap` and other truncation reasons, redacted recovery metadata, and `callsite_content_unavailable_reason` when the exact focus line cannot be reconstructed from indexed chunks. A bounded projection containing only `callsite_*` fields still materializes body mode; a projection containing neither `body_*` nor `callsite_*` skips it. Existing output without `--body` remains unchanged.
 
@@ -5807,6 +5818,14 @@ resolution を再構築し、同じ transaction で marker を設定します。
 対象となる symbol 集合で名前が一意の場合だけ global candidate を持ちます。それ以外は
 `ambiguous` または `unresolved` のままとし、dependency query は同名 edge へ fallback しません。
 
+C# の無修飾 call と method group が local function 宣言に一致する場合、enclosing callable 内の
+最も狭い完全な字句 block に対して解決します。宣言順は visibility gate とせず、選択された block の
+overload 群を候補に残したうえで通常の call arity filter で絞り込みます。parameter、local value、
+delegate value binding は graph 解決より先に local function を shadow し、兄弟 block や無関係な
+enclosing callable の local function は候補になりません。callable または block range の evidence が
+不完全な場合は file 全体の同名 edge へ fallback せず `unresolved` のままにします。永続化した target
+identity は references、callers、inspect、impact、LSP definition/reference read で共有します。
+
 C# の type-reference resolution は、有効な論理 partial-family identity を持つ declaration に
 `LogicalPartialSymbolGrouper` を使用します。full / scoped refresh は grouped symbol discovery と同じ
 安定した `family:` target key を永続化するため、language、kind、namespace / container、generic arity が
@@ -6653,6 +6672,8 @@ runtime diagnostic subcontract:
 `references` は以前から人間向け出力の各行先頭に `reference_kind` を表示しており、`callers` も grouped caller 行に対して同じタグを出す。1 つの grouped container で kind が混在する場合（例: 同じ event メンバに対する `call` と `subscribe`）は、単一 preferred label へ潰さずに `call+subscribe` のように distinct kind を `+` で連結して表示する。reference-kind 列の幅はバッチ内で最も長いラベルに合わせて動的に広がるため、mixed 行が隣接列を押し出さない。`callers` / `callees` の JSON 出力では、後方互換のため scalar な `reference_kind`（preferred 順 `instantiate` > `subscribe` > `MIN(call)` の要約 kind）を残しつつ、ソート済みの `reference_kinds` 配列と `has_mixed_reference_kinds` bool も追加した。これにより consumer は単一 summary label に騙されずに mixed container を検出できる。端末上でも `call` / `instantiate` / `subscribe` / mixed を `--json` なしで見分けられ、AI クライアントも `--exact` を改めて投げ直さずに mixed-kind の問いに答えられる。
 
 `references`、`callers`、`callees` で明示した `--snippet-lines` は、`--body` と text または JSON の結果出力を併用する場合だけ有効です。location-only format と `--count` は database を開く前にこの option を拒否するため、要求した snippet 長が黙って無視されたり、適用されないまま replay / query context に記録されたりすることはありません。明示指定かどうかは引数 parser の状態で判定するため、`--query` の値または `--` 以降に渡した option 風の literal は query のままです。bounded JSON projection の内部 count replay からは snippet 専用 control も除去し、表示可能な body excerpt で stderr、total count、cursor を正しく維持します。
+
+bounded `--fields` 出力は汎用 JSON projection 契約であり、`--format json` または `--format compact` とだけ併用できます。CSV、TSV、quickfix、LSP、SARIF など projection と互換性のない形式は、database を開く前に `E010_USAGE_ERROR` で拒否されます。`references`、`callers`、`callees` では、collection を持つ 0 件 response を authoritative に展開するため、空 collection は空のまま維持され、result / returned / total count はすべて 0 になります。`body` または `body_content` を選択すると、開始/終了位置、requested/effective range、truncation flag/reason、next-start、omission、recovery の付随 field も自動的に保持されます。byte budget に収まらない場合は、付随 field だけを削らずに row 全体を省略するか `E028_RESPONSE_BUDGET_TOO_SMALL` を返します。
 
 graph body mode は既存の定義 / container 抜粋である `body_*` を維持し、`references`、`callers`、`callees`、graph-backed な `impact` row に独立した `callsite_*` 抜粋を追加します。call-site window は indexed source から取得し、決定的な `first_reference` を中心にします。group row は source position が最小の参照を選び、個別 reference は自分自身を選びます。`callsite_line`、永続化済みの場合の `callsite_column` / `callsite_length`、`callsite_selection`、`callsite_reference_count`、`callsite_omitted_reference_count` でその選択を明示し、座標または span を index していない legacy row では該当 field を省略します。content / range field は requested / effective range、`line_width_cap` などの truncation reason、伏字化した recovery metadata、indexed chunk から正確な focus 行を復元できない場合の `callsite_content_unavailable_reason` まで body 契約を反映します。`callsite_*` field だけを含む bounded projection でも body mode を materialize し、`body_*` と `callsite_*` のどちらも含まない投影では省略します。`--body` なしの既存出力は変わりません。
 

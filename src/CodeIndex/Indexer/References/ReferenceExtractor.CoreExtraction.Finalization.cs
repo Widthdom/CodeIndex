@@ -50,6 +50,11 @@ public static partial class ReferenceExtractor
                 references,
                 loop.Lookups);
             RemoveCSharpCallsDuplicatedByMemberReads(references);
+            ApplyCSharpLocalFunctionTargetQualifiers(
+                loop.Preparation.StructuralLines,
+                request.Symbols,
+                references,
+                loop.Lookups);
         }
 
         loop.Lookups.ApplyCSharpUsingAliasReferenceNames(references);

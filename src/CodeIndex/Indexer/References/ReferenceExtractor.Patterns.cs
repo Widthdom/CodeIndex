@@ -119,8 +119,12 @@ public static partial class ReferenceExtractor
     private static readonly Regex CSharpUsingStaticRegex = new(
         @"^\s*(?:global\s+)?using\s+static\s+(?<target>[^;]+)",
         RegexOptions.Compiled);
+    // Statement keywords cannot be declaration types; excluding them preserves method groups
+    // such as `return Local;` instead of inventing a value named Local.
+    // 文keywordは宣言型ではないため除外し、`return Local;`などのmethod groupを
+    // Localという値の宣言として捏造しない。
     private static readonly Regex CSharpLocalValueNameRegex = new(
-        @"(?:^\s*|[;{}]\s*)(?:(?:(?:await\s+)?using\s+var)|var|(?:(?:const\s+)?[A-Za-z_]\w*(?:\s*::\s*|\s*\.\s*)*[A-Za-z_]\w*(?:\s*<[^>\n]+>)?(?:\s*\?)?(?:\s*\[\s*\])*))\s+(?<name>@?[A-Za-z_]\w*)\s*(?==|;|,)",
+        @"(?:^\s*|[;{}]\s*)(?:(?:(?:await\s+)?using\s+var)|var|(?:(?!return\b|throw\b)(?:const\s+)?[A-Za-z_]\w*(?:\s*::\s*|\s*\.\s*)*[A-Za-z_]\w*(?:\s*<[^>\n]+>)?(?:\s*\?)?(?:\s*\[\s*\])*))\s+(?<name>@?[A-Za-z_]\w*)\s*(?==|;|,)",
         RegexOptions.Compiled);
     private static readonly Regex CSharpForeachValueNameRegex = new(
         @"\bforeach\s*\(\s*(?:var|(?:[A-Za-z_]\w*(?:\s*::\s*|\s*\.\s*)*[A-Za-z_]\w*(?:\s*<[^>\n]+>)?(?:\s*\?)?(?:\s*\[\s*\])*))\s+(?<name>@?[A-Za-z_]\w*)\s+in\b",

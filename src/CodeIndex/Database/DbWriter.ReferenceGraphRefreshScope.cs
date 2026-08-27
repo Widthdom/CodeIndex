@@ -292,7 +292,7 @@ public partial class DbWriter
         const string fullCSharpTypeNamePredicateSql = "AND type_symbol.name_folded IS NOT NULL";
         const string fullLowerRankCandidateSourceSql =
             "FROM symbol_reference_candidates AS lower_rank_candidate";
-        const int expectedReferenceSourceCount = 14;
+        const int expectedReferenceSourceCount = 15;
 
         if (CountOrdinalOccurrences(RefreshReferenceCandidatesSql, fullDeleteSql) != 1
             || CountOrdinalOccurrences(RefreshReferenceCandidatesSql, fullReferenceSourceSql)

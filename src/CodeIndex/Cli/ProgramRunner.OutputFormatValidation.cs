@@ -2,7 +2,7 @@ namespace CodeIndex.Cli;
 
 internal static partial class ProgramRunner
 {
-    private static bool TryValidateOutputFormatOptions(
+    internal static bool TryValidateOutputFormatOptions(
         string[] args,
         out string error,
         out string hint,
@@ -26,6 +26,7 @@ internal static partial class ProgramRunner
         var jsonRequested = false;
         var prettyRequested = false;
         var compactRequested = false;
+        var fieldsRequested = false;
         var resultsOnlyRequested = false;
         var countFlagRequested = false;
         var usesSingleDocumentJsonMode = false;
@@ -88,6 +89,12 @@ internal static partial class ProgramRunner
             if (tokenRole != QueryCommandTokenRole.CommandOptionValue && arg == "--compact")
             {
                 compactRequested = true;
+                continue;
+            }
+            if (tokenRole != QueryCommandTokenRole.CommandOptionValue
+                && (arg == "--fields" || arg.StartsWith("--fields=", StringComparison.Ordinal)))
+            {
+                fieldsRequested = true;
                 continue;
             }
             if (arg.StartsWith("--format=", StringComparison.Ordinal))
@@ -167,6 +174,17 @@ internal static partial class ProgramRunner
         {
             error = $"--json cannot be combined with non-JSON --format {outputFormat}.";
             hint = $"remove --json to keep --format {outputFormat}, or use --format json for the generic JSON contract.";
+            usage = ConsoleUi.GetUsageLine(commandName) ?? $"cdidx {commandName} --help";
+            return false;
+        }
+
+        if (fieldsRequested
+            && outputFormat != null
+            && CliOutputFormatCapabilities.TryGet(outputFormat, out var fieldsFormatCapability)
+            && fieldsFormatCapability.Name is not "json" and not "compact")
+        {
+            error = $"--fields cannot be combined with projection-incompatible --format {outputFormat}.";
+            hint = $"remove --fields to keep --format {outputFormat}, or use --format json or compact for projected output.";
             usage = ConsoleUi.GetUsageLine(commandName) ?? $"cdidx {commandName} --help";
             return false;
         }

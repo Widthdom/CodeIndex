@@ -6,7 +6,15 @@ public static partial class SymbolExtractor
     public const int ExpandedLanguageContractVersion = 2;
     public const int YamlContractVersion = 3;
     public const int PythonContractVersion = 2;
-    public const int CSharpContractVersion = 15;
+    // Version 15 (#5188) re-extracts C# calls so local-function lexical targets and
+    // value-shadowing evidence are persisted for existing indexes.
+    // バージョン 15 (#5188) は既存 index の C# call を再抽出し、local function の
+    // 字句 target と value shadowing evidence を永続化する。
+    // Version 16 (#5189) re-extracts C# constructor calls so canonical alias targets,
+    // lexical token spans, and unambiguous positional arity are persisted after version 15.
+    // バージョン 16 (#5189) は version 15 適用後の既存 index に対して C# constructor call を
+    // 再抽出し、canonical alias target、字句 token span、曖昧でない位置引数 arity を永続化する。
+    public const int CSharpContractVersion = 16;
     public const int DockerfileContractVersion = 2;
     public const int MakefileContractVersion = 2;
     public const int StyleAndXamlContractVersion = 2;
