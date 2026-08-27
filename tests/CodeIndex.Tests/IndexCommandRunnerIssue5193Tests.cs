@@ -89,9 +89,75 @@ public partial class IndexCommandRunnerTests
         }
     }
 
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void RunIndexOptimize_DryRunBlankDbInputReportsResolvedFallback_Issue5193(
+        string blankDbPath)
+    {
+        var projectPath = CreateTempProject();
+        var dbPath = Path.Combine(projectPath, ".cdidx", "codeindex.db");
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+                db.InitializeSchema();
+
+            SqliteConnection.ClearAllPools();
+            var bytesBefore = File.ReadAllBytes(dbPath);
+            foreach (var showPaths in new[] { false, true })
+            {
+                foreach (var json in new[] { false, true })
+                {
+                    var args = new List<string>
+                    {
+                        "--db",
+                        blankDbPath,
+                        "--dry-run",
+                    };
+                    if (json)
+                        args.Add("--json");
+                    if (showPaths)
+                        args.Add("--show-paths");
+
+                    var (exitCode, output) = RunOptimizePreviewAndCapture(
+                        args.ToArray(),
+                        useIndexAlias: true,
+                        projectPath: projectPath);
+
+                    Assert.Equal(CommandExitCodes.Success, exitCode);
+                    var expectedPath = showPaths ? dbPath : "<redacted>";
+                    if (json)
+                    {
+                        using var document = JsonDocument.Parse(output);
+                        Assert.Equal(
+                            expectedPath,
+                            document.RootElement.GetProperty("db_path").GetString());
+                    }
+                    else
+                    {
+                        Assert.Contains(expectedPath, output, StringComparison.Ordinal);
+                    }
+
+                    if (!showPaths)
+                        Assert.DoesNotContain(dbPath, output, StringComparison.Ordinal);
+                }
+            }
+
+            SqliteConnection.ClearAllPools();
+            Assert.Equal(bytesBefore, File.ReadAllBytes(dbPath));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectPath);
+        }
+    }
+
     private (int ExitCode, string Output) RunOptimizePreviewAndCapture(
         string[] args,
-        bool useIndexAlias)
+        bool useIndexAlias,
+        string projectPath = ".")
     {
         lock (TestConsoleLock.Gate)
         {
@@ -102,7 +168,7 @@ public partial class IndexCommandRunnerTests
                 Console.SetOut(stdout);
                 var exitCode = useIndexAlias
                     ? IndexCommandRunner.Run(
-                        [".", "--optimize", .. args],
+                        [projectPath, "--optimize", .. args],
                         _jsonOptions,
                         cancellationForTesting: null,
                         output: null)

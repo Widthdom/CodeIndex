@@ -205,6 +205,9 @@ public static partial class IndexCommandRunner
         var requestedDbPath = dbPath;
         dbPath = DbPathResolver.NormalizeDbPath(dbPath);
         var resolvedDbPath = Path.GetFullPath(dbPath);
+        var diagnosticDbPath = string.IsNullOrWhiteSpace(options.DbPathInput)
+            ? resolvedDbPath
+            : options.DbPathInput;
         var databaseExistedBeforeIndex = File.Exists(LongPath.EnsureWindowsPrefix(resolvedDbPath));
 
         if (!options.Json && !options.Quiet)
@@ -218,7 +221,7 @@ public static partial class IndexCommandRunner
                 ? options.ShowPaths
                     ? resolvedDbPath
                     : MaintenanceDatabaseErrorClassifier.FormatPathForOutput(
-                        options.DbPathInput ?? resolvedDbPath,
+                        diagnosticDbPath,
                         showPaths: false)
                 : resolvedDbPath;
             ConsoleUi.PrintBanner();
@@ -237,7 +240,7 @@ public static partial class IndexCommandRunner
                 options.ProjectPath,
                 options.DryRun,
                 showPaths: options.ShowPaths,
-                diagnosticDbPath: options.DbPathInput ?? resolvedDbPath,
+                diagnosticDbPath: diagnosticDbPath,
                 queryOnlyDbPath: options.DryRun ? requestedDbPath : null);
 
         bool ignoreCase;
