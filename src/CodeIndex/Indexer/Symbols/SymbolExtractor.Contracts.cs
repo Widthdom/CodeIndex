@@ -6,11 +6,11 @@ public static partial class SymbolExtractor
     public const int ExpandedLanguageContractVersion = 2;
     public const int YamlContractVersion = 3;
     public const int PythonContractVersion = 2;
-    // Version 15 (#5188) re-extracts C# calls so local-function lexical targets and
-    // value-shadowing evidence are persisted for existing indexes.
-    // バージョン 15 (#5188) は既存 index の C# call を再抽出し、local function の
-    // 字句 target と value shadowing evidence を永続化する。
-    public const int CSharpContractVersion = 15;
+    // Version 16 (#5192) re-extracts C# symbols so test-method taxonomy from
+    // multiline attribute blocks is persisted for existing indexes.
+    // バージョン 16 (#5192) は既存 index の C# symbol を再抽出し、複数行の
+    // attribute block から得た test method taxonomy を永続化する。
+    public const int CSharpContractVersion = 16;
     public const int DockerfileContractVersion = 2;
     public const int MakefileContractVersion = 2;
     public const int StyleAndXamlContractVersion = 2;

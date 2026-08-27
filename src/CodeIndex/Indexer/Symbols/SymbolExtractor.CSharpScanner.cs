@@ -3916,12 +3916,15 @@ public static partial class SymbolExtractor
         bool applyCSharpRegexProbeOptimizations,
         CSharpRegexProbeCounts? csharpRegexProbeCounts,
         out int[]?[] collapsedToRaw,
-        out string[] scopeLines)
+        out string[] scopeLines,
+        out bool[] testMethodAttributedDeclarationLines)
     {
         var matchLines = new string[rawLines.Length];
         collapsedToRaw = new int[]?[rawLines.Length];
         scopeLines = new string[rawLines.Length];
+        testMethodAttributedDeclarationLines = new bool[rawLines.Length];
         var csharpLexState = new CSharpLexState();
+        var testAttributeScanner = new CSharpTestAttributePrefixScanner();
         var inLeadingAttributeBlock = false;
         var attributeBracketDepth = 0;
         var attributeParenDepth = 0;
@@ -3937,6 +3940,8 @@ public static partial class SymbolExtractor
             // masking が必要であり、汎用 structural masking だけでは全 C# literal を扱えない。
             scopeLines[lineIndex] = BlankCSharpStringDelimitersForCrossLineScan(
                 lexedLine.SanitizedLine);
+            testMethodAttributedDeclarationLines[lineIndex] =
+                testAttributeScanner.ScanLine(scopeLines[lineIndex]);
             matchLines[lineIndex] = CollapseCSharpGenericTypeWhitespace(
                 StripLeadingCSharpAttributeLists(
                     lexedLine.SanitizedLine,

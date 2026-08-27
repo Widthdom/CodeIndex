@@ -1289,6 +1289,13 @@ the public arrays at runtime.
 | `volume` | Dockerfile `VOLUME` paths | Container storage search symbol |
 | `workdir` | Dockerfile `WORKDIR` paths | Container filesystem search symbol |
 
+For C#, `test.method` ownership is determined from the complete leading attribute
+block rather than from the immediately preceding physical line. The bounded scanner
+reuses the C# lexical masking pass, so multiline attribute arguments and consecutive
+attribute lists are supported while brackets and test-like names in comments or
+normal, verbatim, raw, interpolated, and character literals are ignored. Explicit
+`return:`, `assembly:`, and `module:` targets do not classify a method.
+
 `SymbolKindCatalog.CompatibilityKindFamilies` maps both `typealias` and
 `type_parameter` to the broad `type` family for consumers that only understand
 the older coarse taxonomy. The persisted `kind` remains semantic, and `--kind`
@@ -5352,6 +5359,13 @@ test も更新してください。公開 array を実行時に変更しては�
 | `variable` | variable binding | Search/filter symbol |
 | `volume` | Dockerfile `VOLUME` path | container storage search symbol |
 | `workdir` | Dockerfile `WORKDIR` path | container filesystem search symbol |
+
+C# の `test.method` 所有権は、直前の物理行だけではなく、先頭に連続する attribute
+block 全体から判定します。上限付き scanner は C# の字句 masking pass を再利用するため、
+複数行の attribute 引数と連続する attribute list を扱いつつ、comment、通常文字列、
+verbatim 文字列、raw 文字列、interpolated 文字列、文字 literal 内の bracket や test 風の
+名前を無視します。明示的な `return:`、`assembly:`、`module:` target は method を
+`test.method` に分類しません。
 
 古い粗い taxonomy だけを理解する consumer 向けに、
 `SymbolKindCatalog.CompatibilityKindFamilies` は `typealias` と

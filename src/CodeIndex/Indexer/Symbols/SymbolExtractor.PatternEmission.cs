@@ -34,7 +34,8 @@ public static partial class SymbolExtractor
         List<SymbolRecord> Symbols,
         SymbolExtractionState ExtractionState,
         HashSet<SymbolLineIdentity>? CssSeenSymbols,
-        HashSet<string>? DockerfileStageNames);
+        HashSet<string>? DockerfileStageNames,
+        bool IsCSharpTestMethod);
 
     private static string EmitPatternSymbols(PatternSymbolEmissionContext context)
     {
@@ -55,7 +56,7 @@ public static partial class SymbolExtractor
 
         if (context.Language == "csharp"
             && context.Pattern.Kind == "function"
-            && IsCSharpTestMethod(context.Lines, context.LineIndex))
+            && context.IsCSharpTestMethod)
         {
             kind = "test.method";
         }

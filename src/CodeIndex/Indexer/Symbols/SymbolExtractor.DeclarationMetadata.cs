@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.RegularExpressions;
 using CodeIndex.Models;
 
@@ -119,58 +120,255 @@ public static partial class SymbolExtractor
         return chars is null ? line : new string(chars);
     }
 
-    private static bool IsCSharpTestMethod(string[] lines, int declarationLineIndex)
+    private const int CSharpTestAttributeMaxLines = 128;
+    private const int CSharpTestAttributeMaxCharacters = 32 * 1024;
+    private const int CSharpTestAttributeMaxItems = 64;
+    private const int CSharpTestAttributeMaxNameCharacters = 512;
+
+    private static bool IsCSharpTestMethod(
+        bool[] attributedDeclarationLines,
+        int declarationLineIndex,
+        bool isFunction)
     {
-        var scannedAttributeLine = false;
-        for (var lineIndex = declarationLineIndex; lineIndex >= 0; lineIndex--)
-        {
-            var trimmed = lines[lineIndex].TrimStart();
-            if (trimmed.Length == 0)
-                return false;
-
-            if (!trimmed.StartsWith('['))
-            {
-                if (lineIndex == declarationLineIndex && !scannedAttributeLine)
-                    continue;
-
-                return false;
-            }
-
-            scannedAttributeLine = true;
-            if (CSharpLineHasTestMethodAttribute(trimmed))
-                return true;
-
-            var remainderIndex = trimmed.LastIndexOf(']');
-            if (remainderIndex < 0)
-                return false;
-
-            var remainder = trimmed[(remainderIndex + 1)..].TrimStart();
-            if (remainder.Length > 0)
-                return false;
-        }
-
-        return false;
+        return isFunction
+            && declarationLineIndex >= 0
+            && declarationLineIndex < attributedDeclarationLines.Length
+            && attributedDeclarationLines[declarationLineIndex];
     }
 
-    private static bool CSharpLineHasTestMethodAttribute(string trimmedLine)
+    private static void ConsumeCSharpTestAttributePrefix(
+        bool[] attributedDeclarationLines,
+        int declarationLineIndex)
     {
-        var cursor = 0;
-        while (cursor < trimmedLine.Length && trimmedLine[cursor] == '[')
+        if (declarationLineIndex >= 0
+            && declarationLineIndex < attributedDeclarationLines.Length
+            && attributedDeclarationLines[declarationLineIndex])
         {
-            var closeIndex = trimmedLine.IndexOf(']', cursor + 1);
-            if (closeIndex < 0)
-                return false;
+            // An attribute prefix belongs to the first emitted declaration after it.
+            // Delaying consumption until emission avoids losing ownership to an
+            // overlapping pattern candidate that was accepted but deduplicated.
+            attributedDeclarationLines[declarationLineIndex] = false;
+        }
+    }
 
-            var content = trimmedLine[(cursor + 1)..closeIndex];
-            if (CSharpTestMethodAttributeRegex.IsMatch(content))
-                return true;
+    private sealed class CSharpTestAttributePrefixScanner
+    {
+        private readonly StringBuilder _attributeName = new(64);
+        private bool _inAttributeSection;
+        private bool _pendingAttributePrefix;
+        private bool _blockHasTestAttribute;
+        private bool _sectionHasTestAttribute;
+        private bool _sectionTargetIgnored;
+        private bool _itemNameFinalized;
+        private bool _budgetExceeded;
+        private int _bracketDepth;
+        private int _parenthesisDepth;
+        private int _blockLineCount;
+        private int _blockCharacterCount;
+        private int _blockItemCount;
 
-            cursor = closeIndex + 1;
-            while (cursor < trimmedLine.Length && char.IsWhiteSpace(trimmedLine[cursor]))
+        public bool ScanLine(string sanitizedLine)
+        {
+            var firstNonWhitespace = 0;
+            while (firstNonWhitespace < sanitizedLine.Length
+                   && char.IsWhiteSpace(sanitizedLine[firstNonWhitespace]))
+            {
+                firstNonWhitespace++;
+            }
+
+            if (!_inAttributeSection && !_pendingAttributePrefix)
+            {
+                if (firstNonWhitespace >= sanitizedLine.Length
+                    || sanitizedLine[firstNonWhitespace] != '[')
+                {
+                    return false;
+                }
+
+                ResetBlock();
+            }
+
+            CountLine();
+            var cursor = 0;
+            while (cursor < sanitizedLine.Length)
+            {
+                var ch = sanitizedLine[cursor];
+                if (!_inAttributeSection)
+                {
+                    if (char.IsWhiteSpace(ch))
+                    {
+                        CountCharacter();
+                        cursor++;
+                        continue;
+                    }
+
+                    if (ch == '[')
+                    {
+                        StartSection();
+                        CountCharacter();
+                        cursor++;
+                        continue;
+                    }
+
+                    var isAttributedDeclaration = !_budgetExceeded
+                        && _pendingAttributePrefix
+                        && _blockHasTestAttribute;
+                    ResetBlock();
+                    return isAttributedDeclaration;
+                }
+
+                CountCharacter();
                 cursor++;
+
+                if (ch == '[')
+                {
+                    _bracketDepth++;
+                    continue;
+                }
+
+                if (ch == ']')
+                {
+                    _bracketDepth--;
+                    if (_bracketDepth == 0)
+                    {
+                        CompleteItem();
+                        if (!_sectionTargetIgnored)
+                            _blockHasTestAttribute |= _sectionHasTestAttribute;
+
+                        _inAttributeSection = false;
+                        _pendingAttributePrefix = true;
+                        _parenthesisDepth = 0;
+                    }
+
+                    continue;
+                }
+
+                if (_bracketDepth != 1)
+                    continue;
+
+                if (ch == '(')
+                {
+                    if (_parenthesisDepth == 0)
+                        FinalizeItemName();
+                    _parenthesisDepth++;
+                    continue;
+                }
+
+                if (ch == ')' && _parenthesisDepth > 0)
+                {
+                    _parenthesisDepth--;
+                    continue;
+                }
+
+                if (_parenthesisDepth != 0)
+                    continue;
+
+                if (ch == ',')
+                {
+                    CompleteItem();
+                    continue;
+                }
+
+                if (ch == ':' && IsTargetSpecifier(_attributeName, out var ignoreTarget))
+                {
+                    _sectionTargetIgnored = ignoreTarget;
+                    _attributeName.Clear();
+                    _itemNameFinalized = false;
+                    continue;
+                }
+
+                if (!char.IsWhiteSpace(ch) && !_itemNameFinalized)
+                {
+                    if (_attributeName.Length >= CSharpTestAttributeMaxNameCharacters)
+                    {
+                        _budgetExceeded = true;
+                    }
+                    else
+                    {
+                        _attributeName.Append(ch);
+                    }
+                }
+            }
+
+            return false;
         }
 
-        return false;
+        private void StartSection()
+        {
+            _inAttributeSection = true;
+            _sectionHasTestAttribute = false;
+            _sectionTargetIgnored = false;
+            _itemNameFinalized = false;
+            _bracketDepth = 1;
+            _parenthesisDepth = 0;
+            _attributeName.Clear();
+        }
+
+        private void CompleteItem()
+        {
+            FinalizeItemName();
+            _blockItemCount++;
+            if (_blockItemCount > CSharpTestAttributeMaxItems)
+                _budgetExceeded = true;
+
+            _attributeName.Clear();
+            _itemNameFinalized = false;
+        }
+
+        private void FinalizeItemName()
+        {
+            if (_itemNameFinalized)
+                return;
+
+            if (!_budgetExceeded
+                && _attributeName.Length > 0
+                && CSharpTestMethodAttributeRegex.IsMatch(_attributeName.ToString()))
+            {
+                _sectionHasTestAttribute = true;
+            }
+
+            _itemNameFinalized = true;
+        }
+
+        private static bool IsTargetSpecifier(StringBuilder value, out bool ignoreTarget)
+        {
+            var target = value.ToString();
+            var isTarget = target is
+                "assembly" or "event" or "field" or "method" or "module" or
+                "param" or "property" or "return" or "type" or "typevar";
+            ignoreTarget = target is "assembly" or "module" or "return";
+            return isTarget;
+        }
+
+        private void CountLine()
+        {
+            _blockLineCount++;
+            if (_blockLineCount > CSharpTestAttributeMaxLines)
+                _budgetExceeded = true;
+        }
+
+        private void CountCharacter()
+        {
+            _blockCharacterCount++;
+            if (_blockCharacterCount > CSharpTestAttributeMaxCharacters)
+                _budgetExceeded = true;
+        }
+
+        private void ResetBlock()
+        {
+            _inAttributeSection = false;
+            _pendingAttributePrefix = false;
+            _blockHasTestAttribute = false;
+            _sectionHasTestAttribute = false;
+            _sectionTargetIgnored = false;
+            _itemNameFinalized = false;
+            _budgetExceeded = false;
+            _bracketDepth = 0;
+            _parenthesisDepth = 0;
+            _blockLineCount = 0;
+            _blockCharacterCount = 0;
+            _blockItemCount = 0;
+            _attributeName.Clear();
+        }
     }
 
     private static void AddCppFriendDeclarationSymbol(
