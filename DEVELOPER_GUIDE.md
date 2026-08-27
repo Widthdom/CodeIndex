@@ -1289,6 +1289,18 @@ the public arrays at runtime.
 | `volume` | Dockerfile `VOLUME` paths | Container storage search symbol |
 | `workdir` | Dockerfile `WORKDIR` paths | Container filesystem search symbol |
 
+For C#, `test.method` ownership is determined from the complete leading attribute
+block rather than from the immediately preceding physical line. The bounded scanner
+reuses the C# lexical masking pass, so multiline attribute arguments and consecutive
+attribute lists are supported while generic attribute type arguments stay within their
+own item and brackets or test-like names in comments and normal, verbatim, raw,
+interpolated, and character literals are ignored. Explicit
+`return:`, `assembly:`, and `module:` targets do not classify a method. A declaration-
+context gate tracks expression-initializer braces and rejects bracket-led collection
+expressions. Only shaped ordinary method declarations with return types can receive the
+test taxonomy; fields, indexers, and constructors (including implicit-return partial
+constructors) consume their attribute ownership without being reclassified.
+
 `SymbolKindCatalog.CompatibilityKindFamilies` maps both `typealias` and
 `type_parameter` to the broad `type` family for consumers that only understand
 the older coarse taxonomy. The persisted `kind` remains semantic, and `--kind`
@@ -5362,6 +5374,17 @@ test も更新してください。公開 array を実行時に変更しては�
 | `variable` | variable binding | Search/filter symbol |
 | `volume` | Dockerfile `VOLUME` path | container storage search symbol |
 | `workdir` | Dockerfile `WORKDIR` path | container filesystem search symbol |
+
+C# の `test.method` 所有権は、直前の物理行だけではなく、先頭に連続する attribute
+block 全体から判定します。上限付き scanner は C# の字句 masking pass を再利用するため、
+複数行の attribute 引数と連続する attribute list を扱い、generic attribute の型引数を
+同じ item 内に保ちつつ、comment、通常文字列、verbatim 文字列、raw 文字列、interpolated
+文字列、文字 literal 内の bracket や test 風の名前を無視します。明示的な `return:`、
+`assembly:`、`module:` target は method を `test.method` に分類しません。declaration
+context gate は expression initializer の brace を追跡して行頭 bracket の collection
+expression を拒否します。return type を持つ shaped な通常 method declaration だけが test
+taxonomy を受け取り、field、indexer、constructor（暗黙 return の partial constructor を含む）
+は attribute 所有権を消費しますが、再分類しません。
 
 古い粗い taxonomy だけを理解する consumer 向けに、
 `SymbolKindCatalog.CompatibilityKindFamilies` は `typealias` と

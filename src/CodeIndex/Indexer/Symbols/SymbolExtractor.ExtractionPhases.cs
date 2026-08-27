@@ -80,6 +80,7 @@ public static partial class SymbolExtractor
 
             int[]?[] csharpMatchColumnToRaw = null!;
             string[]? csharpScopeLines = null;
+            bool[]? csharpTestMethodAttributedDeclarationLines = null;
             CSharpMatchLines = lang == "csharp"
                 ? BuildCSharpMatchLines(
                     lines,
@@ -89,10 +90,12 @@ public static partial class SymbolExtractor
                     applyCSharpRegexProbeOptimizations,
                     csharpRegexProbeCounts,
                     out csharpMatchColumnToRaw,
-                    out csharpScopeLines)
+                    out csharpScopeLines,
+                    out csharpTestMethodAttributedDeclarationLines)
                 : null;
             CSharpMatchColumnToRaw = csharpMatchColumnToRaw;
             CSharpScopeLines = csharpScopeLines;
+            CSharpTestMethodAttributedDeclarationLines = csharpTestMethodAttributedDeclarationLines;
             GetCSharpLineStartStates = lang == "csharp"
                 ? BuildCSharpLineStartStates
                 : null;
@@ -120,6 +123,7 @@ public static partial class SymbolExtractor
         public int[]?[] CSharpMatchColumnToRaw { get; }
         public string[]? CSharpMatchLines { get; }
         public string[]? CSharpScopeLines { get; }
+        public bool[]? CSharpTestMethodAttributedDeclarationLines { get; }
         public Func<CSharpLexState[]>? GetCSharpLineStartStates { get; }
         public Func<JavaScriptScopePrivacyFlags[][]>? GetPrivateScopeColumns { get; }
         public Func<bool[]?>? GetCSharpSwitchExpressionLines { get; }
