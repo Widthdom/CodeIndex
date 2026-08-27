@@ -32,36 +32,41 @@ public partial class IndexCommandRunnerTests
 
             foreach (var testCase in cases)
             {
-                foreach (var json in new[] { false, true })
+                foreach (var useIndexAlias in new[] { false, true })
                 {
-                    var args = new List<string>
+                    foreach (var json in new[] { false, true })
                     {
-                        "--db",
-                        testCase.InputPath,
-                        "--dry-run",
-                    };
-                    if (json)
-                        args.Add("--json");
-                    if (testCase.ShowPaths)
-                        args.Add("--show-paths");
+                        var args = new List<string>
+                        {
+                            "--db",
+                            testCase.InputPath,
+                            "--dry-run",
+                        };
+                        if (json)
+                            args.Add("--json");
+                        if (testCase.ShowPaths)
+                            args.Add("--show-paths");
 
-                    var (exitCode, output) = RunOptimizePreviewAndCapture(args.ToArray());
+                        var (exitCode, output) = RunOptimizePreviewAndCapture(
+                            args.ToArray(),
+                            useIndexAlias);
 
-                    Assert.Equal(CommandExitCodes.Success, exitCode);
-                    if (json)
-                    {
-                        using var document = JsonDocument.Parse(output);
-                        Assert.Equal(
-                            testCase.ExpectedPath,
-                            document.RootElement.GetProperty("db_path").GetString());
+                        Assert.Equal(CommandExitCodes.Success, exitCode);
+                        if (json)
+                        {
+                            using var document = JsonDocument.Parse(output);
+                            Assert.Equal(
+                                testCase.ExpectedPath,
+                                document.RootElement.GetProperty("db_path").GetString());
+                        }
+                        else
+                        {
+                            Assert.Contains(testCase.ExpectedPath, output, StringComparison.Ordinal);
+                        }
+
+                        if (!testCase.ShowPaths)
+                            Assert.DoesNotContain(dbPath, output, StringComparison.Ordinal);
                     }
-                    else
-                    {
-                        Assert.Contains(testCase.ExpectedPath, output, StringComparison.Ordinal);
-                    }
-
-                    if (!testCase.ShowPaths)
-                        Assert.DoesNotContain(dbPath, output, StringComparison.Ordinal);
                 }
             }
 
@@ -82,7 +87,9 @@ public partial class IndexCommandRunnerTests
         }
     }
 
-    private (int ExitCode, string Output) RunOptimizePreviewAndCapture(string[] args)
+    private (int ExitCode, string Output) RunOptimizePreviewAndCapture(
+        string[] args,
+        bool useIndexAlias)
     {
         lock (TestConsoleLock.Gate)
         {
@@ -91,10 +98,16 @@ public partial class IndexCommandRunnerTests
             {
                 using var stdout = new StringWriter();
                 Console.SetOut(stdout);
-                var exitCode = IndexCommandRunner.RunOptimizeFts(
-                    args,
-                    _jsonOptions,
-                    forceLogicalObjectSizeFallbackForTesting: true);
+                var exitCode = useIndexAlias
+                    ? IndexCommandRunner.Run(
+                        [".", "--optimize", .. args],
+                        _jsonOptions,
+                        cancellationForTesting: null,
+                        output: null)
+                    : IndexCommandRunner.RunOptimizeFts(
+                        args,
+                        _jsonOptions,
+                        forceLogicalObjectSizeFallbackForTesting: true);
                 return (exitCode, stdout.ToString());
             }
             finally
