@@ -173,6 +173,8 @@ public static partial class SymbolExtractor
             SkipCodeOwnersWhitespace(span, ref index);
             if (index >= span.Length)
                 break;
+            if (span[index] == '#')
+                break;
 
             var ownerColumn = index;
             while (index < span.Length && !char.IsWhiteSpace(span[index]))
@@ -305,14 +307,24 @@ public static partial class SymbolExtractor
     {
         if (!reportedDiagnostics.Add(category))
             return;
-        var added = false;
-        AddStructuredDataDiagnosticSymbol(
-            symbols,
-            fileId,
-            category,
-            line,
-            lines,
-            message,
-            ref added);
+
+        var signatureIndex = Math.Clamp(line - 1, 0, Math.Max(0, lines.Length - 1));
+        var signature = lines.Length == 0 ? message : $"{message} {lines[signatureIndex].Trim()}";
+        var diagnostic = new SymbolRecord
+        {
+            FileId = fileId,
+            Kind = "annotation",
+            SubKind = "extraction_diagnostic",
+            Name = category,
+            Line = Math.Max(1, line),
+            StartLine = Math.Max(1, line),
+            EndLine = Math.Max(1, line),
+            Signature = LimitStructuredDataSignature(signature),
+        };
+
+        if (symbols.Count >= StructuredDataMaxSymbols)
+            symbols[^1] = diagnostic;
+        else
+            symbols.Add(diagnostic);
     }
 }

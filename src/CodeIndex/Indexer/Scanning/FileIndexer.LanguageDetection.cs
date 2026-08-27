@@ -396,7 +396,8 @@ public partial class FileIndexer
                 ? null
                 : ObservePatternConfigurationDirectoryExists,
             patternConfigInputObserver: ObservePatternConfigurationInput,
-            deferUnknownScriptHeader: deferUnknownScriptHeader);
+            deferUnknownScriptHeader: deferUnknownScriptHeader,
+            repositoryRoot: _ignoreRuleRoot);
 
     private IReadOnlyDictionary<string, string> LoadLanguageMapOverridesForIndexing(string? startDirectory)
     {
@@ -531,7 +532,8 @@ public partial class FileIndexer
         Func<string, Stream>? openPatternConfig = null,
         Func<string, bool, bool>? patternConfigDirectoryExists = null,
         Action<string, ReadOnlyMemory<byte>?, long?>? patternConfigInputObserver = null,
-        bool deferUnknownScriptHeader = false)
+        bool deferUnknownScriptHeader = false,
+        string? repositoryRoot = null)
     {
         var fileName = Path.GetFileName(filePath);
         var ext = Path.GetExtension(fileName);
@@ -552,12 +554,14 @@ public partial class FileIndexer
         }
 
         // Location-scoped special files are checked before filename-only rules. Indexing passes
-        // projectRoot, so arbitrary nested CODEOWNERS files do not inherit GitHub semantics.
+        // the enclosing Git worktree root (with the scan root as the non-Git fallback), so a scan
+        // rooted at a subdirectory cannot promote an arbitrary nested CODEOWNERS file.
         // location scoped special file は filename-only rule より先に判定する。indexing path は
-        // projectRoot を渡すため、任意の nested CODEOWNERS に GitHub semantics を付与しない。
+        // enclosing Git worktree root（非 Git では scan root）を渡すため、subdirectory scan が
+        // 任意の nested CODEOWNERS に GitHub semantics を付与することはない。
         if (TryGetRepositoryRelativePathLanguage(
                 filePath,
-                projectRoot,
+                repositoryRoot ?? projectRoot,
                 out var repositoryPathLanguage))
         {
             return new LanguageDetectionResult(FileProbeStatus.Supported, repositoryPathLanguage);
@@ -728,7 +732,9 @@ public partial class FileIndexer
 
         try
         {
-            relativePath = Path.GetRelativePath(projectRoot, filePath).Replace('\\', '/');
+            relativePath = Path.GetRelativePath(projectRoot, filePath);
+            if (Path.DirectorySeparatorChar == '\\')
+                relativePath = relativePath.Replace('\\', '/');
         }
         catch (Exception ex) when (ex is ArgumentException or NotSupportedException)
         {

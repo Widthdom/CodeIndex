@@ -418,7 +418,7 @@ public partial class QueryCommandRunnerTests
             Directory.CreateDirectory(Path.Combine(projectRoot, "docs"));
             File.WriteAllText(
                 Path.Combine(projectRoot, ".github", "CODEOWNERS"),
-                "# highest-precedence candidate\r\n/src/** @org/team owner@example.com\r\n/src/special/**\r\n/src/** @later\r\n");
+                "# highest-precedence candidate\r\n/src/** @org/team owner@example.com # inline comment\r\n/src/special/**\r\n/src/** @later\r\n\\#literal @escaped\r\n");
             File.WriteAllText(Path.Combine(projectRoot, "CODEOWNERS"), "* @root\n");
             File.WriteAllText(Path.Combine(projectRoot, "docs", "CODEOWNERS"), "/docs/** @docs\n");
 
@@ -456,6 +456,10 @@ public partial class QueryCommandRunnerTests
                 symbol => symbol.GetProperty("kind").GetString() == "property"
                     && symbol.GetProperty("name").GetString() == "@org/team"
                     && symbol.GetProperty("container_name").GetString() == "/src/**");
+            Assert.Contains(
+                symbols,
+                symbol => symbol.GetProperty("kind").GetString() == "annotation"
+                    && symbol.GetProperty("name").GetString() == "codeowners_unsupported_pattern");
 
             var (outlineExitCode, outlineStdout, outlineStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
                 [".github/CODEOWNERS", "--db", dbPath, "--json"],
@@ -500,6 +504,31 @@ public partial class QueryCommandRunnerTests
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
+    }
+
+    [Fact]
+    public void RunCodeOwners_GitSubdirectoryScanDoesNotPromoteNestedCandidate_Issue5198Review()
+    {
+        using var repository = TestProjectHelper.CreateTempProjectScope("cdidx_codeowners_git_subdirectory_issue5198");
+        TestProjectHelper.InitializeGitRepo(repository.Root);
+        var projectRoot = Path.Combine(repository.Root, "packages", "app");
+        Directory.CreateDirectory(projectRoot);
+        File.WriteAllText(Path.Combine(projectRoot, "CODEOWNERS"), "* @nested\n");
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+
+        var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+            [projectRoot, "--db", dbPath, "--json", "--quiet"],
+            _jsonOptions));
+        Assert.Equal(CommandExitCodes.Success, indexExitCode);
+        Assert.Equal(string.Empty, indexStderr);
+
+        var (filesExitCode, filesStdout, filesStderr) = CaptureConsole(() => QueryCommandRunner.RunFiles(
+            ["--db", dbPath, "--lang", "codeowners", "--json=array"],
+            _jsonOptions));
+        using var filesDocument = ParseJsonOutput(filesStdout);
+        Assert.Equal(CommandExitCodes.Success, filesExitCode);
+        Assert.Equal(string.Empty, filesStderr);
+        Assert.Empty(filesDocument.RootElement.EnumerateArray());
     }
 
     [Fact]

@@ -3278,11 +3278,36 @@ public partial class FileIndexerTests
         File.WriteAllText(Path.Combine(projectRoot, ".github", "codeowners"), "* @lowercase\n");
         File.WriteAllText(Path.Combine(projectRoot, "CodeOwners"), "* @mixed\n");
         File.WriteAllText(Path.Combine(projectRoot, "Docs", "CODEOWNERS"), "* @wrong-directory-case\n");
+        if (!OperatingSystem.IsWindows())
+            File.WriteAllText(Path.Combine(projectRoot, @".github\CODEOWNERS"), "* @literal-backslash\n");
 
         var scan = new FileIndexer(projectRoot, ignoreCase: true).ScanFilesDetailed();
 
         Assert.DoesNotContain(scan.FileLanguages, pair => pair.Value == "codeowners");
         Assert.Null(FileIndexer.DetectLanguage(Path.Combine(projectRoot, ".github", "codeowners")));
+    }
+
+    [Fact]
+    public void ScanFiles_CodeOwnersUsesEnclosingGitWorktreeRoot_Issue5198Review()
+    {
+        using var repository = TestProjectHelper.CreateTempProjectScope("codeindex_codeowners_git_root_issue5198");
+        var repositoryRoot = repository.Root;
+        var projectRoot = Path.Combine(repositoryRoot, "packages", "app");
+        Directory.CreateDirectory(projectRoot);
+        RunGit(repositoryRoot, "init");
+        File.WriteAllText(Path.Combine(projectRoot, "CODEOWNERS"), "* @nested\n");
+
+        var resolvedRepositoryRoot = GitHelper.TryGetRepositoryRoot(projectRoot);
+        Assert.Equal(
+            Path.TrimEndingDirectorySeparator(Path.GetFullPath(repositoryRoot)),
+            Path.TrimEndingDirectorySeparator(resolvedRepositoryRoot!));
+
+        var scan = new FileIndexer(
+            projectRoot,
+            ignoreCase: false,
+            ignoreRuleRoot: resolvedRepositoryRoot).ScanFilesDetailed();
+
+        Assert.DoesNotContain(scan.FileLanguages, pair => pair.Value == "codeowners");
     }
 
     private static readonly (string Entry, string Language)[] ExactLanguageMapEntries =

@@ -111,7 +111,7 @@ public partial class SymbolExtractorTests
             "  # comment",
             string.Empty,
             "   ",
-            "\t/src/**\t@org/team @user\towner@example.com",
+            "\t/src/**\t@org/team @user\towner@example.com # inline comment",
             "/src/special/**",
             @"\#literal @escaped",
             "/src/** @later",
@@ -137,7 +137,9 @@ public partial class SymbolExtractorTests
         Assert.All(owners, owner => Assert.Equal("owner", owner.SubKind));
         Assert.Contains(owners, owner => owner.Name == "@org/team" && owner.ContainerName == "/src/**");
 
-        var diagnostics = symbols.Where(symbol => symbol.Kind == "extraction_diagnostic").ToList();
+        var diagnostics = symbols
+            .Where(symbol => symbol.Kind == "annotation" && symbol.SubKind == "extraction_diagnostic")
+            .ToList();
         Assert.Equal(2, diagnostics.Count);
         Assert.Contains(diagnostics, diagnostic => diagnostic.Name == "codeowners_unsupported_pattern");
         Assert.Contains(diagnostics, diagnostic => diagnostic.Name == "codeowners_invalid_owner");
@@ -156,11 +158,15 @@ public partial class SymbolExtractorTests
             symbols.Count(symbol => symbol.Kind == "property" && symbol.ContainerName == "/bounded/**"));
         Assert.Contains(
             symbols,
-            symbol => symbol.Kind == "extraction_diagnostic" && symbol.Name == "codeowners_owner_budget_exceeded");
+            symbol => symbol.Kind == "annotation"
+                && symbol.SubKind == "extraction_diagnostic"
+                && symbol.Name == "codeowners_owner_budget_exceeded");
         Assert.Contains(
             symbols,
-            symbol => symbol.Kind == "extraction_diagnostic" && symbol.Name == "codeowners_rule_line_too_long");
-        Assert.True(symbols.Count(symbol => symbol.Kind == "extraction_diagnostic") <= 2);
+            symbol => symbol.Kind == "annotation"
+                && symbol.SubKind == "extraction_diagnostic"
+                && symbol.Name == "codeowners_rule_line_too_long");
+        Assert.True(symbols.Count(symbol => symbol.SubKind == "extraction_diagnostic") <= 2);
     }
 
     [Fact]
