@@ -128,9 +128,9 @@ public static partial class SymbolExtractor
     private static bool IsCSharpTestMethod(
         bool[] attributedDeclarationLines,
         int declarationLineIndex,
-        bool isFunction)
+        bool isMethodDeclaration)
     {
-        return isFunction
+        return isMethodDeclaration
             && declarationLineIndex >= 0
             && declarationLineIndex < attributedDeclarationLines.Length
             && attributedDeclarationLines[declarationLineIndex];
@@ -164,6 +164,11 @@ public static partial class SymbolExtractor
         private bool _canStartAttributePrefix = true;
         private int _bracketDepth;
         private int _parenthesisDepth;
+        private int _genericArgumentDepth;
+        private bool _inExpressionInitializer;
+        private int _expressionInitializerBraceDepth;
+        private int _codeParenthesisDepth;
+        private int _codeBracketDepth;
         private int _blockLineCount;
         private int _blockCharacterCount;
         private int _blockItemCount;
@@ -187,8 +192,7 @@ public static partial class SymbolExtractor
                 if (sanitizedLine[firstNonWhitespace] != '['
                     || !_canStartAttributePrefix)
                 {
-                    _canStartAttributePrefix =
-                        CanStartCSharpAttributePrefixAfter(sanitizedLine);
+                    UpdateCSharpAttributePrefixContext(sanitizedLine);
                     return false;
                 }
 
@@ -220,8 +224,7 @@ public static partial class SymbolExtractor
                     var isAttributedDeclaration = !_budgetExceeded
                         && _pendingAttributePrefix
                         && _blockHasTestAttribute;
-                    _canStartAttributePrefix =
-                        CanStartCSharpAttributePrefixAfter(sanitizedLine);
+                    UpdateCSharpAttributePrefixContext(sanitizedLine.AsSpan(cursor));
                     ResetBlock();
                     return isAttributedDeclaration;
                 }
@@ -247,6 +250,7 @@ public static partial class SymbolExtractor
                         _inAttributeSection = false;
                         _pendingAttributePrefix = true;
                         _parenthesisDepth = 0;
+                        _genericArgumentDepth = 0;
                     }
 
                     continue;
@@ -270,6 +274,23 @@ public static partial class SymbolExtractor
                 }
 
                 if (_parenthesisDepth != 0)
+                    continue;
+
+                if (ch == '<')
+                {
+                    if (_genericArgumentDepth == 0)
+                        FinalizeItemName();
+                    _genericArgumentDepth++;
+                    continue;
+                }
+
+                if (ch == '>' && _genericArgumentDepth > 0)
+                {
+                    _genericArgumentDepth--;
+                    continue;
+                }
+
+                if (_genericArgumentDepth != 0)
                     continue;
 
                 if (ch == ',')
@@ -302,21 +323,84 @@ public static partial class SymbolExtractor
             return false;
         }
 
-        private static bool CanStartCSharpAttributePrefixAfter(string sanitizedLine)
+        private void UpdateCSharpAttributePrefixContext(ReadOnlySpan<char> sanitizedLine)
         {
-            var trimmed = sanitizedLine.AsSpan().Trim();
+            var trimmed = sanitizedLine.Trim();
             if (trimmed.Length == 0)
-                return false;
+                return;
+
+            for (var cursor = 0; cursor < sanitizedLine.Length; cursor++)
+            {
+                var ch = sanitizedLine[cursor];
+                if (ch == '(')
+                {
+                    _codeParenthesisDepth++;
+                    continue;
+                }
+
+                if (ch == ')' && _codeParenthesisDepth > 0)
+                {
+                    _codeParenthesisDepth--;
+                    continue;
+                }
+
+                if (ch == '[')
+                {
+                    _codeBracketDepth++;
+                    continue;
+                }
+
+                if (ch == ']' && _codeBracketDepth > 0)
+                {
+                    _codeBracketDepth--;
+                    continue;
+                }
+
+                if (!_inExpressionInitializer
+                    && ch == '='
+                    && _codeParenthesisDepth == 0
+                    && _codeBracketDepth == 0
+                    && IsCSharpAssignmentOperator(sanitizedLine, cursor))
+                {
+                    _inExpressionInitializer = true;
+                    continue;
+                }
+
+                if (!_inExpressionInitializer)
+                    continue;
+
+                if (ch == '{')
+                {
+                    _expressionInitializerBraceDepth++;
+                }
+                else if (ch == '}' && _expressionInitializerBraceDepth > 0)
+                {
+                    _expressionInitializerBraceDepth--;
+                }
+                else if (ch == ';' && _expressionInitializerBraceDepth == 0)
+                {
+                    _inExpressionInitializer = false;
+                }
+            }
 
             // A declaration attribute may begin at the file start or after a completed
             // declaration/statement/body. A bracket-led line following an expression
-            // continuation (`=>`, `=`, `return`, an argument list, and so on) is instead
-            // a collection expression and must not create attribute ownership.
+            // continuation (`=>`, `=`, `return`, an argument list, and so on), including
+            // an initializer brace, is instead a collection expression and must not create
+            // attribute ownership.
             // declaration attribute は file 先頭または完了した宣言・statement・body の後に
-            // 開始できる。expression continuation 後の行頭 bracket は collection expression
-            // なので、attribute 所有権を作らない。
-            return trimmed[0] == '#'
-                || trimmed[^1] is ';' or '{' or '}';
+            // 開始できる。initializer brace を含む expression continuation 後の行頭 bracket は
+            // collection expression なので、attribute 所有権を作らない。
+            _canStartAttributePrefix = !_inExpressionInitializer
+                && (trimmed[0] == '#'
+                    || trimmed[^1] is ';' or '{' or '}');
+        }
+
+        private static bool IsCSharpAssignmentOperator(ReadOnlySpan<char> line, int index)
+        {
+            var previous = index > 0 ? line[index - 1] : '\0';
+            var next = index + 1 < line.Length ? line[index + 1] : '\0';
+            return next != '=' && previous is not ('=' or '!' or '<' or '>');
         }
 
         private void StartSection()
@@ -327,6 +411,7 @@ public static partial class SymbolExtractor
             _itemNameFinalized = false;
             _bracketDepth = 1;
             _parenthesisDepth = 0;
+            _genericArgumentDepth = 0;
             _attributeName.Clear();
         }
 
@@ -391,6 +476,7 @@ public static partial class SymbolExtractor
             _budgetExceeded = false;
             _bracketDepth = 0;
             _parenthesisDepth = 0;
+            _genericArgumentDepth = 0;
             _blockLineCount = 0;
             _blockCharacterCount = 0;
             _blockItemCount = 0;

@@ -46,7 +46,8 @@ public static partial class SymbolExtractor
                 attributedDeclarationLines,
                 i,
                 shapedSymbol.Kind == "function"
-                    && shapedSymbol.RawReturnType != null);
+                    && shapedSymbol.RawReturnType != null
+                    && match.Groups["name"].Value != "this");
         ref var scanState = ref extraction.ScanState;
         ref var pendingRecordPrimaryComponents = ref extraction.PendingRecordPrimaryComponents;
         ref var recordPrimaryComponentParentIndex = ref extraction.RecordPrimaryComponentParentIndex;

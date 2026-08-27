@@ -36,9 +36,25 @@ public partial class QueryCommandRunnerTests
                 """
                 namespace Demo;
 
+                public sealed class Fact { }
+                public sealed class MetadataAttribute<TLeft, TRight> : System.Attribute { }
+
                 public class Calculator
                 {
                     private void HelperMethod() { }
+
+                    [Metadata<
+                        string,
+                        Fact>]
+                    private void GenericAttributeHelper() { }
+
+                    private static int FactValue => 1;
+                    private int[][] NestedCollectionInitializer =
+                    {
+                        [
+                            FactValue
+                        ]
+                    }; private void InitializerFollowingHelper() { }
                 }
                 """);
             using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
@@ -117,6 +133,8 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(string.Empty, excludedStderr);
             Assert.DoesNotContain("MultilineTheory", excludedNames);
             Assert.Contains("HelperMethod", excludedNames);
+            Assert.Contains("GenericAttributeHelper", excludedNames);
+            Assert.Contains("InitializerFollowingHelper", excludedNames);
         }
         finally
         {

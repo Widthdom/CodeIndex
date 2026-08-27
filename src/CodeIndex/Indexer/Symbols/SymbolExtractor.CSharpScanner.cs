@@ -811,12 +811,13 @@ public static partial class SymbolExtractor
         foreach (var symbol in symbols)
         {
             var signature = symbol.Signature?.TrimStart();
-            if (symbol.Kind == "function"
+            if (symbol.Kind is "function" or "test.method"
                 && symbol.ReturnType == "void"
                 && string.Equals(symbol.Name, symbol.ContainerName, StringComparison.Ordinal)
                 && signature != null
                 && CSharpPartialFunctionDeclarationSignatureRegex.IsMatch(signature))
             {
+                symbol.Kind = "function";
                 symbol.ReturnType = null;
             }
         }

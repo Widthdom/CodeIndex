@@ -539,6 +539,17 @@ public partial class SymbolExtractorTests
             [System.AttributeUsage(System.AttributeTargets.Constructor)]
             public sealed class ConstructorFactAttribute : System.Attribute { }
 
+            [System.AttributeUsage(System.AttributeTargets.Property)]
+            public sealed class IndexerFactAttribute : System.Attribute
+            {
+                public IndexerFactAttribute(string marker) { }
+            }
+
+            [System.AttributeUsage(System.AttributeTargets.Method)]
+            public sealed class MetadataAttribute<TLeft, TRight> : System.Attribute { }
+
+            public sealed class Fact { }
+
             public class MultilineAttributeTests
             {
                 [Theory]
@@ -625,10 +636,31 @@ public partial class SymbolExtractorTests
                     "constructor marker")]
                 public MultilineAttributeTests() { }
 
+                [ConstructorFact]
+                [System.Obsolete(
+                    "partial constructor marker")]
+                partial MultilineAttributeTests();
+
+                [IndexerFact(
+                    "indexer marker")]
+                public int this[int index] => index;
+
+                [Metadata<
+                    string,
+                    Fact>]
+                public void GenericAttributeTypeArgumentDoesNotSpoofTest() { }
+
                 public int[] CollectionExpression =>
                 [
                     Fact
                 ]; public void CollectionExpressionDoesNotSpoofTest() { }
+
+                public int[][] NestedCollectionInitializer =
+                {
+                    [
+                        Fact
+                    ]
+                }; public void NestedCollectionInitializerDoesNotSpoofTest() { }
 
                 public static int Fact => 1;
                 public static int[] Cases => [4];
@@ -659,6 +691,8 @@ public partial class SymbolExtractorTests
             "MemberAfterAttributedProperty",
             "MultilineAttributeTests",
             "CollectionExpressionDoesNotSpoofTest",
+            "GenericAttributeTypeArgumentDoesNotSpoofTest",
+            "NestedCollectionInitializerDoesNotSpoofTest",
         };
 
         Assert.All(
@@ -677,6 +711,14 @@ public partial class SymbolExtractorTests
         Assert.Contains(
             symbols,
             symbol => symbol.Kind == "field" && symbol.Name == "AttributedReadonlyField");
+        Assert.Contains(
+            symbols,
+            symbol => symbol.Kind == "function"
+                && symbol.Signature?.Contains("this[int index]", StringComparison.Ordinal) == true);
+        Assert.DoesNotContain(
+            symbols,
+            symbol => symbol.Kind == "test.method"
+                && symbol.Signature?.Contains("this[int index]", StringComparison.Ordinal) == true);
     }
 
     [Fact]
