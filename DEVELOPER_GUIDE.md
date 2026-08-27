@@ -1859,6 +1859,16 @@ marking the bundle non-identity-scoped. C# call resolution may narrow ordinary r
 overloads by positional argument count only. Named arguments, optional/default parameters,
 `params`, generic method inference, and incomplete syntax remain ambiguous. Extension receiver
 adjustment and dynamic receiver types are outside this arity helper.
+C# constructor resolution applies the same conservative contract to direct calls and after an
+unqualified `using` alias is normalized: keep the canonical target leaf and qualifier for identity,
+but preserve the physical source line and anchor the lexical constructor token with its source
+column and span when counting positional arguments. A bounded multiline context may complete the
+balanced scan. If any primary or explicit constructor in the target family has optional/default or
+`params` binding, do not use argument count to narrow that family. Named arguments, raw strings,
+interpolated strings with embedded expressions, relational/generic angle syntax that the bounded
+scanner cannot distinguish, malformed persisted spans, and malformed calls likewise remain
+ambiguous. Simple conditional expressions and `global::` qualifiers are positional expressions
+rather than named-argument syntax.
 Path/line resolution must select `symbols.id` and enter the same candidate-bundle builder as
 name resolution; do not hand graph loaders only the display name. Each bounded references,
 callers, and callees section computes its own stable-order page and authoritative total.
@@ -5971,6 +5981,15 @@ candidate row を維持しつつ bundle を non-identity-scoped とし、
 parameter overload を位置引数個数だけで絞り込めます。named argument、optional/default parameter、
 `params`、generic method inference、不完全な構文は曖昧なままにします。extension の receiver
 調整と dynamic receiver の型は、この arity helper の対象外です。
+C# constructor resolution では direct call と未修飾の `using` alias を正規化した後の call の
+両方に同じ保守的な契約を適用します。identity には canonical な target leaf と qualifier を保持し、
+位置引数を数える際は物理 source line を維持して source column と span で字句上の constructor
+token を特定します。上限付きの multiline context で balanced scan を完結できます。target family
+内の primary / explicit constructor に optional/default または `params` binding を持つものが1つでも
+あれば、引数個数でその family を絞り込まないでください。named argument、raw string、embedded
+expression を含む interpolated string、上限付き scanner では区別できない relational / generic angle syntax、
+不正な persisted span、不正な call も同様に曖昧なままにします。単純な conditional expression と
+`global::` qualifier は named-argument syntax ではなく位置引数 expression として扱います。
 path/line resolution は `symbols.id` を select し、name resolution と同じ
 candidate-bundle builder に入れてください。graph loader に display name だけを渡しては
 なりません。上限付きの references、callers、callees section は、それぞれ安定順序の page と
