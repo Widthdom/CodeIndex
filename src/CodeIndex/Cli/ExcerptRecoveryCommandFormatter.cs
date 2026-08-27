@@ -190,8 +190,8 @@ internal static class ExcerptRecoveryCommandFormatter
         => ResolveShell(
             TryGetParentProcessName(),
             OperatingSystem.IsWindows(),
-            hasMsysEnvironment: !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("MSYSTEM")),
-            hasPowerShellEnvironment: !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("PSModulePath")));
+            hasMsysEnvironment: !string.IsNullOrWhiteSpace(CdidxEnvironment.GetEnvironmentVariable("MSYSTEM")),
+            hasPowerShellEnvironment: !string.IsNullOrWhiteSpace(CdidxEnvironment.GetEnvironmentVariable("PSModulePath")));
 
     internal static RecoveryCommandShell ResolveShell(
         string? parentProcessName,
