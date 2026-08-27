@@ -811,12 +811,13 @@ public static partial class SymbolExtractor
         foreach (var symbol in symbols)
         {
             var signature = symbol.Signature?.TrimStart();
-            if (symbol.Kind == "function"
+            if (symbol.Kind is "function" or "test.method"
                 && symbol.ReturnType == "void"
                 && string.Equals(symbol.Name, symbol.ContainerName, StringComparison.Ordinal)
                 && signature != null
                 && CSharpPartialFunctionDeclarationSignatureRegex.IsMatch(signature))
             {
+                symbol.Kind = "function";
                 symbol.ReturnType = null;
             }
         }
@@ -3916,12 +3917,15 @@ public static partial class SymbolExtractor
         bool applyCSharpRegexProbeOptimizations,
         CSharpRegexProbeCounts? csharpRegexProbeCounts,
         out int[]?[] collapsedToRaw,
-        out string[] scopeLines)
+        out string[] scopeLines,
+        out bool[] testMethodAttributedDeclarationLines)
     {
         var matchLines = new string[rawLines.Length];
         collapsedToRaw = new int[]?[rawLines.Length];
         scopeLines = new string[rawLines.Length];
+        testMethodAttributedDeclarationLines = new bool[rawLines.Length];
         var csharpLexState = new CSharpLexState();
+        var testAttributeScanner = new CSharpTestAttributePrefixScanner();
         var inLeadingAttributeBlock = false;
         var attributeBracketDepth = 0;
         var attributeParenDepth = 0;
@@ -3937,6 +3941,8 @@ public static partial class SymbolExtractor
             // masking が必要であり、汎用 structural masking だけでは全 C# literal を扱えない。
             scopeLines[lineIndex] = BlankCSharpStringDelimitersForCrossLineScan(
                 lexedLine.SanitizedLine);
+            testMethodAttributedDeclarationLines[lineIndex] =
+                testAttributeScanner.ScanLine(scopeLines[lineIndex]);
             matchLines[lineIndex] = CollapseCSharpGenericTypeWhitespace(
                 StripLeadingCSharpAttributeLists(
                     lexedLine.SanitizedLine,

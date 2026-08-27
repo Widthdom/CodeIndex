@@ -40,10 +40,19 @@ public static partial class SymbolExtractor
         var extractionState = extraction.ExtractionState;
         var cssSeenSymbols = extraction.CssSeenSymbols;
         var dockerfileStageNames = extraction.DockerfileStageNames;
+        var isCSharpTestMethod = lang == "csharp"
+            && scanInputs.CSharpTestMethodAttributedDeclarationLines is { } attributedDeclarationLines
+            && IsCSharpTestMethod(
+                attributedDeclarationLines,
+                i,
+                shapedSymbol.Kind == "function"
+                    && shapedSymbol.RawReturnType != null
+                    && match.Groups["name"].Value != "this");
         ref var scanState = ref extraction.ScanState;
         ref var pendingRecordPrimaryComponents = ref extraction.PendingRecordPrimaryComponents;
         ref var recordPrimaryComponentParentIndex = ref extraction.RecordPrimaryComponentParentIndex;
         emittedKind = kind;
+        var symbolCountBeforeEmission = symbols.Count;
         kind = EmitPatternSymbols(
             new PatternSymbolEmissionContext(
                 fileId,
@@ -68,7 +77,16 @@ public static partial class SymbolExtractor
                 symbols,
                 extractionState,
                 cssSeenSymbols,
-                dockerfileStageNames));
+                dockerfileStageNames,
+                isCSharpTestMethod));
+        if (lang == "csharp"
+            && symbols.Count > symbolCountBeforeEmission
+            && scanInputs.CSharpTestMethodAttributedDeclarationLines is { } emittedAttributeLines)
+        {
+            ConsumeCSharpTestAttributePrefix(
+                emittedAttributeLines,
+                i);
+        }
 
         if (lang == "css"
             && pattern.Kind == "namespace"
