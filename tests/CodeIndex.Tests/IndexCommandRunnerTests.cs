@@ -6852,7 +6852,7 @@ public sealed class Caller
             Assert.Equal(CommandExitCodes.Success, previewExitCode);
             Assert.Equal("dry_run", previewJson.GetProperty("status").GetString());
             Assert.True(previewJson.GetProperty("dry_run").GetBoolean());
-            Assert.Equal(dbPath, previewJson.GetProperty("db_path").GetString());
+            Assert.Equal("<redacted>", previewJson.GetProperty("db_path").GetString());
             Assert.Equal(
                 DbWriter.DefaultFtsOptimizeIncrementalWriteThreshold,
                 previewJson.GetProperty("writes_since_optimize_before").GetInt32());
@@ -6935,6 +6935,8 @@ public sealed class Caller
             Assert.Contains("state=current", humanPreviewOutput, StringComparison.Ordinal);
             Assert.Contains("Planned operations", humanPreviewOutput, StringComparison.Ordinal);
             Assert.Contains("initialize_or_migrate_schema", humanPreviewOutput, StringComparison.Ordinal);
+            Assert.Contains("<redacted>", humanPreviewOutput, StringComparison.Ordinal);
+            Assert.DoesNotContain(dbPath, humanPreviewOutput, StringComparison.Ordinal);
             Assert.Equal(dbBytesBeforePreview, File.ReadAllBytes(dbPath));
 
             int exitCode;
@@ -7206,6 +7208,8 @@ public sealed class Caller
 
                 Assert.Equal(CommandExitCodes.Success, previewExitCode);
                 Assert.Equal("locked", previewJson.GetProperty("lock_state").GetString());
+                Assert.Equal("<redacted>", previewJson.GetProperty("db_path").GetString());
+                Assert.DoesNotContain(dbPath, previewJson.ToString(), StringComparison.Ordinal);
                 Assert.True(previewJson.GetProperty("source_database_unchanged").GetBoolean());
 
                 int exitCode;
