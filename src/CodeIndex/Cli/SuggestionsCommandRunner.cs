@@ -1289,7 +1289,7 @@ internal static partial class SuggestionsCommandRunner
             jsonOptions,
             message,
             CommandExitCodes.UsageError,
-            hint ?? CommandErrorWriter.DefaultHint,
+            hint ?? CommandErrorWriter.BuildUsageHint("suggestions"),
             Usage);
 
     private static int WritePreflightError(
@@ -1304,7 +1304,7 @@ internal static partial class SuggestionsCommandRunner
             result.Error!,
             result.ExitCode,
             usageFailure
-                ? CommandErrorWriter.DefaultHint
+                ? CommandErrorWriter.BuildUsageHint("suggestions")
                 : "Retry the GitHub lookup after resolving the reported remote failure; duplicate preflight is indeterminate and no issue drafts were exported.",
             usageFailure ? Usage : null,
             category: result.ErrorCategory,

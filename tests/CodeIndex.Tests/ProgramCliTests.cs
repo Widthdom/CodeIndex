@@ -1153,6 +1153,57 @@ public class ProgramCliTests
     }
 
     [ProductionRuntimeFact]
+    public void Suggestions_UsageErrorsUseExecutableHelpHints_Issue5196()
+    {
+        using var fixture = SuggestionFixture.Create();
+        const string expectedHint = "Run `cdidx suggestions --help` for usage information.";
+
+        var (humanExitCode, humanStdout, humanStderr) = RunCliInSubprocess([
+            "suggestions", "list", "--bogus", "--db", fixture.DbPath
+        ]);
+        var (missingIdExitCode, missingIdStdout, missingIdStderr) = RunCliInSubprocess([
+            "suggestions", "show", "--db", fixture.DbPath, "--json"
+        ]);
+        var (invalidCombinationExitCode, invalidCombinationStdout, invalidCombinationStderr) = RunCliInSubprocess([
+            "suggestions", "list", "--actor", "agent", "--db", fixture.DbPath, "--json"
+        ]);
+
+        Assert.Equal(CommandExitCodes.UsageError, humanExitCode);
+        Assert.Equal(string.Empty, humanStdout);
+        Assert.Contains("Error: --bogus is not supported for suggestions.", humanStderr, StringComparison.Ordinal);
+        Assert.Contains($"Hint: {expectedHint}", humanStderr, StringComparison.Ordinal);
+        Assert.Contains("Usage: cdidx suggestions", humanStderr, StringComparison.Ordinal);
+        Assert.DoesNotContain("<cmd>", humanStderr, StringComparison.Ordinal);
+
+        Assert.Equal(CommandExitCodes.UsageError, missingIdExitCode);
+        Assert.Equal(string.Empty, missingIdStderr);
+        using (var document = JsonDocument.Parse(missingIdStdout))
+        {
+            var root = document.RootElement;
+            Assert.Equal("suggestions show requires an id.", root.GetProperty("message").GetString());
+            Assert.Equal(expectedHint, root.GetProperty("hint").GetString());
+            Assert.Equal(CommandErrorCodes.UsageError, root.GetProperty("error_code").GetString());
+            Assert.Equal("usage", root.GetProperty("category").GetString());
+            Assert.Equal(CommandExitCodes.UsageError, root.GetProperty("exit_code").GetInt32());
+            Assert.Contains("Usage: cdidx suggestions", root.GetProperty("usage").GetString(), StringComparison.Ordinal);
+        }
+        Assert.DoesNotContain("<cmd>", missingIdStdout, StringComparison.Ordinal);
+
+        Assert.Equal(CommandExitCodes.UsageError, invalidCombinationExitCode);
+        Assert.Equal(string.Empty, invalidCombinationStderr);
+        using (var document = JsonDocument.Parse(invalidCombinationStdout))
+        {
+            var root = document.RootElement;
+            Assert.Contains("--actor and --reason can only be used", root.GetProperty("message").GetString(), StringComparison.Ordinal);
+            Assert.Equal(expectedHint, root.GetProperty("hint").GetString());
+            Assert.Equal(CommandErrorCodes.UsageError, root.GetProperty("error_code").GetString());
+            Assert.Equal("usage", root.GetProperty("category").GetString());
+            Assert.Equal(CommandExitCodes.UsageError, root.GetProperty("exit_code").GetInt32());
+        }
+        Assert.DoesNotContain("<cmd>", invalidCombinationStdout, StringComparison.Ordinal);
+    }
+
+    [ProductionRuntimeFact]
     public void Suggestions_ListJsonSupportsLimitAndOffset()
     {
         using var fixture = SuggestionFixture.Create();

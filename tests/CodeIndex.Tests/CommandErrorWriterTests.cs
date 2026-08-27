@@ -124,6 +124,19 @@ public class CommandErrorWriterTests
         Assert.Equal("not_found", category);
     }
 
+    [Theory]
+    [InlineData("suggestions", "Run `cdidx suggestions --help` for usage information.")]
+    [InlineData(null, "Run `cdidx --help` for usage information.")]
+    [InlineData("not-a-command", "Run `cdidx --help` for usage information.")]
+    [InlineData("suggestions show", "Run `cdidx --help` for usage information.")]
+    [InlineData("suggestions\n--version", "Run `cdidx --help` for usage information.")]
+    public void BuildUsageHint_UsesCanonicalCommandOrSafeGlobalFallback_Issue5196(
+        string? canonicalCommand,
+        string expected)
+    {
+        Assert.Equal(expected, CommandErrorWriter.BuildUsageHint(canonicalCommand));
+    }
+
     [Fact]
     public void Write_DoesNotDuplicateExistingUsagePrefix_Issue4244()
     {
