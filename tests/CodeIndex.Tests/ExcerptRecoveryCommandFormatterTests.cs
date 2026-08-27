@@ -192,19 +192,18 @@ public class ExcerptRecoveryCommandFormatterTests
     }
 
     [Theory]
-    [InlineData("pwsh", false, true, false, true)]
-    [InlineData("PowerShell.EXE", false, false, false, true)]
-    [InlineData("bash", true, false, true, false)]
-    [InlineData("git-bash.exe", true, false, false, false)]
-    [InlineData("testhost", true, true, false, false)]
-    [InlineData("testhost", false, false, true, true)]
-    [InlineData("testhost", true, false, false, true)]
-    [InlineData("testhost", false, false, false, false)]
+    [InlineData("pwsh", false, true, true)]
+    [InlineData("PowerShell.EXE", false, false, true)]
+    [InlineData("bash", true, false, false)]
+    [InlineData("git-bash.exe", true, false, false)]
+    [InlineData("testhost", true, true, false)]
+    [InlineData("testhost", false, true, false)]
+    [InlineData("testhost", true, false, true)]
+    [InlineData("testhost", false, false, false)]
     public void ResolveShell_PrefersInvokingShellOverOperatingSystem_Issue5191(
         string parentProcessName,
         bool isWindows,
         bool hasMsysEnvironment,
-        bool hasPowerShellEnvironment,
         bool expectPowerShell)
     {
         Assert.Equal(
@@ -212,7 +211,6 @@ public class ExcerptRecoveryCommandFormatterTests
             ExcerptRecoveryCommandFormatter.ResolveShell(
                 parentProcessName,
                 isWindows,
-                hasMsysEnvironment,
-                hasPowerShellEnvironment));
+                hasMsysEnvironment));
     }
 }
