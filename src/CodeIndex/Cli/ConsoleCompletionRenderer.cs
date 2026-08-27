@@ -817,6 +817,17 @@ internal static class ConsoleCompletionRenderer
             }
         }
         if (wroteNestedPowerShellBranch)
+        {
+            // hooks/status shares the parent schema inventory, but hooks is intentionally
+            // excluded from the generic command switch below. Preserve its exact fallback
+            // after emitting the schema-restricted install/uninstall branches.
+            // hooks/status は親 schema の inventory を共有する一方、下の汎用 command switch
+            // から hooks 自体は意図的に除外される。schema 制約付きの install/uninstall branch
+            // の後に、status 用の正確な fallback を維持する。
+            sb.AppendLine("    } elseif ($subcmd -eq 'hooks' -and $nested -eq 'status') {");
+            sb.AppendLine($"        $flags = @({FormatPowerShellArray(BuildPowerShellFlagList("hooks", "status"))})");
+        }
+        if (wroteNestedPowerShellBranch)
             sb.AppendLine("    } else {");
         sb.AppendLine("        switch ($subcmd) {");
         foreach (var command in EnumeratedCompletionCommands)

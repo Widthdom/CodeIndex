@@ -380,6 +380,22 @@ public class CliFlagSchemaTests
     }
 
     [Fact]
+    public void PowerShellHooksStatusRetainsItsExactFallback_Issue5194()
+    {
+        var expected = CliFlagSchema.GetCompletionFlagsForCommand("hooks", "status")
+            .Select(flag => flag.Name)
+            .Where(name => !CompletionGlobalFlags.Contains(name));
+        var actual = ExtractPowerShellContextLongFlags(
+            ConsoleCompletionRenderer.GetCompletionScript("powershell"),
+            "hooks",
+            "status");
+        actual.Remove("--help");
+        actual.ExceptWith(CompletionGlobalFlags);
+
+        AssertOptionSet(expected, actual, "PowerShell completion context hooks status");
+    }
+
+    [Fact]
     public void Goto_AcceptsDocumentedExcludeFilters_Issue3934()
     {
         var accepted = CliFlagSchema.GetAcceptedFlagNamesForCommand("goto");
