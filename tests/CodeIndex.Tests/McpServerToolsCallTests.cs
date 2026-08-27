@@ -6706,9 +6706,7 @@ public partial class McpServerTests
         Assert.Contains("missing-references", codeOwners["capability_gaps"]!.AsArray().Select(value => value!.GetValue<string>()));
         Assert.Contains("missing-graph", codeOwners["capability_gaps"]!.AsArray().Select(value => value!.GetValue<string>()));
         var codeOwnersPaths = codeOwners["exact_filenames"]!.AsArray().Select(value => value!.GetValue<string>()).ToList();
-        Assert.Contains(".github/CODEOWNERS", codeOwnersPaths);
-        Assert.Contains("CODEOWNERS", codeOwnersPaths);
-        Assert.Contains("docs/CODEOWNERS", codeOwnersPaths);
+        Assert.Equal([".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"], codeOwnersPaths);
     }
 
     [Fact]

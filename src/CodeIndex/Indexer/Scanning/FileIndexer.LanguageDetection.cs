@@ -558,7 +558,6 @@ public partial class FileIndexer
         if (TryGetRepositoryRelativePathLanguage(
                 filePath,
                 projectRoot,
-                fileNameIgnoreCase,
                 out var repositoryPathLanguage))
         {
             return new LanguageDetectionResult(FileProbeStatus.Supported, repositoryPathLanguage);
@@ -709,11 +708,9 @@ public partial class FileIndexer
     private static bool TryGetRepositoryRelativePathLanguage(
         string filePath,
         string? projectRoot,
-        bool ignoreCase,
         out string language)
     {
         language = string.Empty;
-        var comparison = ignoreCase ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
         string relativePath;
         if (string.IsNullOrWhiteSpace(projectRoot))
         {
@@ -721,7 +718,7 @@ public partial class FileIndexer
             // exact-filename detection there, while the indexing path below remains location-aware.
             // public compatibility helper には repository root context がないため filename を
             // 認識する。indexing path は下記の projectRoot 分岐で location-aware のままにする。
-            if (string.Equals(Path.GetFileName(filePath), "CODEOWNERS", comparison))
+            if (string.Equals(Path.GetFileName(filePath), "CODEOWNERS", StringComparison.Ordinal))
             {
                 language = "codeowners";
                 return true;
@@ -743,7 +740,11 @@ public partial class FileIndexer
 
         foreach (var (path, pathLanguage) in RepositoryRelativePathMap)
         {
-            if (!string.Equals(relativePath, path, comparison))
+            // GitHub's reserved CODEOWNERS paths are case-sensitive even when the local
+            // filesystem is not. Do not classify a path that GitHub would ignore.
+            // GitHub の予約 CODEOWNERS path は local filesystem が case-insensitive でも
+            // case-sensitive のため、GitHub が無視する path を分類しない。
+            if (!string.Equals(relativePath, path, StringComparison.Ordinal))
                 continue;
             language = pathLanguage;
             return true;

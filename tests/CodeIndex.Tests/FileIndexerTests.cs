@@ -3268,6 +3268,23 @@ public partial class FileIndexerTests
                 FileIndexer.GetReusableDetectedLanguage(pair.Key, scan.FileLanguages)));
     }
 
+    [Fact]
+    public void ScanFiles_CodeOwnersReservedPathsRemainCaseSensitive_Issue5198Review()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_codeowners_case_issue5198");
+        var projectRoot = project.Root;
+        Directory.CreateDirectory(Path.Combine(projectRoot, ".github"));
+        Directory.CreateDirectory(Path.Combine(projectRoot, "Docs"));
+        File.WriteAllText(Path.Combine(projectRoot, ".github", "codeowners"), "* @lowercase\n");
+        File.WriteAllText(Path.Combine(projectRoot, "CodeOwners"), "* @mixed\n");
+        File.WriteAllText(Path.Combine(projectRoot, "Docs", "CODEOWNERS"), "* @wrong-directory-case\n");
+
+        var scan = new FileIndexer(projectRoot, ignoreCase: true).ScanFilesDetailed();
+
+        Assert.DoesNotContain(scan.FileLanguages, pair => pair.Value == "codeowners");
+        Assert.Null(FileIndexer.DetectLanguage(Path.Combine(projectRoot, ".github", "codeowners")));
+    }
+
     private static readonly (string Entry, string Language)[] ExactLanguageMapEntries =
     [
         ("Dockerfile", "dockerfile"),

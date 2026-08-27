@@ -5473,9 +5473,7 @@ public partial class QueryCommandRunnerTests
             codeOwners.GetProperty("capability_gaps").EnumerateArray().Select(value => value.GetString()));
         var codeOwnersPaths = codeOwners.GetProperty("exact_filenames").EnumerateArray()
             .Select(value => value.GetString()).ToList();
-        Assert.Contains(".github/CODEOWNERS", codeOwnersPaths);
-        Assert.Contains("CODEOWNERS", codeOwnersPaths);
-        Assert.Contains("docs/CODEOWNERS", codeOwnersPaths);
+        Assert.Equal([".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"], codeOwnersPaths);
 
         // Cython owns .pyx / .pxd exclusively; python keeps .py / .pyi / .pyw and Bazel filenames.
         // Cython は .pyx / .pxd を専有し、python は .py / .pyi / .pyw と Bazel ファイル名を維持。

@@ -117,19 +117,22 @@ public partial class SymbolExtractorTests
             "/src/** @later",
             "!unsupported @owner",
             "[ab].txt @owner",
-            "bad-owner @") + "\r\n";
+            "bad-owner @",
+            "invalid-double-at @@",
+            "invalid-empty-team @org/",
+            "invalid-nested-team @org/team/extra") + "\r\n";
 
         var symbols = SymbolExtractor.Extract(1, "codeowners", content);
         var rules = symbols.Where(symbol => symbol.Kind == "rule").ToList();
 
-        Assert.Equal(["/src/**", "/src/special/**", "#literal", "/src/**"], rules.Select(rule => rule.Name));
-        Assert.Equal([4, 5, 6, 7], rules.Select(rule => rule.Line));
+        Assert.Equal(["/src/**", "/src/special/**", "/src/**"], rules.Select(rule => rule.Name));
+        Assert.Equal([4, 5, 7], rules.Select(rule => rule.Line));
         Assert.All(rules, rule => Assert.Equal("ownership_rule", rule.SubKind));
         Assert.Contains(rules, rule => rule.Name == "/src/special/**" && rule.Signature == "/src/special/**");
 
         var owners = symbols.Where(symbol => symbol.Kind == "property").ToList();
         Assert.Equal(
-            ["@org/team", "@user", "owner@example.com", "@escaped", "@later"],
+            ["@org/team", "@user", "owner@example.com", "@later"],
             owners.Select(owner => owner.Name));
         Assert.All(owners, owner => Assert.Equal("owner", owner.SubKind));
         Assert.Contains(owners, owner => owner.Name == "@org/team" && owner.ContainerName == "/src/**");

@@ -155,9 +155,8 @@ public static partial class SymbolExtractor
             return false;
         }
 
-        if (rawPattern.StartsWith(@"\#"))
-            rawPattern = rawPattern[1..];
         if (rawPattern.IsEmpty
+            || rawPattern.StartsWith(@"\#")
             || rawPattern[0] == '!'
             || rawPattern.IndexOf('[') >= 0
             || rawPattern.IndexOf(']') >= 0
@@ -210,13 +209,55 @@ public static partial class SymbolExtractor
         if (owner.Length < 2 || ContainsCodeOwnersControlCharacter(owner))
             return false;
         if (owner[0] == '@')
-            return owner.Length > 1;
+            return IsCodeOwnersMention(owner[1..]);
 
         var atIndex = owner.IndexOf('@');
         return atIndex > 0
             && atIndex == owner.LastIndexOf('@')
             && atIndex < owner.Length - 1;
     }
+
+    private static bool IsCodeOwnersMention(ReadOnlySpan<char> mention)
+    {
+        var slashIndex = mention.IndexOf('/');
+        if (slashIndex < 0)
+            return IsCodeOwnersMentionSegment(mention);
+
+        return slashIndex > 0
+            && slashIndex < mention.Length - 1
+            && mention[(slashIndex + 1)..].IndexOf('/') < 0
+            && IsCodeOwnersMentionSegment(mention[..slashIndex])
+            && IsCodeOwnersMentionSegment(mention[(slashIndex + 1)..]);
+    }
+
+    private static bool IsCodeOwnersMentionSegment(ReadOnlySpan<char> segment)
+    {
+        if (segment.IsEmpty
+            || !IsCodeOwnersMentionAlphaNumeric(segment[0])
+            || !IsCodeOwnersMentionAlphaNumeric(segment[^1]))
+        {
+            return false;
+        }
+
+        var previousWasHyphen = false;
+        foreach (var character in segment)
+        {
+            if (IsCodeOwnersMentionAlphaNumeric(character))
+            {
+                previousWasHyphen = false;
+                continue;
+            }
+            if (character != '-' || previousWasHyphen)
+                return false;
+            previousWasHyphen = true;
+        }
+        return true;
+    }
+
+    private static bool IsCodeOwnersMentionAlphaNumeric(char character)
+        => character is >= 'a' and <= 'z'
+            or >= 'A' and <= 'Z'
+            or >= '0' and <= '9';
 
     private static bool ContainsCodeOwnersControlCharacter(ReadOnlySpan<char> value)
     {
