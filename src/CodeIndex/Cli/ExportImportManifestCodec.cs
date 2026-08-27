@@ -200,8 +200,9 @@ internal static class ExportImportManifestCodec
         var categories = manifest.PathRedactionOmittedCategories;
         if (categories == null)
         {
-            message = string.Empty;
-            return true;
+            return ExportImportCommandRunner.TryValidateCompletedManifestPathRedaction(
+                manifest,
+                out message);
         }
         if (!manifest.PathRedactionRequested && categories.Length > 0)
         {
@@ -230,8 +231,9 @@ internal static class ExportImportManifestCodec
             }
         }
 
-        message = string.Empty;
-        return true;
+        return ExportImportCommandRunner.TryValidateCompletedManifestPathRedaction(
+            manifest,
+            out message);
     }
 
     private static bool TryValidateScope(

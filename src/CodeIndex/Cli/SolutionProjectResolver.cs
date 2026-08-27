@@ -364,22 +364,36 @@ internal static class SolutionProjectResolver
         return new DotNetProjectInfo(name, relativeProject, Path.GetDirectoryName(fullProjectPath) ?? workspaceRoot);
     }
 
-    private static DotNetProjectInfo? MatchProject(IReadOnlyList<DotNetProjectInfo> projects, string requested)
+    internal static DotNetProjectInfo? MatchProject(IReadOnlyList<DotNetProjectInfo> projects, string requested)
     {
         var trimmed = requested.Trim();
         var absoluteRequested = Path.IsPathFullyQualified(trimmed)
             ? Path.GetFullPath(trimmed)
             : null;
+        if (absoluteRequested != null)
+        {
+            var exactMatch = projects.FirstOrDefault(project =>
+                string.Equals(
+                    GetAbsoluteProjectPath(project),
+                    absoluteRequested,
+                    StringComparison.Ordinal));
+            if (exactMatch != null)
+                return exactMatch;
+
+            return projects.FirstOrDefault(project =>
+                PathCasing.PathsEqual(
+                    GetAbsoluteProjectPath(project),
+                    absoluteRequested));
+        }
+
         return projects.FirstOrDefault(project =>
             string.Equals(project.Name, trimmed, StringComparison.OrdinalIgnoreCase)
             || string.Equals(project.ProjectPath, trimmed.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase)
-            || string.Equals(Path.GetFileName(project.ProjectPath), trimmed, StringComparison.OrdinalIgnoreCase)
-            || absoluteRequested != null
-            && string.Equals(
-                Path.GetFullPath(Path.Combine(project.DirectoryPath, Path.GetFileName(project.ProjectPath))),
-                absoluteRequested,
-                StringComparison.OrdinalIgnoreCase));
+            || string.Equals(Path.GetFileName(project.ProjectPath), trimmed, StringComparison.OrdinalIgnoreCase));
     }
+
+    private static string GetAbsoluteProjectPath(DotNetProjectInfo project)
+        => Path.GetFullPath(Path.Combine(project.DirectoryPath, Path.GetFileName(project.ProjectPath)));
 
     private static IEnumerable<string> EnumerateFilesUsingIndexerPolicy(
         string workspaceRoot,

@@ -2,6 +2,7 @@ using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using Microsoft.Data.Sqlite;
@@ -64,6 +65,7 @@ public class ExportImportCommandRunnerIssue5195Tests
             const string posixSample = "/Users/alice/work/private-repository/secret.foo";
             const string windowsSample = @"C:\Users\Alice\work\private-repository\secret.bar";
             SetUnknownExtensionPaths(dbPath, [posixSample, windowsSample, "docs/relative.baz"]);
+            SetWorkspaceVerificationPendingPaths(dbPath, [posixSample, "src/App.cs"]);
             SqliteConnection.ClearAllPools();
             var sourceBytesBefore = File.ReadAllBytes(dbPath);
             var archivePath = Path.Combine(projectRoot, "redacted.cdidx.zip");
@@ -122,6 +124,13 @@ public class ExportImportCommandRunnerIssue5195Tests
             Assert.Equal(2, groupedSamples.Count(path => path == "[redacted]"));
             Assert.Contains("docs/relative.baz", groupedSamples);
             Assert.DoesNotContain(projectRoot, Encoding.UTF8.GetString(File.ReadAllBytes(extractedDb)), StringComparison.Ordinal);
+            var pendingPaths = JsonStringListCodec.Deserialize(
+                ReadMetaValue(extractedDb, DbContext.WorkspaceVerificationPendingPathsMetaKey));
+            Assert.NotNull(pendingPaths);
+            Assert.Equal(["[redacted]", "src/App.cs"], pendingPaths);
+            Assert.Equal(
+                bool.FalseString,
+                ReadMetaValue(extractedDb, DbContext.WorkspaceVerificationPendingPathsCompleteMetaKey));
             Assert.Equal(
                 Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(extractedDb))).ToLowerInvariant(),
                 manifest.GetProperty("database_sha256").GetString());
@@ -205,6 +214,9 @@ public class ExportImportCommandRunnerIssue5195Tests
                     DbContext.WorkspaceVerificationPendingPathsMetaKey,
                     JsonStringListCodec.Serialize(
                         ["/" + new string('x', JsonStringListCodec.MaxRawJsonCharacters)]));
+                writer.SetMeta(
+                    DbContext.WorkspaceVerificationPendingPathsCompleteMetaKey,
+                    bool.TrueString);
             }
             SqliteConnection.ClearAllPools();
 
@@ -234,7 +246,11 @@ public class ExportImportCommandRunnerIssue5195Tests
             Assert.Equal(largePaths.Length, redactedPaths.Count);
             Assert.All(redactedPaths, path => Assert.Equal("[redacted]", path));
             Assert.Null(ReadMetaValue(extractedDb, DbContext.UnknownExtensionGroupsMetaKey));
-            Assert.Null(ReadMetaValue(extractedDb, DbContext.WorkspaceVerificationPendingPathsMetaKey));
+            Assert.Empty(JsonStringListCodec.Deserialize(
+                ReadMetaValue(extractedDb, DbContext.WorkspaceVerificationPendingPathsMetaKey))!);
+            Assert.Equal(
+                bool.FalseString,
+                ReadMetaValue(extractedDb, DbContext.WorkspaceVerificationPendingPathsCompleteMetaKey));
             var extractedBytes = Encoding.UTF8.GetString(File.ReadAllBytes(extractedDb));
             Assert.DoesNotContain("group-secret.foo", extractedBytes, StringComparison.Ordinal);
             Assert.DoesNotContain("secret-0.foo", extractedBytes, StringComparison.Ordinal);
@@ -270,7 +286,7 @@ public class ExportImportCommandRunnerIssue5195Tests
                     [
                         archivePath,
                         "--db", dbPath,
-                        "--project", Path.GetFullPath(projectPath),
+                        "--project", $" {Path.GetFullPath(projectPath)} ",
                         "--solution", Path.GetFullPath(solutionPath),
                         "--path", "/Users/alice/work/private-repository/**",
                         "--exclude-path", @"C:\Users\Alice\work\private-repository\**",
@@ -306,6 +322,74 @@ public class ExportImportCommandRunnerIssue5195Tests
         }
     }
 
+    [Fact]
+    public void RunImport_RejectsUnverifiedCompletedRedactionClaim_Issue5195()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("import_unverified_redaction_5195");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var archivePath = Path.Combine(projectRoot, "unverified-redaction.cdidx.zip");
+            var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
+            var export = ConsoleCapture.Capture(() =>
+                ExportImportCommandRunner.RunExport(
+                    [archivePath, "--db", dbPath, "--json"],
+                    jsonOptions,
+                    "test"));
+            Assert.Equal(CommandExitCodes.Success, export.ExitCode);
+
+            RewriteManifest(archivePath, manifest =>
+            {
+                manifest["project_root"] = null;
+                manifest["path_redaction_requested"] = true;
+                manifest["path_redaction_complete"] = true;
+                manifest["path_redaction_omitted_categories"] = new JsonArray("project_root");
+            });
+
+            var importedDb = Path.Combine(projectRoot, "forged-import.db");
+            var import = ConsoleCapture.Capture(() =>
+                ExportImportCommandRunner.RunImport(
+                    [archivePath, "--db", importedDb, "--dry-run", "--no-backup", "--json"],
+                    jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, import.ExitCode);
+            Assert.Equal(string.Empty, import.Stderr);
+            using var error = JsonDocument.Parse(import.Stdout);
+            Assert.Equal("sqlite_validate", error.RootElement.GetProperty("phase").GetString());
+            Assert.Equal("import_manifest_mismatch", error.RootElement.GetProperty("error_code").GetString());
+            Assert.Contains(
+                "embedded project root metadata",
+                error.RootElement.GetProperty("message").GetString(),
+                StringComparison.Ordinal);
+            Assert.False(File.Exists(importedDb));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void MatchProject_PrefersExactAbsolutePathCasing_Issue5195()
+    {
+        var root = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "project-case-5195"));
+        var upperDirectory = Path.Combine(root, "src", "Foo");
+        var lowerDirectory = Path.Combine(root, "src", "foo");
+        var projects = new DotNetProjectInfo[]
+        {
+            new("Upper", "src/Foo/App.csproj", upperDirectory),
+            new("Lower", "src/foo/App.csproj", lowerDirectory),
+        };
+
+        var match = SolutionProjectResolver.MatchProject(
+            projects,
+            Path.Combine(lowerDirectory, "App.csproj"));
+
+        Assert.NotNull(match);
+        Assert.Equal("Lower", match.Name);
+        Assert.Equal(lowerDirectory, match.DirectoryPath);
+    }
+
     private static void SetUnknownExtensionPaths(string dbPath, string[] paths)
     {
         using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
@@ -323,6 +407,37 @@ public class ExportImportCommandRunnerIssue5195Tests
         writer.SetMeta(
             DbContext.UnknownExtensionFilePathLimitMetaKey,
             DbContext.UnknownExtensionFilePathSampleLimit.ToString(System.Globalization.CultureInfo.InvariantCulture));
+    }
+
+    private static void SetWorkspaceVerificationPendingPaths(string dbPath, string[] paths)
+    {
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+        var writer = new DbWriter(db.Connection);
+        writer.SetMeta(
+            DbContext.WorkspaceVerificationPendingPathsMetaKey,
+            JsonStringListCodec.Serialize(paths));
+        writer.SetMeta(
+            DbContext.WorkspaceVerificationPendingPathsCompleteMetaKey,
+            bool.TrueString);
+    }
+
+    private static void RewriteManifest(string archivePath, Action<JsonObject> rewrite)
+    {
+        using var archive = ZipFile.Open(archivePath, ZipArchiveMode.Update);
+        var manifestEntry = archive.GetEntry("manifest.json")
+            ?? throw new InvalidOperationException("manifest.json entry was not found");
+        JsonObject manifest;
+        using (var stream = manifestEntry.Open())
+        {
+            manifest = JsonNode.Parse(stream)?.AsObject()
+                ?? throw new InvalidOperationException("manifest.json did not contain an object");
+        }
+
+        rewrite(manifest);
+        manifestEntry.Delete();
+        var replacement = archive.CreateEntry("manifest.json", CompressionLevel.SmallestSize);
+        using var writer = new StreamWriter(replacement.Open(), new UTF8Encoding(false));
+        writer.Write(manifest.ToJsonString());
     }
 
     private static string ExtractDatabase(string projectRoot, string archivePath, string fileName)

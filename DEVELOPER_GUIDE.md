@@ -64,7 +64,9 @@ values, and resolved success paths. `--redact-paths` must operate only on the
 private copied snapshot: resolve and apply scope first, delete the copied project
 root, replace absolute POSIX/Windows/file-URI scope values and persisted
 flat and grouped path-sample values with `[redacted]`, and fail closed by deleting
-malformed or over-budget path metadata from the copy. Run exactly one final
+or emptying malformed or over-budget path metadata from the copy. Losing a
+workspace-verification pending-path identity must also stamp its coverage marker
+incomplete. Run exactly one final
 `VACUUM` after scope and redaction before computing
 `database_sha256`. Successful manifest and export JSON must keep
 `path_redaction_requested`, `path_redaction_complete`, and bounded stable
@@ -73,7 +75,9 @@ not repeat the resolved archive, database, or source-root paths. Repository-rela
 indexed paths, source content, hashes, readiness, and commit provenance are not
 redaction targets. Import derives its destination project root from the destination
 DB path/current directory and must tolerate an absent source root in both execution
-and dry-run modes.
+and dry-run modes. Imports accepting `path_redaction_complete=true` must verify
+the manifest root/scope values and known embedded path metadata before reporting
+that claim as complete.
 
 Checkpoint plan drift detection covers DB/WAL/SHM content changes and sidecar appearance or disappearance through the final pre-publication validation. The plan's `uncertainty` value records the remaining post-validation race; copied outputs are independently hash-verified against the plan before atomic publication. DB/WAL/SHM candidates must pass native regular-file type validation before hashing so Unix FIFOs cannot block planning. `metadata_policy` reports `owner_only_files_and_directories` on POSIX and the actually inherited `inherited_windows_acls` policy on Windows. A database payload whose output name collides with `manifest.txt`, including filesystem-equivalent casing, makes the plan not ready and is rejected before mutation.
 
@@ -4268,7 +4272,8 @@ success path を保持します。`--redact-paths` は private な copy 済み s
 最初に scope を解決・適用し、copy 側の project root を削除して、POSIX / Windows /
 file URI 形式の絶対 scope value と永続化済み path sample を `[redacted]` に置換します。
 flat / group 別 sample の両方を対象とし、不正または上限超過の path metadata は fail-closed
-として copy から削除します。scope と redaction の後に最終 `VACUUM` を一度だけ実行してから
+として copy から削除するか空にします。workspace verification の pending-path identity を失う場合は、
+coverage marker も incomplete に stamp します。scope と redaction の後に最終 `VACUUM` を一度だけ実行してから
 `database_sha256` を計算します。成功時の manifest と
 export JSON では `path_redaction_requested`、`path_redaction_complete`、上限付きで安定した
 `path_redaction_omitted_categories` を同期させます。redacted success output は解決済み
@@ -4276,6 +4281,8 @@ archive / database / source-root path を再表示してはいけません。rep
 indexed path、source content、hash、readiness、commit provenance は redaction 対象外です。
 import は destination DB path / current directory から destination project root を導出し、
 source root がない archive を execution / dry-run の双方で許容する必要があります。
+`path_redaction_complete=true` を受け入れる import は、その claim を complete と報告する前に
+manifest の root / scope value と既知の embedded path metadata を検証する必要があります。
 
 checkpoint plan の drift 検出は、publish 前の最終検証までに起きる DB/WAL/SHM content の変更と sidecar の出現・消失を対象にします。plan の `uncertainty` 値は最終検証後に残る race を記録し、copy 済み output は atomic publish 前に plan の hash と個別に照合されます。DB/WAL/SHM 候補は hash 読み取り前に native regular-file type validation を通すため、Unix FIFO が plan 作成を停止させることはありません。`metadata_policy` は POSIX では `owner_only_files_and_directories`、Windows では実際に継承される `inherited_windows_acls` policy を報告します。database payload の output 名が filesystem 上で同一の大小文字を含め `manifest.txt` と衝突する場合、plan は not ready となり、変更前に拒否されます。
 
