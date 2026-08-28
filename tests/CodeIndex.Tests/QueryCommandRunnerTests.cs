@@ -5459,6 +5459,22 @@ public partial class QueryCommandRunnerTests
             Assert.Empty(languages[repositoryMetadata].GetProperty("capability_gaps").EnumerateArray());
         }
 
+        Assert.True(languages.ContainsKey("codeowners"), "expected 'codeowners' to be listed");
+        var codeOwners = languages["codeowners"];
+        Assert.True(codeOwners.GetProperty("symbol_extraction").GetBoolean());
+        Assert.True(codeOwners.GetProperty("outline").GetBoolean());
+        Assert.False(codeOwners.GetProperty("reference_extraction").GetBoolean());
+        Assert.False(codeOwners.GetProperty("graph_queries").GetBoolean());
+        Assert.Contains(
+            "missing-references",
+            codeOwners.GetProperty("capability_gaps").EnumerateArray().Select(value => value.GetString()));
+        Assert.Contains(
+            "missing-graph",
+            codeOwners.GetProperty("capability_gaps").EnumerateArray().Select(value => value.GetString()));
+        var codeOwnersPaths = codeOwners.GetProperty("exact_filenames").EnumerateArray()
+            .Select(value => value.GetString()).ToList();
+        Assert.Equal([".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"], codeOwnersPaths);
+
         // Cython owns .pyx / .pxd exclusively; python keeps .py / .pyi / .pyw and Bazel filenames.
         // Cython は .pyx / .pxd を専有し、python は .py / .pyi / .pyw と Bazel ファイル名を維持。
         var cythonExts = languages["cython"].GetProperty("extensions").EnumerateArray()

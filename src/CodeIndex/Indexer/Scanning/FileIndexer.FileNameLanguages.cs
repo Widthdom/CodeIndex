@@ -63,6 +63,19 @@ public partial class FileIndexer
     private static readonly IReadOnlyDictionary<string, string> FileNameMapIgnoreCase =
         new Dictionary<string, string>(FileNameMap, StringComparer.OrdinalIgnoreCase);
 
+    // Repository-relative special paths whose meaning depends on their location. CODEOWNERS
+    // is intentionally not part of FileNameMap: GitHub recognizes only these three locations,
+    // and indexing an arbitrary nested CODEOWNERS file would overstate the ownership contract.
+    // location に意味が依存する repository-relative special path。CODEOWNERS は意図的に
+    // FileNameMap へ入れない。GitHub が認識する3箇所以外の nested file を ownership
+    // contract として index しないためである。
+    private static readonly (string Path, string Language)[] RepositoryRelativePathMap =
+    [
+        (".github/CODEOWNERS", "codeowners"),
+        ("CODEOWNERS", "codeowners"),
+        ("docs/CODEOWNERS", "codeowners"),
+    ];
+
     // Filename prefixes (with trailing dot) mapped to language for suffixed variants like
     // Dockerfile.dev / Makefile.common / GNUmakefile.am. The suffix must be non-empty.
     // Dockerfile.dev / Makefile.common / GNUmakefile.am のようにサフィックス付きで使われる

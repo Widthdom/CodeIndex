@@ -232,7 +232,7 @@ public class CliFlagSchemaTests
             ],
             [("export", null)] =
             [
-                "--db", "--json", "--overwrite", "--lang", "--path", "--exclude-path", "--project", "--solution", "--exclude-tests",
+                "--db", "--json", "--overwrite", "--redact-paths", "--lang", "--path", "--exclude-path", "--project", "--solution", "--exclude-tests",
             ],
             [("export", "ctags")] =
             [

@@ -594,6 +594,9 @@ public static partial class SymbolExtractor
             case "config":
                 symbols = ExtractRepositoryMetadataSymbols(fileId, lang, SplitContentLines(content));
                 return true;
+            case "codeowners":
+                symbols = ExtractCodeOwnersSymbols(fileId, SplitContentLines(content));
+                return true;
             case "yaml":
                 symbols = ExtractYamlSymbols(fileId, SplitContentLines(content));
                 return true;

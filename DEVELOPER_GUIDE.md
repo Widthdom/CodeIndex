@@ -58,6 +58,27 @@ Development contracts:
 
 Portable archive trust is scope-aware. Unfiltered exports set `scope.represents_entire_source_database` and preserve completeness, indexed-HEAD, run, and unknown-extension metadata. Filtered exports normalize only the archive snapshot to `index_complete=false` with `partial_archive`, remove source-wide HEAD/run provenance, and omit unavailable unknown-extension summaries. Import repeats that normalization for legacy manifests without scope metadata, while current full-snapshot manifests preserve trust. Scoped indexing of a partial archive falls back to a full workspace scan before it may clear `partial_archive`.
 
+Portable archive path privacy is opt-in for compatibility. Default exports retain
+`manifest.project_root`, the snapshot's `indexed_project_root`, requested scope
+values, and resolved success paths. `--redact-paths` must operate only on the
+private copied snapshot: resolve and apply scope first, delete the copied project
+root, replace absolute POSIX/Windows/file-URI scope values and persisted
+flat and grouped path-sample values with `[redacted]`, and fail closed by deleting
+or emptying malformed or over-budget path metadata from the copy. Losing a
+workspace-verification pending-path identity must also stamp its coverage marker
+incomplete. Run exactly one final
+`VACUUM` after scope and redaction before computing
+`database_sha256`. Successful manifest and export JSON must keep
+`path_redaction_requested`, `path_redaction_complete`, and bounded stable
+`path_redaction_omitted_categories` synchronized. Redacted success output must
+not repeat the resolved archive, database, or source-root paths. Repository-relative
+indexed paths, source content, hashes, readiness, and commit provenance are not
+redaction targets. Import derives its destination project root from the destination
+DB path/current directory and must tolerate an absent source root in both execution
+and dry-run modes. Imports accepting `path_redaction_complete=true` must verify
+the manifest root/scope values and known embedded path metadata before reporting
+that claim as complete.
+
 Checkpoint plan drift detection covers DB/WAL/SHM content changes and sidecar appearance or disappearance through the final pre-publication validation. The plan's `uncertainty` value records the remaining post-validation race; copied outputs are independently hash-verified against the plan before atomic publication. DB/WAL/SHM candidates must pass native regular-file type validation before hashing so Unix FIFOs cannot block planning. `metadata_policy` reports `owner_only_files_and_directories` on POSIX and the actually inherited `inherited_windows_acls` policy on Windows. A database payload whose output name collides with `manifest.txt`, including filesystem-equivalent casing, makes the plan not ready and is rejected before mutation.
 
 ## Filesystem Permissions
@@ -2182,6 +2203,7 @@ Extractor strategy by language surface:
 | HTML | Uses a dedicated character-level state machine instead of the regex pattern loop. It walks tag openers, quoted/unquoted attribute values including multi-line values, and masks `<script>` / `<style>` / `<textarea>` / `<title>` bodies plus `<!-- ... -->` comments so attribute-lookalike strings inside those regions do not leak phantom symbols. |
 | JSON / JSON Lines | JSON emits `object`, `array`, `property`, and bounded primitive-array `value` symbols with indexed paths. Array indexes attach directly to the parent path (`command_cases[0]`, not `command_cases.command_cases[0]`), and object/array parent kinds preserve the hierarchy used by outline depth. Root arrays start at paths such as `[0]`. `.jsonl` and `.ndjson` parse each non-empty physical line independently, prefix symbols with a stable zero-based record path such as `[0].result.path`, and emit repository-local path references from each valid record without flattening malformed neighbors. |
 | TOML / repository metadata | TOML tables and keys, EditorConfig sections and keys, Git/Docker ignore rules, Git attribute rules/attributes, and `.rules` blocks/keys are emitted as bounded structural symbols. References are limited to repository-local paths or globs; remote URLs, absolute filesystem paths, and parent traversal are suppressed. |
+| CODEOWNERS | Path-aware detection recognizes only the case-sensitive paths `.github/CODEOWNERS`, repository-root `CODEOWNERS`, and `docs/CODEOWNERS`, relative to the enclosing Git worktree root or to the scan root for non-Git input. A dedicated bounded line parser handles full-line and inline comments and emits ordered ownership `rule` symbols and child owner `property` symbols, including ownerless rules, with limits of 4,096 characters per line, 128 owners per rule, and 256 characters per owner. Invalid input, including unsupported escaped leading `#` patterns and malformed mentions, produces category-deduplicated, persistable extraction-diagnostic annotations. No reference extractor is registered because owner authorization and pattern-to-path resolution are outside the syntax-only contract. |
 | Windows application manifests | Manifest element paths, assembly identities, execution levels, and supported-OS values remain structural symbols. Dependent assembly identities emit `dependency` references, while local `file`, `codeBase`, and probing paths emit `project_reference` edges. |
 | XML / NuGet.config | Generic XML emits bounded element and attribute paths. NuGet.config additionally promotes package sources, source mappings, signature validation mode, trusted signer names, certificate fingerprints, and `allowUntrustedRoot` values to semantic `property` symbols with `nuget.*` subkinds. |
 
@@ -4247,6 +4269,24 @@ net9 CI lane に合わせる場合は `FRAMEWORK=net9.0 make test` を使いま�
 
 portable archive の trust は scope を考慮します。filter なし export は `scope.represents_entire_source_database` を設定し、completeness、indexed-HEAD、run、unknown-extension metadata を維持します。filter 済み export は archive snapshot だけを `index_complete=false` / `partial_archive` に正規化し、source 全体に対する HEAD / run provenance を削除して、未計測の unknown-extension summary を省略します。scope metadata がない legacy manifest は import 時に同じ正規化を行い、現行の full-snapshot manifest は trust を維持します。partial archive に対する scoped index は `partial_archive` を解除する前に full workspace scan へ fallback します。
 
+portable archive の path privacy は互換性のため opt-in です。既定 export は
+`manifest.project_root`、snapshot の `indexed_project_root`、指定 scope value、解決済み
+success path を保持します。`--redact-paths` は private な copy 済み snapshot だけを変更します。
+最初に scope を解決・適用し、copy 側の project root を削除して、POSIX / Windows /
+file URI 形式の絶対 scope value と永続化済み path sample を `[redacted]` に置換します。
+flat / group 別 sample の両方を対象とし、不正または上限超過の path metadata は fail-closed
+として copy から削除するか空にします。workspace verification の pending-path identity を失う場合は、
+coverage marker も incomplete に stamp します。scope と redaction の後に最終 `VACUUM` を一度だけ実行してから
+`database_sha256` を計算します。成功時の manifest と
+export JSON では `path_redaction_requested`、`path_redaction_complete`、上限付きで安定した
+`path_redaction_omitted_categories` を同期させます。redacted success output は解決済み
+archive / database / source-root path を再表示してはいけません。repository-relative な
+indexed path、source content、hash、readiness、commit provenance は redaction 対象外です。
+import は destination DB path / current directory から destination project root を導出し、
+source root がない archive を execution / dry-run の双方で許容する必要があります。
+`path_redaction_complete=true` を受け入れる import は、その claim を complete と報告する前に
+manifest の root / scope value と既知の embedded path metadata を検証する必要があります。
+
 checkpoint plan の drift 検出は、publish 前の最終検証までに起きる DB/WAL/SHM content の変更と sidecar の出現・消失を対象にします。plan の `uncertainty` 値は最終検証後に残る race を記録し、copy 済み output は atomic publish 前に plan の hash と個別に照合されます。DB/WAL/SHM 候補は hash 読み取り前に native regular-file type validation を通すため、Unix FIFO が plan 作成を停止させることはありません。`metadata_policy` は POSIX では `owner_only_files_and_directories`、Windows では実際に継承される `inherited_windows_acls` policy を報告します。database payload の output 名が filesystem 上で同一の大小文字を含め `manifest.txt` と衝突する場合、plan は not ready となり、変更前に拒否されます。
 
 ## ファイルシステム権限
@@ -6300,6 +6340,7 @@ LIMIT 20;
 | HTML | 汎用の正規表現 loop を使わず、専用の文字単位 state machine で tag opener、引用符付き/なし attribute value（複数行値を含む）、`<script>` / `<style>` / `<textarea>` / `<title>` body、`<!-- ... -->` comment を扱い、attribute 名に似た body 内文字列から phantom symbol が漏れないようにします。 |
 | JSON / JSON Lines | JSON は `object`、`array`、`property` と、上限付きの primitive-array `value` symbol を index 付き path で出力します。配列 index は親 path に直接連結し（`command_cases.command_cases[0]` ではなく `command_cases[0]`）、object / array の親 kind を保持して outline の depth に階層を反映します。root array は `[0]` のような path から始まります。`.jsonl` と `.ndjson` は空でない物理行を個別に parse し、`[0].result.path` のような安定した 0 始まり record path を付けます。各有効 record から repository-local path reference を出し、不正な隣接 record の内容は平坦化しません。 |
 | TOML / repository metadata | TOML の table / key、EditorConfig の section / key、Git / Docker ignore rule、Git attribute の rule / attribute、`.rules` の block / key を上限付き structural symbol として出力します。reference は repository-local な path / glob に限定し、remote URL、絶対 filesystem path、親 directory traversal は抑止します。 |
+| CODEOWNERS | path-aware detection は enclosing Git worktree root（非 Git input では scan root）からの相対位置が case-sensitive な `.github/CODEOWNERS`、repository root の `CODEOWNERS`、`docs/CODEOWNERS` である場合だけ認識します。専用の上限付き line parser が full-line / inline comment を処理し、順序付き ownership `rule` symbol と child owner `property` symbol を出力して ownerless rule も保持します。上限は1行4,096文字、1 rule 128 owner、1 owner 256文字です。GitHub が対応しない先頭 `#` の escaped pattern や malformed mention を含む不正 input は、category ごとに重複を除いた永続化可能な extraction-diagnostic annotation にします。owner authorization と pattern から path への解決は syntax-only contract の範囲外なので、reference extractor は登録しません。 |
 | Windows application manifest | manifest element path、assembly identity、execution level、supported OS value を structural symbol として維持します。依存 assembly identity は `dependency` reference、local な `file` / `codeBase` / probing path は `project_reference` edge を出力します。 |
 | XML / NuGet.config | 汎用 XML は上限付きの element / attribute path を出力します。NuGet.config ではさらに package source、source mapping、署名検証モード、trusted signer 名、証明書 fingerprint、`allowUntrustedRoot` の値を `nuget.*` subkind 付きの semantic `property` symbol にします。 |
 

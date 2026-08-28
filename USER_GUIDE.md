@@ -542,6 +542,7 @@ job:
 ```bash
 cdidx export codeindex.cdidx.zip
 cdidx export codeindex.cdidx.zip --overwrite --json
+cdidx export support.cdidx.zip --redact-paths --json
 cdidx export app.cdidx.zip --project App --lang csharp --exclude-tests
 cdidx export shared.cdidx.zip --path 'src/shared/*' --exclude-path 'src/shared/generated/*'
 cdidx import codeindex.cdidx.zip
@@ -576,15 +577,37 @@ complete immutable `manifest` object. That manifest carries the database hash,
 row counts, schema contract stamps, readiness state, unknown-extension summary,
 and export scope needed to evaluate the artifact before import.
 
+By default, compatibility archives retain `manifest.project_root` and the
+embedded database's `indexed_project_root`, and successful human/JSON output
+reports the resolved archive and database paths. Use `--redact-paths` before
+sharing an archive outside the source machine. This opt-in mode removes the
+project root from both manifest and snapshot, replaces absolute POSIX, Windows,
+or file-URI scope values and unknown-extension path samples with `[redacted]`,
+including the grouped samples exposed by `status`. Malformed or over-budget
+path-sample metadata is removed or replaced with an empty fail-closed value instead
+of being retained under a completed-redaction claim. If a workspace-verification
+pending-path identity is removed or redacted, its coverage marker is set incomplete
+so a later scoped refresh cannot trust the placeholder. The exporter then vacuums the copied snapshot
+once before computing `database_sha256`. Indexed
+repository-relative paths, source text, hashes, readiness, and commit provenance
+are retained. Export JSON and the manifest expose `path_redaction_requested`,
+`path_redaction_complete`, and `path_redaction_omitted_categories`; top-level
+`archive_path` / `db_path` are `[redacted]`, and human success output does not
+repeat a local path. The source database is never modified.
+
 The archive path is intended for trusted CodeIndex databases. Import validates
 that the embedded SQLite file is a CodeIndex DB before replacing the destination
-database. `--prune-paths` rewrites the imported `indexed_project_root` metadata
+database. A completed path-redaction claim is also checked against the manifest
+root/scope fields and the corresponding embedded path metadata; an inconsistent
+claim is rejected rather than echoed as verified. `--prune-paths` rewrites the imported `indexed_project_root` metadata
 to the import target project root. Imports targeting `.../.cdidx/codeindex.db`
 use the sibling project directory; other database paths fall back to the process
-current directory. `--dry-run` and its `--check` alias also compare an existing
+current directory. A path-redacted archive may omit the source root entirely;
+import and dry-run validation do not trust it and remain usable without
+`--prune-paths`. `--dry-run` and its `--check` alias also compare an existing
 destination DB with the validated archive without replacing it. JSON results
-expose the normalized `index_complete`, `index_incomplete_reasons`, and `scope`
-values. Archives with no scope metadata are treated conservatively as partial
+expose the normalized `index_complete`, `index_incomplete_reasons`, `scope`, and
+path-redaction state. Archives with no scope metadata are treated conservatively as partial
 during import; current unfiltered archives explicitly preserve full-snapshot
 trust. JSON `destination_delta.comparison` reports schema and count deltas plus bounded
 file, symbol, reference-edge, chunk, and metadata records. Text fields in those
@@ -2927,6 +2950,7 @@ For one `--extension` lookup, CLI JSON and the MCP `languages` tool return the s
 | Gradle | `.gradle` | yes |
 | Dependency manifest | `package.json`, `pyproject.toml`, `requirements.txt`, `Gemfile`, `Podfile`, `Cargo.toml`, `composer.json`, `go.mod`, `packages.config` | -- |
 | Dependency lockfile | `package-lock.json`, `npm-shrinkwrap.json`, `yarn.lock`, `pnpm-lock.yaml`, `Gemfile.lock`, `Cargo.lock`, `go.sum`, `uv.lock` | -- |
+| CODEOWNERS | `.github/CODEOWNERS`, `CODEOWNERS`, `docs/CODEOWNERS` | yes |
 | Makefile | `Makefile`, `GNUmakefile`, `Makefile.<suffix>`, `GNUmakefile.<suffix>`, `.mk` | yes |
 | Dockerfile | `Dockerfile`, `Containerfile`, `Dockerfile.<suffix>`, `Containerfile.<suffix>` | yes |
 | Assembly | `.s`, `.S`, `.asm`, `.nasm` | yes |
@@ -2992,6 +3016,7 @@ For one `--extension` lookup, CLI JSON and the MCP `languages` tool return the s
 - Node module layouts: `.cjs` / `.mjs` are JavaScript; `.cts` / `.mts`, including `.d.cts` / `.d.mts`, are TypeScript.
 - Dependency manifests and lockfiles: use `--lang dependency_manifest` or `--lang dependency_lock` for dependency/security audits. `Directory.Packages.props`, `packages.config`, `requirements.txt`, `pyproject.toml`, `packages.lock.json`, and npm `package-lock.json` / `npm-shrinkwrap.json` expose package symbols and `dependency` references with version, scope, and direct/transitive metadata where the format provides it.
 - Solution and application manifests: `.sln` files expose project entries as symbols and project path references; `.manifest` files expose assembly identity, requested execution level, supported OS, and long-path settings as symbols.
+- CODEOWNERS: cdidx indexes every recognized candidate at the case-sensitive paths `.github/CODEOWNERS`, repository-root `CODEOWNERS`, and `docs/CODEOWNERS`; locations are relative to the enclosing Git worktree root, with the scan root used for non-Git input. Arbitrary nested or case-variant files are not classified as CODEOWNERS. GitHub selects the first existing file in that location order, and the last matching rule in the effective file controls ownership. Each ordered pattern is a `rule` symbol, each syntactically valid user, team, or email owner is a child `property` symbol, and ownerless rules remain visible. Full-line and inline comments, blank lines, horizontal whitespace, and CRLF input are handled; unsupported escaped leading `#` patterns and other malformed or oversized input produce bounded extraction-diagnostic annotations. Use `search --lang codeowners` for raw text, `files --lang codeowners` for candidates, and `symbols --lang codeowners` or `outline` for structure. cdidx does not resolve owner authorization, team membership, or pattern-to-path ownership, and CODEOWNERS does not advertise reference or graph support.
 - Shebang scripts: recognized first-line shebangs index extensionless and unknown-extension files for shell (`sh`, `bash`, `zsh`, `fish`, `dash`, `ksh`, `ash`), Python, Ruby, Perl, Tcl (`tclsh`, `wish`), Node.js, PHP, Lua, and PowerShell. Explicit language-map overrides remain authoritative; for ambiguous `.t` files, a recognized shebang overrides the Perl default, while strong known extensions continue to win conflicts.
 - Ambiguous `.m` / `.pl`: recognized shebangs win first, then bounded content checks use only strong Objective-C/MATLAB or Perl/Prolog markers, followed by conservative project markers. Scoped updates that add, change, or remove one of those markers automatically rescan the workspace so unchanged ambiguous files do not retain stale classifications. Weak or conflicting evidence remains searchable under `ambiguous_m` or `ambiguous_pl` instead of being assigned unconditionally. Unresolved `.m` content exposes the conservative union of MATLAB and Objective-C symbols/references after both comment syntaxes are position-preservingly masked. Prolog and `ambiguous_pl` expose conservative symbols, references, and graph queries after classification; `ambiguous_pl` uses a safe union of Perl and Prolog constructs without overriding the content-based language decision.
 
@@ -3039,6 +3064,7 @@ returns a typed stale-cursor error that requires restarting without `cursor`.
 | Verilog / SystemVerilog / VHDL | modules, packages, interfaces, classes, functions/tasks/processes, types, signals/parameters | module/entity/interface instantiations, package/import/use relationships, architecture/entity links, bounded known signal/type references | HDL graph extraction is syntax-based and does not elaborate generates, macros, parameterized hierarchy, or signal data flow; use `search` for those cases. |
 | Shell / PowerShell / Batch / Makefile / CMake / Justfile / MSBuild / Gradle | functions, labels, targets, recipes, tasks, imports where applicable | command-style calls, target dependencies, and control-flow targets | Runtime command construction is not resolved. |
 | Solution / application manifest | solution projects and manifest identity/settings | solution project references; application manifests are symbol-only | `.sln` project paths are graph edges for repository structure; use `symbols --lang app_manifest` for Windows manifest metadata. |
+| CODEOWNERS | ordered pattern rules and owner child properties | none | All three supported candidate locations are searchable. GitHub location and last-match precedence are documented above; cdidx does not perform authorization or path-to-owner resolution. |
 | SQL / Terraform / Dockerfile | statements/resources/stages/labels | table/resource/stage references, Dockerfile stage dependencies, Terraform dotted refs | SQL hotspot grouping defaults to statements; Dockerfile `COPY --from=<stage>` follows named stages. |
 | Markdown / HTML / CSS / Sass / Stylus / XML / XAML / GraphQL / Protobuf | headings, explicit anchors, selectors, UI elements, generic XML element/attribute paths, schema types/messages where supported | links/assets/components, path-scoped local and cross-document fragments, CSS/Sass/Stylus imports, variables, mixins/functions, XAML resources/bindings/handlers, schema references where supported | Markdown fragment references resolve only against headings or explicit anchors in the linked document. Generic non-XAML XML emits bounded structural symbols; use `search` for prose and generated markup. |
 | Dependency manifests / lockfiles | none | none | Use `--lang dependency_manifest` or `--lang dependency_lock` for dependency/security audits. |
@@ -4250,6 +4276,7 @@ legacy database も query でき、generated-code policy は `unavailable` と�
 ```bash
 cdidx export codeindex.cdidx.zip
 cdidx export codeindex.cdidx.zip --overwrite --json
+cdidx export support.cdidx.zip --redact-paths --json
 cdidx export app.cdidx.zip --project App --lang csharp --exclude-tests
 cdidx export shared.cdidx.zip --path 'src/shared/*' --exclude-path 'src/shared/generated/*'
 cdidx import codeindex.cdidx.zip
@@ -4280,14 +4307,35 @@ portable export は既存 destination を既定で拒否します。意図して
 には import 前に artifact を評価するための database hash、row count、schema contract
 stamp、readiness state、unknown-extension summary、export scope が含まれます。
 
+互換性を維持する既定 archive は `manifest.project_root` と embedded database の
+`indexed_project_root` を保持し、成功時の human / JSON output も解決済み archive path と
+database path を報告します。source machine の外へ共有する前に `--redact-paths` を指定してください。
+この opt-in mode は manifest と snapshot の両方から project root を除去し、scope と
+unknown-extension path sample に含まれる POSIX / Windows / file URI 形式の絶対 path を
+`[redacted]` に置換し、`status` が公開する group 別 sample も同様に処理します。不正または
+上限超過の path-sample metadata は redaction 完了と報告したまま保持せず、private copy から
+削除するか、空の fail-closed 値へ置換します。workspace verification の pending-path identity を
+削除または秘匿した場合は coverage marker を incomplete にし、後続の scoped refresh が placeholder を
+信頼しないようにします。その後 copy 済み snapshot を一度だけ vacuum し、
+`database_sha256` を計算します。repository-relative な indexed path、source text、hash、
+readiness、commit provenance は維持します。export JSON と manifest は
+`path_redaction_requested`、`path_redaction_complete`、
+`path_redaction_omitted_categories` を公開します。top-level の `archive_path` /
+`db_path` は `[redacted]` となり、human success output も local path を再表示しません。
+source database は変更しません。
+
 archive は信頼できる CodeIndex database の共有向けです。Import は埋め込まれた
 SQLite file が CodeIndex DB であることを検証してから destination database を置き換えます。
+path redaction 完了の claim は manifest の root / scope field と対応する embedded path metadata に
+照合し、不整合な claim は verified として再表示せず拒否します。
 `--prune-paths` は import した `indexed_project_root` metadata を import 先 project root に書き換えます。
 `.../.cdidx/codeindex.db` を import 先にした場合は sibling の project directory を使い、
-それ以外の database path では process current directory に fallback します。
+それ以外の database path では process current directory に fallback します。path-redacted
+archive は source root を完全に省略できますが、import と dry-run validation はこの値を
+信頼しないため、`--prune-paths` なしでも利用できます。
 `--dry-run` と alias の `--check` は置換せず、既存 destination DB と検証済み archive を
 比較します。JSON result は正規化後の `index_complete`、`index_incomplete_reasons`、
-`scope` を公開します。scope metadata がない archive は import 時に保守的に partial と
+`scope`、path-redaction state を公開します。scope metadata がない archive は import 時に保守的に partial と
 扱い、現行の filter なし archive だけが full snapshot の trust を明示的に維持します。
 JSON の `destination_delta.comparison` には schema / count delta と、
 file、symbol、reference edge、chunk、metadata の bounded record が含まれます。
@@ -6545,6 +6593,7 @@ CLI JSON と MCP の `languages` response は同じ catalog snapshot を共有�
 | Gradle | `.gradle` | yes |
 | Dependency manifest | `package.json`, `pyproject.toml`, `requirements.txt`, `Gemfile`, `Podfile`, `Cargo.toml`, `composer.json`, `go.mod`, `packages.config` | -- |
 | Dependency lockfile | `package-lock.json`, `npm-shrinkwrap.json`, `yarn.lock`, `pnpm-lock.yaml`, `Gemfile.lock`, `Cargo.lock`, `go.sum`, `uv.lock` | -- |
+| CODEOWNERS | `.github/CODEOWNERS`、`CODEOWNERS`、`docs/CODEOWNERS` | yes |
 | Makefile | `Makefile`, `GNUmakefile`, `Makefile.<suffix>`, `GNUmakefile.<suffix>`, `.mk` | yes |
 | Dockerfile | `Dockerfile`, `Containerfile`, `Dockerfile.<suffix>`, `Containerfile.<suffix>` | yes |
 | Assembly | `.s`, `.S`, `.asm`, `.nasm` | yes |
@@ -6610,6 +6659,7 @@ CLI JSON と MCP の `languages` response は同じ catalog snapshot を共有�
 - Node モジュール構成: `.cjs` / `.mjs` は JavaScript、`.cts` / `.mts`（`.d.cts` / `.d.mts` を含む）は TypeScript として扱います。
 - Dependency manifest / lockfile: dependency / security audit では `--lang dependency_manifest` または `--lang dependency_lock` を使います。`Directory.Packages.props`、`packages.config`、`requirements.txt`、`pyproject.toml`、`packages.lock.json`、npm の `package-lock.json` / `npm-shrinkwrap.json` は、format が提供する範囲で version、scope、direct/transitive metadata を持つ package symbol と `dependency` reference を公開します。
 - ソリューションとアプリケーションマニフェスト: `.sln` は project entry をシンボルとして公開し、project path を参照として記録します。`.manifest` は assembly identity、requested execution level、supported OS、long-path 設定をシンボルとして公開します。
+- CODEOWNERS: cdidx は case-sensitive な `.github/CODEOWNERS`、repository root の `CODEOWNERS`、`docs/CODEOWNERS` にある認識済み candidate をすべて索引します。location は enclosing Git worktree root からの相対位置で判定し、非 Git input では scan root を使います。任意の nested file や大小文字が異なる file は CODEOWNERS として分類しません。GitHub はこの順序で最初に存在する file を選び、有効な file 内では最後に一致した rule が ownership を決定します。順序付き pattern ごとに `rule` symbol、構文上有効な user・team・email owner ごとに child `property` symbol を出力し、owner のない rule も可視化します。full-line / inline comment、blank line、horizontal whitespace、CRLF を処理し、GitHub が対応しない先頭 `#` の escaped pattern と、その他の不正または過大な input は上限付き extraction-diagnostic annotation にします。raw text は `search --lang codeowners`、candidate は `files --lang codeowners`、構造は `symbols --lang codeowners` または `outline` で確認できます。cdidx は owner の authorization、team membership、pattern から path への ownership 解決を行わず、CODEOWNERS は reference / graph 対応を広告しません。
 - shebang script: 先頭行の shebang を認識できる拡張子なし/未知拡張子ファイルは、shell (`sh`, `bash`, `zsh`, `fish`, `dash`, `ksh`, `ash`)、Python、Ruby、Perl、Tcl (`tclsh`, `wish`)、Node.js、PHP、Lua、PowerShell として index 対象です。明示的な language-map override は常に優先し、曖昧な `.t` では認識済み shebang が Perl の既定値を上書きします。一方、曖昧でない既知拡張子は競合する shebang より優先されます。
 - 曖昧な `.m` / `.pl`: 認識済み shebang を最優先し、その後は bounded content check で Objective-C/MATLAB または Perl/Prolog の強い marker だけを使い、最後に保守的な project marker を確認します。これらの marker を追加・変更・削除する scoped update は workspace を自動的に再 scan し、未変更の曖昧ファイルに古い分類を残しません。弱い証拠や競合する証拠は無条件に言語を割り当てず、`ambiguous_m` / `ambiguous_pl` として全文検索可能なまま残します。未確定の `.m` は両方のコメント構文を位置を保ってマスクした後、MATLAB と Objective-C の symbol/reference を保守的に統合します。Prolog と `ambiguous_pl` は分類後に保守的な symbol、reference、graph query を公開し、`ambiguous_pl` は content-based の言語判定を上書きせず Perl / Prolog 構文の安全な和集合を使います。
 
@@ -6650,6 +6700,7 @@ item budget と byte budget のどちらが継続理由かも示します。filt
 | Verilog / SystemVerilog / VHDL | module、package、interface、class、function/task/process、type、signal/parameter | module/entity/interface のインスタンス化、package/import/use 関係、architecture/entity link、上限付きの既知 signal/type reference | HDL graph extraction は構文ベースで、generate、macro、parameterized hierarchy、signal data flow の elaboration は行いません。これらには `search` を使ってください。 |
 | Shell / PowerShell / Batch / Makefile / CMake / Justfile / MSBuild / Gradle | function、label、target、recipe、task、対応言語の import | command-style call、target dependency、control-flow target | runtime で組み立てられる command は解決しません。 |
 | ソリューション / アプリケーションマニフェスト | solution project、manifest identity / setting | `.sln` の project reference。manifest は symbol-only | `.sln` の project path はリポジトリ構造の graph edge です。Windows manifest metadata は `symbols --lang app_manifest` で確認できます。 |
+| CODEOWNERS | 順序付き pattern rule と owner の child property | なし | 対応する3箇所の candidate をすべて検索できます。GitHub の location precedence と last-match precedence は上記の説明に従い、cdidx は authorization や path から owner への解決を行いません。 |
 | SQL / Terraform / Dockerfile | statement/resource/stage/label | table/resource/stage reference、Dockerfile stage dependency、Terraform dotted refs | SQL hotspot grouping は既定で statement、Dockerfile `COPY --from=<stage>` は named stage を追跡します。 |
 | Markdown / HTML / CSS / Sass / Stylus / XML / XAML / GraphQL / Protobuf | heading、明示的な anchor、selector、UI element、汎用 XML の要素・属性パス、対応 schema type/message | link/asset/component、path に限定した同一文書・文書間の fragment、CSS/Sass/Stylus の import・variable・mixin/function、XAML resource / binding / handler、対応 schema reference | Markdown の fragment reference は、リンク先文書内の heading または明示的な anchor にのみ解決します。汎用の非 XAML XML は上限付きの構造シンボルを出力します。prose や generated markup には `search` を使ってください。 |
 | Dependency manifest / lockfile | なし | なし | dependency / security audit には `--lang dependency_manifest` または `--lang dependency_lock` を使います。 |

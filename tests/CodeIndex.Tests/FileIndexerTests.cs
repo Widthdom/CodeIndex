@@ -757,6 +757,7 @@ public partial class FileIndexerTests
     [InlineData("script.zsh", "shell")]
     [InlineData("script.fish", "shell")]
     [InlineData("Dockerfile", "dockerfile")]
+    [InlineData("CODEOWNERS", "codeowners")]
     [InlineData(".dockerfile", "dockerfile")]
     [InlineData("api.Dockerfile", "dockerfile")]
     [InlineData("api.Containerfile", "dockerfile")]
@@ -3233,6 +3234,82 @@ public partial class FileIndexerTests
         Assert.Equal(["Cargo.toml", "composer.json", "package.json", "pyproject.toml", "requirements.txt"], files);
     }
 
+    [Fact]
+    public void ScanFiles_CodeOwnersRecognizesOnlySupportedRepositoryLocations_Issue5198()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_codeowners_issue5198");
+        var projectRoot = project.Root;
+        Directory.CreateDirectory(Path.Combine(projectRoot, ".github"));
+        Directory.CreateDirectory(Path.Combine(projectRoot, "docs"));
+        Directory.CreateDirectory(Path.Combine(projectRoot, "nested"));
+        File.WriteAllText(Path.Combine(projectRoot, ".github", "CODEOWNERS"), "/src/ @primary\n");
+        File.WriteAllText(Path.Combine(projectRoot, "CODEOWNERS"), "* @root\n");
+        File.WriteAllText(Path.Combine(projectRoot, "docs", "CODEOWNERS"), "/docs/ @docs\n");
+        File.WriteAllText(Path.Combine(projectRoot, "nested", "CODEOWNERS"), "* @nested\n");
+
+        var scan = new FileIndexer(projectRoot, ignoreCase: false).ScanFilesDetailed();
+        var indexedCodeOwners = scan.FileLanguages
+            .Where(pair => pair.Value == "codeowners")
+            .Select(pair => Path.GetRelativePath(projectRoot, pair.Key).Replace('\\', '/'))
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToList();
+
+        Assert.Equal([".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"], indexedCodeOwners);
+        Assert.DoesNotContain(
+            scan.Files,
+            path => string.Equals(
+                Path.GetRelativePath(projectRoot, path).Replace('\\', '/'),
+                "nested/CODEOWNERS",
+                StringComparison.Ordinal));
+        Assert.All(
+            scan.FileLanguages.Where(pair => pair.Value == "codeowners"),
+            pair => Assert.Equal(
+                "codeowners",
+                FileIndexer.GetReusableDetectedLanguage(pair.Key, scan.FileLanguages)));
+    }
+
+    [Fact]
+    public void ScanFiles_CodeOwnersReservedPathsRemainCaseSensitive_Issue5198Review()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_codeowners_case_issue5198");
+        var projectRoot = project.Root;
+        Directory.CreateDirectory(Path.Combine(projectRoot, ".github"));
+        Directory.CreateDirectory(Path.Combine(projectRoot, "Docs"));
+        File.WriteAllText(Path.Combine(projectRoot, ".github", "codeowners"), "* @lowercase\n");
+        File.WriteAllText(Path.Combine(projectRoot, "CodeOwners"), "* @mixed\n");
+        File.WriteAllText(Path.Combine(projectRoot, "Docs", "CODEOWNERS"), "* @wrong-directory-case\n");
+        if (!OperatingSystem.IsWindows())
+            File.WriteAllText(Path.Combine(projectRoot, @".github\CODEOWNERS"), "* @literal-backslash\n");
+
+        var scan = new FileIndexer(projectRoot, ignoreCase: true).ScanFilesDetailed();
+
+        Assert.DoesNotContain(scan.FileLanguages, pair => pair.Value == "codeowners");
+        Assert.Null(FileIndexer.DetectLanguage(Path.Combine(projectRoot, ".github", "codeowners")));
+    }
+
+    [Fact]
+    public void ScanFiles_CodeOwnersUsesEnclosingGitWorktreeRoot_Issue5198Review()
+    {
+        using var repository = TestProjectHelper.CreateTempProjectScope("codeindex_codeowners_git_root_issue5198");
+        var repositoryRoot = repository.Root;
+        var projectRoot = Path.Combine(repositoryRoot, "packages", "app");
+        Directory.CreateDirectory(projectRoot);
+        RunGit(repositoryRoot, "init");
+        File.WriteAllText(Path.Combine(projectRoot, "CODEOWNERS"), "* @nested\n");
+
+        var resolvedRepositoryRoot = GitHelper.TryGetRepositoryRoot(projectRoot);
+        Assert.Equal(
+            Path.TrimEndingDirectorySeparator(Path.GetFullPath(repositoryRoot)),
+            Path.TrimEndingDirectorySeparator(resolvedRepositoryRoot!));
+
+        var scan = new FileIndexer(
+            projectRoot,
+            ignoreCase: false,
+            ignoreRuleRoot: resolvedRepositoryRoot).ScanFilesDetailed();
+
+        Assert.DoesNotContain(scan.FileLanguages, pair => pair.Value == "codeowners");
+    }
+
     private static readonly (string Entry, string Language)[] ExactLanguageMapEntries =
     [
         ("Dockerfile", "dockerfile"),
@@ -3265,6 +3342,9 @@ public partial class FileIndexerTests
         (".runsettings", "xml"),
         (".rules", "config"),
         (".gitattributes", "gitattributes"),
+        (".github/CODEOWNERS", "codeowners"),
+        ("CODEOWNERS", "codeowners"),
+        ("docs/CODEOWNERS", "codeowners"),
         (".s", "assembly"),
         (".S", "assembly")
     ];

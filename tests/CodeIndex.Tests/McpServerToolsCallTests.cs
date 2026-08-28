@@ -6697,6 +6697,16 @@ public partial class McpServerTests
             Assert.True(entry["graph_queries"]!.GetValue<bool>());
             Assert.Empty(entry["capability_gaps"]!.AsArray());
         }
+
+        var codeOwners = languages.Single(language => language!["lang"]!.GetValue<string>() == "codeowners")!;
+        Assert.True(codeOwners["symbol_extraction"]!.GetValue<bool>());
+        Assert.True(codeOwners["outline"]!.GetValue<bool>());
+        Assert.False(codeOwners["reference_extraction"]!.GetValue<bool>());
+        Assert.False(codeOwners["graph_queries"]!.GetValue<bool>());
+        Assert.Contains("missing-references", codeOwners["capability_gaps"]!.AsArray().Select(value => value!.GetValue<string>()));
+        Assert.Contains("missing-graph", codeOwners["capability_gaps"]!.AsArray().Select(value => value!.GetValue<string>()));
+        var codeOwnersPaths = codeOwners["exact_filenames"]!.AsArray().Select(value => value!.GetValue<string>()).ToList();
+        Assert.Equal([".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"], codeOwnersPaths);
     }
 
     [Fact]

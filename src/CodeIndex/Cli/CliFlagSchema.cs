@@ -836,7 +836,17 @@ internal static class CliFlagSchema
                     ["export"] = Set("ctags"),
                 },
             },
-            new() { Name = "--redact-paths", Description = "Redact machine-specific paths (the default for recovery/config JSON and reports)", PrimaryCommands = Set(RecoveryPathCommands.Concat(["status", "report"]).ToArray()) },
+            new()
+            {
+                Name = "--redact-paths",
+                Description = "Redact machine-specific paths; opt in for portable archives (the default for recovery/config JSON and reports)",
+                PrimaryCommands = Set(RecoveryPathCommands.Concat(["status", "report", "export"]).ToArray()),
+                CompletionSubcommands = new Dictionary<string, IReadOnlySet<string>>(StringComparer.Ordinal)
+                {
+                    ["export"] = Set(),
+                },
+                ParentCompletionCommands = Set("export"),
+            },
             new() { Name = "--no-log", Description = "Exclude global tool log from bundle", PrimaryCommands = Set("report") },
             new() { Name = "--include-args", Description = "Include args in bundle log", PrimaryCommands = Set("report") },
             new() { Name = "--log-lines", ValuePlaceholder = "<n>", Description = "Number of log lines to include in bundle (clamped to 2000)", PrimaryCommands = Set("report") },

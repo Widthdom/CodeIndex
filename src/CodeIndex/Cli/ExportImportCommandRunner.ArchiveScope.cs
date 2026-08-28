@@ -145,8 +145,9 @@ internal static partial class ExportImportCommandRunner
                 throw new InvalidDataException("scoped archive snapshot failed SQLite foreign-key validation");
         }
 
-        using (var vacuum = connection.CreateCommand())
+        if (!options.RedactPaths)
         {
+            using var vacuum = connection.CreateCommand();
             vacuum.CommandText = "VACUUM";
             vacuum.ExecuteNonQuery();
         }
