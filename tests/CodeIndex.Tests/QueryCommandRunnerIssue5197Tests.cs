@@ -292,6 +292,55 @@ public partial class QueryCommandRunnerTests
         Assert.Equal(2, reason.GetProperty("references_removed").GetInt64());
     }
 
+    [Fact]
+    public void RunDeps_CSharpNoiseSuppressionKeepsOnlyResolvedGroupCandidateFiles_Issue5197()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_deps_csharp_resolved_group_5197");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        InsertFileWithSymbolsAndReferences(dbPath, "src/Caller.cs", ["Caller"], ["Target"]);
+        InsertFileWithSymbolsAndReferences(dbPath, "src/PartialDeclaration.cs", ["Target"], ["Caller"]);
+        InsertFileWithSymbolsAndReferences(dbPath, "src/PartialImplementation.cs", ["Target"], ["Caller"]);
+        InsertFileWithSymbolsAndReferences(dbPath, "src/Decoy.cs", ["Target"], ["Caller"]);
+        SetCycleReferenceResolvedGroupCandidates(
+            dbPath,
+            "src/Caller.cs",
+            ["src/PartialDeclaration.cs", "src/PartialImplementation.cs"]);
+        SetCycleReferenceResolution(dbPath, "src/PartialDeclaration.cs", "src/Caller.cs", "resolved");
+        SetCycleReferenceResolution(dbPath, "src/PartialImplementation.cs", "src/Caller.cs", "resolved");
+        SetCycleReferenceResolution(dbPath, "src/Decoy.cs", "src/Caller.cs", "resolved");
+        MarkDependencyGraphReady(dbPath);
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+            ["--db", dbPath, "--json", "--cycles", "--suppress-noise", "--limit", "10", "--lang", "csharp"],
+            _jsonOptions));
+
+        using var document = ParseJsonOutput(stdout);
+        var json = document.RootElement;
+        var cycle = Assert.Single(json.GetProperty("cycles").EnumerateArray());
+        var nodes = cycle.GetProperty("nodes").EnumerateArray().Select(static node => node.GetString()).ToArray();
+        var resolutions = cycle
+            .GetProperty("retained_evidence")
+            .GetProperty("by_resolution_state")
+            .EnumerateArray()
+            .ToDictionary(
+                static item => item.GetProperty("resolution_state").GetString()!,
+                static item => item.GetProperty("reference_count").GetInt64(),
+                StringComparer.Ordinal);
+        var reason = Assert.Single(json.GetProperty("symbol_filter").GetProperty("suppression_reasons").EnumerateArray());
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Equal(
+            ["src/Caller.cs", "src/PartialDeclaration.cs", "src/PartialImplementation.cs"],
+            nodes);
+        Assert.Equal(2, resolutions["resolved"]);
+        Assert.Equal(2, resolutions["resolved_group"]);
+        Assert.Equal("csharp_non_authoritative_qualified_call", reason.GetProperty("reason").GetString());
+        Assert.Equal(1, reason.GetProperty("edges_affected").GetInt32());
+        Assert.Equal(1, reason.GetProperty("edges_removed").GetInt32());
+        Assert.Equal(1, reason.GetProperty("references_removed").GetInt64());
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("0")]
@@ -380,5 +429,64 @@ public partial class QueryCommandRunnerTests
         command.Parameters.AddWithValue("$targetPath", targetPath);
         command.Parameters.AddWithValue("$resolutionState", resolutionState);
         Assert.Equal(1, command.ExecuteNonQuery());
+    }
+
+    private static void SetCycleReferenceResolvedGroupCandidates(
+        string dbPath,
+        string sourcePath,
+        IReadOnlyList<string> targetPaths)
+    {
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString);
+        connection.Open();
+        using var transaction = connection.BeginTransaction();
+        using var update = connection.CreateCommand();
+        update.Transaction = transaction;
+        update.CommandText = """
+            UPDATE symbol_references
+            SET reference_kind = 'call',
+                target_qualifier = 'Receiver',
+                resolution_state = 'resolved_group',
+                resolution_candidate_count = $candidateCount,
+                target_symbol_id = NULL,
+                target_symbol_key = 'family:issue5197'
+            WHERE file_id = (SELECT id FROM files WHERE path = $sourcePath)
+            """;
+        update.Parameters.AddWithValue("$candidateCount", targetPaths.Count);
+        update.Parameters.AddWithValue("$sourcePath", sourcePath);
+        Assert.Equal(1, update.ExecuteNonQuery());
+
+        using var delete = connection.CreateCommand();
+        delete.Transaction = transaction;
+        delete.CommandText = """
+            DELETE FROM symbol_reference_candidates
+            WHERE reference_id = (
+                SELECT r.id
+                FROM symbol_references r
+                JOIN files f ON f.id = r.file_id
+                WHERE f.path = $sourcePath
+            )
+            """;
+        delete.Parameters.AddWithValue("$sourcePath", sourcePath);
+        delete.ExecuteNonQuery();
+
+        foreach (var targetPath in targetPaths)
+        {
+            using var insert = connection.CreateCommand();
+            insert.Transaction = transaction;
+            insert.CommandText = """
+                INSERT INTO symbol_reference_candidates(reference_id, symbol_id, scope_rank)
+                SELECT r.id, s.id, 0
+                FROM symbol_references r
+                JOIN files source_file ON source_file.id = r.file_id
+                JOIN files target_file ON target_file.path = $targetPath
+                JOIN symbols s ON s.file_id = target_file.id AND s.name = r.symbol_name
+                WHERE source_file.path = $sourcePath
+                """;
+            insert.Parameters.AddWithValue("$sourcePath", sourcePath);
+            insert.Parameters.AddWithValue("$targetPath", targetPath);
+            Assert.Equal(1, insert.ExecuteNonQuery());
+        }
+
+        transaction.Commit();
     }
 }

@@ -41,12 +41,17 @@ public partial class DbReader
                                       && _referenceColumns.Contains("target_symbol_id")
             ? "(r.resolution_state = 'resolved' AND r.target_symbol_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM symbols confirmed_target WHERE confirmed_target.id = r.target_symbol_id AND confirmed_target.file_id = dst.id))"
             : "0 = 1";
+        var resolvedGroupCSharpNonCandidate = hasCurrentReferenceIdentityContract
+            ? "(r.resolution_state = 'resolved_group' AND NOT EXISTS (SELECT 1 FROM symbol_reference_candidates confirmed_candidate JOIN symbols confirmed_target ON confirmed_target.id = confirmed_candidate.symbol_id WHERE confirmed_candidate.reference_id = r.id AND confirmed_target.file_id = dst.id))"
+            : "0 = 1";
         var csharpNonAuthoritativeQualifiedCall = hasCurrentReferenceIdentityContract
                                                    && _referenceColumns.Contains("target_qualifier")
                                                    && _referenceColumns.Contains("resolution_state")
                                                    && _referenceColumns.Contains("target_symbol_id")
             ? "(src.lang = 'csharp' AND r.reference_kind = 'call' AND r.target_qualifier IS NOT NULL AND (COALESCE(r.resolution_state, 'unresolved') NOT IN ('resolved', 'resolved_group') OR "
               + resolvedCSharpNonTarget
+              + " OR "
+              + resolvedGroupCSharpNonCandidate
               + "))"
             : "0 = 1";
         var suppressedEvidenceScope = "((src.lang = 'markdown' AND s.kind = 'heading' AND NOT "
