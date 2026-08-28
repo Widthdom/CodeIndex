@@ -450,7 +450,12 @@ public class ExportImportCommandRunnerIssue5195Tests
 
     private static string? ReadMetaValue(string dbPath, string key)
     {
-        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString);
+        using var connection = new SqliteConnection(
+            new SqliteConnectionStringBuilder
+            {
+                DataSource = dbPath,
+                Pooling = false,
+            }.ConnectionString);
         connection.Open();
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT value FROM codeindex_meta WHERE key = @key";
