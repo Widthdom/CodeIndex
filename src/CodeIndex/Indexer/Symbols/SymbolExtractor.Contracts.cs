@@ -30,6 +30,7 @@ public static partial class SymbolExtractor
     public const int SystemsLanguageContractVersion = 2;
     public const int ScientificNativeGraphContractVersion = 4;
     public const int RepositoryMetadataContractVersion = 2;
+    public const int CodeOwnersContractVersion = 1;
     public const int ApplicationManifestContractVersion = 3;
     public const int MarkdownContractVersion = 4;
     public const int DependencyLockContractVersion = 3;
@@ -66,6 +67,7 @@ public static partial class SymbolExtractor
         "editorconfig",
         "dockerignore",
         "config",
+        "codeowners",
     ];
 
     public static int GetContractVersion(string? lang)
@@ -84,6 +86,7 @@ public static partial class SymbolExtractor
             "prolog" or "ambiguous_pl" => PrologReferenceGraphContractVersion,
             "ada" or "ambiguous_m" or "cython" or "d" or "julia" or "matlab" or "nim" or "objc" => ScientificNativeGraphContractVersion,
             "config" or "dockerignore" or "editorconfig" or "gitattributes" or "gitignore" or "toml" => RepositoryMetadataContractVersion,
+            "codeowners" => CodeOwnersContractVersion,
             "app_manifest" => ApplicationManifestContractVersion,
             "markdown" => MarkdownContractVersion,
             "dependency_lock" => DependencyLockContractVersion,
