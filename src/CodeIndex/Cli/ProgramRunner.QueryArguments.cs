@@ -178,6 +178,9 @@ internal static partial class ProgramRunner
                 return QueryCommandTokenRole.CommandOptionValue;
         }
 
+        if (HasExplicitSearchQueryMode(commandName, subArgs, withValues, flagOnly))
+            return QueryCommandTokenRole.None;
+
         if (!CommandAcceptsQueryLiteral(commandName))
             return QueryCommandTokenRole.None;
 
@@ -223,6 +226,31 @@ internal static partial class ProgramRunner
         }
 
         return QueryCommandTokenRole.FirstQueryLiteral;
+    }
+
+    private static bool HasExplicitSearchQueryMode(
+        string commandName,
+        string[] subArgs,
+        IReadOnlySet<string> withValues,
+        IReadOnlySet<string> flagOnly)
+    {
+        if (!string.Equals(commandName, "search", StringComparison.Ordinal))
+            return false;
+
+        for (var i = 0; i < subArgs.Length; i++)
+        {
+            var arg = subArgs[i];
+            if (arg == "--")
+                break;
+
+            var normalizedArg = NormalizeCommandOptionToken(arg, withValues, flagOnly, out var hasInlineValue);
+            if (normalizedArg is "--query" or "--recipe" or "--named-query")
+                return true;
+            if (!hasInlineValue && withValues.Contains(normalizedArg) && i + 1 < subArgs.Length)
+                i++;
+        }
+
+        return false;
     }
 
     private static bool IsInspectPathLineMode(string commandName, string[] subArgs)
