@@ -111,17 +111,17 @@ internal static partial class JsonEnvelopeWrapper
             return false;
         if (command == "find" && IsStandaloneFindCountContinuationRequest(args))
             return false;
-        if (HasArgument(args, "--fields") || HasArgument(args, "--cursor"))
+        if (HasArgument(command, args, "--fields") || HasArgument(command, args, "--cursor"))
             return true;
         if (command == "languages"
-            && HasJsonOutputSelection(args)
-            && (HasArgument(args, "--limit") || HasArgument(args, "--top")))
+            && HasJsonOutputSelection(command, args)
+            && (HasArgument(command, args, "--limit") || HasArgument(command, args, "--top")))
         {
             return true;
         }
-        if (AutoWrapByteBudgetCommands.Contains(command) && HasArgument(args, "--max-json-bytes"))
+        if (AutoWrapByteBudgetCommands.Contains(command) && HasArgument(command, args, "--max-json-bytes"))
             return true;
-        return AutoWrapCompactCommands.Contains(command) && HasCompactOutputSelection(args);
+        return AutoWrapCompactCommands.Contains(command) && HasCompactOutputSelection(command, args);
     }
 
     private static bool IsBoundedResponseRequest(string command, string[] args)
@@ -132,37 +132,47 @@ internal static partial class JsonEnvelopeWrapper
         if (command == "search" && IsSearchAggregateResponseRequest(args))
             return false;
 
-        return HasArgument(args, "--fields")
-               || HasArgument(args, "--cursor")
-               || (command == "search" && HasEnvelopeFlag(command, args) && HasJsonArrayOutputSelection(args))
-               || (command != "search" && HasEnvelopeFlag(command, args) && HasArgument(args, "--max-json-bytes"))
+        return HasArgument(command, args, "--fields")
+               || HasArgument(command, args, "--cursor")
+               || (command == "search" && HasEnvelopeFlag(command, args) && HasJsonArrayOutputSelection(command, args))
+               || (command != "search" && HasEnvelopeFlag(command, args) && HasArgument(command, args, "--max-json-bytes"))
                || ShouldAutoWrapBoundedResponse(command, args);
     }
 
     private static bool IsStandaloneWholeRowByteBudgetRequest(string command, string[] args)
         => command is "outline" or "unused"
-           && HasArgument(args, "--max-json-bytes");
+           && HasArgument(command, args, "--max-json-bytes");
 
     private static bool HasUnsupportedStandaloneBoundedControl(string command, string[] args)
         => command is "outline" or "unused"
-           && (HasArgument(args, "--fields")
-               || HasArgument(args, "--format")
-               || args.Any(arg => arg.StartsWith("--json=", StringComparison.Ordinal)));
+           && (HasArgument(command, args, "--fields")
+               || HasArgument(command, args, "--format")
+               || ClassifyArgumentTokens(command, args)
+                   .Any(token => token.IsOption && token.Value.StartsWith("--json=", StringComparison.Ordinal)));
 
     private static bool IsStandaloneFindCountContinuationRequest(string[] args)
         => IsFindCountResponseRequest(args)
-           && HasArgument(args, "--cursor")
-           && !HasArgument(args, "--fields")
-           && !HasArgument(args, "--max-json-bytes")
-           && !HasCompactOutputSelection(args)
+           && HasArgument("find", args, "--cursor")
+           && !HasArgument("find", args, "--fields")
+           && !HasArgument("find", args, "--max-json-bytes")
+           && !HasCompactOutputSelection("find", args)
            && !HasEnvelopeFlag("find", args);
 
     private static bool IsFindCountResponseRequest(string[] args)
     {
+        var nextTokenIsLiteralQuery = false;
         for (var i = 0; i < args.Length; i++)
         {
+            if (nextTokenIsLiteralQuery)
+            {
+                nextTokenIsLiteralQuery = false;
+                continue;
+            }
             if (string.Equals(args[i], "--", StringComparison.Ordinal))
-                break;
+            {
+                nextTokenIsLiteralQuery = true;
+                continue;
+            }
             if (string.Equals(args[i], "--query", StringComparison.Ordinal)
                 && i + 1 < args.Length)
             {
@@ -185,27 +195,31 @@ internal static partial class JsonEnvelopeWrapper
     }
 
     private static bool IsSearchAggregateResponseRequest(string[] args)
-        => HasArgument(args, "--recipe")
-           || HasArgument(args, "--list-recipes")
-           || HasArgument(args, "--named-query")
-           || HasArgument(args, "--count")
-           || HasArgument(args, "--group-by")
-           || HasArgument(args, "--unique")
-           || HasArgument(args, "--count-by")
-           || HasArgument(args, "--summary-only");
+        => HasArgument("search", args, "--recipe")
+           || HasArgument("search", args, "--list-recipes")
+           || HasArgument("search", args, "--named-query")
+           || HasArgument("search", args, "--count")
+           || HasArgument("search", args, "--group-by")
+           || HasArgument("search", args, "--unique")
+           || HasArgument("search", args, "--count-by")
+           || HasArgument("search", args, "--summary-only");
 
-    private static bool HasJsonOutputSelection(string[] args)
-        => args.Any(arg => string.Equals(arg, "--json", StringComparison.Ordinal)
-                           || arg.StartsWith("--json=", StringComparison.Ordinal));
+    private static bool HasJsonOutputSelection(string command, string[] args)
+        => HasArgument(command, args, "--json");
 
-    private static bool HasJsonArrayOutputSelection(string[] args)
-        => args.Any(arg => string.Equals(arg, "--json=array", StringComparison.OrdinalIgnoreCase));
+    private static bool HasJsonArrayOutputSelection(string command, string[] args)
+        => ClassifyArgumentTokens(command, args)
+            .Any(token => token.IsOption
+                          && string.Equals(token.Value, "--json=array", StringComparison.OrdinalIgnoreCase));
 
-    private static bool HasCompactOutputSelection(string[] args)
+    private static bool HasCompactOutputSelection(string command, string[] args)
     {
-        for (var i = 0; i < args.Length; i++)
+        var tokens = ClassifyArgumentTokens(command, args).ToArray();
+        for (var i = 0; i < tokens.Length; i++)
         {
-            var arg = args[i];
+            if (!tokens[i].IsOption)
+                continue;
+            var arg = tokens[i].Value;
             if (string.Equals(arg, "--compact", StringComparison.Ordinal)
                 || string.Equals(arg, "--format=compact", StringComparison.OrdinalIgnoreCase))
                 return true;
@@ -219,7 +233,7 @@ internal static partial class JsonEnvelopeWrapper
 
     private static bool IsStaticStatusExplainRequest(string command, string[] args)
         => string.Equals(command, "status", StringComparison.Ordinal)
-           && HasArgument(args, "--explain");
+           && HasArgument(command, args, "--explain");
 
     private static int RunBoundedResponse(
         string command,
@@ -228,7 +242,7 @@ internal static partial class JsonEnvelopeWrapper
         JsonSerializerOptions jsonOptions,
         Func<string[], int> runInner)
     {
-        if (TryReadRequestedMaxJsonBytes(args, out var requestedBytes)
+        if (TryReadRequestedMaxJsonBytes(command, args, out var requestedBytes)
             && requestedBytes <= 0)
         {
             return CommandErrorWriter.WriteResponseBudgetError(
@@ -250,7 +264,7 @@ internal static partial class JsonEnvelopeWrapper
             return WriteBoundedResponseUsageError(controlError!, "Use the command help to pass positive --limit/--max-json-bytes values and a next_cursor returned by the same query.");
         }
         if (HasUnsupportedStandaloneBoundedControl(command, args)
-            || command == "unused" && HasArgument(args, "--summary-only"))
+            || command == "unused" && HasArgument(command, args, "--summary-only"))
         {
             return RunStandaloneValidationWithinBudget(
                 command,
@@ -293,7 +307,7 @@ internal static partial class JsonEnvelopeWrapper
         var bodyIntentValidationArgs = PrepareBoundedGraphBodyIntentValidationArgs(command, args);
         if (!QueryCommandRunner.TryValidateBoundedGraphSnippetLinesOption(command, bodyIntentValidationArgs, bodyOutputHidden))
             return CommandExitCodes.UsageError;
-        if (HasArgument(args, "--count")
+        if (HasArgument(command, args, "--count")
             || command == "find" && IsFindCountResponseRequest(args))
             return WriteBoundedResponseUsageError("Bounded response controls cannot be combined with --count.", "Run --count --json separately for a count-only response, or remove --count to page projected rows.");
         if (command == "map" && ValidateMapProjectionControls(args, controls.Fields) is { } mapProjectionError)
@@ -413,7 +427,7 @@ internal static partial class JsonEnvelopeWrapper
             command,
             extraction.PrimaryCollection,
             suppressRuntimeMetadata,
-            groupedSymbolsRequest: command == "symbols" && HasArgument(args, "--group-partials"));
+            groupedSymbolsRequest: command == "symbols" && HasArgument(command, args, "--group-partials"));
         var pageItems = availableItems
             .Take(controls.PageLimit)
             .Select(item => ProjectResponseItem(
@@ -1655,12 +1669,12 @@ internal static partial class JsonEnvelopeWrapper
     {
         var stripped = StripResponseOptions(command, args, stripLimit: PageableResponseCommands.Contains(command));
         var bodyProjected = HasExplicitBodyProjection(controls.Fields);
-        var bodyOptionRequested = args.Any(arg => string.Equals(arg, "--body", StringComparison.Ordinal));
+        var bodyOptionRequested = HasArgument(command, args, "--body");
         if (command is not ("outline" or "references" or "callers" or "callees")
             && !bodyProjected
             && (controls.Compact || controls.Fields is { Count: > 0 }))
         {
-            stripped.RemoveAll(arg => string.Equals(arg, "--body", StringComparison.Ordinal));
+            RemoveFlagOptions(command, stripped, arg => string.Equals(arg, "--body", StringComparison.Ordinal));
         }
         var additions = new List<string>();
         if (PageableResponseCommands.Contains(command))
@@ -1708,7 +1722,7 @@ internal static partial class JsonEnvelopeWrapper
             "entrypoints");
         if (collection is null)
             return null;
-        if (HasArgument(args, "--summary-only"))
+        if (HasArgument("map", args, "--summary-only"))
             return $"Map collection projection '{collection}' cannot be combined with --summary-only.";
 
         var requestedSections = ReadMapSections(args);
@@ -1756,9 +1770,12 @@ internal static partial class JsonEnvelopeWrapper
     private static string[] PrepareCountArgs(string command, string[] args)
     {
         var stripped = StripResponseOptions(command, args, stripLimit: true);
-        stripped.RemoveAll(arg => string.Equals(arg, "--body", StringComparison.Ordinal)
-                                  || string.Equals(arg, "--summary-only", StringComparison.Ordinal)
-                                  || string.Equals(arg, "--strict-not-found", StringComparison.Ordinal));
+        RemoveFlagOptions(
+            command,
+            stripped,
+            arg => string.Equals(arg, "--body", StringComparison.Ordinal)
+                   || string.Equals(arg, "--summary-only", StringComparison.Ordinal)
+                   || string.Equals(arg, "--strict-not-found", StringComparison.Ordinal));
         RemoveParsedGraphSnippetLinesOption(stripped);
         var additions = new List<string>();
         if (command == "impact")
@@ -1770,6 +1787,19 @@ internal static partial class JsonEnvelopeWrapper
         additions.Add("--json");
         InsertBeforeEndOfOptions(command, stripped, additions);
         return [.. stripped];
+    }
+
+    private static void RemoveFlagOptions(
+        string command,
+        List<string> args,
+        Func<string, bool> shouldRemove)
+    {
+        var retained = ClassifyArgumentTokens(command, [.. args])
+            .Where(token => !token.IsOption || !shouldRemove(token.Value))
+            .Select(token => token.Value)
+            .ToArray();
+        args.Clear();
+        args.AddRange(retained);
     }
 
     private static void RemoveParsedGraphSnippetLinesOption(List<string> args)
@@ -1893,11 +1923,14 @@ internal static partial class JsonEnvelopeWrapper
         string? cursor = null;
         int? maxJsonBytes = null;
         var pageLimit = DefaultPageLimit;
-        var compact = HasCompactOutputSelection(args);
+        var compact = HasCompactOutputSelection(command, args);
         error = null;
-        for (var i = 0; i < args.Length; i++)
+        var tokens = ClassifyArgumentTokens(command, args).ToArray();
+        for (var i = 0; i < tokens.Length; i++)
         {
-            var arg = args[i];
+            if (!tokens[i].IsOption)
+                continue;
+            var arg = tokens[i].Value;
             if (!TryReadInlineOrSeparated(args, ref i, arg, "--fields", out var fieldsValue, out var matched, out error))
             {
                 controls = default!;
@@ -2044,13 +2077,16 @@ internal static partial class JsonEnvelopeWrapper
         return true;
     }
 
-    private static bool TryReadRequestedMaxJsonBytes(string[] args, out long requestedBytes)
+    private static bool TryReadRequestedMaxJsonBytes(string command, string[] args, out long requestedBytes)
     {
         requestedBytes = 0;
-        for (var i = 0; i < args.Length; i++)
+        var tokens = ClassifyArgumentTokens(command, args).ToArray();
+        for (var i = 0; i < tokens.Length; i++)
         {
+            if (!tokens[i].IsOption)
+                continue;
             const string option = "--max-json-bytes";
-            var arg = args[i];
+            var arg = tokens[i].Value;
             string? raw = null;
             if (arg.StartsWith(option + "=", StringComparison.Ordinal))
                 raw = arg[(option.Length + 1)..];

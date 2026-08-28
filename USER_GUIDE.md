@@ -2453,7 +2453,7 @@ same source location.
 | `--palette <name>` | All commands | Choose the ANSI palette used when color output is enabled. Accepts `basic` (8-color SGR 30–37, the default fallback for minimal SSH/CI terminals), `256` (256-color `\x1b[38;5;Nm`), or `truecolor` (24-bit RGB `\x1b[38;2;R;G;Bm`). Precedence: `--palette` flag > `CDIDX_COLOR_PALETTE` env var > `COLORTERM` / `TERM` auto-detect. The basic palette avoids `\x1b[90m` (bright-black / dim), which is unreadable on many minimal terminals. |
 | `--metrics <path>` | All commands (and MCP tool calls) | Append one JSONL metrics record per CLI command / MCP tool call to `<path>`. The `CDIDX_METRICS=<path>` environment variable provides the same destination as a fallback when the flag is not passed. If the destination cannot be opened at startup, cdidx emits a bounded warning, disables metrics, and continues the underlying command. Later write or rotation failures remain best-effort and never break the command. |
 
-If a query itself begins with `-`, pass it as `--query <query>` or `-- <query>`. If an option value itself begins with `--`, pass it as `--opt=<value>` rather than a separated value, for example `--path=--json-dir` or `--db=--tmp.db`.
+If a query itself begins with `-`, pass it as `--query <query>` or `-- <query>`. The token immediately after `--` remains literal query data even when it matches a bounded-response option such as `--fields`; options after that one query token continue to be parsed normally. If an option value itself begins with `--`, pass it as `--opt=<value>` rather than a separated value, for example `--path=--json-dir` or `--db=--tmp.db`.
 
 ### Exit codes
 
@@ -6108,7 +6108,7 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--palette <name>` | 全コマンド | カラー出力が有効なときに用いる ANSI パレットを選択する。`basic`（標準8色 SGR 30–37、最小 SSH/CI 端末向けの既定フォールバック）、`256`（256色 `\x1b[38;5;Nm`）、`truecolor`（24ビット RGB `\x1b[38;2;R;G;Bm`）を受け付ける。優先順位: `--palette` フラグ > `CDIDX_COLOR_PALETTE` 環境変数 > `COLORTERM` / `TERM` 自動判定。`basic` パレットは最小端末で読みにくい `\x1b[90m`（暗灰 / dim）を避ける。 |
 | `--metrics <path>` | 全コマンド（および MCP ツール呼び出し） | CLI コマンド / MCP ツール呼び出し 1 回ごとに JSONL レコードを 1 行ずつ `<path>` に追記する。フラグ未指定時のフォールバックとして `CDIDX_METRICS=<path>` 環境変数でも同じ出力先を指定できる。起動時に出力先を開けない場合、cdidx は長さを制限した警告を出してメトリクスを無効化し、本体コマンドを続行する。その後の書き込みやローテーションの失敗はベストエフォートのまま扱われ、本体コマンドを壊さない。 |
 
-クエリ自体が `-` で始まる場合は `--query <query>` または `-- <query>` で渡してください。オプション値自体が `--` で始まる場合は、分離形式ではなく `--opt=<value>` で渡します。たとえば `--path=--json-dir` や `--db=--tmp.db` のように指定します。
+クエリ自体が `-` で始まる場合は `--query <query>` または `-- <query>` で渡してください。`--` 直後の1トークンは `--fields` のような bounded-response オプションと一致してもリテラルなクエリデータのままで、その1トークンより後のオプションは通常どおり解析されます。オプション値自体が `--` で始まる場合は、分離形式ではなく `--opt=<value>` で渡します。たとえば `--path=--json-dir` や `--db=--tmp.db` のように指定します。
 
 ### 終了コード
 

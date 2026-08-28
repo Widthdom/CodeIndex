@@ -602,6 +602,65 @@ public class JsonEnvelopeWrapperTests
     }
 
     [Fact]
+    public void Search_EndOfOptionsPreservesBoundedControlLikeQueries_Issue5208()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("bounded_option_query_5208");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            string[] literalQueries =
+            [
+                "--fields",
+                "--cursor",
+                "--max-json-bytes",
+                "--limit",
+                "--top",
+                "--compact",
+                "--format=compact",
+                "--json=array",
+                "--count",
+                "--summary-only",
+            ];
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/App.txt",
+                "text",
+                string.Join(' ', literalQueries) + "\n");
+
+            foreach (var literalQuery in literalQueries)
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                    [
+                        "search",
+                        "--json",
+                        "--db",
+                        dbPath,
+                        "--exact-substring",
+                        "--",
+                        literalQuery,
+                        "--fields",
+                        "path",
+                    ],
+                    _jsonOptions,
+                    "1.0.0-test"));
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                using var document = JsonDocument.Parse(stdout);
+                Assert.Equal(
+                    literalQuery,
+                    document.RootElement.GetProperty("metadata").GetProperty("query_normalized").GetString());
+                var result = Assert.Single(document.RootElement.GetProperty("results").EnumerateArray());
+                Assert.Equal("src/App.txt", result.GetProperty("path").GetString());
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunWrapped_CapturedOutputExceedsLimit_ReturnsJsonErrorEnvelope_Issue2901()
     {
         var (exitCode, stdout, stderr) = CaptureConsole(() => JsonEnvelopeWrapper.RunWrapped(
