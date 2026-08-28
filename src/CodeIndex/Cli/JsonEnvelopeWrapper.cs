@@ -100,12 +100,12 @@ internal static partial class JsonEnvelopeWrapper
 
     private static IEnumerable<ArgumentToken> ClassifyArgumentTokens(string command, string[] args)
     {
-        var afterEndOfOptions = false;
+        var nextTokenIsLiteralQuery = false;
         var nextTokenIsValue = false;
         for (var i = 0; i < args.Length; i++)
         {
             var arg = args[i];
-            var isOption = !afterEndOfOptions && !nextTokenIsValue;
+            var isOption = !nextTokenIsLiteralQuery && !nextTokenIsValue;
             yield return new ArgumentToken(arg, isOption);
 
             if (nextTokenIsValue)
@@ -113,11 +113,14 @@ internal static partial class JsonEnvelopeWrapper
                 nextTokenIsValue = false;
                 continue;
             }
-            if (afterEndOfOptions)
+            if (nextTokenIsLiteralQuery)
+            {
+                nextTokenIsLiteralQuery = false;
                 continue;
+            }
             if (string.Equals(arg, "--", StringComparison.Ordinal))
             {
-                afterEndOfOptions = true;
+                nextTokenIsLiteralQuery = true;
                 continue;
             }
             nextTokenIsValue = IsValueConsumingOption(command, arg)
@@ -162,7 +165,7 @@ internal static partial class JsonEnvelopeWrapper
         if (IsBoundedResponseRequest(command, args))
             return RunBoundedResponse(command, args, appVersion, jsonOptions, runInner);
 
-        if (HasArgument(args, "--max-json-bytes"))
+        if (HasArgument(command, args, "--max-json-bytes"))
         {
             CommandErrorWriter.WriteStderr("Error [E010_USAGE_ERROR]: --json-envelope cannot be combined with --max-json-bytes because envelope serialization changes the final stdout byte count.");
             CommandErrorWriter.WriteStderr("Hint: use streaming --json=ndjson with --max-json-bytes, or remove the byte cap when a single JSON envelope is required.");
@@ -171,7 +174,7 @@ internal static partial class JsonEnvelopeWrapper
 
         var innerArgs = PrepareInnerArgs(command, args);
         var queryNormalized = ExtractQueryArg(command, args);
-        var (resolvedDbPath, dbPathExplicit) = ResolveQueryDbPath(args);
+        var (resolvedDbPath, dbPathExplicit) = ResolveQueryDbPath(command, args);
         var responseSnapshot = SafeReadResponseSnapshot(resolvedDbPath, dbPathExplicit, appVersion);
 
         using var captured = new BoundedStringWriter(MaxCapturedOutputChars);
@@ -333,9 +336,11 @@ internal static partial class JsonEnvelopeWrapper
         return CommandExitCodes.UsageError;
     }
 
-    private static bool HasArgument(string[] args, string option)
-        => args.Any(arg => string.Equals(arg, option, StringComparison.Ordinal)
-                           || arg.StartsWith(option + "=", StringComparison.Ordinal));
+    private static bool HasArgument(string command, string[] args, string option)
+        => ClassifyArgumentTokens(command, args)
+            .Any(token => token.IsOption
+                          && (string.Equals(token.Value, option, StringComparison.Ordinal)
+                              || token.Value.StartsWith(option + "=", StringComparison.Ordinal)));
 
     private static JsonObject BuildEnvelope(
         string command,
@@ -625,17 +630,24 @@ internal static partial class JsonEnvelopeWrapper
         return firstPositional;
     }
 
-    private static bool TryExtractDbPath(string[] args, out string? dbPath)
-        => TryExtractOptionValue(args, "--db", out dbPath);
+    private static bool TryExtractDbPath(string command, string[] args, out string? dbPath)
+        => TryExtractOptionValue(command, args, "--db", out dbPath);
 
-    private static bool TryExtractDataDir(string[] args, out string? dataDir)
-        => TryExtractOptionValue(args, "--data-dir", out dataDir);
+    private static bool TryExtractDataDir(string command, string[] args, out string? dataDir)
+        => TryExtractOptionValue(command, args, "--data-dir", out dataDir);
 
-    private static bool TryExtractOptionValue(string[] args, string option, out string? value)
+    private static bool TryExtractOptionValue(
+        string command,
+        string[] args,
+        string option,
+        out string? value)
     {
-        for (var i = 0; i < args.Length; i++)
+        var tokens = ClassifyArgumentTokens(command, args).ToArray();
+        for (var i = 0; i < tokens.Length; i++)
         {
-            var arg = args[i];
+            if (!tokens[i].IsOption)
+                continue;
+            var arg = tokens[i].Value;
             if (string.Equals(arg, option, StringComparison.Ordinal) && i + 1 < args.Length)
             {
                 value = args[i + 1];
@@ -651,10 +663,10 @@ internal static partial class JsonEnvelopeWrapper
         return false;
     }
 
-    private static (string DbPath, bool DbPathExplicit) ResolveQueryDbPath(string[] args)
+    private static (string DbPath, bool DbPathExplicit) ResolveQueryDbPath(string command, string[] args)
     {
-        var dbPathExplicit = TryExtractDbPath(args, out var explicitDbPath);
-        TryExtractDataDir(args, out var explicitDataDir);
+        var dbPathExplicit = TryExtractDbPath(command, args, out var explicitDbPath);
+        TryExtractDataDir(command, args, out var explicitDataDir);
         var resolution = DbPathResolver.ResolveForQuery(
             Environment.CurrentDirectory,
             explicitDbPath,
