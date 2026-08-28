@@ -28,16 +28,20 @@ public partial class DbReader
         foreach (var item in payload.Split('\u001e', StringSplitOptions.RemoveEmptyEntries))
         {
             var fields = item.Split('\u001f');
-            if (fields.Length != 5 || !int.TryParse(fields[4], out var referenceCount))
+            var currentPayload = fields.Length == 7;
+            var referenceCountField = currentPayload ? 6 : 4;
+            if (fields.Length is not (5 or 7) || !int.TryParse(fields[referenceCountField], out var referenceCount))
                 continue;
 
             evidence.Add(new FileDependencyEvidence
             {
                 SourceLanguage = fields[0],
                 Origin = fields[1],
-                ReferenceKind = fields[2],
-                TargetKind = fields[3],
+                ResolutionState = currentPayload ? fields[2] : "unavailable",
+                ReferenceKind = fields[currentPayload ? 3 : 2],
+                TargetKind = fields[currentPayload ? 4 : 3],
                 ReferenceCount = referenceCount,
+                SuppressionReason = currentPayload && fields[5].Length > 0 ? fields[5] : null,
             });
         }
 

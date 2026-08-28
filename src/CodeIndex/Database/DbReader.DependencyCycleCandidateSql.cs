@@ -33,12 +33,7 @@ public partial class DbReader
             WITH candidate_edges AS (
                 SELECT src.path AS source_path,
                        dst.path AS target_path,
-                       MAX(CASE
-                               WHEN src.lang = 'markdown'
-                                AND s.kind = 'heading'
-                                AND NOT " + _expressions.MarkdownExplicitLink + @" THEN 0
-                               ELSE 1
-                           END) AS retained_evidence
+                       MAX(CASE WHEN " + _expressions.SuppressedEvidenceScope + @" THEN 0 ELSE 1 END) AS retained_evidence
             FROM symbol_references r
             JOIN files src ON r.file_id = src.id
             JOIN symbols s ON s.name = r.symbol_name

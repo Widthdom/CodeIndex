@@ -1,0 +1,180 @@
+{
+  "count": 1,
+  "summary_only": true,
+  "cycle_summaries": [
+    {
+      "rank": 1,
+      "length": 3,
+      "node_count": 3,
+      "internal_edge_count": 3,
+      "reference_count": 3,
+      "nodes": [
+        "src/CycleA.cs",
+        "src/CycleB.cs",
+        "src/CycleC.cs"
+      ],
+      "nodes_returned": 3,
+      "nodes_truncated": false,
+      "nodes_omitted_count": 0,
+      "node_limit": 50,
+      "retained_evidence": {
+        "retained_reference_count": 3,
+        "classified_reference_count": 3,
+        "classification_complete": true,
+        "by_source_language": [
+          {
+            "source_language": "csharp",
+            "reference_count": 3
+          }
+        ],
+        "by_origin": [
+          {
+            "origin": "symbol_name_match",
+            "reference_count": 3
+          }
+        ],
+        "by_resolution_state": [
+          {
+            "resolution_state": "resolved",
+            "reference_count": 3
+          }
+        ],
+        "by_reference_kind": [
+          {
+            "reference_kind": "type_reference",
+            "reference_count": 3
+          }
+        ],
+        "by_target_kind": [
+          {
+            "target_kind": "symbol",
+            "reference_count": 3
+          }
+        ],
+        "by_suppression_reason": [
+          {
+            "suppression_reason": "unavailable",
+            "reference_count": 3
+          }
+        ]
+      }
+    }
+  ],
+  "truncated": false,
+  "termination_reason": "completed",
+  "analysis_complete": true,
+  "graph_edge_count": 3,
+  "graph_edge_budget": 10000,
+  "candidate_edge_count": 3,
+  "candidate_edge_limit": 10000,
+  "cycle_detection_mode": "deterministic_scc",
+  "cycle_ranking_mode": "reference_count_desc_internal_edge_count_desc_length_desc_path",
+  "cycle_ranking_stable": true,
+  "cycle_result_scope": "complete_graph",
+  "cycle_result_note": "SCC analysis and the stable ranked result set are complete for the selected graph.",
+  "total_cycle_count": 1,
+  "total_cycle_count_authoritative": true,
+  "page_offset": 0,
+  "page_limit": 1,
+  "returned_count": 1,
+  "has_more": false,
+  "next_cursor": null,
+  "returned_node_count": 3,
+  "returned_nodes_materialized": 3,
+  "returned_nodes_omitted_count": 0,
+  "display_truncated": false,
+  "display_truncation_reason": null,
+  "node_materialization_mode": "bounded_sample",
+  "node_materialization_limit": 50,
+  "cycle_grouping_mode": "file",
+  "cycle_grouping_applied": false,
+  "cycle_grouping_reason": "file_level_scc",
+  "largest_component": {
+    "rank": 1,
+    "length": 3,
+    "node_count": 3,
+    "internal_edge_count": 3,
+    "reference_count": 3,
+    "nodes": [
+      "src/CycleA.cs",
+      "src/CycleB.cs",
+      "src/CycleC.cs"
+    ],
+    "nodes_returned": 3,
+    "nodes_truncated": false,
+    "nodes_omitted_count": 0,
+    "node_limit": 50,
+    "retained_evidence": {
+      "retained_reference_count": 3,
+      "classified_reference_count": 3,
+      "classification_complete": true,
+      "by_source_language": [
+        {
+          "source_language": "csharp",
+          "reference_count": 3
+        }
+      ],
+      "by_origin": [
+        {
+          "origin": "symbol_name_match",
+          "reference_count": 3
+        }
+      ],
+      "by_resolution_state": [
+        {
+          "resolution_state": "resolved",
+          "reference_count": 3
+        }
+      ],
+      "by_reference_kind": [
+        {
+          "reference_kind": "type_reference",
+          "reference_count": 3
+        }
+      ],
+      "by_target_kind": [
+        {
+          "target_kind": "symbol",
+          "reference_count": 3
+        }
+      ],
+      "by_suppression_reason": [
+        {
+          "suppression_reason": "unavailable",
+          "reference_count": 3
+        }
+      ]
+    }
+  },
+  "next_step_flags": [],
+  "api_version": "1",
+  "query_context": {
+    "limit": 1,
+    "lang": "csharp",
+    "include_generated": false,
+    "generated_code_policy": "exclude",
+    "generated_file_filter_available": true,
+    "cycles": true,
+    "graph_budget": 10000,
+    "all_cycle_nodes": false
+  },
+  "reference_extraction_limits": {
+    "max_lookup_symbols": 50000,
+    "max_lookup_lines": 20000,
+    "max_names_per_line": 512,
+    "max_container_candidates": 20000
+  },
+  "reference_graph_complete": true,
+  "reference_extraction_cap_hits": {
+    "state_available": true,
+    "hit_count": 0,
+    "affected_file_count": 0,
+    "reasons": [],
+    "files": [],
+    "files_truncated": false,
+    "file_limit": 50
+  },
+  "indexed_file_count": 3,
+  "indexed_at": "\u003CTIMESTAMP\u003E",
+  "freshness_available": true
+}

@@ -273,7 +273,7 @@ public partial class McpServer
                 "exactName" or "exact" or "prefix" or "countOnly" or "includeBody" or "lsp_compatible" or
                 "lspCompatible" or
                 "regex" or "withPaths" or "rebuild" or "dryRun" or "dry_run" or "force" or
-                "optimize" or "reverse" or "cycles" or "config" or "logPath" or "updateCheck" or
+                "optimize" or "reverse" or "cycles" or "suppressNoise" or "summaryOnly" or "includeAllCycleNodes" or "config" or "logPath" or "updateCheck" or
                 "rawKinds" or "includeQualifiedCommonCalls" or "includeMemberReads" or "orderBySize" or "rawBytes" or "byBucket" or "memoryTrace" or "watch" or
                 "estimateOnly" or "listRecipes" => "boolean",
             "project" or "capability" or "scopes" or "fields" or "visibility" or "excludeVisibility" or "includeSymbolKind" or "excludeSymbolKind" or

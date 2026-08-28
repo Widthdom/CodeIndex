@@ -249,6 +249,35 @@ public class Probe
     }
 
     [Fact]
+    public void RunDepsCyclesSummary_JsonOutput_MatchesGolden_Issue5197()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_snapshot_deps_cycles_5197");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            InsertDependencyCycleSnapshotFile(dbPath, "src/CycleA.cs", "CycleA", "CycleB");
+            InsertDependencyCycleSnapshotFile(dbPath, "src/CycleB.cs", "CycleB", "CycleC");
+            InsertDependencyCycleSnapshotFile(dbPath, "src/CycleC.cs", "CycleC", "CycleA");
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+                ["--db", dbPath, "--json", "--cycles", "--summary-only", "--limit", "1", "--lang", "csharp"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            JsonOutputSnapshotHelper.AssertMatches(
+                "deps-cycles-summary.json",
+                stdout,
+                BuildPathReplacements(projectRoot));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSuggestionsCompact_JsonOutput_MatchesGolden_Issue5061()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_snapshot_suggestions_compact");
@@ -302,6 +331,47 @@ public class Probe
         writer.MarkFoldReady();
         writer.MarkCSharpSymbolNameContractReady();
         writer.MarkIssuesReady();
+    }
+
+    private static void InsertDependencyCycleSnapshotFile(
+        string dbPath,
+        string path,
+        string symbolName,
+        string referenceName)
+    {
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+        var writer = new DbWriter(db.Connection);
+        var fileId = writer.UpsertFile(new FileRecord
+        {
+            Path = path,
+            Lang = "csharp",
+            Size = 1,
+            Lines = 1,
+            Modified = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            Checksum = $"snapshot-{symbolName}",
+        });
+        writer.InsertSymbols([
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = symbolName,
+                Line = 1,
+                StartLine = 1,
+                EndLine = 1,
+            },
+        ]);
+        writer.InsertReferences([
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = referenceName,
+                ReferenceKind = "type_reference",
+                Line = 1,
+                Column = 1,
+                Context = referenceName,
+            },
+        ]);
     }
 
     private static IReadOnlyList<(string Original, string Placeholder)> BuildPathReplacements(string projectRoot)

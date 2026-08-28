@@ -34,12 +34,19 @@ public partial class McpServer
         var includeGenerated = args?["includeGenerated"]?.GetValue<bool>() ?? false;
         var reverse = args?["reverse"]?.GetValue<bool>() ?? false;
         var cyclesOnly = args?["cycles"]?.GetValue<bool>() ?? false;
+        var suppressNoise = args?["suppressNoise"]?.GetValue<bool>() ?? false;
+        var summaryOnly = args?["summaryOnly"]?.GetValue<bool>() ?? false;
+        var includeAllCycleNodes = args?["includeAllCycleNodes"]?.GetValue<bool>() ?? false;
         var format = args?["format"]?.GetValue<string>()?.ToLowerInvariant() ?? "edgelist";
         var cursorValue = args?["cursor"]?.GetValue<string>();
         if (requestedGraphBudget.HasValue && !cyclesOnly)
             return CreateToolErrorResponse(id, "'graphBudget' requires 'cycles=true'.");
         if (cursorValue != null && !cyclesOnly)
             return CreateToolErrorResponse(id, "'cursor' requires 'cycles=true'.");
+        if ((suppressNoise || summaryOnly || includeAllCycleNodes) && !cyclesOnly)
+            return CreateToolErrorResponse(id, "'suppressNoise', 'summaryOnly', and 'includeAllCycleNodes' require 'cycles=true'.");
+        if (summaryOnly && format == "json-graph")
+            return CreateToolErrorResponse(id, "'summaryOnly' is not supported with format='json-graph' because summary mode does not emit graph-shaped nodes or edges.");
         if (cursorValue != null && !QueryCommandRunner.TryParseDependencyCycleCursor(cursorValue, out _))
             return CreateToolErrorResponse(id, "'cursor' must be an opaque dependency-cycle next_cursor returned by deps.");
 
@@ -51,6 +58,8 @@ public partial class McpServer
             ExcludeTests = excludeTests,
             IncludeGenerated = includeGenerated,
             DependencyCycleGraphBudget = graphBudget,
+            DependencySuppressNoise = suppressNoise,
+            IncludeAllDependencyCycleNodes = includeAllCycleNodes,
         };
         var cursorBaseFingerprint = QueryCommandRunner.BuildDependencyCycleCursorFingerprint(cursorOptions, reverse);
         var cursor = cursorValue == null
@@ -72,9 +81,20 @@ public partial class McpServer
                     excludePaths,
                     excludeTests,
                     reverse,
-                    reader.Cancellation)
+                    cancellationToken: reader.Cancellation,
+                    suppressDependencyNoise: suppressNoise)
                 : reader.GetFileDependencies(limit, lang, pathPatterns, excludePaths, excludeTests, reverse);
-            var cycleCandidates = cyclesOnly ? results.Take(graphBudget).ToList() : results;
+            if (cyclesOnly && suppressNoise)
+                cycleCandidateRowCount = results.Count(QueryCommandRunner.HasRetainedDependencyEvidence);
+            var rawCycleCandidates = cyclesOnly
+                ? suppressNoise
+                    ? QueryCommandRunner.OrderWorkspaceCycleCandidates(results, graphBudget)
+                    : results.Take(graphBudget).ToList()
+                : results;
+            var cycleFilter = cyclesOnly
+                ? QueryCommandRunner.ApplyDependencySymbolFilters(rawCycleCandidates, cursorOptions)
+                : null;
+            var cycleCandidates = cycleFilter?.Edges ?? rawCycleCandidates;
             var cursorFingerprint = QueryCommandRunner.BuildDependencyCycleGraphFingerprint(
                 cursorBaseFingerprint,
                 cycleCandidates,
@@ -110,14 +130,37 @@ public partial class McpServer
                     sqlGraphSignalPaths,
                     lang);
             var payload = new JsonObject { ["count"] = cyclesOnly ? cycles.Count : results.Count };
-            if (cyclesOnly)
-                payload["cycles"] = QueryCommandRunner.BuildDependencyCyclesJson(cycleAnalysis!.Components, cycleAnalysis.PageOffset);
+            if (cyclesOnly && format == "json-graph")
+            {
+                var graphProjection = QueryCommandRunner.BuildDependencyCycleGraphProjection(
+                    cycleAnalysis!.Edges,
+                    cycleAnalysis.Components,
+                    includeAllCycleNodes);
+                payload["graph"] = BuildJsonGraphPayload(graphProjection.Edges, graphProjection.Nodes);
+            }
+            else if (cyclesOnly)
+            {
+                payload[summaryOnly ? "cycle_summaries" : "cycles"] = QueryCommandRunner.BuildDependencyCyclesJson(
+                    cycleAnalysis!.Components,
+                    cycleAnalysis.PageOffset,
+                    includeAllCycleNodes,
+                    mcpArguments: true);
+            }
             else if (format == "json-graph")
                 payload["graph"] = BuildJsonGraphPayload(outputEdges);
             else
                 payload["edges"] = JsonSerializer.SerializeToNode(outputEdges, _jsonOptions);
             if (cyclesOnly)
-                QueryCommandRunner.AddDependencyCycleAnalysisJsonFields(payload, cycleAnalysis!, mcpArguments: true);
+            {
+                QueryCommandRunner.AddDependencyCycleAnalysisJsonFields(
+                    payload,
+                    cycleAnalysis!,
+                    mcpArguments: true,
+                    includeAllNodes: includeAllCycleNodes);
+                QueryCommandRunner.AddDependencySymbolFilterJsonFields(payload, cycleFilter!.Summary, _jsonOptions);
+                if (summaryOnly)
+                    payload["summary_only"] = true;
+            }
             payload["format"] = format;
             payload["includeGenerated"] = includeGenerated;
             payload["generated_code_filter_supported"] = true;
@@ -140,11 +183,18 @@ public partial class McpServer
         });
     }
 
-    private static JsonObject BuildJsonGraphPayload(IReadOnlyList<FileDependencyResult> edges)
+    private static JsonObject BuildJsonGraphPayload(
+        IReadOnlyList<FileDependencyResult> edges,
+        IReadOnlyList<string>? projectedNodes = null)
     {
         var nodes = new JsonArray();
         var seenNodes = new HashSet<string>(StringComparer.Ordinal);
         var graphEdges = new JsonArray();
+        foreach (var node in projectedNodes ?? [])
+        {
+            if (seenNodes.Add(node))
+                nodes.Add(new JsonObject { ["id"] = node });
+        }
         foreach (var edge in edges)
         {
             if (seenNodes.Add(edge.SourcePath))

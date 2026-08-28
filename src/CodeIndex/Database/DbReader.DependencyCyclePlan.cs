@@ -8,10 +8,13 @@ public partial class DbReader
 
     private sealed record DependencyCycleQueryExpressions(
         string MarkdownExplicitLink,
+        string CSharpNonAuthoritativeQualifiedCall,
+        string SuppressedEvidenceScope,
         string NoiseEvidenceScope,
         string CandidateOrder,
         string RetainedSymbolFilter,
-        string ConstrainedAlias);
+        string ConstrainedAlias,
+        string ResolutionState);
 
     private DependencyCycleQueryPlan BuildDependencyCycleQueryPlan(DependencyQueryRequest request)
     {
@@ -30,19 +33,47 @@ public partial class DbReader
 
     private DependencyCycleQueryExpressions BuildDependencyCycleQueryExpressions(DependencyQueryRequest request)
     {
+        var hasCurrentReferenceIdentityContract = HasCurrentReferenceIdentityContractForRead();
         var markdownExplicitLink = _referenceColumns.Contains("target_qualifier")
             ? "(src.lang = 'markdown' AND r.reference_kind = 'reference' AND r.target_qualifier IS NOT NULL AND dst.path = markdown_resolve_path(src.path, r.target_qualifier))"
             : "0 = 1";
+        var resolvedCSharpNonTarget = hasCurrentReferenceIdentityContract
+                                      && _referenceColumns.Contains("target_symbol_id")
+            ? "(r.resolution_state = 'resolved' AND r.target_symbol_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM symbols confirmed_target WHERE confirmed_target.id = r.target_symbol_id AND confirmed_target.file_id = dst.id))"
+            : "0 = 1";
+        var resolvedGroupCSharpNonCandidate = hasCurrentReferenceIdentityContract
+            ? "(r.resolution_state = 'resolved_group' AND NOT EXISTS (SELECT 1 FROM symbol_reference_candidates confirmed_candidate JOIN symbols confirmed_target ON confirmed_target.id = confirmed_candidate.symbol_id WHERE confirmed_candidate.reference_id = r.id AND confirmed_target.file_id = dst.id))"
+            : "0 = 1";
+        var csharpNonAuthoritativeQualifiedCall = hasCurrentReferenceIdentityContract
+                                                   && _referenceColumns.Contains("target_qualifier")
+                                                   && _referenceColumns.Contains("resolution_state")
+                                                   && _referenceColumns.Contains("target_symbol_id")
+            ? "(src.lang = 'csharp' AND r.reference_kind = 'call' AND r.target_qualifier IS NOT NULL AND (COALESCE(r.resolution_state, 'unresolved') NOT IN ('resolved', 'resolved_group') OR "
+              + resolvedCSharpNonTarget
+              + " OR "
+              + resolvedGroupCSharpNonCandidate
+              + "))"
+            : "0 = 1";
+        var suppressedEvidenceScope = "((src.lang = 'markdown' AND s.kind = 'heading' AND NOT "
+                                      + markdownExplicitLink
+                                      + ") OR "
+                                      + csharpNonAuthoritativeQualifiedCall
+                                      + ")";
         return new DependencyCycleQueryExpressions(
             markdownExplicitLink,
-            "(" + markdownExplicitLink + " OR (src.lang = 'markdown' AND s.kind = 'heading'))",
+            csharpNonAuthoritativeQualifiedCall,
+            suppressedEvidenceScope,
+            "(" + markdownExplicitLink + " OR (src.lang = 'markdown' AND s.kind = 'heading') OR " + csharpNonAuthoritativeQualifiedCall + ")",
             request.SuppressDependencyNoise
                 ? "retained_evidence DESC, source_path, target_path"
                 : "source_path, target_path",
             request.SuppressDependencyNoise
-                ? " WHERE origin <> 'markdown_heading_name_match'"
+                ? " WHERE suppression_reason IS NULL"
                 : string.Empty,
-            request.Reverse ? "dst" : "src");
+            request.Reverse ? "dst" : "src",
+            hasCurrentReferenceIdentityContract && _referenceColumns.Contains("resolution_state")
+                ? "COALESCE(r.resolution_state, 'unavailable')"
+                : "'unavailable'");
     }
 
     private static void AppendDependencyCycleTerminalParameters(

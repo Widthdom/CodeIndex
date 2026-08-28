@@ -24,6 +24,7 @@ public static partial class QueryCommandRunner
     internal const int DefaultImpactLimit = 50;
     internal const int DefaultDependencyCycleGraphBudget = 10_000;
     internal const int MaxDependencyCycleGraphBudget = 1_000_000;
+    internal const int DefaultDependencyCycleNodeLimit = 50;
     internal const int GraphLivenessLimitThreshold = 80;
     internal const string DependencyCycleDetectionMode = "deterministic_scc";
     internal const int MaxWorkspaceDependencyDatabaseCount = 8;
@@ -208,6 +209,7 @@ public sealed class QueryCommandOptions
     public bool MapSummaryOnly { get; init; }
     public bool DependencyCycles { get; init; }
     public int DependencyCycleGraphBudget { get; init; } = QueryCommandRunner.DefaultDependencyCycleGraphBudget;
+    public bool IncludeAllDependencyCycleNodes { get; init; }
     public bool DependencySuppressNoise { get; init; }
     public List<string> DependencySymbols { get; init; } = [];
     public List<string> DependencySymbolFamilies { get; init; } = [];
