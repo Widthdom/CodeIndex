@@ -63,6 +63,18 @@ public class MetricsSinkArgumentTests
     }
 
     [Fact]
+    public void TryConsumeMetricsFlag_MissingValueBeforeRecipe_PreservesSearchArguments_Issue5210()
+    {
+        var args = new[] { "search", "--metrics", "--recipe", "risky-code", "--json" };
+        var expected = args.ToArray();
+
+        Assert.True(ProgramRunner.TryConsumeMetricsFlag(ref args, out var path, out var error));
+        Assert.Null(path);
+        Assert.Empty(error);
+        Assert.Equal(expected, args);
+    }
+
+    [Fact]
     public void TryParseLanguageFromArgs_ReturnsValueWhenPresent()
     {
         Assert.Equal("csharp", ProgramRunner.TryParseLanguageFromArgs(["search", "foo", "--lang", "csharp"]));
