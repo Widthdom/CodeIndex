@@ -25,6 +25,7 @@ internal static partial class ExportImportCommandRunner
         var projects = new List<string>();
         var excludeTests = false;
         var overwrite = false;
+        var redactPaths = false;
         var wantsJson = Array.Exists(args, arg => arg == "--json");
 
         for (var i = 0; i < args.Length; i++)
@@ -43,6 +44,11 @@ internal static partial class ExportImportCommandRunner
             if (arg == "--overwrite")
             {
                 overwrite = true;
+                continue;
+            }
+            if (arg == "--redact-paths")
+            {
+                redactPaths = true;
                 continue;
             }
 
@@ -144,7 +150,8 @@ internal static partial class ExportImportCommandRunner
             excludePathPatterns.ToArray(),
             projects.ToArray(),
             solution,
-            excludeTests);
+            excludeTests,
+            redactPaths);
         string? snapshotDirectory = null;
         string? snapshotPath = null;
         var phase = PhaseWriteArchive;
@@ -173,7 +180,15 @@ internal static partial class ExportImportCommandRunner
                 phase = PhaseScopeArchive;
                 var snapshotConnection = snapshotContext.Connection;
                 var scope = ApplyArchiveScope(snapshotConnection, scopeOptions, cancellationToken);
-                manifest = BuildManifest(snapshotConnection, appVersion, scope, cancellationToken);
+                var redaction = ApplyArchivePathRedaction(snapshotConnection, scope, scopeOptions.RedactPaths, cancellationToken);
+                manifest = BuildManifest(
+                    snapshotConnection,
+                    appVersion,
+                    redaction.Scope,
+                    scopeOptions.RedactPaths,
+                    redaction.Complete,
+                    redaction.OmittedCategories,
+                    cancellationToken);
             }
             else
             {
@@ -182,7 +197,15 @@ internal static partial class ExportImportCommandRunner
                 snapshotConnection.Open();
                 phase = PhaseScopeArchive;
                 var scope = ApplyArchiveScope(snapshotConnection, scopeOptions, cancellationToken);
-                manifest = BuildManifest(snapshotConnection, appVersion, scope, cancellationToken);
+                var redaction = ApplyArchivePathRedaction(snapshotConnection, scope, scopeOptions.RedactPaths, cancellationToken);
+                manifest = BuildManifest(
+                    snapshotConnection,
+                    appVersion,
+                    redaction.Scope,
+                    scopeOptions.RedactPaths,
+                    redaction.Complete,
+                    redaction.OmittedCategories,
+                    cancellationToken);
             }
             SqliteConnection.ClearAllPools();
             phase = PhaseSha256;
@@ -204,16 +227,21 @@ internal static partial class ExportImportCommandRunner
                 Console.WriteLine(JsonSerializer.Serialize(
                     new ExportArchiveResult(
                         "1",
-                        fullOutputPath,
-                        fullSourceDbPath,
+                        redactPaths ? RedactedArchivePath : fullOutputPath,
+                        redactPaths ? RedactedArchivePath : fullSourceDbPath,
                         attestation.SizeBytes,
                         attestation.Sha256,
                         manifest,
-                        manifest.Scope ?? throw new InvalidDataException("export scope metadata was not created")),
+                        manifest.Scope ?? throw new InvalidDataException("export scope metadata was not created"),
+                        manifest.PathRedactionRequested,
+                        manifest.PathRedactionComplete,
+                        manifest.PathRedactionOmittedCategories ?? []),
                     jsonOptions));
             }
             else
-                Console.WriteLine($"Exported CodeIndex archive to {fullOutputPath}");
+                Console.WriteLine(redactPaths
+                    ? "Exported path-redacted CodeIndex archive."
+                    : $"Exported CodeIndex archive to {fullOutputPath}");
             return CommandExitCodes.Success;
         }
         catch (OperationCanceledException)

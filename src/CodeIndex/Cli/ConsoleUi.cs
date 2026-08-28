@@ -141,7 +141,7 @@ public static partial class ConsoleUi
         ("suggestions-update", "cdidx suggestions update <id> [--description <text>] [--context <text>] [--title <text>] [--evidence-path <path>] [--category <value>] [--language <lang>] [--agent <name>] [--db <path>] [--json]"),
         ("suggestions-update", "cdidx suggestions update <id> --status <draft|open_in_upstream|resolved_in_upstream|wont_fix|duplicate|superseded> [--actor <name>] [--reason <text>] [--db <path>] [--json]"),
         ("suggestions-delete", "cdidx suggestions delete <id> [--db <path>] [--json]"),
-        ("export", "cdidx export <archive> [--db <path>] [--json] [--overwrite] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--project <name|path>] [--solution <path>] [--exclude-tests]"),
+        ("export", "cdidx export <archive> [--db <path>] [--json] [--overwrite] [--redact-paths] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--project <name|path>] [--solution <path>] [--exclude-tests]"),
         ("export", "cdidx export ctags [--output <path>] [--db <path>] [--json] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--include-generated]"),
         ("export-ctags", "cdidx export ctags [--output <path>] [--db <path>] [--json] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--include-generated]"),
         ("import", "cdidx import <archive> [--db <path>] [--prune-paths] [--no-backup] [--dry-run|--check] [--limit <n<=10000>] [--offset <n>] [--json]"),

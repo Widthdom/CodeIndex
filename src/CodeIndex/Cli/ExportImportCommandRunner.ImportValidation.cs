@@ -146,7 +146,12 @@ internal static partial class ExportImportCommandRunner
             if (!TryValidateManifestCount(manifest.FileCount, connection, "files", "file_count", out message, cancellationToken)
                 || !TryValidateManifestCount(manifest.ChunkCount, connection, "chunks", "chunk_count", out message, cancellationToken)
                 || !TryValidateManifestCount(manifest.SymbolCount, connection, "symbols", "symbol_count", out message, cancellationToken)
-                || !TryValidateManifestCount(manifest.ReferenceCount, connection, "symbol_references", "reference_count", out message, cancellationToken))
+                || !TryValidateManifestCount(manifest.ReferenceCount, connection, "symbol_references", "reference_count", out message, cancellationToken)
+                || !TryValidateCompletedDatabasePathRedaction(
+                    manifest,
+                    connection,
+                    out message,
+                    cancellationToken))
             {
                 return false;
             }

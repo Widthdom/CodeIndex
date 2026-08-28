@@ -34,6 +34,9 @@ internal static partial class ExportImportCommandRunner
     internal const int MaxArchiveIncompleteReasonChars = 128;
     internal const int MaxArchiveIncompleteReasonsTotalChars = 4096;
     internal const string PartialArchiveIncompleteReason = "partial_archive";
+    internal const int MaxArchivePathRedactionCategories = 16;
+    internal const int MaxArchivePathRedactionCategoryChars = 64;
+    private const string RedactedArchivePath = "[redacted]";
     private static readonly DateTimeOffset DeterministicZipTimestamp = new(1980, 1, 1, 0, 0, 0, TimeSpan.Zero);
     private const string ExportCommandName = "export";
     private const string ImportCommandName = "import";
@@ -51,7 +54,7 @@ internal static partial class ExportImportCommandRunner
     private const string PhaseWriteArchive = "write_archive";
     private const string PhaseWriteCtags = "write_ctags";
     private const string ImportUsage = "cdidx import <archive> [--db <path>] [--prune-paths] [--no-backup] [--dry-run|--check] [--limit <n<=10000>] [--offset <n>] [--json]";
-    private const string ArchiveExportUsage = "cdidx export <archive> [--db <path>] [--json] [--overwrite] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--project <name|path>] [--solution <path>] [--exclude-tests]";
+    private const string ArchiveExportUsage = "cdidx export <archive> [--db <path>] [--json] [--overwrite] [--redact-paths] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--project <name|path>] [--solution <path>] [--exclude-tests]";
     private const string CtagsExportUsage = "cdidx export ctags [--output <path>] [--db <path>] [--json] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--include-generated]";
     private const string CtagsSkipInvalidName = "invalid_name";
     private const string CtagsSkipUnsupportedKind = "unsupported_kind";

@@ -542,6 +542,7 @@ job:
 ```bash
 cdidx export codeindex.cdidx.zip
 cdidx export codeindex.cdidx.zip --overwrite --json
+cdidx export support.cdidx.zip --redact-paths --json
 cdidx export app.cdidx.zip --project App --lang csharp --exclude-tests
 cdidx export shared.cdidx.zip --path 'src/shared/*' --exclude-path 'src/shared/generated/*'
 cdidx import codeindex.cdidx.zip
@@ -576,15 +577,37 @@ complete immutable `manifest` object. That manifest carries the database hash,
 row counts, schema contract stamps, readiness state, unknown-extension summary,
 and export scope needed to evaluate the artifact before import.
 
+By default, compatibility archives retain `manifest.project_root` and the
+embedded database's `indexed_project_root`, and successful human/JSON output
+reports the resolved archive and database paths. Use `--redact-paths` before
+sharing an archive outside the source machine. This opt-in mode removes the
+project root from both manifest and snapshot, replaces absolute POSIX, Windows,
+or file-URI scope values and unknown-extension path samples with `[redacted]`,
+including the grouped samples exposed by `status`. Malformed or over-budget
+path-sample metadata is removed or replaced with an empty fail-closed value instead
+of being retained under a completed-redaction claim. If a workspace-verification
+pending-path identity is removed or redacted, its coverage marker is set incomplete
+so a later scoped refresh cannot trust the placeholder. The exporter then vacuums the copied snapshot
+once before computing `database_sha256`. Indexed
+repository-relative paths, source text, hashes, readiness, and commit provenance
+are retained. Export JSON and the manifest expose `path_redaction_requested`,
+`path_redaction_complete`, and `path_redaction_omitted_categories`; top-level
+`archive_path` / `db_path` are `[redacted]`, and human success output does not
+repeat a local path. The source database is never modified.
+
 The archive path is intended for trusted CodeIndex databases. Import validates
 that the embedded SQLite file is a CodeIndex DB before replacing the destination
-database. `--prune-paths` rewrites the imported `indexed_project_root` metadata
+database. A completed path-redaction claim is also checked against the manifest
+root/scope fields and the corresponding embedded path metadata; an inconsistent
+claim is rejected rather than echoed as verified. `--prune-paths` rewrites the imported `indexed_project_root` metadata
 to the import target project root. Imports targeting `.../.cdidx/codeindex.db`
 use the sibling project directory; other database paths fall back to the process
-current directory. `--dry-run` and its `--check` alias also compare an existing
+current directory. A path-redacted archive may omit the source root entirely;
+import and dry-run validation do not trust it and remain usable without
+`--prune-paths`. `--dry-run` and its `--check` alias also compare an existing
 destination DB with the validated archive without replacing it. JSON results
-expose the normalized `index_complete`, `index_incomplete_reasons`, and `scope`
-values. Archives with no scope metadata are treated conservatively as partial
+expose the normalized `index_complete`, `index_incomplete_reasons`, `scope`, and
+path-redaction state. Archives with no scope metadata are treated conservatively as partial
 during import; current unfiltered archives explicitly preserve full-snapshot
 trust. JSON `destination_delta.comparison` reports schema and count deltas plus bounded
 file, symbol, reference-edge, chunk, and metadata records. Text fields in those
@@ -4250,6 +4273,7 @@ legacy database も query でき、generated-code policy は `unavailable` と�
 ```bash
 cdidx export codeindex.cdidx.zip
 cdidx export codeindex.cdidx.zip --overwrite --json
+cdidx export support.cdidx.zip --redact-paths --json
 cdidx export app.cdidx.zip --project App --lang csharp --exclude-tests
 cdidx export shared.cdidx.zip --path 'src/shared/*' --exclude-path 'src/shared/generated/*'
 cdidx import codeindex.cdidx.zip
@@ -4280,14 +4304,35 @@ portable export は既存 destination を既定で拒否します。意図して
 には import 前に artifact を評価するための database hash、row count、schema contract
 stamp、readiness state、unknown-extension summary、export scope が含まれます。
 
+互換性を維持する既定 archive は `manifest.project_root` と embedded database の
+`indexed_project_root` を保持し、成功時の human / JSON output も解決済み archive path と
+database path を報告します。source machine の外へ共有する前に `--redact-paths` を指定してください。
+この opt-in mode は manifest と snapshot の両方から project root を除去し、scope と
+unknown-extension path sample に含まれる POSIX / Windows / file URI 形式の絶対 path を
+`[redacted]` に置換し、`status` が公開する group 別 sample も同様に処理します。不正または
+上限超過の path-sample metadata は redaction 完了と報告したまま保持せず、private copy から
+削除するか、空の fail-closed 値へ置換します。workspace verification の pending-path identity を
+削除または秘匿した場合は coverage marker を incomplete にし、後続の scoped refresh が placeholder を
+信頼しないようにします。その後 copy 済み snapshot を一度だけ vacuum し、
+`database_sha256` を計算します。repository-relative な indexed path、source text、hash、
+readiness、commit provenance は維持します。export JSON と manifest は
+`path_redaction_requested`、`path_redaction_complete`、
+`path_redaction_omitted_categories` を公開します。top-level の `archive_path` /
+`db_path` は `[redacted]` となり、human success output も local path を再表示しません。
+source database は変更しません。
+
 archive は信頼できる CodeIndex database の共有向けです。Import は埋め込まれた
 SQLite file が CodeIndex DB であることを検証してから destination database を置き換えます。
+path redaction 完了の claim は manifest の root / scope field と対応する embedded path metadata に
+照合し、不整合な claim は verified として再表示せず拒否します。
 `--prune-paths` は import した `indexed_project_root` metadata を import 先 project root に書き換えます。
 `.../.cdidx/codeindex.db` を import 先にした場合は sibling の project directory を使い、
-それ以外の database path では process current directory に fallback します。
+それ以外の database path では process current directory に fallback します。path-redacted
+archive は source root を完全に省略できますが、import と dry-run validation はこの値を
+信頼しないため、`--prune-paths` なしでも利用できます。
 `--dry-run` と alias の `--check` は置換せず、既存 destination DB と検証済み archive を
 比較します。JSON result は正規化後の `index_complete`、`index_incomplete_reasons`、
-`scope` を公開します。scope metadata がない archive は import 時に保守的に partial と
+`scope`、path-redaction state を公開します。scope metadata がない archive は import 時に保守的に partial と
 扱い、現行の filter なし archive だけが full snapshot の trust を明示的に維持します。
 JSON の `destination_delta.comparison` には schema / count delta と、
 file、symbol、reference edge、chunk、metadata の bounded record が含まれます。

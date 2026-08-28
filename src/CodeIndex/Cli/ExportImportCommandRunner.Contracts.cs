@@ -168,7 +168,13 @@ internal static partial class ExportImportCommandRunner
         [property: JsonPropertyName("index_incomplete_reasons")]
         string[]? IndexIncompleteReasons = null,
         [property: JsonPropertyName("scope")]
-        ArchiveExportScopeResult? Scope = null);
+        ArchiveExportScopeResult? Scope = null,
+        [property: JsonPropertyName("path_redaction_requested")]
+        bool PathRedactionRequested = false,
+        [property: JsonPropertyName("path_redaction_complete")]
+        bool PathRedactionComplete = false,
+        [property: JsonPropertyName("path_redaction_omitted_categories")]
+        string[]? PathRedactionOmittedCategories = null);
     internal sealed record ExportImportErrorResult(
         [property: JsonPropertyName("api_version")] string ApiVersion,
         [property: JsonPropertyName("status")] string Status,
@@ -221,7 +227,10 @@ internal static partial class ExportImportCommandRunner
         [property: JsonPropertyName("unknown_extension_file_sample_truncated")] bool? UnknownExtensionFileSampleTruncated = null,
         [property: JsonPropertyName("index_complete")] bool? IndexComplete = null,
         [property: JsonPropertyName("index_incomplete_reasons")] string[]? IndexIncompleteReasons = null,
-        [property: JsonPropertyName("scope")] ArchiveExportScopeResult? Scope = null);
+        [property: JsonPropertyName("scope")] ArchiveExportScopeResult? Scope = null,
+        [property: JsonPropertyName("path_redaction_requested")] bool PathRedactionRequested = false,
+        [property: JsonPropertyName("path_redaction_complete")] bool PathRedactionComplete = false,
+        [property: JsonPropertyName("path_redaction_omitted_categories")] string[]? PathRedactionOmittedCategories = null);
     internal sealed record ImportDestinationDeltaResult(
         [property: JsonPropertyName("destination_exists")] bool DestinationExists,
         [property: JsonPropertyName("comparable")] bool Comparable,
@@ -237,14 +246,18 @@ internal static partial class ExportImportCommandRunner
         [property: JsonPropertyName("archive_size_bytes")] long ArchiveSizeBytes,
         [property: JsonPropertyName("archive_sha256")] string ArchiveSha256,
         [property: JsonPropertyName("manifest")] ExportManifest Manifest,
-        [property: JsonPropertyName("scope")] ArchiveExportScopeResult Scope);
+        [property: JsonPropertyName("scope")] ArchiveExportScopeResult Scope,
+        [property: JsonPropertyName("path_redaction_requested")] bool PathRedactionRequested,
+        [property: JsonPropertyName("path_redaction_complete")] bool PathRedactionComplete,
+        [property: JsonPropertyName("path_redaction_omitted_categories")] string[] PathRedactionOmittedCategories);
     private sealed record ArchiveExportOptions(
         string? Lang,
         IReadOnlyList<string> PathPatterns,
         IReadOnlyList<string> ExcludePathPatterns,
         IReadOnlyList<string> Projects,
         string? Solution,
-        bool ExcludeTests)
+        bool ExcludeTests,
+        bool RedactPaths)
     {
         internal bool IsScoped =>
             !string.IsNullOrWhiteSpace(Lang) ||
@@ -318,7 +331,10 @@ internal static partial class ExportImportCommandRunner
         [property: JsonPropertyName("unknown_extension_file_sample_truncated")] bool? UnknownExtensionFileSampleTruncated = null,
         [property: JsonPropertyName("index_complete")] bool? IndexComplete = null,
         [property: JsonPropertyName("index_incomplete_reasons")] string[]? IndexIncompleteReasons = null,
-        [property: JsonPropertyName("scope")] ArchiveExportScopeResult? Scope = null);
+        [property: JsonPropertyName("scope")] ArchiveExportScopeResult? Scope = null,
+        [property: JsonPropertyName("path_redaction_requested")] bool PathRedactionRequested = false,
+        [property: JsonPropertyName("path_redaction_complete")] bool PathRedactionComplete = false,
+        [property: JsonPropertyName("path_redaction_omitted_categories")] string[]? PathRedactionOmittedCategories = null);
 
     private sealed class ImportReplacementException : IOException
     {
