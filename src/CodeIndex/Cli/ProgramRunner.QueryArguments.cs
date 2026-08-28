@@ -243,6 +243,16 @@ internal static partial class ProgramRunner
             if (arg == "--")
                 break;
 
+            if (TryGetInlineOptionName(arg, out var topLevelInlineName)
+                && TopLevelValueOptionNames.Contains(topLevelInlineName))
+                continue;
+            if (TopLevelValueOptionNames.Contains(arg))
+            {
+                if (i + 1 < subArgs.Length)
+                    i++;
+                continue;
+            }
+
             var normalizedArg = NormalizeCommandOptionToken(arg, withValues, flagOnly, out var hasInlineValue);
             if (normalizedArg is "--query" or "--recipe" or "--named-query")
                 return true;
