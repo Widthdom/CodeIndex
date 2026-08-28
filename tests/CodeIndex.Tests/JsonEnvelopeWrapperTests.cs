@@ -620,6 +620,16 @@ public class JsonEnvelopeWrapperTests
                 "--json=array",
                 "--count",
                 "--summary-only",
+                "--body",
+                "--allow-partial",
+                "--results-only",
+                "--verbose",
+                "--profile",
+                "--line-scan-limit",
+                "--db",
+                "--db=ignored.db",
+                "--data-dir",
+                "--data-dir=ignored",
             ];
             TestProjectHelper.InsertIndexedFile(
                 dbPath,
@@ -633,11 +643,11 @@ public class JsonEnvelopeWrapperTests
                     [
                         "search",
                         "--json",
-                        "--db",
-                        dbPath,
                         "--exact-substring",
                         "--",
                         literalQuery,
+                        "--db",
+                        dbPath,
                         "--fields",
                         "path",
                     ],
@@ -650,8 +660,89 @@ public class JsonEnvelopeWrapperTests
                 Assert.Equal(
                     literalQuery,
                     document.RootElement.GetProperty("metadata").GetProperty("query_normalized").GetString());
+                Assert.Equal(
+                    dbPath,
+                    document.RootElement.GetProperty("metadata").GetProperty("db_path").GetString());
                 var result = Assert.Single(document.RootElement.GetProperty("results").EnumerateArray());
                 Assert.Equal("src/App.txt", result.GetProperty("path").GetString());
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Search_EndOfOptionsPreservesLiteralQueryInCursorFingerprint_Issue5208()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("bounded_option_cursor_5208");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            foreach (var path in new[] { "src/First.txt", "src/Second.txt" })
+            {
+                TestProjectHelper.InsertIndexedFile(
+                    dbPath,
+                    path,
+                    "text",
+                    "--body --allow-partial --line-scan-limit --profile\n");
+            }
+
+            foreach (var (firstQuery, secondQuery) in new[]
+                     {
+                         ("--body", "--allow-partial"),
+                         ("--line-scan-limit", "--profile"),
+                     })
+            {
+                var (firstExitCode, firstStdout, firstStderr) = CaptureConsole(() => ProgramRunner.Run(
+                    [
+                        "search",
+                        "--json",
+                        "--exact-substring",
+                        "--",
+                        firstQuery,
+                        "--db",
+                        dbPath,
+                        "--fields",
+                        "path",
+                        "--limit",
+                        "1",
+                    ],
+                    _jsonOptions,
+                    "1.0.0-test"));
+
+                Assert.Equal(CommandExitCodes.Success, firstExitCode);
+                Assert.Equal(string.Empty, firstStderr);
+                using var firstDocument = JsonDocument.Parse(firstStdout);
+                var cursor = firstDocument.RootElement
+                    .GetProperty("metadata")
+                    .GetProperty("next_cursor")
+                    .GetString();
+                Assert.False(string.IsNullOrWhiteSpace(cursor));
+
+                var (resumeExitCode, resumeStdout, resumeStderr) = CaptureConsole(() => ProgramRunner.Run(
+                    [
+                        "search",
+                        "--json",
+                        "--exact-substring",
+                        "--",
+                        secondQuery,
+                        "--db",
+                        dbPath,
+                        "--fields",
+                        "path",
+                        "--limit",
+                        "1",
+                        "--cursor",
+                        cursor!,
+                    ],
+                    _jsonOptions,
+                    "1.0.0-test"));
+
+                Assert.Equal(CommandExitCodes.UsageError, resumeExitCode);
+                Assert.Equal(string.Empty, resumeStdout);
+                Assert.Contains("cursor_mismatch", resumeStderr, StringComparison.Ordinal);
             }
         }
         finally

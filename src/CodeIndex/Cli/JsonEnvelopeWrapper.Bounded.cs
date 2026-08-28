@@ -314,7 +314,7 @@ internal static partial class JsonEnvelopeWrapper
             return WriteBoundedResponseUsageError(mapProjectionError, "Remove the conflicting map filter, or select a collection enabled by --sections.");
 
         var queryNormalized = ExtractQueryArg(command, args);
-        var (resolvedDbPath, dbPathExplicit) = ResolveQueryDbPath(args);
+        var (resolvedDbPath, dbPathExplicit) = ResolveQueryDbPath(command, args);
         var queryFingerprint = BuildResponseFingerprint(command, args);
         var suppressRuntimeMetadata = IsStaticStatusExplainRequest(command, args);
         var snapshot = suppressRuntimeMetadata
@@ -2117,9 +2117,11 @@ internal static partial class JsonEnvelopeWrapper
             ? IsFindCountResponseRequest(args) ? "count" : "rows"
             : null;
         var normalized = StripResponseOptions(command, args, stripLimit: true);
-        normalized.RemoveAll(arg => string.Equals(arg, "--body", StringComparison.Ordinal));
-        normalized.RemoveAll(arg => arg is "--allow-partial" or "--results-only" or "--verbose" or "--profile");
-        RemoveOptionWithValue(normalized, "--line-scan-limit");
+        RemoveFlagOptions(
+            command,
+            normalized,
+            arg => arg is "--body" or "--allow-partial" or "--results-only" or "--verbose" or "--profile");
+        RemoveOptionWithValue(command, normalized, "--line-scan-limit");
         var input = command + "\0" + string.Join('\0', normalized);
         if (scanMode is not null)
             input += "\0scan-mode=" + scanMode;
@@ -2127,21 +2129,30 @@ internal static partial class JsonEnvelopeWrapper
         return Convert.ToHexString(hash.AsSpan(0, 8)).ToLowerInvariant();
     }
 
-    private static void RemoveOptionWithValue(List<string> args, string option)
+    private static void RemoveOptionWithValue(string command, List<string> args, string option)
     {
-        for (var i = args.Count - 1; i >= 0; i--)
+        var tokens = ClassifyArgumentTokens(command, [.. args]).ToArray();
+        var retained = new List<string>(args.Count);
+        for (var i = 0; i < tokens.Length; i++)
         {
-            if (args[i].StartsWith(option + "=", StringComparison.Ordinal))
+            var token = tokens[i];
+            if (!token.IsOption)
             {
-                args.RemoveAt(i);
+                retained.Add(token.Value);
                 continue;
             }
-            if (!string.Equals(args[i], option, StringComparison.Ordinal))
+            if (token.Value.StartsWith(option + "=", StringComparison.Ordinal))
                 continue;
-            args.RemoveAt(i);
-            if (i < args.Count)
-                args.RemoveAt(i);
+            if (string.Equals(token.Value, option, StringComparison.Ordinal))
+            {
+                if (i + 1 < tokens.Length)
+                    i++;
+                continue;
+            }
+            retained.Add(token.Value);
         }
+        args.Clear();
+        args.AddRange(retained);
     }
 
     internal static string FormatResponseCursor(
