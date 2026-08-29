@@ -473,12 +473,13 @@ restore the remainder after that update. Small scoped updates must keep every
 index in place so a fixed rebuild cost does not dominate the update.
 
 C# reference-graph finalization materializes reference arity, invocation arity,
-member-receiver, definition arity, constructor arity, and value-type facts once
-per applicable row in TEMP tables. Full, scoped, and retained-graph rebuilds must
-then materialize project/file-local type identities and constructor-owner identity
-and arity facts from those symbol facts. Before property-receiver normalization,
-also materialize C# field/property target identities into a primary-keyed TEMP
-fact set. Populate all fact sets before
+member-receiver, definition arity, constructor arity, constructor binding sensitivity,
+and value-type facts once per applicable row in TEMP tables. Full, scoped, and
+retained-graph rebuilds must then materialize project/file-local type identities,
+constructor-owner identity and arity facts, and one primary-keyed instantiation-family
+fact row for every eligible type declaration and constructor. Before property-receiver
+normalization, also materialize C# field/property target identities into a primary-keyed
+TEMP fact set. Populate all fact sets before
 property-receiver normalization, candidate construction, and resolution. Keep
 candidate SQL on primary-key fact lookups instead of rebuilding identity strings,
 rescanning constructor-owner ranges, or re-entering managed SQLite scalar functions
@@ -487,6 +488,11 @@ lookup-name set and derive identity facts from that bounded population; full and
 retained rebuilds use the complete C# symbol-fact population. Property-receiver
 normalization must likewise drive from flagged reference facts and the target fact
 primary key; scoped target materialization is restricted to its lookup-name set.
+Instantiation-family materialization must drive from the already-bounded type and
+constructor identity facts into persistent symbols by primary-key seek. Ranks 0–4
+join those facts by symbol ID. The lower-rank binding-sensitive flag includes every
+partial type declaration and constructor in an identity, while the rank-5 flag
+includes constructors plus only the deterministic representative type declaration.
 
 Language-independent scope ranks 1–4 must build their shared reference/name/language
 candidate relation once in a materialized CTE, assign each reference/symbol pair its best
@@ -502,12 +508,17 @@ ambiguity contracts remain unchanged. Scoped refreshes must build the set by
 driving from dirty reference IDs into the candidate primary key, and every graph
 pass must clear it before materialization so retries cannot observe stale rows.
 
-The unqualified C# rank-5 type fallback materializes physical type members from
-the shared symbol and type-identity facts, groups them into unique logical
-families by exact name, arity, and identity, and matches each reference to that
-family once. Only the final projection expands a matched family back to every
-physical member. This preserves row-per-symbol candidates for partial types while
-avoiding repeated compatibility and ambiguity work for every partial declaration.
+The unqualified C# rank-5 instantiation fallback consumes the shared family facts
+instead of rebuilding type and constructor families per reference. Its uniqueness
+flag is computed from type declarations only, grouped by folded name, exact BINARY
+name, and arity with non-NULL-count plus BINARY min/max identity equality; a row is
+eligible only when its identity is that unique type identity. Constructor-only
+orphans therefore remain available to lower ranks but never create a global family.
+The reference-driven query uses the explicit composite family-fact index and emits
+constructors plus only the deterministic representative type. This preserves
+project/file-local conflicts, partial rows, overload/default/optional/`params`,
+value-type, enum, delegate, unknown-arity, and ambiguity semantics without a
+correlated persistent-symbol scan.
 
 Resolution also materializes the nullable target-family key once per candidate-bearing
 target symbol into a primary-keyed TEMP fact table. Full, fresh, differential, and
@@ -2800,7 +2811,7 @@ Process exit codes are coarse (`0` success including valid zero-row queries, `1`
 - **Dependency-cycle cursors bind presentation evidence as well as topology** — the graph fingerprint includes each retained evidence row's source language, origin, resolution state, reference kind, target kind, suppression reason, and count in deterministic order. A metadata-only graph refresh therefore rejects an older cursor instead of mixing evidence summaries from different snapshots. MCP `format=json-graph` cycle requests use the same bounded node/edge projection as CLI graph output, and the specialized graph node/edge schema limits match the maximum cycle graph budget (#5197).
 - **No ORM** — Raw `Microsoft.Data.Sqlite` with parameterized queries. Keeps dependencies minimal and control explicit.
 - **Batch commits** — 500 records per transaction for write performance. Reduces fsync overhead.
-- **Set-based C# instantiation fallback** — The rank-5 unqualified `instantiate` candidate stage materializes C# type members, unique raw-name/arity families, family-scoped constructor members, and per-family explicit-constructor summaries before matching references. Unique families drive indexed constructor lookups instead of scanning every constructor or running correlated type/constructor scalar probes per candidate. Raw type names, identities, and constructor containers remain `BINARY`, family/member arity joins remain NULL-safe, partial types keep their path/start/id representative, and the final lower-rank suppression stays reference-scoped so the optimization preserves overload, implicit-default, value-type, enum, delegate, ambiguity, and unparseable-arity semantics.
+- **Fact-backed C# instantiation families** — Graph finalization materializes one TEMP row per eligible C# type declaration and constructor after identity facts are ready. Ranks 0–4 use symbol-primary-key joins and rank 5 uses a reference-driven composite family seek, so no candidate path performs a correlated constructor-family symbol scan. Separate lower-rank and fallback binding-sensitive flags preserve all-partial versus representative-only primary-constructor semantics. Type-declaration-only BINARY uniqueness keeps project/file-local conflicts ambiguous and constructor-only orphans out of rank 5 while retaining overload, implicit-default, optional/default/`params`, value-type, enum, delegate, and unknown-arity behavior.
 - **Partial batch failures** — `DbWriter` keeps the fast multi-row `INSERT` path for normal chunk and symbol batches. If SQLite rejects a batch, the writer rolls that batch back, retries rows under per-row `SAVEPOINT`s, commits the valid rows, skips only the failing rows, increments `BatchRowsSkipped`, and emits a warning containing the row identifier and SQLite error. This keeps one corrupt extracted row from discarding the rest of a large indexing batch (#1754).
 - **WAL mode + busy_timeout** — Write-Ahead Logging for concurrent read/write access and crash safety. 5-second busy timeout avoids immediate SQLITE_BUSY errors.
 - **Content-external FTS5 with triggers** — Avoids doubling storage by pointing to `chunks` table instead of storing a copy. Database triggers keep the FTS index in sync automatically.
@@ -4721,8 +4732,9 @@ full mutual-recursion update は、call-like または非canonicalな row ごと
 single-evaluation の契約を維持してください。
 
 C# の reference-graph finalization は、reference arity、invocation arity、member receiver、
-definition arity、constructor arity、value-type の fact を、対象 row ごとに TEMP table へ1回だけ
-materialize し、その symbol fact から project / file-local type identity と constructor-owner の identity / arity
+definition arity、constructor arity、constructor binding sensitivity、value-type の fact を、対象 row ごとに
+TEMP table へ1回だけ materialize し、その symbol fact から project / file-local type identity、constructor-owner
+の identity / arity、および対象となる全 type declaration / constructor の primary-keyed instantiation-family fact
 も materialize します。property-receiver normalization の前に C# field / property の target identity も
 primary-keyed TEMP fact 集合へ materialize します。full / scoped / retained graph rebuild の全経路で fact 集合を
 property-receiver normalization、candidate 構築、resolution より前に投入してください。candidate SQL は
@@ -4731,6 +4743,10 @@ scalar function へ再入したりせず、primary-key の fact lookup を使い
 lookup-name 集合だけに限定し、identity fact もその限定済み集合から作ります。full / retained rebuild は
 C# symbol fact の全対象を使います。property-receiver normalization も flag 済み reference fact と target fact の
 primary key から駆動し、scoped target materialization は lookup-name 集合だけに限定してください。
+instantiation-family materialization は限定済み type / constructor identity fact を外側にして、永続 symbol を
+primary key で seek します。rank 0〜4 は symbol ID でこの fact を join します。lower-rank の binding-sensitive
+flag は同一 identity の全 partial type declaration と constructor を含め、rank 5 用 flag は constructor と
+決定的な代表 type declaration だけを含めてください。
 
 言語共通の scope rank 1〜4 は、共有する reference / name / language candidate relation を
 materialized CTE で1回だけ構築し、reference / symbol pair ごとの最良rankを割り当てたうえで、
@@ -4745,11 +4761,13 @@ ambiguity 契約は変更しません。scoped refresh は dirty reference ID �
 seek して集合を作り、retry が古い行を参照しないよう graph pass ごとに materialize 前の clear を
 維持してください。
 
-qualifier のない C# rank 5 type fallback は、共有 symbol / type-identity fact から物理 type member を
-materializeし、exact name・arity・identityごとの一意な論理familyへgroup化して、referenceごとの照合を
-family単位で1回だけ行います。一致したfamilyを全物理memberへ展開するのは最終projectionだけです。
-これによりpartial typeのsymbolごとのcandidate行を維持しつつ、各partial宣言でcompatibilityとambiguity
-判定を繰り返しません。
+qualifier のない C# rank 5 instantiation fallback は、reference ごとに type / constructor family を再構築せず、
+共有 family fact を使います。一意性 flag の母集団は type declaration だけで、fold済みname、BINARY exact name、
+arity ごとに非NULL件数とBINARY identityのmin/max一致を判定し、row自身のidentityがその一意identityに一致する
+場合だけ有効にします。そのため constructor しかない orphan はlower rankでは候補になれてもglobal familyを
+作りません。reference側から明示的なcomposite family-fact indexをseekし、constructorと決定的な代表typeだけを
+出力します。project / file-local競合、partial row、overload、default / optional / `params`、value type、enum、
+delegate、arity不明、ambiguityのsemanticsを保ちつつ、相関した永続symbol scanを行いません。
 
 resolution は nullable な target-family key も candidate を持つ target symbol ごとに1回だけ
 primary-keyed TEMP fact table へ materialize します。full / fresh / differential / retained refresh は
@@ -7002,7 +7020,7 @@ USER_GUIDEの[終了コード](USER_GUIDE.md#終了コード)セクションを�
 - **依存 cycle cursor は topology に加えて表示 evidence にも束縛する** — graph fingerprint は retained evidence 各行の source language、origin、resolution state、reference kind、target kind、suppression reason、件数を決定的な順序で含めます。そのため metadata だけが更新された graph でも古い cursor を拒否し、異なる snapshot の evidence summary を混在させません。MCP の `format=json-graph` cycle request は CLI graph 出力と同じ上限付き node / edge 投影を使い、専用 graph node / edge schema の上限も cycle graph budget の最大値と一致させます（#5197）。
 - **ORMなし** — `Microsoft.Data.Sqlite`でパラメータ化クエリを直接使用。依存関係を最小限に、制御を明確に。
 - **バッチコミット** — 書き込み性能のため1トランザクション500レコード。fsyncオーバーヘッドを削減。
-- **C# instantiation fallback の集合処理** — rank 5 の無修飾 `instantiate` candidate 段階は、参照との照合前に C# type member、raw name / arity 単位の一意 family、family 内 constructor member、family ごとの明示 constructor summary を materialize します。一意 family から indexed constructor lookup を駆動するため、全 constructor scan や candidate ごとの相関 type / constructor scalar probe を行いません。raw type name・identity・constructor container は `BINARY`、family/member の arity join は NULL-safe のまま維持し、partial type は path/start/id 順の代表を使い、最後の lower-rank suppression も reference 単位に保つため、overload、implicit default、value type、enum、delegate、ambiguity、arity を解析できない場合の意味を変えずに高速化します。
+- **fact-backed C# instantiation family** — graph finalization はidentity fact完成後、対象となるC# type declaration / constructorごとにTEMP rowを1件materializeします。rank 0〜4はsymbol primary key join、rank 5はreference側からcomposite family indexをseekするため、candidate経路で相関constructor-family symbol scanを行いません。lower-rankとfallbackのbinding-sensitive flagを分離し、全partialと代表typeだけのprimary-constructor semanticsを保ちます。type declarationだけを母集団にしたBINARY一意性によりproject / file-local競合はambiguousのまま、constructor-only orphanはrank 5から除外し、overload、implicit default、optional / default / `params`、value type、enum、delegate、arity不明の挙動を維持します。
 - **部分的なバッチ失敗** — `DbWriter` は通常の chunk / symbol batch では高速な multi-row `INSERT` 経路を保ちます。SQLite が batch を拒否した場合、その batch を rollback し、各 row を per-row `SAVEPOINT` の下で再試行し、有効な row だけを commit し、失敗 row だけを skip して `BatchRowsSkipped` を増やし、row identifier と SQLite error を含む warning を出します。これにより、抽出された 1 行の破損で大きな indexing batch 全体が捨てられることを防ぎます（#1754）。
 - **WALモード + busy_timeout** — Write-Ahead Loggingで読み書き同時アクセスとクラッシュ安全性を確保。5秒のbusy_timeoutで即座のSQLITE_BUSYエラーを回避。
 - **複数 SELECT をまたぐ reader の snapshot 隔離** — 1 回の呼び出しで複数 SQL を発行する read エントリポイント（`DbReader.GetStatus`、`DbReader.AnalyzeSymbol`（CLI `inspect` / MCP `analyze_symbol`）、`RepoMapBuilder.Build`（CLI `map` / MCP `repo_map`））は、本体を 1 つの `BEGIN DEFERRED` transaction で囲み、すべての sub-query が同じ WAL snapshot を参照するようにする。これが無いと、2 つの `COUNT(*)` の間に writer が commit した結果として並行 reader が `files=836, refs=0` のような不整合状態を観測しうる（issue #180 で露見）。`DEFERRED` は最初の SELECT で `SHARED` lock を取るだけで writer を阻害せず、末尾で明示 Commit して `SHARED` lock を早期解放する。独自に `SqliteDataReader` を開く sub-query は内側ブロックに閉じ込めて `Commit()` より前に handle を解放すること — `SqliteTransaction.Commit()` は同じ connection 上で開いている reader があると失敗する。新しい多段 read エントリポイントは同じパターンに従うこと。単一 SQL のクエリは SQLite の auto-commit が文単位の snapshot を与えるため不要。

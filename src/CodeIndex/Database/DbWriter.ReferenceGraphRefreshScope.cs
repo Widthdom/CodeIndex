@@ -206,6 +206,7 @@ public partial class DbWriter
                 + RefreshCSharpSymbolFactsFullSql + "\n"
                 + RefreshCSharpTypeIdentityFactsSql + "\n"
                 + RefreshCSharpConstructorIdentityFactsSql + "\n"
+                + RefreshCSharpInstantiationFamilyFactsSql + "\n"
                 + RefreshCSharpPropertyTargetFactsFullSql + "\n"
                 + NormalizeCSharpPropertyReceiverReferencesFullSql + "\n"
                 + RefreshReferenceCandidatesSql),
@@ -215,6 +216,7 @@ public partial class DbWriter
                 + RefreshCSharpSymbolFactsScopedSql + "\n"
                 + RefreshCSharpTypeIdentityFactsSql + "\n"
                 + RefreshCSharpConstructorIdentityFactsSql + "\n"
+                + RefreshCSharpInstantiationFamilyFactsSql + "\n"
                 + RefreshCSharpPropertyTargetFactsScopedSql + "\n"
                 + NormalizeCSharpPropertyReceiverReferencesScopedSql + "\n"
                 + RefreshScopedReferenceCandidatesSql),
@@ -224,6 +226,7 @@ public partial class DbWriter
                 + RefreshCSharpSymbolFactsFullSql + "\n"
                 + RefreshCSharpTypeIdentityFactsSql + "\n"
                 + RefreshCSharpConstructorIdentityFactsSql + "\n"
+                + RefreshCSharpInstantiationFamilyFactsSql + "\n"
                 + RefreshCSharpPropertyTargetFactsFullSql + "\n"
                 + NormalizeCSharpPropertyReceiverReferencesFullSql + "\n"
                 + RefreshReferenceCandidatesSql),
@@ -236,6 +239,15 @@ public partial class DbWriter
             ("full", RefreshReferenceCandidatesSql),
             ("scoped", RefreshScopedReferenceCandidatesSql),
             ("retained", RefreshReferenceCandidatesSql),
+        ];
+
+    internal static IReadOnlyList<(string Scope, string Sql)>
+        CSharpInstantiationFamilyFactSqlForTesting
+        =>
+        [
+            ("full", RefreshCSharpInstantiationFamilyFactsSql),
+            ("scoped", RefreshCSharpInstantiationFamilyFactsSql),
+            ("retained", RefreshCSharpInstantiationFamilyFactsSql),
         ];
 
     internal static IReadOnlyList<(
@@ -298,8 +310,6 @@ public partial class DbWriter
     {
         const string fullDeleteSql = "DELETE FROM symbol_reference_candidates;";
         const string fullReferenceSourceSql = "FROM symbol_references AS r";
-        const string fullInstantiateSymbolSourceSql = "FROM symbols AS s";
-        const string fullInstantiateNamePredicateSql = "AND s.name_folded IS NOT NULL";
         const string fullCSharpTypeSymbolSourceSql = "FROM symbols AS type_symbol";
         const string fullCSharpTypeNamePredicateSql = "AND type_symbol.name_folded IS NOT NULL";
         const string fullLowerRankCandidateSourceSql =
@@ -309,8 +319,6 @@ public partial class DbWriter
         if (CountOrdinalOccurrences(RefreshReferenceCandidatesSql, fullDeleteSql) != 1
             || CountOrdinalOccurrences(RefreshReferenceCandidatesSql, fullReferenceSourceSql)
                 != expectedReferenceSourceCount
-            || CountOrdinalOccurrences(RefreshReferenceCandidatesSql, fullInstantiateSymbolSourceSql) != 1
-            || CountOrdinalOccurrences(RefreshReferenceCandidatesSql, fullInstantiateNamePredicateSql) != 1
             || CountOrdinalOccurrences(RefreshReferenceCandidatesSql, fullCSharpTypeSymbolSourceSql) != 1
             || CountOrdinalOccurrences(RefreshReferenceCandidatesSql, fullCSharpTypeNamePredicateSql) != 1
             || CountOrdinalOccurrences(RefreshReferenceCandidatesSql, fullLowerRankCandidateSourceSql) != 1)
@@ -327,14 +335,6 @@ public partial class DbWriter
             .Replace(
                 fullReferenceSourceSql,
                 $"FROM temp.{ReferenceGraphDirtyReferencesTable} AS dirty_reference\n        CROSS JOIN symbol_references AS r ON r.id = dirty_reference.reference_id",
-                StringComparison.Ordinal)
-            .Replace(
-                fullInstantiateSymbolSourceSql,
-                $"FROM temp.{ReferenceGraphLookupNamesTable} AS lookup_name\n            CROSS JOIN symbols AS s INDEXED BY idx_symbols_name_folded",
-                StringComparison.Ordinal)
-            .Replace(
-                fullInstantiateNamePredicateSql,
-                "AND lookup_name.lang = 'csharp'\n              AND s.name_folded = lookup_name.name_folded",
                 StringComparison.Ordinal)
             .Replace(
                 fullCSharpTypeSymbolSourceSql,
