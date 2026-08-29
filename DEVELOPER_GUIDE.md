@@ -538,8 +538,11 @@ bounded-regex issue reporting remain on the normal main-pass path. Incomplete
 prepasses, extraction-stall test seams, checksum drift, regex timeouts, and cache
 admission limits fall back to ordinary extraction. A timed-out prepass result is
 partial and must not make that transient result authoritative. Keep admission
-bounded to 4,096 files, 131,072 symbols, and an estimated 32 MiB, and clear all
-unconsumed artifacts before reference-graph work begins.
+bounded to 131,072 symbols and an estimated 32 MiB rather than an independent
+production file-count ceiling. When a bound is reached, admit larger decoded
+sources first with original candidate order as the deterministic tie-breaker;
+build immutable lookups in semantic order before this admission ordering. Clear
+all unconsumed artifacts before reference-graph work begins.
 
 The workspace qualified-pattern lookup needs only raw non-enum type names for
 enum-shadowing decisions. Build that conflict set directly; do not call the
@@ -4745,7 +4748,9 @@ extraction には main pass と同じ absolute file path / project root を渡�
 persistence、reference extraction、bounded-regex issue は通常の main-pass 経路で処理してください。
 不完全な prepass、extraction-stall test seam、checksum drift、regex timeout、cache 上限では通常
 extraction へ fallback します。timeout した prepass 結果は partial であり、一過性の結果を
-authoritative にしてはいけません。admission は 4,096 file、131,072 symbol、推定 32 MiB に制限し、未消費
+authoritative にしてはいけません。admission は独立した production file-count 上限ではなく、131,072 symbol と
+推定 32 MiB に制限してください。上限へ達する場合は decode 済み source の大きい順、同じ size では元の
+candidate 順で admit し、この順序付けより前に immutable lookup を意味上の順序で構築してください。未消費
 artifact は reference graph 開始前にすべて clear してください。
 
 workspace qualified-pattern lookup が enum shadowing 判定に必要とするのは raw な non-enum type

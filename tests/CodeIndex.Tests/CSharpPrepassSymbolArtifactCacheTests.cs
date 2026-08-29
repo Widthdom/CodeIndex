@@ -409,6 +409,79 @@ public class CSharpPrepassSymbolArtifactCacheTests
     }
 
     [Fact]
+    public void TryAdmit_DefaultCapacityRetainsArtifactsBeyondLegacyFileCeiling()
+    {
+        const int artifactCount = 4_097;
+        var cache = new CSharpPrepassSymbolArtifactCache();
+
+        for (var index = 0; index < artifactCount; index++)
+        {
+            Assert.True(cache.TryAdmit(
+                $"src/Artifact{index}.cs",
+                "checksum",
+                Array.Empty<SymbolRecord>(),
+                hadRegexTimeout: false));
+        }
+
+        Assert.Equal(artifactCount, cache.AdmittedFileCount);
+        Assert.True(cache.AdmittedEstimatedBytes < CSharpPrepassSymbolArtifactCache.DefaultMaxEstimatedBytes);
+    }
+
+    [Fact]
+    public void BuildWorkspaceSymbols_WhenCapacityBindsRetainsLargestSourceWithoutChangingLookups()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope(
+            "csharp_prepass_artifact_priority");
+        var smallPath = TestProjectHelper.WriteTextFile(
+            project.Root,
+            "src/Small.cs",
+            "public interface ISmall { static abstract int Create(); }");
+        var largePath = TestProjectHelper.WriteTextFile(
+            project.Root,
+            "src/Large.cs",
+            $$"""
+            public interface ILarge
+            {
+                /* {{new string('x', 8_192)}} */
+                static abstract int Create();
+            }
+            """);
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+        var writer = new DbWriter(db.Connection);
+        var indexer = new FileIndexer(project.Root, ignoreCase: false);
+        var smallTarget = CSharpStaticInterfacePrepass.FileTarget.Create(
+            project.Root,
+            smallPath,
+            "csharp");
+        var largeTarget = CSharpStaticInterfacePrepass.FileTarget.Create(
+            project.Root,
+            largePath,
+            "csharp");
+        var cache = new CSharpPrepassSymbolArtifactCache(
+            maxFiles: 1,
+            maxSymbols: 100,
+            maxEstimatedBytes: 1_000_000);
+
+        var workspace = CSharpStaticInterfacePrepass.BuildWorkspaceSymbols(
+            writer,
+            indexer,
+            [smallTarget, largeTarget],
+            includeExistingSymbols: false,
+            symbolArtifactCache: cache);
+
+        var lookups = FlattenStaticInterfaceLookups(workspace.StaticInterfaceMemberLookups!);
+        Assert.Contains(lookups, item => item.StartsWith("ISmall:Create:", StringComparison.Ordinal));
+        Assert.Contains(lookups, item => item.StartsWith("ILarge:Create:", StringComparison.Ordinal));
+        var smallChecksum = indexer.BuildRecord(smallPath).record.Checksum;
+        var largeChecksum = indexer.BuildRecord(largePath).record.Checksum;
+        Assert.NotNull(smallChecksum);
+        Assert.NotNull(largeChecksum);
+        Assert.False(cache.TryTake(smallTarget.IndexPath, smallChecksum, out _));
+        Assert.True(cache.TryTake(largeTarget.IndexPath, largeChecksum, out _));
+    }
+
+    [Fact]
     public void TryAdmit_CancellationDoesNotPublishPartialArtifact()
     {
         var cache = new CSharpPrepassSymbolArtifactCache();
