@@ -1,6 +1,8 @@
+using System.Buffers;
 using System.Diagnostics;
 using System.Globalization;
 using System.Text;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using CodeIndex.Cli;
@@ -95,7 +97,6 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
                 hasOversizeLine,
                 conflictMarkerLine,
                 symlinkPolicy);
-            var requestUtf8 = JsonSerializer.SerializeToUtf8Bytes(request, SymbolExtractionWorker.JsonOptions);
             var waitMilliseconds = GetRemainingWaitMilliseconds(stopwatch, callbackBudget);
             if (waitMilliseconds <= 0)
             {
@@ -110,7 +111,11 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
                     process!.StandardOutput.BaseStream,
                     maxProtocolLineBytes,
                     cancellationToken);
-                sendTask = SendRequestAsync(process.StandardInput.BaseStream, requestUtf8);
+                sendTask = SendRequestAsync(
+                    process.StandardInput.BaseStream,
+                    request,
+                    maxProtocolLineBytes,
+                    cancellationToken);
             }
             catch (Exception ex)
             {
@@ -321,11 +326,105 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
             DurationMs: Math.Max(0, durationMs),
             Symbols: null);
 
-    private static async Task SendRequestAsync(Stream input, ReadOnlyMemory<byte> requestUtf8)
+    internal static async Task SendRequestAsync(
+        Stream input,
+        SymbolExtractionWorker.WorkerRequest request,
+        int maxProtocolLineBytes,
+        CancellationToken cancellationToken = default)
     {
-        await input.WriteAsync(requestUtf8).ConfigureAwait(false);
-        await input.WriteAsync(ProtocolLineTerminator).ConfigureAwait(false);
-        await input.FlushAsync().ConfigureAwait(false);
+        const int escapedCharacterBufferSize = 4 * 1024;
+        var metadata = SymbolExtractionWorker.WorkerRequestMetadata.From(request);
+        var metadataUtf8 = JsonSerializer.SerializeToUtf8Bytes(
+            metadata,
+            SymbolExtractionWorker.JsonOptions);
+        var writtenBytes = 0;
+        writtenBytes = await WriteBoundedRequestBytesAsync(
+            input,
+            metadataUtf8.AsMemory(0, metadataUtf8.Length - 1),
+            writtenBytes,
+            request.Content.Length,
+            maxProtocolLineBytes,
+            cancellationToken).ConfigureAwait(false);
+        writtenBytes = await WriteBoundedRequestBytesAsync(
+            input,
+            SymbolExtractionWorker.RequestContentPrefix,
+            writtenBytes,
+            request.Content.Length,
+            maxProtocolLineBytes,
+            cancellationToken).ConfigureAwait(false);
+
+        var escapedCharacters = ArrayPool<char>.Shared.Rent(escapedCharacterBufferSize);
+        var escapedUtf8 = ArrayPool<byte>.Shared.Rent(
+            Encoding.UTF8.GetMaxByteCount(escapedCharacterBufferSize));
+        try
+        {
+            var contentOffset = 0;
+            while (contentOffset < request.Content.Length)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var status = JavaScriptEncoder.Default.Encode(
+                    request.Content.AsSpan(contentOffset),
+                    escapedCharacters.AsSpan(0, escapedCharacterBufferSize),
+                    out var charactersConsumed,
+                    out var charactersWritten,
+                    isFinalBlock: true);
+                if (charactersConsumed == 0 && charactersWritten == 0)
+                    throw new JsonException("Symbol worker request content could not be JSON-escaped.");
+
+                contentOffset += charactersConsumed;
+                var utf8BytesWritten = Encoding.UTF8.GetBytes(
+                    escapedCharacters.AsSpan(0, charactersWritten),
+                    escapedUtf8);
+                writtenBytes = await WriteBoundedRequestBytesAsync(
+                    input,
+                    escapedUtf8.AsMemory(0, utf8BytesWritten),
+                    writtenBytes,
+                    request.Content.Length,
+                    maxProtocolLineBytes,
+                    cancellationToken).ConfigureAwait(false);
+
+                if (status == OperationStatus.Done)
+                    break;
+                if (status != OperationStatus.DestinationTooSmall)
+                    throw new JsonException("Symbol worker request content contains invalid UTF-16.");
+            }
+        }
+        finally
+        {
+            ArrayPool<char>.Shared.Return(escapedCharacters, clearArray: true);
+            ArrayPool<byte>.Shared.Return(escapedUtf8, clearArray: true);
+        }
+
+        _ = await WriteBoundedRequestBytesAsync(
+            input,
+            SymbolExtractionWorker.RequestSuffix,
+            writtenBytes,
+            request.Content.Length,
+            maxProtocolLineBytes,
+            cancellationToken).ConfigureAwait(false);
+        await input.WriteAsync(ProtocolLineTerminator, cancellationToken).ConfigureAwait(false);
+        await input.FlushAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async ValueTask<int> WriteBoundedRequestBytesAsync(
+        Stream output,
+        ReadOnlyMemory<byte> bytes,
+        int writtenBytes,
+        int contentCharacters,
+        int maxProtocolLineBytes,
+        CancellationToken cancellationToken)
+    {
+        if (bytes.Length > maxProtocolLineBytes - writtenBytes)
+        {
+            throw new BoundedLineLengthException(
+                contentCharacters,
+                writtenBytes,
+                maxProtocolLineBytes,
+                maxProtocolLineBytes);
+        }
+
+        await output.WriteAsync(bytes, cancellationToken).ConfigureAwait(false);
+        return writtenBytes + bytes.Length;
     }
 
     private bool WaitForTask(Task task, int milliseconds, CancellationToken cancellationToken, out Exception? exception)
@@ -532,6 +631,8 @@ internal static class SymbolExtractionWorker
     private const string TestDelayMillisecondsOption = "--test-delay-ms";
     private const string TestConsoleStdoutOption = "--test-console-stdout";
     private const int CapturedConsoleMaxChars = 32 * 1024;
+    internal static readonly byte[] RequestContentPrefix = ",\"Content\":\""u8.ToArray();
+    internal static readonly byte[] RequestSuffix = "\"}"u8.ToArray();
     private static readonly object PatternConfigDiscoveryGate = new();
     private static WorkerPatternConfigDiscoveryCache patternConfigDiscoveryCache = new();
 
@@ -1098,6 +1199,28 @@ internal static class SymbolExtractionWorker
         int? ConflictMarkerLine = null,
         FileIndexer.SymlinkPolicy SymlinkPolicy = FileIndexer.SymlinkPolicy.All);
 
+    internal sealed record WorkerRequestMetadata(
+        long FileId,
+        string? Lang,
+        string FilePath,
+        string ProjectRoot,
+        bool ContentIsNormalized,
+        bool? HasOversizeLine,
+        int? ConflictMarkerLine,
+        FileIndexer.SymlinkPolicy SymlinkPolicy)
+    {
+        internal static WorkerRequestMetadata From(WorkerRequest request) =>
+            new(
+                request.FileId,
+                request.Lang,
+                request.FilePath,
+                request.ProjectRoot,
+                request.ContentIsNormalized,
+                request.HasOversizeLine,
+                request.ConflictMarkerLine,
+                request.SymlinkPolicy);
+    }
+
     internal sealed record WorkerResponse(
         List<SymbolRecord>? Symbols,
         string? WorkerError,
@@ -1116,5 +1239,6 @@ internal static class SymbolExtractionWorker
 
 [JsonSourceGenerationOptions(PropertyNameCaseInsensitive = true)]
 [JsonSerializable(typeof(SymbolExtractionWorker.WorkerRequest))]
+[JsonSerializable(typeof(SymbolExtractionWorker.WorkerRequestMetadata))]
 [JsonSerializable(typeof(SymbolExtractionWorker.WorkerResponse))]
 internal partial class SymbolExtractionWorkerJsonContext : JsonSerializerContext;
