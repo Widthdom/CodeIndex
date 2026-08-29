@@ -100,6 +100,7 @@ public sealed class ReferenceSecondaryIndexBulkLoadGuardTests : IDisposable
 
     [Theory]
     [InlineData("candidate")]
+    [InlineData("resolution")]
     [InlineData("deferred_graph")]
     [InlineData("mutual")]
     [InlineData("complete")]
@@ -121,6 +122,10 @@ public sealed class ReferenceSecondaryIndexBulkLoadGuardTests : IDisposable
         {
             case "candidate":
                 guard.PrepareForCandidatePopulation();
+                break;
+            case "resolution":
+                guard.PrepareForCandidatePopulation();
+                guard.PrepareForReferenceResolution();
                 break;
             case "deferred_graph":
                 guard.PrepareForDeferredGraphRefresh();
@@ -155,10 +160,12 @@ public sealed class ReferenceSecondaryIndexBulkLoadGuardTests : IDisposable
         AssertRawPersistenceIndexesPresent(_db.Connection);
 
         guard.PrepareForCandidatePopulation();
+        guard.PrepareForReferenceResolution();
         guard.PrepareForMutualRecursion();
 
         AssertGraphFinalizationIndexesPresent(_db.Connection);
-        AssertRemainingQueryIndexesAbsent(_db.Connection);
+        AssertCandidateResolutionIndexPresent(_db.Connection);
+        AssertRemainingQueryIndexesExceptCandidateAbsent(_db.Connection);
 
         guard.Complete();
 
@@ -198,6 +205,11 @@ public sealed class ReferenceSecondaryIndexBulkLoadGuardTests : IDisposable
         preparedNames = ReadReferenceIndexNames(_db.Connection);
         Assert.Equal(expectedPreparedNames, preparedNames.Order(StringComparer.Ordinal));
         Assert.DoesNotContain(candidateReverseIndexName, preparedNames);
+
+        guard.PrepareForReferenceResolution();
+
+        preparedNames = ReadReferenceIndexNames(_db.Connection);
+        Assert.Contains(candidateReverseIndexName, preparedNames);
 
         guard.Complete();
 
@@ -253,6 +265,37 @@ public sealed class ReferenceSecondaryIndexBulkLoadGuardTests : IDisposable
 
         guard.PrepareForCandidatePopulation();
         AssertAuthoritativeFreshPersistenceIndexesPresent(_db.Connection);
+        guard.Complete();
+        transaction.Commit();
+    }
+
+    [Fact]
+    public void TransactionalCancelledCandidateLookupRestore_RemainsRetryable()
+    {
+        const string candidateReverseIndexName = "idx_symbol_ref_candidates_symbol";
+        using var transaction = _writer.BeginTransaction();
+        using var guard = ReferenceSecondaryIndexBulkLoadGuard.StartTransactional(
+            _writer,
+            enabled: true);
+        Assert.NotNull(guard);
+
+        guard.PrepareForCandidatePopulation();
+        Assert.DoesNotContain(
+            candidateReverseIndexName,
+            ReadReferenceIndexNames(_db.Connection));
+
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        Assert.Throws<OperationCanceledException>(() =>
+            guard.PrepareForReferenceResolution(cancellation.Token));
+        Assert.DoesNotContain(
+            candidateReverseIndexName,
+            ReadReferenceIndexNames(_db.Connection));
+
+        guard.PrepareForReferenceResolution();
+        Assert.Contains(
+            candidateReverseIndexName,
+            ReadReferenceIndexNames(_db.Connection));
         guard.Complete();
         transaction.Commit();
     }
@@ -336,13 +379,16 @@ public sealed class ReferenceSecondaryIndexBulkLoadGuardTests : IDisposable
         {
             Assert.NotNull(guard);
             guard.PrepareForCandidatePopulation();
+            guard.PrepareForReferenceResolution();
             guard.PrepareForMutualRecursion();
             AssertGraphFinalizationIndexesPresent(_db.Connection);
-            AssertRemainingQueryIndexesAbsent(_db.Connection);
+            AssertCandidateResolutionIndexPresent(_db.Connection);
+            AssertRemainingQueryIndexesExceptCandidateAbsent(_db.Connection);
 
             cancellation.Cancel();
             Assert.Throws<OperationCanceledException>(() => guard.Complete(cancellation.Token));
-            AssertRemainingQueryIndexesAbsent(_db.Connection);
+            AssertCandidateResolutionIndexPresent(_db.Connection);
+            AssertRemainingQueryIndexesExceptCandidateAbsent(_db.Connection);
         }
 
         AssertDeferredIndexesPresent(_db.Connection);
@@ -434,6 +480,7 @@ public sealed class ReferenceSecondaryIndexBulkLoadGuardTests : IDisposable
             guard.PrepareForCandidatePopulation();
             guard.PrepareForCandidatePopulation();
             guard.ReportIdentityRefreshStarted();
+            guard.PrepareForReferenceResolution();
             guard.Complete();
             transaction.Commit();
 
@@ -446,6 +493,7 @@ public sealed class ReferenceSecondaryIndexBulkLoadGuardTests : IDisposable
                     "post_load_statistics_completed",
                     "candidate_deferred",
                     "identity_started",
+                    "candidate_lookup_restored",
                     "restored",
                 ],
                 lifecycle);
@@ -664,7 +712,8 @@ public sealed class ReferenceSecondaryIndexBulkLoadGuardTests : IDisposable
 
         Assert.Equal(2, ReadChanges(_db.Connection));
         AssertGraphFinalizationIndexesPresent(_db.Connection);
-        AssertRemainingQueryIndexesAbsent(_db.Connection);
+        AssertCandidateResolutionIndexPresent(_db.Connection);
+        AssertRemainingQueryIndexesExceptCandidateAbsent(_db.Connection);
 
         guard.Complete();
 
@@ -719,9 +768,11 @@ public sealed class ReferenceSecondaryIndexBulkLoadGuardTests : IDisposable
             enabled: true);
         Assert.NotNull(abandonedGuard);
         abandonedGuard.PrepareForCandidatePopulation();
+        abandonedGuard.PrepareForReferenceResolution();
         abandonedGuard.PrepareForMutualRecursion();
         AssertGraphFinalizationIndexesPresent(_db.Connection);
-        AssertRemainingQueryIndexesAbsent(_db.Connection);
+        AssertCandidateResolutionIndexPresent(_db.Connection);
+        AssertRemainingQueryIndexesExceptCandidateAbsent(_db.Connection);
 
         // Model termination between graph finalization and query-index restoration.
         _db.Dispose();
@@ -784,6 +835,27 @@ public sealed class ReferenceSecondaryIndexBulkLoadGuardTests : IDisposable
         var names = ReadReferenceIndexNames(connection);
         foreach (var definition in ReferenceSecondaryIndexSql.RemainingQuery)
             Assert.DoesNotContain(definition.Name, names);
+    }
+
+    private static void AssertCandidateResolutionIndexPresent(SqliteConnection connection)
+    {
+        var names = ReadReferenceIndexNames(connection);
+        foreach (var definition in ReferenceSecondaryIndexSql.CandidatePopulationDeferred)
+            Assert.Contains(definition.Name, names);
+    }
+
+    private static void AssertRemainingQueryIndexesExceptCandidateAbsent(
+        SqliteConnection connection)
+    {
+        var candidateNames = ReferenceSecondaryIndexSql.CandidatePopulationDeferred
+            .Select(static definition => definition.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        var names = ReadReferenceIndexNames(connection);
+        foreach (var definition in ReferenceSecondaryIndexSql.RemainingQuery)
+        {
+            if (!candidateNames.Contains(definition.Name))
+                Assert.DoesNotContain(definition.Name, names);
+        }
     }
 
     private static long ReadChanges(SqliteConnection connection)

@@ -58,10 +58,14 @@ internal sealed partial class FileContentLoader
                 readPath,
                 out var initialSnapshot);
             var initialLength = initialSnapshot.Length;
+            var readGrowthToEnd = attempt > 0;
+            var headerByteLimit = readGrowthToEnd
+                ? headerBytes.Length
+                : (int)Math.Min(initialLength, headerBytes.Length);
 
             var headerByteCount = FileIndexer.ReadScriptHeaderPrefix(
                 stream,
-                headerBytes,
+                headerBytes[..headerByteLimit],
                 cancellationToken);
             var language = FileIndexer.DetectLanguageFromScriptHeaderBytes(
                 headerBytes[..headerByteCount],
@@ -76,6 +80,7 @@ internal sealed partial class FileContentLoader
                 if (attempt == 0
                     && (finalSnapshot.ModifiedUtc != initialSnapshot.ModifiedUtc
                         || headerLengthChanged
+                        || finalSnapshot.Identity != initialSnapshot.Identity
                         || headerPathIdentityChanged))
                 {
                     continue;
@@ -100,16 +105,24 @@ internal sealed partial class FileContentLoader
                     absoluteOffset: 0);
 
                 var reachedEof = false;
-                while (prefixLength < UnknownLanguageUtf16SampleByteLimit)
+                while (prefixLength < UnknownLanguageUtf16SampleByteLimit
+                       && (readGrowthToEnd || total < initialLength))
                 {
                     cancellationToken.ThrowIfCancellationRequested();
+                    var requestedReadLength = UnknownLanguageUtf16SampleByteLimit - prefixLength;
+                    if (!readGrowthToEnd)
+                    {
+                        requestedReadLength = (int)Math.Min(
+                            requestedReadLength,
+                            initialLength - total);
+                    }
                     var read = stream.Read(
                         coverageBuffer,
                         prefixLength,
                         GetReadLengthWithinLimit(
                             total,
                             maxFileSizeBytes,
-                            UnknownLanguageUtf16SampleByteLimit - prefixLength));
+                            requestedReadLength));
                     if (read == 0)
                     {
                         reachedEof = true;
@@ -126,14 +139,21 @@ internal sealed partial class FileContentLoader
                 }
 
                 var readBuffer = coverageBuffer.AsSpan(UnknownLanguageUtf16SampleByteLimit);
-                while (!reachedEof)
+                while (!reachedEof && (readGrowthToEnd || total < initialLength))
                 {
                     cancellationToken.ThrowIfCancellationRequested();
+                    var requestedReadLength = readBuffer.Length;
+                    if (!readGrowthToEnd)
+                    {
+                        requestedReadLength = (int)Math.Min(
+                            requestedReadLength,
+                            initialLength - total);
+                    }
                     var read = stream.Read(
                         readBuffer[..GetReadLengthWithinLimit(
                             total,
                             maxFileSizeBytes,
-                            readBuffer.Length)]);
+                            requestedReadLength)]);
                     if (read == 0)
                         break;
 
@@ -145,13 +165,18 @@ internal sealed partial class FileContentLoader
                     ThrowIfReadExceedsMaxFileSize(normalizedRelativePath, total);
                 }
 
+                cancellationToken.ThrowIfCancellationRequested();
                 var finalSnapshot = CaptureFileHandleSnapshot(stream);
-                var lengthChanged = finalSnapshot.Length != initialLength || total != initialLength;
+                ThrowIfReadExceedsMaxFileSize(
+                    normalizedRelativePath,
+                    finalSnapshot.Length);
                 var pathIdentityChanged = ReadPathIdentityChanged(absolutePath, finalSnapshot);
                 if (attempt == 0
-                    && (finalSnapshot.ModifiedUtc != initialSnapshot.ModifiedUtc
-                        || lengthChanged
-                        || pathIdentityChanged))
+                    && !InitialLengthReadIsStable(
+                        initialSnapshot,
+                        finalSnapshot,
+                        total,
+                        pathIdentityChanged))
                 {
                     continue;
                 }

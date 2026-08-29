@@ -351,6 +351,8 @@ public static partial class SymbolExtractor
     private sealed class CSharpRegexProbeCounts
     {
         public int PropertyPrefixSuffixSkipCount { get; set; }
+        public int PropertyCandidateBuildCount { get; set; }
+        public int PropertyStructuralShapeSkipCount { get; set; }
         public int PropertyHeaderRegexAttemptCount { get; set; }
         public int MethodHeaderRegexAttemptCount { get; set; }
         public int PlainFieldTerminatorSkipCount { get; set; }
@@ -363,10 +365,13 @@ public static partial class SymbolExtractor
         public int WrappedModifierMatchInputMaterializationCount { get; set; }
         public int DeclarationPatternRegexAttemptCount { get; set; }
         public int PhysicalInputNegativePrefixCacheHitCount { get; set; }
+        public int LineStartStateReuseCount { get; set; }
     }
 
     internal readonly record struct CSharpRegexProbeMetrics(
         int PropertyPrefixSuffixSkipCount,
+        int PropertyCandidateBuildCount,
+        int PropertyStructuralShapeSkipCount,
         int PropertyHeaderRegexAttemptCount,
         int MethodHeaderRegexAttemptCount,
         int PlainFieldTerminatorSkipCount,
@@ -378,7 +383,8 @@ public static partial class SymbolExtractor
         int WrappedModifierPrefixMaterializationCount,
         int WrappedModifierMatchInputMaterializationCount,
         int DeclarationPatternRegexAttemptCount,
-        int PhysicalInputNegativePrefixCacheHitCount);
+        int PhysicalInputNegativePrefixCacheHitCount,
+        int LineStartStateReuseCount);
 
     internal static List<SymbolRecord> ExtractForRequiredLiteralGateTesting(
         long fileId,
@@ -446,6 +452,8 @@ public static partial class SymbolExtractor
             csharpRegexProbeCounts: counts);
         metrics = new CSharpRegexProbeMetrics(
             counts.PropertyPrefixSuffixSkipCount,
+            counts.PropertyCandidateBuildCount,
+            counts.PropertyStructuralShapeSkipCount,
             counts.PropertyHeaderRegexAttemptCount,
             counts.MethodHeaderRegexAttemptCount,
             counts.PlainFieldTerminatorSkipCount,
@@ -457,7 +465,8 @@ public static partial class SymbolExtractor
             counts.WrappedModifierPrefixMaterializationCount,
             counts.WrappedModifierMatchInputMaterializationCount,
             counts.DeclarationPatternRegexAttemptCount,
-            counts.PhysicalInputNegativePrefixCacheHitCount);
+            counts.PhysicalInputNegativePrefixCacheHitCount,
+            counts.LineStartStateReuseCount);
         return symbols;
     }
 

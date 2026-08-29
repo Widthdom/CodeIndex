@@ -8,7 +8,10 @@ public static partial class SymbolExtractor
     {
         private readonly string _lang;
         private readonly string[] _lines;
+        private readonly CSharpRegexProbeCounts? _csharpRegexProbeCounts;
+        private readonly bool _csharpLineStartStatesFromInitialScan;
         private CSharpLexState[]? _csharpLineStartStates;
+        private bool _csharpLineStartStateReuseRecorded;
         private DartClassBodyScope? _dartInsideClassBody;
         private JavaScriptScopePrivacyFlags[][]? _privateScopeColumns;
         private CSharpTypeBodyScope? _csharpInsideTypeBody;
@@ -31,6 +34,7 @@ public static partial class SymbolExtractor
         {
             _lang = lang;
             _lines = lines;
+            _csharpRegexProbeCounts = csharpRegexProbeCounts;
             PythonModulePrefix = lang == "python"
                 ? GetPythonModulePrefix(filePath)
                 : null;
@@ -81,6 +85,7 @@ public static partial class SymbolExtractor
             int[]?[] csharpMatchColumnToRaw = null!;
             string[]? csharpScopeLines = null;
             bool[]? csharpTestMethodAttributedDeclarationLines = null;
+            CSharpLexState[]? csharpLineStartStates = null;
             CSharpMatchLines = lang == "csharp"
                 ? BuildCSharpMatchLines(
                     lines,
@@ -91,8 +96,11 @@ public static partial class SymbolExtractor
                     csharpRegexProbeCounts,
                     out csharpMatchColumnToRaw,
                     out csharpScopeLines,
-                    out csharpTestMethodAttributedDeclarationLines)
+                    out csharpTestMethodAttributedDeclarationLines,
+                    out csharpLineStartStates)
                 : null;
+            _csharpLineStartStates = csharpLineStartStates;
+            _csharpLineStartStatesFromInitialScan = csharpLineStartStates != null;
             CSharpMatchColumnToRaw = csharpMatchColumnToRaw;
             CSharpScopeLines = csharpScopeLines;
             CSharpTestMethodAttributedDeclarationLines = csharpTestMethodAttributedDeclarationLines;
@@ -148,8 +156,25 @@ public static partial class SymbolExtractor
                 CSharpScopeLines!,
                 GetCSharpInsideTypeBody());
 
-        private CSharpLexState[] BuildCSharpLineStartStates() =>
-            _csharpLineStartStates ??= SymbolExtractor.BuildCSharpLineStartStates(_lines);
+        private CSharpLexState[] BuildCSharpLineStartStates()
+        {
+            if (_csharpLineStartStates != null)
+            {
+                if (_csharpLineStartStatesFromInitialScan && !_csharpLineStartStateReuseRecorded)
+                {
+                    _csharpLineStartStateReuseRecorded = true;
+                    if (_csharpRegexProbeCounts != null)
+                    {
+                        _csharpRegexProbeCounts.LineStartStateReuseCount +=
+                            _csharpLineStartStates.Length;
+                    }
+                }
+
+                return _csharpLineStartStates;
+            }
+
+            return _csharpLineStartStates = SymbolExtractor.BuildCSharpLineStartStates(_lines);
+        }
 
         private JavaScriptScopePrivacyFlags[][] BuildPrivateScopeColumns()
         {

@@ -108,9 +108,19 @@ public partial class FileIndexerTests
             _ => "class Fixture { }\n",
         };
         var path = TestProjectHelper.WriteTextFile(project.Root, "subject", source);
+        var openCount = 0;
         var snapshotCount = 0;
+        CountingCSharpPrepassFileStream? openedStream = null;
         var loader = new FileContentLoader(
             FileIndexer.DefaultMaxFileSizeBytes,
+            openReadForIndexContent: candidate =>
+            {
+                openCount++;
+                openedStream = new CountingCSharpPrepassFileStream(
+                    candidate,
+                    maxReadBytes: 3);
+                return openedStream;
+            },
             resolveFileReadPath: readPathShape == "load-bound"
                 ? static candidate => Path.GetFullPath(candidate)
                 : null,
@@ -178,7 +188,299 @@ public partial class FileIndexerTests
                     null);
         }
 
+        Assert.Equal(1, openCount);
         Assert.Equal(2, snapshotCount);
+        Assert.NotNull(openedStream);
+        Assert.Equal(0, openedStream.ReadByteCallCount);
+        Assert.Equal(0, openedStream.ZeroByteReadCount);
+    }
+
+    [Theory]
+    [InlineData("load")]
+    [InlineData("raw-negative")]
+    [InlineData("csharp-negative")]
+    [InlineData("unknown-coverage")]
+    public void FileContentLoader_SameMtimeGrowthRetriesFromFinalHandleLength(
+        string readPathShape)
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope(
+            "cdidx_initial_length_growth_retry");
+        var source = readPathShape switch
+        {
+            "csharp-negative" => "public class C { int M() => 0; }\n" + new string('x', 64),
+            "unknown-coverage" => "plain unknown-language coverage\n" + new string('x', 64),
+            _ => "class Fixture { }\n" + new string('x', 64),
+        };
+        const string growth = "tail-growth\n";
+        var path = TestProjectHelper.WriteTextFile(project.Root, "subject", source);
+        File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddMinutes(-3));
+        var stableModifiedUtc = File.GetLastWriteTimeUtc(path);
+        var openCount = 0;
+        var snapshotCount = 0;
+        var openedStreams = new List<CountingCSharpPrepassFileStream>();
+        var loader = new FileContentLoader(
+            FileIndexer.DefaultMaxFileSizeBytes,
+            openReadForIndexContent: candidate =>
+            {
+                openCount++;
+                Action? afterFirstRead = null;
+                if (openCount == 1)
+                {
+                    afterFirstRead = () =>
+                    {
+                        File.AppendAllText(path, growth);
+                        File.SetLastWriteTimeUtc(path, stableModifiedUtc);
+                    };
+                }
+
+                var stream = new CountingCSharpPrepassFileStream(
+                    candidate,
+                    maxReadBytes: 7,
+                    afterFirstRead);
+                openedStreams.Add(stream);
+                return stream;
+            },
+            fileHandleSnapshotCapturedForTesting: () => snapshotCount++);
+
+        switch (readPathShape)
+        {
+            case "load":
+                Assert.Equal(source + growth, loader.Load(
+                    path,
+                    "subject",
+                    "subject",
+                    CancellationToken.None).Content);
+                break;
+            case "raw-negative":
+                Assert.False(loader.RawByteChunksMayMatch(
+                    path,
+                    "subject",
+                    static _ => false,
+                    CancellationToken.None));
+                break;
+            case "csharp-negative":
+                var first = loader.LoadCSharpStaticInterfaceCandidateContentForPrepass(
+                    path,
+                    "subject",
+                    "subject",
+                    retryOnMutation: true,
+                    includeQualifiedMemberAccessCandidate: false,
+                    includeChecksum: false,
+                    CancellationToken.None);
+                Assert.True(first.RequiresRetry);
+                var second = loader.LoadCSharpStaticInterfaceCandidateContentForPrepass(
+                    path,
+                    "subject",
+                    "subject",
+                    retryOnMutation: false,
+                    includeQualifiedMemberAccessCandidate: false,
+                    includeChecksum: false,
+                    CancellationToken.None);
+                Assert.False(second.RequiresRetry);
+                Assert.Null(second.Content);
+                break;
+            case "unknown-coverage":
+                var unknown = loader.ProbeUnknownLanguage(
+                    path,
+                    "subject",
+                    "subject",
+                    CancellationToken.None);
+                Assert.Equal(
+                    FileIndexer.FileProbeStatus.Unsupported,
+                    unknown.LanguageDetection.Status);
+                Assert.True(unknown.IsCoverageCandidate);
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(
+                    nameof(readPathShape),
+                    readPathShape,
+                    null);
+        }
+
+        Assert.Equal(2, openCount);
+        Assert.Equal(4, snapshotCount);
+        Assert.Equal(0, openedStreams[0].ReadByteCallCount);
+        Assert.Equal(0, openedStreams[0].ZeroByteReadCount);
+    }
+
+    [Fact]
+    public void FileContentLoader_Load_ShrinkThenRegrowRetriesAndReadsRegrownSnapshot()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope(
+            "cdidx_initial_length_shrink_regrow");
+        var originalSource = new string('a', 16 * 1024) + "\n";
+        var regrownSource = new string('b', 16 * 1024) + "\n";
+        var path = TestProjectHelper.WriteTextFile(project.Root, "subject", originalSource);
+        File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddMinutes(-3));
+        var stableModifiedUtc = File.GetLastWriteTimeUtc(path);
+        var openCount = 0;
+        var snapshotCount = 0;
+        var openedStreams = new List<CountingCSharpPrepassFileStream>();
+        var loader = new FileContentLoader(
+            FileIndexer.DefaultMaxFileSizeBytes,
+            openReadForIndexContent: candidate =>
+            {
+                openCount++;
+                if (openCount == 2)
+                {
+                    File.WriteAllText(path, regrownSource);
+                    File.SetLastWriteTimeUtc(path, stableModifiedUtc);
+                }
+
+                Action? afterFirstRead = openCount == 1
+                    ? () =>
+                    {
+                        File.WriteAllText(path, "short\n");
+                        File.SetLastWriteTimeUtc(path, stableModifiedUtc);
+                    }
+                : null;
+                var stream = new CountingCSharpPrepassFileStream(
+                    candidate,
+                    maxReadBytes: 4 * 1024,
+                    afterFirstRead);
+                openedStreams.Add(stream);
+                return stream;
+            },
+            fileHandleSnapshotCapturedForTesting: () => snapshotCount++);
+
+        var loaded = loader.Load(
+            path,
+            "subject",
+            "subject",
+            CancellationToken.None);
+
+        Assert.Equal(regrownSource, loaded.Content);
+        Assert.Equal(2, openCount);
+        Assert.Equal(4, snapshotCount);
+        Assert.Equal(0, openedStreams[0].ReadByteCallCount);
+    }
+
+    [Theory]
+    [InlineData("load")]
+    [InlineData("raw-negative")]
+    public void FileContentLoader_GrowthBeyondLimitUsesFinalHandleSnapshotWithoutRetry(
+        string readPathShape)
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope(
+            "cdidx_initial_length_growth_cap");
+        var path = TestProjectHelper.WriteTextFile(
+            project.Root,
+            "subject",
+            new string('x', 128));
+        var initialLength = new FileInfo(path).Length;
+        var openCount = 0;
+        var snapshotCount = 0;
+        CountingCSharpPrepassFileStream? openedStream = null;
+        var loader = new FileContentLoader(
+            initialLength + 8,
+            openReadForIndexContent: candidate =>
+            {
+                openCount++;
+                openedStream = new CountingCSharpPrepassFileStream(
+                    candidate,
+                    maxReadBytes: 7,
+                    afterFirstRead: () => File.AppendAllText(path, new string('y', 32)));
+                return openedStream;
+            },
+            fileHandleSnapshotCapturedForTesting: () => snapshotCount++);
+
+        var exception = Assert.Throws<FileIndexer.FileTooLargeSkippedException>(() =>
+        {
+            if (readPathShape == "load")
+            {
+                loader.Load(path, "subject", "subject", CancellationToken.None);
+                return;
+            }
+
+            loader.RawByteChunksMayMatch(
+                path,
+                "subject",
+                static _ => false,
+                CancellationToken.None);
+        });
+
+        Assert.Contains("grew during read", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(1, openCount);
+        Assert.Equal(2, snapshotCount);
+        Assert.NotNull(openedStream);
+        Assert.Equal(0, openedStream.ReadByteCallCount);
+        Assert.Equal(0, openedStream.ZeroByteReadCount);
+    }
+
+    [Fact]
+    public void FileContentLoader_RawPositiveGrowthRemainsConservativeWithoutRetry()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope(
+            "cdidx_initial_length_raw_positive");
+        var path = TestProjectHelper.WriteTextFile(
+            project.Root,
+            "subject",
+            new string('x', 128));
+        var initialLength = new FileInfo(path).Length;
+        var openCount = 0;
+        var loader = new FileContentLoader(
+            initialLength + 8,
+            openReadForIndexContent: candidate =>
+            {
+                openCount++;
+                return new CountingCSharpPrepassFileStream(
+                    candidate,
+                    maxReadBytes: 7,
+                    afterFirstRead: () => File.AppendAllText(path, new string('y', 32)));
+            });
+
+        Assert.True(loader.RawByteChunksMayMatch(
+            path,
+            "subject",
+            static bytes => !bytes.IsEmpty,
+            CancellationToken.None));
+        Assert.Equal(1, openCount);
+    }
+
+    [Fact]
+    public void FileContentLoader_Load_SecondAttemptGrowthUsesBoundedEofRead()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope(
+            "cdidx_initial_length_second_growth");
+        var path = TestProjectHelper.WriteTextFile(
+            project.Root,
+            "subject",
+            new string('x', 1024));
+        var initialLength = new FileInfo(path).Length;
+        File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddMinutes(-3));
+        var stableModifiedUtc = File.GetLastWriteTimeUtc(path);
+        var openCount = 0;
+        var snapshotCount = 0;
+        var openedStreams = new List<CountingCSharpPrepassFileStream>();
+        var loader = new FileContentLoader(
+            initialLength + 16,
+            openReadForIndexContent: candidate =>
+            {
+                openCount++;
+                Action afterFirstRead = openCount == 1
+                    ? () =>
+                    {
+                        File.AppendAllText(path, "tail");
+                        File.SetLastWriteTimeUtc(path, stableModifiedUtc);
+                    }
+                : () => File.AppendAllText(path, new string('y', 32));
+                var stream = new CountingCSharpPrepassFileStream(
+                    candidate,
+                    maxReadBytes: 64,
+                    afterFirstRead);
+                openedStreams.Add(stream);
+                return stream;
+            },
+            fileHandleSnapshotCapturedForTesting: () => snapshotCount++);
+
+        var exception = Assert.Throws<FileIndexer.FileTooLargeSkippedException>(() =>
+            loader.Load(path, "subject", "subject", CancellationToken.None));
+
+        Assert.Contains("grew during read", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(2, openCount);
+        Assert.Equal(3, snapshotCount);
+        Assert.Equal(0, openedStreams[0].ReadByteCallCount);
+        Assert.Equal(1, openedStreams[1].ReadByteCallCount);
     }
 
     [Fact]

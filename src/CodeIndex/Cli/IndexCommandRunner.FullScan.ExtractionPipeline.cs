@@ -513,6 +513,17 @@ public static partial class IndexCommandRunner
         return schedule;
     }
 
+    internal static int ResolveFullScanExtractionWorkOrdinal(
+        int extractionIndex,
+        int[] extractionTailSchedule)
+        // The schedule is a permutation of the contiguous input suffix. Consume it
+        // first, then map the remaining claims directly onto the unscheduled prefix;
+        // no repository-sized visited set or second ordering buffer is needed.
+        // scheduleは連続suffixのpermutationなので、先に消費した後は残りをprefixへ直結する。
+        => extractionIndex < extractionTailSchedule.Length
+            ? extractionTailSchedule[extractionIndex]
+            : extractionIndex - extractionTailSchedule.Length;
+
     internal static int ResolveFullScanExtractionFileIndex(
         IReadOnlyList<int>? extractionFileIndexes,
         int workOrdinal)

@@ -38,6 +38,7 @@ public partial class DbWriter
     private static readonly AsyncLocal<Action<string>?> ScopedBatchRowSkipWarningForTesting = new();
     private static readonly AsyncLocal<Action<DbWriterBatchProgress>?> ScopedBatchProgressCheckpointForTesting = new();
     private static readonly AsyncLocal<Action?> ScopedMutualRecursionRefreshForTesting = new();
+    private static readonly AsyncLocal<Action?> ScopedReferenceCandidateRefreshCompletedForTesting = new();
     private static readonly AsyncLocal<Action?> ScopedCSharpContractPreflightForTesting = new();
     private static readonly AsyncLocal<Action?> ScopedCSharpContractWorkspaceReadForTesting = new();
     private static readonly AsyncLocal<Action<CSharpContractWorkspaceReadStats>?>
@@ -93,6 +94,12 @@ public partial class DbWriter
     {
         get => ScopedMutualRecursionRefreshForTesting.Value;
         set => ScopedMutualRecursionRefreshForTesting.Value = value;
+    }
+
+    internal static Action? ReferenceCandidateRefreshCompletedForTesting
+    {
+        get => ScopedReferenceCandidateRefreshCompletedForTesting.Value;
+        set => ScopedReferenceCandidateRefreshCompletedForTesting.Value = value;
     }
 
     internal static Action? CSharpContractPreflightForTesting
@@ -172,11 +179,15 @@ public partial class DbWriter
     private static readonly ConcurrentDictionary<int, string> ChunkInsertSqlCache = new();
     private static readonly ConcurrentDictionary<int, string> SymbolInsertSqlCache = new();
     private static readonly ConcurrentDictionary<int, string> IssueInsertSqlCache = new();
-    private static readonly ConcurrentDictionary<(int Rows, bool FreshResolutionDefaults), string>
+    private static readonly ConcurrentDictionary<
+        (int Rows, bool FreshResolutionDefaults, bool MaterializedFreshSourceLookup),
+        string>
         ReferenceInsertSqlCache = new();
     private static readonly ConcurrentDictionary<int, string> ReferenceLineUpsertSqlCache = new();
     private static readonly ConcurrentDictionary<int, string> ReferenceLineLookupSqlCache = new();
     private static readonly ConcurrentDictionary<int, string> ReferenceLineInsertSqlCache = new();
+    private static readonly ConcurrentDictionary<int, string>
+        AuthoritativeFreshReferenceLineInsertSqlCache = new();
     private static readonly BoundedRegex CSharpExternAliasSignatureRegex = new(
         @"^\s*extern\s+alias\b",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);

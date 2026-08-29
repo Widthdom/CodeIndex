@@ -87,6 +87,9 @@ internal static class CSharpStaticInterfacePrepass
         var artifactHadRegexTimeouts = symbolArtifactCache == null
             ? null
             : new bool[candidates.Count];
+        var artifactSourceLengths = symbolArtifactCache == null
+            ? null
+            : new int[candidates.Count];
         var sourceEvidenceComplete = 1;
         var hasPendingQualifiedMemberAccessCandidate = 0;
         string? firstIncompleteSourcePath = null;
@@ -165,6 +168,8 @@ internal static class CSharpStaticInterfacePrepass
                                         extractionFilePath,
                                         extractionProjectRoot,
                                         cancellationToken: cancellationToken);
+                            if (artifactSourceLengths != null)
+                                artifactSourceLengths[candidateIndex] = content.Length;
                             if (regexTimeouts != null)
                             {
                                 artifactChecksums![candidateIndex] = checksum;
@@ -254,6 +259,7 @@ internal static class CSharpStaticInterfacePrepass
         // prepass snapshot を分離する。
         if (symbolArtifactCache != null)
         {
+            var artifactAdmissions = new List<(int CandidateIndex, int SourceLength)>();
             for (var candidateIndex = 0;
                  candidateIndex < extractedByCandidate.Length;
                  candidateIndex++)
@@ -263,9 +269,30 @@ internal static class CSharpStaticInterfacePrepass
                 if (extracted == null || checksum == null)
                     continue;
 
+                artifactAdmissions.Add(
+                    (candidateIndex, artifactSourceLengths![candidateIndex]));
+            }
+
+            // When a retained-artifact budget binds, prefer the decoded sources that
+            // would be most expensive to extract again. Candidate order remains the
+            // deterministic tie-breaker, and lookup construction above retains the
+            // original semantic order.
+            // artifact budget 到達時は再抽出 cost の大きい source を優先し、同じ
+            // size では元の candidate 順を維持する。lookup の意味順は上で確定済み。
+            artifactAdmissions.Sort(static (left, right) =>
+            {
+                var lengthComparison = right.SourceLength.CompareTo(left.SourceLength);
+                return lengthComparison != 0
+                    ? lengthComparison
+                    : left.CandidateIndex.CompareTo(right.CandidateIndex);
+            });
+            foreach (var admission in artifactAdmissions)
+            {
+                var candidateIndex = admission.CandidateIndex;
+                var extracted = extractedByCandidate[candidateIndex]!;
                 symbolArtifactCache.TryAdmitOwned(
                     candidates[candidateIndex].IndexPath,
-                    checksum,
+                    artifactChecksums![candidateIndex]!,
                     extracted,
                     artifactHadRegexTimeouts![candidateIndex],
                     cancellationToken);

@@ -560,12 +560,12 @@ public partial class IndexCommandRunnerTests
         {
             var cases = new[]
             {
-                (Lang: "csharp", Extension: ".cs", Content: "// 顧客\npublic class Customer { }\n"),
-                (Lang: "java", Extension: ".java", Content: "// 顧客\npublic class Customer { }\n"),
-                (Lang: "typescript", Extension: ".ts", Content: "// 顧客\nexport class Customer { }\n"),
-                (Lang: "python", Extension: ".py", Content: "# 顧客\nclass Customer:\n    pass\n"),
-                (Lang: "go", Extension: ".go", Content: "// 顧客\ntype Customer struct {}\n"),
-                (Lang: "rust", Extension: ".rs", Content: "// 顧客\npub struct Customer {}\n"),
+                (Lang: "csharp", Extension: ".cs", Content: "// 顧客 \\\"引用\\\" C:\\\\tmp\t列\r\npublic class Customer { }\n"),
+                (Lang: "java", Extension: ".java", Content: "// 顧客 \\\"引用\\\" C:\\\\tmp\t列\r\npublic class Customer { }\n"),
+                (Lang: "typescript", Extension: ".ts", Content: "// 顧客 \\\"引用\\\" C:\\\\tmp\t列\r\nexport class Customer { }\n"),
+                (Lang: "python", Extension: ".py", Content: "# 顧客 \\\"引用\\\" C:\\\\tmp\t列\r\nclass Customer:\n    pass\n"),
+                (Lang: "go", Extension: ".go", Content: "// 顧客 \\\"引用\\\" C:\\\\tmp\t列\r\ntype Customer struct {}\n"),
+                (Lang: "rust", Extension: ".rs", Content: "// 顧客 \\\"引用\\\" C:\\\\tmp\t列\r\npub struct Customer {}\n"),
             };
             using var worker = new SymbolExtractionWorkerClient();
             var warmup = worker.Invoke(
@@ -599,6 +599,102 @@ public partial class IndexCommandRunnerTests
         finally
         {
             DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public async Task SymbolExtractionWorker_RequestStreamingPreservesJsonAndBoundsAllocation()
+    {
+        var request = new SymbolExtractionWorker.WorkerRequest(
+            17,
+            "csharp",
+            "first\r\n\\\"quoted\\\"\\path\t顧客\nlast",
+            "/workspace/顧客.cs",
+            "/workspace",
+            ContentIsNormalized: true,
+            HasOversizeLine: false,
+            ConflictMarkerLine: 9,
+            FileIndexer.SymlinkPolicy.Internal);
+        using var frame = new MemoryStream();
+
+        await SymbolExtractionWorkerClient.SendRequestAsync(
+            frame,
+            request,
+            maxProtocolLineBytes: 64 * 1024);
+
+        var frameBytes = frame.ToArray();
+        Assert.Equal((byte)'{', frameBytes[0]);
+        Assert.Equal((byte)'\n', frameBytes[^1]);
+        Assert.Equal(1, frameBytes.Count(value => value == (byte)'\n'));
+        var roundTripped = JsonSerializer.Deserialize<SymbolExtractionWorker.WorkerRequest>(
+            frameBytes.AsSpan(0, frameBytes.Length - 1),
+            SymbolExtractionWorker.JsonOptions);
+        Assert.Equal(request, roundTripped);
+
+        var largeRequest = request with { Content = new string('"', 512 * 1024) };
+        using (var warmup = new CountingWriteStream())
+        {
+            await SymbolExtractionWorkerClient.SendRequestAsync(
+                warmup,
+                largeRequest,
+                maxProtocolLineBytes: 8 * 1024 * 1024);
+        }
+
+        using var counting = new CountingWriteStream();
+        var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+        await SymbolExtractionWorkerClient.SendRequestAsync(
+            counting,
+            largeRequest,
+            maxProtocolLineBytes: 8 * 1024 * 1024);
+        var allocatedBytes = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+
+        Assert.True(
+            allocatedBytes < 128 * 1024,
+            $"Expected bounded request streaming allocation, measured {allocatedBytes:N0} bytes.");
+        Assert.True(counting.MaxWriteSize <= 16 * 1024);
+
+        using var capped = new CountingWriteStream();
+        await Assert.ThrowsAsync<BoundedLineLengthException>(() =>
+            SymbolExtractionWorkerClient.SendRequestAsync(
+                capped,
+                request with { Content = new string('"', 256) },
+                maxProtocolLineBytes: 128));
+        Assert.True(capped.BytesWritten <= 128);
+    }
+
+    private sealed class CountingWriteStream : Stream
+    {
+        internal long BytesWritten { get; private set; }
+        internal int MaxWriteSize { get; private set; }
+        public override bool CanRead => false;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => BytesWritten;
+        public override long Position
+        {
+            get => BytesWritten;
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush() { }
+        public override Task FlushAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => Record(count);
+        public override ValueTask WriteAsync(
+            ReadOnlyMemory<byte> buffer,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Record(buffer.Length);
+            return ValueTask.CompletedTask;
+        }
+
+        private void Record(int count)
+        {
+            BytesWritten += count;
+            MaxWriteSize = Math.Max(MaxWriteSize, count);
         }
     }
 

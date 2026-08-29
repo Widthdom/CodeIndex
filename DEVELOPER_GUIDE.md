@@ -276,7 +276,7 @@ Set `CDIDX_SLOW_QUERY_MS=<milliseconds>` to write slow SQLite command diagnostic
 
 | Path | Contract |
 |---|---|
-| Worker protocol JSON | Isolated worker stdin frames are read through `BoundedLineReader`. The symbol-worker client serializes requests directly to UTF-8 and writes newline-framed bytes to the process stream; the worker serializes responses directly to its stdout stream, and the client reads each bounded response frame as UTF-8 bytes for direct deserialization. This avoids an additional UTF-16 JSON string and encoding pass in each direction for every source file. The default frame cap is 32 MiB for both characters and UTF-8 bytes. When a larger `--max-file-bytes` setting needs JSON-escaping headroom, the protocol frame cap may expand up to `WorkerProtocolLineLimits.MaxExtendedLineUtf8Bytes` (384 MiB), never to `int.MaxValue`. `WorkerProtocolJsonValidator` rejects payloads over the negotiated character/UTF-8 byte cap before `JsonDocument.Parse`, parses with `DefaultMaxJsonDepth` (32), rejects more than 1,000,000 object properties, and rejects strings longer than the frame cap. |
+| Worker protocol JSON | Isolated worker stdin frames are read through `BoundedLineReader`. The symbol-worker client serializes small request metadata directly to UTF-8, then JSON-escapes source content through fixed-size pooled buffers while writing the newline-framed request to the process stream; it must not retain a source-sized JSON byte array. The writer counts emitted bytes and rejects the frame before exceeding its negotiated cap. The worker serializes responses directly to stdout, and the client reads each bounded response frame as UTF-8 bytes for direct deserialization. This avoids additional source-sized JSON strings and encoding buffers in each direction for every source file. The default frame cap is 32 MiB for both characters and UTF-8 bytes. When a larger `--max-file-bytes` setting needs JSON-escaping headroom, the protocol frame cap may expand up to `WorkerProtocolLineLimits.MaxExtendedLineUtf8Bytes` (384 MiB), never to `int.MaxValue`. `WorkerProtocolJsonValidator` rejects payloads over the negotiated character/UTF-8 byte cap before `JsonDocument.Parse`, parses with `DefaultMaxJsonDepth` (32), rejects more than 1,000,000 object properties, and rejects strings longer than the frame cap. |
 | User regex find | `find --regex` keeps the classic .NET regex engine for lookaround/backreference compatibility, adds `RegexOptions.CultureInvariant`, adds `IgnoreCase` unless `--exact` is set, and uses `BoundedRegex.DefaultMatchTimeout` per match. Timeouts surface as `E014_REGEX_MATCH_TIMEOUT` / `regex_timeout` in CLI JSON, and human output includes the same recovery hint. `find --all` additionally applies candidate-file and line-scan caps before walking the whole index. |
 | Shared regex construction | Production regex construction is centralized through `BoundedRegex`, `RegexRegistry`, or `RegexTimeoutPolicy`. Use `BoundedRegex` for extractor patterns and bounded static regex APIs, `RegexRegistry` for raw BCL regex factories that must preserve timeout exceptions (`find --regex`, ignore glob regexes, generated-code path patterns), and `RegexTimeoutPolicy` for diagnostic/redaction surfaces. `RegexRegistry` owns the named ignore-glob timeout (100 ms), generated-code pattern timeout (50 ms), and find-regex factory using `BoundedRegex.DefaultMatchTimeout`. Search-audit recipes treat only `BoundedRegex` aliases and `RegexRegistry.cs` as centralized positive evidence, so new production raw constructors require a deliberate factory or generated-regex entry plus tests. |
 | Filesystem traversal helpers | `FileSystemTraversalPolicy` keeps top-directory-only enumeration explicit (`IgnoreInaccessible=false`, no implicit recursion) and exposes opt-in `CancellationToken` / entry-budget options. Expected traversal failures are classified centrally so command diagnostics share the same permission, I/O, invalid-path, unsupported-path, path-too-long, and budget-exceeded taxonomy. Existing-child case probes retain one exact-name set capped by `CaseSensitivityProbeDirectory.MaxExistingChildProbeEntries` (4,096), return unknown on truncation so callers use the isolated-write or cached root-policy fallback, and propagate available cancellation tokens. |
@@ -336,10 +336,15 @@ body. To keep a large file near the input tail from starting only in the final
 worker wave, they probe at most the last `min(4 * workers, 64)` work items and
 claim known, indexable sizes largest-first. Equal sizes, unavailable metadata,
 and files already above the configured size cap retain their original order.
-The target array and logical file indexes never move, serial hook/filter paths
-do not probe, and the bounded completion queue still publishes in completion
-order. Keep this tail probe and its schedule state independent of repository
-size; an all-file metadata pass can regress network and virtual filesystems.
+Workers consume that scheduled suffix before the unscheduled prefix, so its
+largest eligible candidates enter the first worker wave; after the schedule is
+exhausted, prefix ordinals resume in their original order. Together those two
+segments form an exactly-once permutation, and only then does the existing
+sparse logical-file mapping apply. The target array and logical file indexes
+never move, serial hook/filter paths do not probe, and the bounded completion
+queue still publishes in completion order. Keep this tail probe and its
+schedule state independent of repository size; an all-file metadata pass can
+regress network and virtual filesystems.
 
 Parallel full-scan workers also carry symbol-preparation state to the single
 persistence consumer. Reuse the worker's family-scope key and completed C#
@@ -393,9 +398,14 @@ indexes on `symbol_references` until raw reference persistence completes. The
 reverse candidate-symbol lookup remains available during raw persistence and is
 dropped only when an actual graph refresh is about to delete or materialize
 candidate rows, so marker-only and high-cardinality no-op updates do not rebuild
-that whole index. The candidate primary key remains available for reference-scoped
-materialization and resolution, and the file and reference-line maintenance indexes
-normally remain available during the load. The sole exception is an authoritative
+that whole index. Candidate construction uses the `(reference_id, symbol_id)`
+primary key without maintaining the reverse B-tree. Immediately after candidate
+construction, restore `idx_symbol_ref_candidates_symbol` before renting or
+preparing the separate resolution command, so target-fact materialization can use
+bounded `(symbol_id, reference_id)` existence seeks. The candidate primary key
+remains available for reference-scoped materialization and resolution, and the file
+and reference-line maintenance indexes normally remain available during the load.
+The sole exception is an authoritative
 empty-database first CLI full scan whose transaction-local recheck still owns the
 fresh-resolution claim: while it persists raw references, it also defers
 `idx_symbol_refs_reference_line` and `idx_reference_lines_file_line`. It restores
@@ -418,14 +428,12 @@ expression single-evaluation: repeating it in both `SET` and `WHERE` causes
 fresh large graphs to perform the same random B-tree probes twice.
 When a TypeScript augmentation rebuild owns the sole graph pass, restore every
 ordinary graph/query index before readiness, then drop the reverse candidate-symbol
-lookup immediately before augmentation candidate population and keep it deferred
-through that graph pass. Transactional full
-scans restore that final index after readiness work and before committing the outer
-full-scan transaction, preserving atomic schema rollback on cancellation or
-failure. Recoverable scoped updates and MCP indexing retain guard ownership through
-the readiness transaction commit and restore the final index immediately afterward.
-Both lifecycles keep readiness queries available without maintaining the candidate
-B-tree row by row. MCP uses the recoverable lifecycle whenever its established
+lookup immediately before augmentation candidate population. Restore that lookup
+immediately after population and before preparing resolution. Transactional rollback
+and recoverable disposal still repair failures before that boundary; successful
+resolution and readiness observe the canonical candidate lookup without maintaining
+the reverse B-tree row by row during candidate inserts. MCP uses the recoverable
+lifecycle whenever its established
 dirty-byte policy selects FTS bulk loading, and restores every index on completion
 or disposal. Schema initialization and read repair must use the same canonical
 index catalog so every path converges on an identical schema.
@@ -457,18 +465,21 @@ non-mutating skips, unchanged targets, and sparsely mutating target sets keep ev
 Any preflight uncertainty keeps staging enabled. This preflight is only a cost
 decision—the file loop must repeat its live authoritative lookup so changes after
 the snapshot are still indexed with all indexes present.
-Keep the query-only set deferred through identity and resolution work,
-restore the three reverse-edge indexes immediately before mutual recursion, then
+Keep the query-only set deferred through identity and resolution work, except that
+the candidate-symbol reverse lookup returns between candidate population and
+resolution-command preparation. Restore the three reverse-edge indexes immediately
+before mutual recursion, then
 restore the remainder after that update. Small scoped updates must keep every
 index in place so a fixed rebuild cost does not dominate the update.
 
 C# reference-graph finalization materializes reference arity, invocation arity,
-member-receiver, definition arity, constructor arity, and value-type facts once
-per applicable row in TEMP tables. Full, scoped, and retained-graph rebuilds must
-then materialize project/file-local type identities and constructor-owner identity
-and arity facts from those symbol facts. Before property-receiver normalization,
-also materialize C# field/property target identities into a primary-keyed TEMP
-fact set. Populate all fact sets before
+member-receiver, definition arity, constructor arity, constructor binding sensitivity,
+and value-type facts once per applicable row in TEMP tables. Full, scoped, and
+retained-graph rebuilds must then materialize project/file-local type identities,
+constructor-owner identity and arity facts, and one primary-keyed instantiation-family
+fact row for every eligible type declaration and constructor. Before property-receiver
+normalization, also materialize C# field/property target identities into a primary-keyed
+TEMP fact set. Populate all fact sets before
 property-receiver normalization, candidate construction, and resolution. Keep
 candidate SQL on primary-key fact lookups instead of rebuilding identity strings,
 rescanning constructor-owner ranges, or re-entering managed SQLite scalar functions
@@ -477,6 +488,17 @@ lookup-name set and derive identity facts from that bounded population; full and
 retained rebuilds use the complete C# symbol-fact population. Property-receiver
 normalization must likewise drive from flagged reference facts and the target fact
 primary key; scoped target materialization is restricted to its lookup-name set.
+Instantiation-family materialization must drive from the already-bounded type and
+constructor identity facts into persistent symbols by primary-key seek. Ranks 0–4
+join those facts by symbol ID. The lower-rank binding-sensitive flag includes every
+partial type declaration and constructor in an identity, while the rank-5 flag
+includes constructors plus only the deterministic representative type declaration.
+
+Language-independent scope ranks 1–4 must build their shared reference/name/language
+candidate relation once in a materialized CTE, assign each reference/symbol pair its best
+applicable rank, and retain every candidate tied at the reference's minimum rank. Keep source
+symbol attribution optional so the rank-3 same-file fallback survives missing source identity,
+and keep scoped refreshes driven from dirty reference IDs into the reference primary key.
 
 After rank 0–4 candidate construction, graph finalization materializes the
 distinct matching reference IDs into a compact `WITHOUT ROWID` TEMP table. All
@@ -486,20 +508,32 @@ ambiguity contracts remain unchanged. Scoped refreshes must build the set by
 driving from dirty reference IDs into the candidate primary key, and every graph
 pass must clear it before materialization so retries cannot observe stale rows.
 
-The unqualified C# rank-5 type fallback materializes physical type members from
-the shared symbol and type-identity facts, groups them into unique logical
-families by exact name, arity, and identity, and matches each reference to that
-family once. Only the final projection expands a matched family back to every
-physical member. This preserves row-per-symbol candidates for partial types while
-avoiding repeated compatibility and ambiguity work for every partial declaration.
+The unqualified C# rank-5 instantiation fallback consumes the shared family facts
+instead of rebuilding type and constructor families per reference. Its uniqueness
+flag is computed from type declarations only, grouped by folded name, exact BINARY
+name, and arity with non-NULL-count plus BINARY min/max identity equality; a row is
+eligible only when its identity is that unique type identity. Constructor-only
+orphans therefore remain available to lower ranks but never create a global family.
+The reference-driven query uses the explicit composite family-fact index and emits
+constructors plus only the deterministic representative type. This preserves
+project/file-local conflicts, partial rows, overload/default/optional/`params`,
+value-type, enum, delegate, unknown-arity, and ambiguity semantics without a
+correlated persistent-symbol scan.
 
-Resolution also materializes the nullable target-family key once per target symbol
-into a primary-keyed TEMP fact table. Full, fresh, differential, and retained
-refreshes populate all symbols; scoped refreshes first deduplicate target symbol
-IDs reachable from dirty-reference candidates. Resolution must join candidates to
-that fact by symbol ID instead of rebuilding the language/path/container/name key
-for every physical candidate. Preserve a `NULL` key when legacy target language is
-missing, while still resolving a single valid candidate by ID.
+Resolution also materializes the nullable target-family key once per candidate-bearing
+target symbol into a primary-keyed TEMP fact table. Full, fresh, differential, and
+retained refreshes filter that population with indexed candidate-symbol existence
+probes; scoped refreshes first deduplicate target symbol IDs reachable from
+dirty-reference candidates. Candidate construction and resolution stay in separate
+SQLite commands, and the resolution command is rented and prepared only after the
+reverse lookup is restored. Resolution joins candidates to facts by symbol ID instead
+of rebuilding the language/path/container/name key for every physical candidate.
+Singleton-family detection preserves `COUNT(DISTINCT)` NULL semantics without a
+per-group distinct set: at least one non-NULL key must exist and the BINARY minimum
+must be null-safely `IS` the BINARY maximum. All-NULL groups remain non-families,
+NULL plus one non-NULL family retains that family, duplicate keys collapse, and
+binary-distinct keys remain ambiguous. A single physical legacy candidate with a
+NULL key still resolves by ID.
 
 Repository-wide incremental scans load stat-reuse candidates with one SQLite
 statement before the C# contract prepass and parallel extraction. Each candidate
@@ -538,8 +572,11 @@ bounded-regex issue reporting remain on the normal main-pass path. Incomplete
 prepasses, extraction-stall test seams, checksum drift, regex timeouts, and cache
 admission limits fall back to ordinary extraction. A timed-out prepass result is
 partial and must not make that transient result authoritative. Keep admission
-bounded to 4,096 files, 131,072 symbols, and an estimated 32 MiB, and clear all
-unconsumed artifacts before reference-graph work begins.
+bounded to 131,072 symbols and an estimated 32 MiB rather than an independent
+production file-count ceiling. When a bound is reached, admit larger decoded
+sources first with original candidate order as the deterministic tie-breaker;
+build immutable lookups in semantic order before this admission ordering. Clear
+all unconsumed artifacts before reference-graph work begins.
 
 The workspace qualified-pattern lookup needs only raw non-enum type names for
 enum-shadowing decisions. Build that conflict set directly; do not call the
@@ -1461,8 +1498,9 @@ Current stable codes and triggers:
 | `synchronous=NORMAL` | Under WAL, `NORMAL` avoids per-commit fsync pressure during 500-row indexing batches while preserving database consistency after crashes. |
 | Caller-owned write batching | Full-scan and other atomic file writes already run inside one caller-owned transaction, so their language-neutral chunk, symbol, issue, reference-line, and reference inserts cap each statement at 32 parameters. Every batch uses compact, one-origin SQLite numeric slots (`?1` through `?N`) in row/column order; this reduces parameter-name resolution work while preserving the existing statement-size, cancellation, and checkpoint contracts. For operations above 500 rows, persistent `db_writer_batch_checkpoint` records are emitted only when progress crosses a 500-row boundary and at completion, avoiding a synchronous log flush for every tiny statement. Public writer APIs retain the SQLite-variable-limit batch shape and their existing per-batch transaction/SAVEPOINT contract. |
 | Prepared savepoint controls | `DbWriter` leases only a fixed, bounded set of control statements from the connection's prepared-command cache: the first nested `sp_1` SAVEPOINT / RELEASE / ROLLBACK trio used by per-file full-index scopes, the atomic metadata savepoints, and the FTS bulk-load owner savepoint. Every lease rebinds the current outer `SqliteTransaction`; a cacheless writer still creates and disposes one command per call. Depth-two and deeper savepoint names remain dynamic and bypass the cache, and cancellation, rollback, terminal-state, and transaction-gate contracts are unchanged. |
-| Authoritative-fresh raw insert scope | After the empty-database CLI path revalidates its authoritative-fresh claim inside the caller-owned transaction, only the extraction pipeline's new-file and fresh reference-line `RETURNING` INSERTs plus its DONE-only chunk, symbol, new-file issue, and atomic fresh-reference INSERTs may bind and execute through SQLitePCLRaw on the provider-owned connection handle. These native positional bindings use a separate 512-parameter ceiling while provider-backed caller-owned writes retain their 32-parameter limit. The scope preserves exact tail/result shapes, batch hooks, row-skip replay, and outer transaction atomicity; a 32-entry LRU retains recurring full and tail statement shapes. The synchronous full-scan persistence consumer and `DbWriter` transaction-owner check keep the non-thread-safe cache single-owner. Every lease resets and clears bindings, errors retain the original step result, cancellation maps SQLite interrupt to `OperationCanceledException`, and all cached statements are finalized before graph/index/FTS work. During this same transaction the three `files_resource_generation_*` triggers are suspended, then recreated only after native statements finalize; the resource-list generation advances exactly once when at least one file was persisted and stays unchanged for an empty repository. Rollback restores both schema and generation atomically. A `RETURNING` lease buffers and validates every positive ID and input ordinal through terminal `DONE` before publishing; a bounded ID set keeps duplicate validation linear as batches grow. Malformed, incomplete, duplicate, failed, or cancelled streams discard the prepared statement, while the caller's per-file savepoint owns data rollback. Replacement, incremental, rebuild, symbols-only, fresh-claim race fallback, MCP, and public writer paths remain on Microsoft.Data.Sqlite with per-mutation generation invalidation. |
-| Authoritative-fresh core secondary indexes | The same revalidated empty-database CLI transaction drops 22 language-neutral secondary indexes on `files`, `chunks`, `file_issues`, and `symbols` before persistence, then builds each B-tree once after every native INSERT statement has finalized and before graph or readiness queries begin. UNIQUE autoindexes remain active, so path and table constraints keep their normal enforcement. `idx_symbols_file` also remains active because fresh-reference insertion resolves each containing source symbol through a correlated per-file lookup; dropping it would turn that hot path into repeated full symbol-table scans. Cancellation or failure leaves restoration to the outer rollback, which atomically restores the pre-load schema; rebuild, incremental, fresh-claim race fallback, and MCP paths retain the indexes throughout their writes. Canonical DDL is shared by schema initialization, opportunistic read migration, and the bulk-load guard so the deferred set cannot drift from the completed database contract. |
+| Authoritative-fresh raw insert scope | After the empty-database CLI path revalidates its authoritative-fresh claim inside the caller-owned transaction, only the extraction pipeline's new-file, chunk, symbol, new-file issue, fresh reference-line, and atomic fresh-reference INSERTs may bind and execute through SQLitePCLRaw on the provider-owned connection handle. These native positional bindings use a separate 512-parameter ceiling while provider-backed caller-owned writes retain their 32-parameter limit. Fresh file and reference-line writes are DONE-only: file insertion captures the same connection's positive `last_insert_rowid`, while every reference-line batch reads the greater of `MAX(id)` and `sqlite_sequence.seq`, checks the complete Int64 range, and inserts explicit contiguous IDs with `?1 + input_ordinal`. Reading the floor for every batch preserves AUTOINCREMENT history and observes inserts between batches without retaining rollback-sensitive allocator state. Invalid floors and identity-range overflow fail before the INSERT executes. Every executed fresh identity write validates `sqlite3_changes()` before publishing IDs; a row-count mismatch, constraint, cleanup failure, or cancellation discards the affected prepared statement while the caller's per-file savepoint owns data rollback. The scope preserves exact tail/write-count shapes, batch hooks, row-skip replay, and outer transaction atomicity; a 32-entry LRU retains recurring full and tail statement shapes. The synchronous full-scan persistence consumer and `DbWriter` transaction-owner check keep the non-thread-safe cache single-owner. Every lease resets and clears bindings, errors retain the original step result, cancellation maps SQLite interrupt to `OperationCanceledException`, and all cached statements are finalized before graph/index/FTS work. During this same transaction the three `files_resource_generation_*` triggers are suspended, then recreated only after native statements finalize; the resource-list generation advances exactly once when at least one file was persisted and stays unchanged for an empty repository. Rollback restores both schema and generation atomically. Replacement, incremental, rebuild, symbols-only, fresh-claim race fallback, MCP, and public writer paths remain on Microsoft.Data.Sqlite, retain their established `RETURNING` behavior, and keep per-mutation generation invalidation. |
+| Authoritative-fresh source-symbol lookup | Before native statements are prepared, the raw scope creates a connection-local TEMP `WITHOUT ROWID` snapshot with partial indexes for folded name, folded display name, and legacy ASCII `NOCASE` fallback. Each atomic reference collection clears that snapshot and copies the symbols for its distinct source file IDs once through `idx_symbols_file`; references without a container skip materialization. The three indexed probes use `UNION` to preserve the existing name-or-display semantics when one symbol matches more than one branch, then retain the same containing-range and innermost-span/start/id ranking. TEMP schema creation belongs to the caller's outer transaction, while each file savepoint owns its snapshot population and reference writes, so cancellation, failure, and rollback restore both together. Provider-backed, rebuild, incremental, fresh-claim fallback, MCP, and public-writer paths neither create nor query the TEMP table. |
+| Authoritative-fresh core secondary indexes | The same revalidated empty-database CLI transaction drops 22 language-neutral secondary indexes on `files`, `chunks`, `file_issues`, and `symbols` before persistence, then builds each B-tree once after every native INSERT statement has finalized and before graph or readiness queries begin. UNIQUE autoindexes remain active, so path and table constraints keep their normal enforcement. `idx_symbols_file` also remains active because fresh-reference insertion copies each relevant file's symbols into its indexed TEMP snapshot once; dropping it would turn every per-file materialization into a full symbol-table scan. Cancellation or failure leaves restoration to the outer rollback, which atomically restores the pre-load schema; rebuild, incremental, fresh-claim race fallback, and MCP paths retain the indexes throughout their writes. Canonical DDL is shared by schema initialization, opportunistic read migration, and the bulk-load guard so the deferred set cannot drift from the completed database contract. |
 | Checkpointing | `DbWriter` runs `PRAGMA wal_checkpoint(PASSIVE)` after each outer transaction commit, and SQLite may also checkpoint automatically after the configured 1000-page threshold. Both checkpoint paths are opportunistic: active readers are not blocked, and an uncheckpointed WAL is expected state rather than corruption. |
 | Checkpoint result contract | Explicit `PRAGMA wal_checkpoint(TRUNCATE)` paths execute a reader and return a structured result containing SQLite's `(busy, log, checkpointed)` values. Non-zero `busy` or positive remaining pages is unsuccessful with a bounded machine reason. `(0, -1, -1)` is SQLite's successful non-WAL no-op. Instance checkpointing, the static read-only-fallback preflight, query diagnostics, top-level status, and nested connection-policy status preserve the same result and counts. Raw exception text and paths must not enter diagnostics. |
 | Crash recovery | If the process is killed after SQLite has committed a transaction but before checkpointing, the next normal opener rolls the WAL forward; no manual recovery step is required. If the process dies before a transaction commits, SQLite rolls that transaction back. |
@@ -1795,7 +1833,8 @@ the compatibility filter are treated as non-authoritative until a normal index r
 their candidates.
 
 Existing-index, rebuild, and retained-graph finalization paths compute candidate count, minimum
-symbol ID, distinct target-family count, and stable target key in one correlated aggregate per
+symbol ID, a single-target-family flag from a positive non-NULL count plus BINARY
+`MIN(...) IS MAX(...)`, and the stable target key in one correlated aggregate per
 reference. Keep these four resolution fields on the row-value assignment path; separate scalar
 subqueries multiply the candidate-index and symbol/file lookup work on large graphs. The
 language/name families that
@@ -2762,8 +2801,8 @@ Process exit codes are coarse (`0` success including valid zero-row queries, `1`
 - **Reference contexts materialize only for emitted rows** — Built-in core, functional-language, and Solidity extractors pass the physical source-line instance through their emitters and trim it only after at least one reference survives filtering and deduplication. The deferred normalizer must key the source line by the emitted physical line number and require reference identity with that raw line; value equality would rewrite derived XAML, Razor, plugin, or other specialized contexts. Columns remain based on the untrimmed physical line, and stateful emitters must still advance on reference-free lines.
 - **Language capability patterns remain typed at the integration boundary** — CLI/MCP `languages` rows expose suffix-only `extensions`, literal `exact_filenames`, and `<suffix>`-rendered `filename_prefix_patterns`. `legacy_patterns` preserves the former combined list during deprecation, and `pattern_provenance` identifies built-in, plugin/pattern, and language-map override ownership. Round-trip tests feed every advertised typed pattern back through `FileIndexer.DetectLanguage` (#4617).
 - **Ambiguous source extensions stay explicit** — `.m` and `.pl` are not assigned to Objective-C and Perl by default. After language-map overrides and built-in exact/prefix filename rules, `FileIndexer` checks an authoritative recognized shebang whose first physical line is bounded to 256 bytes, then a 64 KiB bounded prefix for strong mutually exclusive Objective-C/MATLAB or Perl/Prolog markers, then at most 256 entries per ancestor directory for conservative project markers. A first line that reaches the shebang boundary without a terminator falls through instead of selecting an interpreter. Conflicting or weak evidence is indexed as `ambiguous_m` / `ambiguous_pl`; unresolved `.m` files run the bounded MATLAB and Objective-C symbol/reference paths after a shared position-preserving comment mask, while Prolog and `ambiguous_pl` advertise conservative reference/graph support and the ambiguous `.pl` bucket uses union symbol/reference rules without changing content-based classification. The detector owns the ordered candidate descriptors, filename patterns, exact content patterns, project markers, bounded shebang rules, and reason/confidence vocabulary; CLI/MCP `extension_lookup` diagnostics and dry-run `language_detections` consume that same source so catalog guidance cannot drift from indexing decisions (#4612, #4738, #4746, #4901).
-- **Content reads aggregate open-handle metadata** — Authoritative raw loads, raw-chunk probes, the specialized C# prepass, and final unknown-language probes capture one initial and one final `FileHandleSnapshot` for every stable open. Each snapshot obtains length, mtime, and file identity together through one `GetFileInformationByHandle` call on Windows, one `fstat` call on macOS, or one fixed-layout `statx(..., AT_EMPTY_PATH, ...)` call on Linux; older or unsupported runtimes retain the managed multi-call fallback. The initial snapshot supplies both open-binding identity and the read baseline, while the final snapshot supplies both mutation metadata and the opened identity used against a separate current-path identity probe. Stable reads therefore use exactly two logical snapshots, and one bounded retry uses four, without changing the distinct raw-load, positive chunk-match, C# prepass, or unknown-language retry contracts.
-- **Unknown-language membership uses one bounded file snapshot** — Exact filenames, registered extensions, pattern/plugin mappings, and the `.m` / `.pl` ambiguous detectors keep their existing precedence and I/O. Only the final extensionless or unregistered-extension fallback defers its script-header check: it fills at most 256 bytes with short-read-safe reads from one authorized handle and returns immediately for a recognized shebang or `#compdef`. Otherwise the same handle continues through a pooled fixed-size buffer to EOF or `max-file-bytes + 1`, retaining only the first 4096 bytes for UTF-16 BOM/parity detection while checking the whole stream for NUL and the strict sub-1024-byte Git LFS pointer shape. Length, mtime, and path identity changes discard the first snapshot and re-resolve, reauthorize, and reopen once. Full CLI scans, scoped dry-run probes, freshness scans, and MCP full/dry indexing all consume this `FileIndexer` boundary, so unknown-language diagnostics do not pay a separate full-file allocation or second stable open.
+- **Content reads aggregate open-handle metadata** — Authoritative raw loads, raw-chunk probes, the specialized C# prepass, and final unknown-language probes capture one initial and one final `FileHandleSnapshot` for every stable open. Each snapshot obtains length, mtime, and file identity together through one `GetFileInformationByHandle` call on Windows, one `fstat` call on macOS, or one fixed-layout `statx(..., AT_EMPTY_PATH, ...)` call on Linux; older or unsupported runtimes retain the managed multi-call fallback. The initial snapshot supplies both open-binding identity and the read baseline, while the final snapshot supplies both mutation metadata and the opened identity used against a separate current-path identity probe. On attempt zero, full-content and negative scans stop at the initial length without an extra EOF or `ReadByte` growth probe; stability requires the actual byte count, final length/mtime/handle identity, and current-path identity to agree with that baseline. A changed snapshot reopens once and only the retry scans to bounded EOF, while a final handle length over the max-file cap still fails immediately as growth during the current read. Positive raw-chunk matches remain conservatively true. Stable reads therefore use exactly two logical snapshots, and one bounded retry uses four, without changing the distinct raw-load, positive chunk-match, C# prepass, or unknown-language retry contracts.
+- **Unknown-language membership uses one bounded file snapshot** — Exact filenames, registered extensions, pattern/plugin mappings, and the `.m` / `.pl` ambiguous detectors keep their existing precedence and I/O. Only the final extensionless or unregistered-extension fallback defers its script-header check: it fills at most 256 bytes with short-read-safe reads from one authorized handle and returns immediately for a recognized shebang or `#compdef`. Otherwise the first attempt continues through a pooled fixed-size buffer only to the initial handle length, retaining the first 4096 bytes for UTF-16 BOM/parity detection while checking every consumed byte for NUL and the strict sub-1024-byte Git LFS pointer shape. Matching final length, actual byte count, mtime, and identity make that snapshot authoritative without an EOF probe; a change discards it and re-resolves, reauthorizes, and reopens once, and only that bounded retry continues to EOF or `max-file-bytes + 1`. Full CLI scans, scoped dry-run probes, freshness scans, and MCP full/dry indexing all consume this `FileIndexer` boundary, so unknown-language diagnostics do not pay a separate full-file allocation or second stable open.
 - **Dynamic reference-graph readiness follows extractor contracts** — when indexed Crystal, Groovy, Tcl, Prolog, or `ambiguous_pl` rows have a missing or stale symbol-extractor version stamp, status reports `dynamic_reference_graph_contract_stale` and keeps `reference_graph_complete` / `graph_data_current` false until a normal index refresh rewrites those rows (#4746).
 - **Hotspot marker fingerprints share one bounded tree traversal** — full/update CLI and MCP indexing compute C#, VB, F#, and MSBuild marker fingerprints together instead of walking the directory tree once per language. Each distinct marker glob retains the platform filesystem's matching behavior and is enumerated once per visited directory, while child directories are enumerated once; marker sets, budgets, truncation sentinels, and warning order remain isolated per language. The single-language API delegates to the same engine, preserving ignore rules, nested-repository/submodule boundaries, and MCP authorized-read failures.
 - **Lock-file dependency graphs model package relationships** — `packages.lock.json`, `package-lock.json`, and `npm-shrinkwrap.json` keep package declarations as symbols, but emit `dependency` references only for explicit parent-package to child-package entries. NuGet lock symbols and references preserve the current file, target/RID, parent package, and exact JSON property span; candidate resolution stays file-local, while file-level `deps` suppresses cross-file package-name inference. Normal index updates invalidate the prior dependency-lock extraction and reference-identity contracts, so `callers` identifies the requiring package without connecting unrelated lock files or collapsing repeated declarations to the first matching line (#4409, #4845).
@@ -2772,7 +2811,7 @@ Process exit codes are coarse (`0` success including valid zero-row queries, `1`
 - **Dependency-cycle cursors bind presentation evidence as well as topology** — the graph fingerprint includes each retained evidence row's source language, origin, resolution state, reference kind, target kind, suppression reason, and count in deterministic order. A metadata-only graph refresh therefore rejects an older cursor instead of mixing evidence summaries from different snapshots. MCP `format=json-graph` cycle requests use the same bounded node/edge projection as CLI graph output, and the specialized graph node/edge schema limits match the maximum cycle graph budget (#5197).
 - **No ORM** — Raw `Microsoft.Data.Sqlite` with parameterized queries. Keeps dependencies minimal and control explicit.
 - **Batch commits** — 500 records per transaction for write performance. Reduces fsync overhead.
-- **Set-based C# instantiation fallback** — The rank-5 unqualified `instantiate` candidate stage materializes C# type members, unique raw-name/arity families, family-scoped constructor members, and per-family explicit-constructor summaries before matching references. Unique families drive indexed constructor lookups instead of scanning every constructor or running correlated type/constructor scalar probes per candidate. Raw type names, identities, and constructor containers remain `BINARY`, family/member arity joins remain NULL-safe, partial types keep their path/start/id representative, and the final lower-rank suppression stays reference-scoped so the optimization preserves overload, implicit-default, value-type, enum, delegate, ambiguity, and unparseable-arity semantics.
+- **Fact-backed C# instantiation families** — Graph finalization materializes one TEMP row per eligible C# type declaration and constructor after identity facts are ready. Ranks 0–4 use symbol-primary-key joins and rank 5 uses a reference-driven composite family seek, so no candidate path performs a correlated constructor-family symbol scan. Separate lower-rank and fallback binding-sensitive flags preserve all-partial versus representative-only primary-constructor semantics. Type-declaration-only BINARY uniqueness keeps project/file-local conflicts ambiguous and constructor-only orphans out of rank 5 while retaining overload, implicit-default, optional/default/`params`, value-type, enum, delegate, and unknown-arity behavior.
 - **Partial batch failures** — `DbWriter` keeps the fast multi-row `INSERT` path for normal chunk and symbol batches. If SQLite rejects a batch, the writer rolls that batch back, retries rows under per-row `SAVEPOINT`s, commits the valid rows, skips only the failing rows, increments `BatchRowsSkipped`, and emits a warning containing the row identifier and SQLite error. This keeps one corrupt extracted row from discarding the rest of a large indexing batch (#1754).
 - **WAL mode + busy_timeout** — Write-Ahead Logging for concurrent read/write access and crash safety. 5-second busy timeout avoids immediate SQLITE_BUSY errors.
 - **Content-external FTS5 with triggers** — Avoids doubling storage by pointing to `chunks` table instead of storing a copy. Database triggers keep the FTS index in sync automatically.
@@ -4525,7 +4564,7 @@ query コマンドも JSON profile block 用の `--profile` と command-scoped p
 
 | 経路 | 契約 |
 |---|---|
-| worker protocol JSON | isolated worker の stdin frame は `BoundedLineReader` で読みます。symbol-worker client は request を直接 UTF-8 に serialize して改行区切りの byte を process stream へ書き、worker は response を stdout stream へ直接 serialize し、client は bounded response frame を UTF-8 byte のまま読み取って直接 deserialize します。これにより source file ごとに両方向で発生していた追加 UTF-16 JSON string と encoding pass を避けます。既定の frame 上限は文字数・UTF-8 byte 数ともに 32 MiB です。大きな `--max-file-bytes` によって JSON escape 分の余裕が必要な場合、protocol frame 上限は `WorkerProtocolLineLimits.MaxExtendedLineUtf8Bytes`（384 MiB）まで拡張できますが、`int.MaxValue` までは拡張しません。`WorkerProtocolJsonValidator` は `JsonDocument.Parse` の前に合意済みの文字数 / UTF-8 byte 上限を超える payload を拒否し、`DefaultMaxJsonDepth`（32）で parse し、object property 1,000,000 件超と frame 上限を超える string を拒否します。 |
+| worker protocol JSON | isolated worker の stdin frame は `BoundedLineReader` で読みます。symbol-worker client は小さい request metadata を直接 UTF-8 に serialize し、source content を固定長の pooled buffer で JSON escape しながら改行区切り request を process stream へ書き、source 規模の JSON byte array を保持しません。writer は出力 byte 数を数え、合意済み上限を超える前に frame を拒否します。worker は response を stdout stream へ直接 serialize し、client は bounded response frame を UTF-8 byte のまま読み取って直接 deserialize します。これにより source file ごとに両方向で発生する追加の source 規模 JSON string / encoding buffer を避けます。既定の frame 上限は文字数・UTF-8 byte 数ともに 32 MiB です。大きな `--max-file-bytes` によって JSON escape 分の余裕が必要な場合、protocol frame 上限は `WorkerProtocolLineLimits.MaxExtendedLineUtf8Bytes`（384 MiB）まで拡張できますが、`int.MaxValue` までは拡張しません。`WorkerProtocolJsonValidator` は `JsonDocument.Parse` の前に合意済みの文字数 / UTF-8 byte 上限を超える payload を拒否し、`DefaultMaxJsonDepth`（32）で parse し、object property 1,000,000 件超と frame 上限を超える string を拒否します。 |
 | user regex find | `find --regex` は lookaround / backreference 互換性のため classic .NET regex engine を維持し、`RegexOptions.CultureInvariant` を付け、`--exact` でない場合は `IgnoreCase` も付け、各 match に `BoundedRegex.DefaultMatchTimeout` を使います。timeout は CLI JSON で `E014_REGEX_MATCH_TIMEOUT` / `regex_timeout` として返り、人間向け出力にも同じ recovery hint が出ます。`find --all` は index 全体を走査する前に candidate file と line scan の上限も適用します。 |
 | shared regex construction | production の regex 構築は `BoundedRegex`、`RegexRegistry`、または `RegexTimeoutPolicy` に集約します。extractor pattern と bounded static regex API には `BoundedRegex`、timeout 例外を維持する必要がある raw BCL regex factory（`find --regex`、ignore glob regex、generated-code path pattern）には `RegexRegistry`、diagnostic / redaction surface には `RegexTimeoutPolicy` を使います。`RegexRegistry` は ignore glob timeout（100 ms）、generated-code pattern timeout（50 ms）、および `BoundedRegex.DefaultMatchTimeout` を使う find-regex factory の名前付き policy を所有します。search-audit recipe は `BoundedRegex` alias と `RegexRegistry.cs` だけを集約済みの positive evidence と見なすため、新しい production raw constructor は明示的な factory または generated-regex entry とテストを伴う必要があります。 |
 | filesystem traversal helper | `FileSystemTraversalPolicy` は top-directory-only enumeration を明示し（`IgnoreInaccessible=false`、暗黙の再帰なし）、任意指定の `CancellationToken` / entry budget option を公開します。想定内の traversal failure は中央で分類し、command diagnostic が permission、I/O、invalid-path、unsupported-path、path-too-long、budget-exceeded の taxonomy を共有します。既存 child の case probe は `CaseSensitivityProbeDirectory.MaxExistingChildProbeEntries`（4,096）を上限とする1つの exact-name set だけを保持し、truncation 時は unknown を返して caller の isolated-write または cached root-policy fallback に委ね、利用可能な cancellation token を伝播します。 |
@@ -4580,9 +4619,12 @@ parallel full scan は extraction 本体を共有dynamic claimで配分します
 最後のworker waveまで開始されないことを防ぐため、末尾の
 `min(4 * workers, 64)` work itemだけをprobeし、size取得済みかつ上限内のfileを大きい順に
 claimします。同一size、metadata取得不能、設定size上限を既に超えるfileは元順を維持します。
-target arrayと論理file indexは並べ替えず、serialなhook/filter経路はprobeせず、bounded completion
-queueは引き続き完了順でpublishします。network/virtual filesystemで全file metadata passへ
-退行しないよう、tail probeとschedule stateをrepository規模に依存しない固定上限に保ってください。
+workerはこのschedule済みsuffixを未scheduleのprefixより先に消費するため、末尾で最大の対象候補も
+最初のworker waveへ入ります。schedule消費後はprefix ordinalを元順で再開し、両segment全体で
+exactly-onceのpermutationを作ってから既存のsparseな論理file mappingを適用します。target arrayと
+論理file indexは並べ替えず、serialなhook/filter経路はprobeせず、bounded completion queueは
+引き続き完了順でpublishします。network/virtual filesystemで全file metadata passへ退行しないよう、
+tail probeとschedule stateをrepository規模に依存しない固定上限に保ってください。
 
 parallel full scan の worker は、symbol preparation の状態も single persistence consumer へ
 引き渡します。worker が解決した family-scope key と完了済みの C# source observation を再利用し、
@@ -4629,8 +4671,12 @@ fresh な CLI scan と明示的 rebuild は、raw reference の永続化が完�
 `symbol_references` の query / graph 用 secondary index を遅延します。candidate-symbol の
 reverse lookup は raw persistence 中は維持し、実際の graph refresh が candidate row を削除・
 構築する直前だけ外すため、marker-only / 高 cardinality no-op update はこの index 全体を
-再構築しません。reference scope の materialization / resolution に使う candidate primary key は
-維持します。load 中も通常は file と reference-line の保守用 index を残します。唯一の例外は、
+再構築しません。candidate 構築は `(reference_id, symbol_id)` primary key を使い、reverse B-tree
+を行ごとに保守しません。candidate 構築完了直後かつ独立した resolution command の rent / prepare
+前に `idx_symbol_ref_candidates_symbol` を復元し、target fact の materialization は bounded な
+`(symbol_id, reference_id)` existence seek を使います。reference scope の materialization /
+resolution に使う candidate primary key は維持します。load 中も通常は file と reference-line の
+保守用 index を残します。唯一の例外は、
 transaction-local な再確認後も fresh-resolution claim を所有する authoritative な空DB初回CLI
 full scan です。この経路だけは raw reference の永続化中に
 `idx_symbol_refs_reference_line` と `idx_reference_lines_file_line` も遅延し、candidate、
@@ -4645,12 +4691,11 @@ identity / resolution finalization 中は query index を遅延したままに�
 legacy NOCASE、resolved reverse-edge の3本だけを復元し、残りの query index は mutual update
 後に戻します。TypeScript augmentation rebuild が唯一の graph pass を担当する場合は、readiness
 前に通常の graph / query index を復元し、augmentation の candidate 構築直前にだけ
-candidate-symbol reverse lookup を外して graph pass の完了まで遅延します。transactional full scan は readiness work 後
-かつ outer full-scan transaction の commit 前に最後の1本を復元し、cancellation や失敗時の
-schema rollback を原子的に保ちます。recoverable scoped update と MCP indexing は readiness
-transaction の commit まで guard ownership を保持し、その直後に最後の index を復元します。
-どちらの lifecycle も readiness query を利用可能なまま candidate B-tree の行ごとの保守を
-省きます。MCP は既定の dirty-byte policy が FTS bulk load を選ぶ場合に recoverable lifecycle
+candidate-symbol reverse lookup を外します。candidate 構築直後かつ resolution の prepare 前に
+この lookup を復元します。その境界より前の失敗は transactional rollback / recoverable disposal
+が修復し、正常な resolution と readiness は canonical な candidate lookup を利用できます。
+candidate insert 中だけ reverse B-tree の行ごとの保守を省きます。MCP は既定の dirty-byte policy
+が FTS bulk load を選ぶ場合に recoverable lifecycle
 を使い、正常完了時と dispose 時の両方で全 index を復元します。schema initialization と read
 repair は同じ canonical index catalog を使い、すべての経路が同一の最終 schema に収束する状態を
 保ってください。
@@ -4677,8 +4722,9 @@ index 退避を使います。scoped update には workspace 全体の authorita
 unchanged、または sparse mutation の target 集合では全 index を維持します。preflight
 に不確実性があれば保守的に staging を維持します。この preflight は cost 判定に限り、snapshot 後の
 変更も全 index を維持したまま更新できるよう、file loop は authoritative な live lookup を必ず再実行
-してください。identity / resolution 中は query-only 集合を遅延したままにし、mutual recursion の
-直前に reverse-edge 用3本を復元して、その update 後に残りを戻してください。小規模 scoped
+してください。identity / resolution 中は query-only 集合を遅延したままにしますが、candidate-symbol
+reverse lookup だけは candidate 構築後かつ resolution command の prepare 前に復元します。mutual
+recursion の直前に reverse-edge 用3本を復元して、その update 後に残りを戻してください。小規模 scoped
 update は固定的な再構築 cost が更新時間を支配しないよう、全 index を維持します。
 full mutual-recursion update は、call-like または非canonicalな row ごとに望ましい flag を
 1回 materialize してから変更を適用します。相関 reverse-edge 式を `SET` と `WHERE` の
@@ -4686,8 +4732,9 @@ full mutual-recursion update は、call-like または非canonicalな row ごと
 single-evaluation の契約を維持してください。
 
 C# の reference-graph finalization は、reference arity、invocation arity、member receiver、
-definition arity、constructor arity、value-type の fact を、対象 row ごとに TEMP table へ1回だけ
-materialize し、その symbol fact から project / file-local type identity と constructor-owner の identity / arity
+definition arity、constructor arity、constructor binding sensitivity、value-type の fact を、対象 row ごとに
+TEMP table へ1回だけ materialize し、その symbol fact から project / file-local type identity、constructor-owner
+の identity / arity、および対象となる全 type declaration / constructor の primary-keyed instantiation-family fact
 も materialize します。property-receiver normalization の前に C# field / property の target identity も
 primary-keyed TEMP fact 集合へ materialize します。full / scoped / retained graph rebuild の全経路で fact 集合を
 property-receiver normalization、candidate 構築、resolution より前に投入してください。candidate SQL は
@@ -4696,6 +4743,16 @@ scalar function へ再入したりせず、primary-key の fact lookup を使い
 lookup-name 集合だけに限定し、identity fact もその限定済み集合から作ります。full / retained rebuild は
 C# symbol fact の全対象を使います。property-receiver normalization も flag 済み reference fact と target fact の
 primary key から駆動し、scoped target materialization は lookup-name 集合だけに限定してください。
+instantiation-family materialization は限定済み type / constructor identity fact を外側にして、永続 symbol を
+primary key で seek します。rank 0〜4 は symbol ID でこの fact を join します。lower-rank の binding-sensitive
+flag は同一 identity の全 partial type declaration と constructor を含め、rank 5 用 flag は constructor と
+決定的な代表 type declaration だけを含めてください。
+
+言語共通の scope rank 1〜4 は、共有する reference / name / language candidate relation を
+materialized CTE で1回だけ構築し、reference / symbol pair ごとの最良rankを割り当てたうえで、
+reference ごとの最小rankに同順位の全candidateを保持します。source identity が不明でも rank 3 の
+same-file fallback を残し、scoped refresh は dirty reference ID から reference primary key へ
+駆動する契約を維持してください。
 
 rank 0〜4 の candidate 構築後は、一致した reference ID の distinct 集合を compact な
 `WITHOUT ROWID` TEMP table に materialize します。言語共通および C# の rank 5 fallback は
@@ -4704,18 +4761,26 @@ ambiguity 契約は変更しません。scoped refresh は dirty reference ID �
 seek して集合を作り、retry が古い行を参照しないよう graph pass ごとに materialize 前の clear を
 維持してください。
 
-qualifier のない C# rank 5 type fallback は、共有 symbol / type-identity fact から物理 type member を
-materializeし、exact name・arity・identityごとの一意な論理familyへgroup化して、referenceごとの照合を
-family単位で1回だけ行います。一致したfamilyを全物理memberへ展開するのは最終projectionだけです。
-これによりpartial typeのsymbolごとのcandidate行を維持しつつ、各partial宣言でcompatibilityとambiguity
-判定を繰り返しません。
+qualifier のない C# rank 5 instantiation fallback は、reference ごとに type / constructor family を再構築せず、
+共有 family fact を使います。一意性 flag の母集団は type declaration だけで、fold済みname、BINARY exact name、
+arity ごとに非NULL件数とBINARY identityのmin/max一致を判定し、row自身のidentityがその一意identityに一致する
+場合だけ有効にします。そのため constructor しかない orphan はlower rankでは候補になれてもglobal familyを
+作りません。reference側から明示的なcomposite family-fact indexをseekし、constructorと決定的な代表typeだけを
+出力します。project / file-local競合、partial row、overload、default / optional / `params`、value type、enum、
+delegate、arity不明、ambiguityのsemanticsを保ちつつ、相関した永続symbol scanを行いません。
 
-resolution は nullable な target-family key も target symbol ごとに1回だけ primary-keyed TEMP
-fact table へ materialize します。full / fresh / differential / retained refresh は全 symbol を投入し、
-scoped refresh は dirty-reference candidate から到達する target symbol ID を先に重複排除します。
+resolution は nullable な target-family key も candidate を持つ target symbol ごとに1回だけ
+primary-keyed TEMP fact table へ materialize します。full / fresh / differential / retained refresh は
+indexed な candidate-symbol existence probe で対象を限定し、scoped refresh は dirty-reference
+candidate から到達する target symbol ID を先に重複排除します。candidate 構築と resolution は別の
+SQLite command とし、reverse lookup の復元後にだけ resolution command を rent / prepare します。
 resolution は物理 candidate ごとに language / path / container / name key を再構築せず、symbol IDで
-このfactへjoinしてください。legacy targetのlanguageが欠ける場合はkeyを`NULL`のまま保ちつつ、
-有効candidateが1件ならIDによるresolved状態を維持します。
+このfactへjoinしてください。singleton family 判定は per-group の DISTINCT set を作らず、非NULL
+key が1件以上あり、BINARY の `MIN(...) IS MAX(...)` であることを使って従来の
+`COUNT(DISTINCT)` NULL semantics を維持します。all-NULL は family なし、NULL と1つの非NULL
+family はその family、重複 key は1 family、BINARY で異なる key は ambiguous です。legacy target
+の language が欠ける場合は key を `NULL` のまま保ちつつ、物理 candidate が1件なら ID による
+resolved 状態を維持します。
 
 リポジトリ全体の incremental scan は、C# contract prepass と parallel extraction の前に
 stat-reuse 候補を 1 回の SQLite statement で読みます。各候補は引き続き最新の filesystem
@@ -4745,7 +4810,9 @@ extraction には main pass と同じ absolute file path / project root を渡�
 persistence、reference extraction、bounded-regex issue は通常の main-pass 経路で処理してください。
 不完全な prepass、extraction-stall test seam、checksum drift、regex timeout、cache 上限では通常
 extraction へ fallback します。timeout した prepass 結果は partial であり、一過性の結果を
-authoritative にしてはいけません。admission は 4,096 file、131,072 symbol、推定 32 MiB に制限し、未消費
+authoritative にしてはいけません。admission は独立した production file-count 上限ではなく、131,072 symbol と
+推定 32 MiB に制限してください。上限へ達する場合は decode 済み source の大きい順、同じ size では元の
+candidate 順で admit し、この順序付けより前に immutable lookup を意味上の順序で構築してください。未消費
 artifact は reference graph 開始前にすべて clear してください。
 
 workspace qualified-pattern lookup が enum shadowing 判定に必要とするのは raw な non-enum type
@@ -5599,8 +5666,9 @@ apply 時は `PRAGMA optimize` を実行します。
 | `synchronous=NORMAL` | WAL では `NORMAL` により 500 row 単位の indexing batch ごとの fsync 負荷を避けつつ、crash 後の database consistency を保ちます。 |
 | caller-owned write batch | full-scan などの atomic file write は既に1つの caller-owned transaction 内で実行されるため、言語共通の chunk、symbol、issue、reference-line、reference insert は statement を32 parameter以下に制限します。すべてのbatchはrow / column順にcompactな1-origin SQLite numeric slot（`?1`〜`?N`）を使い、既存のstatement-size、cancellation、checkpoint契約を保ったままparameter name解決の処理を抑えます。500 rowを超えるoperationでは、永続 `db_writer_batch_checkpoint` を500 row境界をまたいだ時点と完了時だけ出力することで、小さなstatementごとの同期log flushを避けます。public writer API は SQLite variable limit までの batch 形状と既存の batch ごとの transaction / SAVEPOINT 契約を維持します。 |
 | prepared savepoint control | `DbWriter` は connection の prepared-command cache から固定・有界な control statement だけを借ります。対象は file 単位 full-index scope が使う最初の nested `sp_1` の SAVEPOINT / RELEASE / ROLLBACK、atomic metadata savepoint、FTS bulk-load owner savepoint です。各 lease は現在の outer `SqliteTransaction` へ再 bind し、cache なし writer は従来どおり呼び出しごとに command を作成・破棄します。depth 2 以深の savepoint 名は動的なまま cache を迂回し、cancellation、rollback、terminal state、transaction gate の契約は変更しません。 |
-| authoritative-fresh raw insert scope | empty-database CLI経路がcaller-owned transaction内でauthoritative-fresh claimを再検証した後に限り、extraction pipelineのnew-file / fresh reference-line `RETURNING` INSERTと、DONE-onlyなchunk、symbol、new-file issue、atomic fresh-reference INSERTをprovider所有connection handle上のSQLitePCLRawでbind / executeします。scopeは既存の32 parameter statement境界、正確なtail / result形状、batch hook、row-skip replay、outer transaction atomicityを維持し、32-entry LRUで本番25形状すべてを保持します。同期的なfull-scan persistence consumerと`DbWriter`のtransaction owner検査により、非thread-safe cacheはsingle-ownerのままです。各leaseはresetとbinding clearを行い、error時は元のstep結果を保持し、SQLite interruptを`OperationCanceledException`へ変換し、graph / index / FTS処理より前に全cached statementをfinalizeします。同じtransaction内では3本の`files_resource_generation_*` triggerを停止し、native statementのfinalize後だけ再作成します。fileを1件以上永続化した場合はresource-list generationを厳密に1回進め、空repositoryでは変更しません。rollback時はschemaとgenerationを一括で元へ戻します。`RETURNING` leaseは正のIDとinput ordinalを終端`DONE`まで全件buffer / validationしてから公開し、不正、欠落、重複、失敗、cancelされたstreamではprepared statementを破棄し、data rollbackはcallerのfile単位SAVEPOINTが所有します。replacement、incremental、rebuild、symbols-only、fresh-claim race fallback、MCP、public writer経路はMicrosoft.Data.Sqliteとmutationごとのgeneration invalidationを維持します。 |
-| authoritative-fresh core secondary index | 同じempty-database CLI transactionがauthoritative-fresh claimを再検証した後、`files`、`chunks`、`file_issues`、`symbols`の言語共通secondary index 22本をpersistence前に停止し、全native INSERT statementのfinalize後かつgraph / readiness queryの開始前に各B-treeを1回だけ構築します。UNIQUE autoindexは維持するため、pathとtable constraintは通常どおり適用されます。fresh-reference insertが相関するfile単位lookupでsource symbolを解決するため、`idx_symbols_file`も維持し、このhot pathがsymbol table全体の反復scanへ退行しないようにします。cancel / failure時はouter rollbackがload前のschemaをatomicに復元し、rebuild、incremental、fresh-claim race fallback、MCP経路はwrite中もindexを維持します。canonical DDLをschema initialization、opportunistic read migration、bulk-load guardで共有し、deferred setと完了DBの契約がずれないようにします。 |
+| authoritative-fresh raw insert scope | empty-database CLI経路がcaller-owned transaction内でauthoritative-fresh claimを再検証した後に限り、extraction pipelineのnew-file、chunk、symbol、new-file issue、fresh reference-line、atomic fresh-reference INSERTをprovider所有connection handle上のSQLitePCLRawでbind / executeします。native positional bindingは専用の512 parameter上限を使い、provider経由のcaller-owned writeは32 parameter上限を維持します。fresh file / reference-line writeもDONE-onlyです。file insertは同じconnectionの正の`last_insert_rowid`を取得し、reference-line batchは毎回`MAX(id)`と`sqlite_sequence.seq`の大きい方を読み、Int64範囲全体を検証して`?1 + input_ordinal`の明示的な連続IDを挿入します。batchごとのfloor読取により、rollback依存のallocator stateを保持せずAUTOINCREMENT履歴とbatch間insertを反映します。不正floorとidentity range overflowはINSERT実行前に失敗します。実行済みfresh identity writeはID公開前に`sqlite3_changes()`を検証し、row count不一致、constraint、cleanup failure、cancellationでは対象prepared statementを破棄し、data rollbackはcallerのfile単位SAVEPOINTが所有します。scopeは正確なtail / write-count形状、batch hook、row-skip replay、outer transaction atomicityを維持し、32-entry LRUで繰り返すfull / tail statement形状を保持します。同期的なfull-scan persistence consumerと`DbWriter`のtransaction owner検査により、非thread-safe cacheはsingle-ownerのままです。各leaseはresetとbinding clearを行い、error時は元のstep結果を保持し、SQLite interruptを`OperationCanceledException`へ変換し、graph / index / FTS処理より前に全cached statementをfinalizeします。同じtransaction内では3本の`files_resource_generation_*` triggerを停止し、native statementのfinalize後だけ再作成します。fileを1件以上永続化した場合はresource-list generationを厳密に1回進め、空repositoryでは変更しません。rollback時はschemaとgenerationを一括で元へ戻します。replacement、incremental、rebuild、symbols-only、fresh-claim race fallback、MCP、public writer経路はMicrosoft.Data.Sqlite、既存の`RETURNING`挙動、mutationごとのgeneration invalidationを維持します。 |
+| authoritative-fresh source-symbol lookup | native statementをprepareする前に、raw scopeはfold済みname、fold済みdisplay name、legacy ASCII `NOCASE` fallback用partial indexを備えたconnection-local TEMP `WITHOUT ROWID` snapshotを作成します。atomic reference collectionごとにsnapshotをclearし、異なるsource file IDのsymbolを`idx_symbols_file`経由で各1回copyします。containerを持たないreferenceではmaterializationを省きます。3本のindexed probeは、同じsymbolが複数branchに一致する場合も既存のname-or-display semanticsを保つため`UNION`で重複を除き、その後もcontaining rangeとinnermost span / start / idの同じrankingを維持します。TEMP schema作成はcallerのouter transactionに属し、各file savepointがsnapshot populationとreference writeを一緒に所有するため、cancel、failure、rollbackでは両方を復元します。provider、rebuild、incremental、fresh-claim fallback、MCP、public-writer経路はTEMP tableを作成も参照もしません。 |
+| authoritative-fresh core secondary index | 同じempty-database CLI transactionがauthoritative-fresh claimを再検証した後、`files`、`chunks`、`file_issues`、`symbols`の言語共通secondary index 22本をpersistence前に停止し、全native INSERT statementのfinalize後かつgraph / readiness queryの開始前に各B-treeを1回だけ構築します。UNIQUE autoindexは維持するため、pathとtable constraintは通常どおり適用されます。fresh-reference insertが関連する各fileのsymbolをindexed TEMP snapshotへ1回copyするため、`idx_symbols_file`も維持し、file単位materializationがsymbol table全体のscanへ退行しないようにします。cancel / failure時はouter rollbackがload前のschemaをatomicに復元し、rebuild、incremental、fresh-claim race fallback、MCP経路はwrite中もindexを維持します。canonical DDLをschema initialization、opportunistic read migration、bulk-load guardで共有し、deferred setと完了DBの契約がずれないようにします。 |
 | checkpoint | `DbWriter` は outer transaction commit 後に `PRAGMA wal_checkpoint(PASSIVE)` を実行し、SQLite も設定済みの 1000 page threshold を超えると自動 checkpoint する場合があります。どちらの checkpoint path も opportunistic で、active reader は block されず、未 checkpoint の WAL は corruption ではなく期待される状態です。 |
 | checkpoint result contract | 明示的な `PRAGMA wal_checkpoint(TRUNCATE)` path は reader を実行し、SQLite の `(busy, log, checkpointed)` を含む構造化結果を返します。`busy` が 0 以外、または remaining page が正の場合は、上限付き machine reason を伴う unsuccessful result です。`(0, -1, -1)` は SQLite の非 WAL database に対する成功 no-op です。instance checkpoint、read-only fallback 前の static preflight、query diagnostics、top-level status、nested connection-policy status は同じ結果と count を保持します。raw exception text や path を diagnostics に含めてはいけません。 |
 | crash recovery | SQLite が transaction を commit した後、checkpoint 前に process が kill された場合、次の通常 open が WAL を roll forward するため手動 recovery は不要です。commit 前に process が終了した transaction は SQLite により rollback されます。 |
@@ -5945,7 +6013,8 @@ Java の reference resolution は変更しません。
 作成された index は、通常の index 更新で candidate を再構築するまで非 authoritative として扱います。
 
 既存index、rebuild、retained graph の reference finalization は、candidate count、最小 symbol ID、
-distinct target-family count、安定 target key を reference ごとに1回の correlated aggregate で
+非NULL count が正で BINARY の `MIN(...) IS MAX(...)` となる single-target-family flag、安定 target key
+を reference ごとに1回の correlated aggregate で
 計算します。この4つの resolution field は row-value assignment のまま維持してください。
 scalar subquery を分けると、大規模 graph で candidate index と symbol/file lookup が重複します。
 global に一意な language/name family は
@@ -6941,8 +7010,8 @@ USER_GUIDEの[終了コード](USER_GUIDE.md#終了コード)セクションを�
 - **reference context はrowを発行した行だけmaterialize** — built-inのcore、functional language、Solidity extractorは物理source lineのinstanceをemitterへ渡し、filterとdedupを通過したreferenceが1件以上ある場合だけ後段でtrimします。遅延normalizerは発行された物理line numberからsource lineを引き、そのraw lineとの参照同一性を必須にします。値一致にするとXAML、Razor、pluginなどの派生contextまで書き換えるためです。columnはtrim前の物理行を基準に保ち、stateful emitterはreferenceがない行でもstate更新を続けます。
 - **integration boundary では language capability pattern の型を維持** — CLI/MCP の `languages` 行は suffix のみの `extensions`、literal な `exact_filenames`、`<suffix>` 表記の `filename_prefix_patterns` を公開します。`legacy_patterns` は deprecation 中に従来の combined list を保持し、`pattern_provenance` は built-in、plugin/pattern、language-map override の所有元を示します。round-trip test は広告した全 typed pattern を `FileIndexer.DetectLanguage` に戻して検証します（#4617）。
 - **曖昧な source extension は曖昧なまま明示** — `.m` と `.pl` を既定で Objective-C / Perl に割り当てません。language-map override と built-in の完全一致/prefix filename rule の後で、`FileIndexer` は先頭物理行を 256 byte に制限した authoritative な認識済み shebang、64 KiB 上限 prefix 内の相互排他的で強い Objective-C/MATLAB または Perl/Prolog marker、各 ancestor directory 最大 256 entry の保守的な project marker の順に確認します。行終端なしで shebang 境界に達した先頭行は interpreter を選択せず、後続判定へ進みます。競合または弱い証拠は `ambiguous_m` / `ambiguous_pl` として index し、未確定の `.m` は位置を保つ共通コメントマスクの後で上限付きの MATLAB / Objective-C symbol・reference 経路を実行します。一方、Prolog と `ambiguous_pl` は保守的な reference / graph 対応を広告し、曖昧な `.pl` bucket は content-based classification を変えずに symbol / reference rule の和集合を使います。順序付き candidate descriptor、filename pattern、正確な content pattern、project marker、上限付き shebang rule、reason/confidence 語彙は detector 自身が所有し、CLI/MCP の `extension_lookup` diagnostic と dry-run の `language_detections` は同じ source を使うため、catalog guidance と indexing 判定が乖離しません（#4612、#4738、#4746、#4901）。
-- **content read はopen済みhandleのmetadataを集約する** — authoritative raw load、raw-chunk probe、C#専用prepass、最終unknown-language probeは、stableなopenごとに最初と最後の`FileHandleSnapshot`を1つずつ取得します。各snapshotはWindowsの`GetFileInformationByHandle` 1回、macOSの`fstat` 1回、Linuxの固定layout `statx(..., AT_EMPTY_PATH, ...)` 1回によりlength・mtime・file identityをまとめて取得し、古いruntimeまたは未対応platformでは従来のmanaged multi-call fallbackを維持します。最初のsnapshotはopen bindingのidentityとread baselineを兼ね、最後のsnapshotはmutation metadataと、別途取得するcurrent-path identityとの比較に使うopened identityを兼ねます。これによりstable readは論理snapshotを厳密に2回、上限付きretry 1回では4回に保ちつつ、raw load、positive chunk match、C# prepass、unknown-languageで異なるretry契約を変更しません。
-- **未知言語の membership は1つの上限付き file snapshotを使う** — 完全一致 filename、登録済み extension、pattern/plugin mapping、`.m` / `.pl` の曖昧判定は従来の優先順位と I/O を維持します。最後の拡張子なし・未登録拡張子 fallback だけ script header 判定を遅延し、同じ認可済み handle から short read に耐える loop で最大256 byteを満たします。認識済み shebang / `#compdef` はそこで即時返却し、それ以外は同じ handle を pooled fixed-size buffer で EOF または `max-file-bytes + 1` まで読み進めます。UTF-16 BOM/parity 判定には先頭4096 byteだけを保持しつつ、全streamのNULと1024 byte未満の厳密なGit LFS pointer形を確認します。length、mtime、path identityが変化した最初のsnapshotは破棄し、resolve・authorize・openを1回だけやり直します。CLI full scan、scoped dry-run、freshness scan、MCP full/dry indexingはいずれもこの`FileIndexer`境界を共有するため、未知言語diagnosticのための別のfull-file allocationやstable fileの2回目openは発生しません。
+- **content read はopen済みhandleのmetadataを集約する** — authoritative raw load、raw-chunk probe、C#専用prepass、最終unknown-language probeは、stableなopenごとに最初と最後の`FileHandleSnapshot`を1つずつ取得します。各snapshotはWindowsの`GetFileInformationByHandle` 1回、macOSの`fstat` 1回、Linuxの固定layout `statx(..., AT_EMPTY_PATH, ...)` 1回によりlength・mtime・file identityをまとめて取得し、古いruntimeまたは未対応platformでは従来のmanaged multi-call fallbackを維持します。最初のsnapshotはopen bindingのidentityとread baselineを兼ね、最後のsnapshotはmutation metadataと、別途取得するcurrent-path identityとの比較に使うopened identityを兼ねます。attempt 0のfull-content readとnegative scanはinitial lengthで停止し、余分なEOFまたは`ReadByte` growth probeを行いません。実読byte数、final length/mtime/handle identity、current-path identityがbaselineと一致した場合だけstableと判定します。変化時は1回だけ再openし、bounded EOF scanはretryだけが行います。一方、final handle lengthがmax-file上限を超えた場合は、従来どおりそのread中のgrowthとして即時失敗します。positive raw-chunk matchは保守的なtrueを維持します。これによりstable readは論理snapshotを厳密に2回、上限付きretry 1回では4回に保ちつつ、raw load、positive chunk match、C# prepass、unknown-languageで異なるretry契約を変更しません。
+- **未知言語の membership は1つの上限付き file snapshotを使う** — 完全一致 filename、登録済み extension、pattern/plugin mapping、`.m` / `.pl` の曖昧判定は従来の優先順位と I/O を維持します。最後の拡張子なし・未登録拡張子 fallback だけ script header 判定を遅延し、同じ認可済み handle から short read に耐える loop で最大256 byteを満たします。認識済み shebang / `#compdef` はそこで即時返却し、それ以外の初回attemptは同じhandleをpooled fixed-size bufferでinitial handle lengthまでだけ読み進めます。UTF-16 BOM/parity判定用の先頭4096 byteを保持し、その範囲を含む読取済み全byteでNULと1024 byte未満の厳密なGit LFS pointer形を確認します。final length、実読byte数、mtime、identityが一致すればEOF probeなしでauthoritativeとし、変化時はsnapshotを破棄してresolve・authorize・openを1回だけやり直します。EOFまたは`max-file-bytes + 1`まで進むのはこのbounded retryだけです。CLI full scan、scoped dry-run、freshness scan、MCP full/dry indexingはいずれもこの`FileIndexer`境界を共有するため、未知言語diagnosticのための別のfull-file allocationやstable fileの2回目openは発生しません。
 - **動的言語の reference-graph readiness は extractor contract に従う** — index 済みの Crystal、Groovy、Tcl、Prolog、`ambiguous_pl` row で symbol-extractor version stamp が欠落または古い場合、status は `dynamic_reference_graph_contract_stale` を報告し、通常の index refresh が対象 row を更新するまで `reference_graph_complete` / `graph_data_current` を false に保ちます（#4746）。
 - **hotspot marker fingerprint は上限付きtree traversalを1回共有** — full/update CLIとMCP indexingは、directory treeを言語ごとに歩かず、C#、VB、F#、MSBuildのmarker fingerprintをまとめて計算します。各directoryでは固有marker globごとにplatform filesystemのmatching挙動を保って1回ずつ列挙し、child directoryも1回だけ列挙する一方、marker集合、budget、truncation sentinel、warning順は言語別に分離します。single-language APIも同じengineへ委譲し、ignore rule、nested repository/submodule境界、MCP authorized read failureを維持します。
 - **lock file の依存グラフは package 間の関係をモデル化** — `packages.lock.json`、`package-lock.json`、`npm-shrinkwrap.json` は package 宣言を symbol として保持しますが、`dependency` reference は明示された親 package → 子 package の項目だけに出力します。NuGet lock の symbol / reference は現在の file、target/RID、親 package、正確な JSON property span を保持し、candidate 解決を file 内に限定します。file 単位の `deps` は package 名による file 間推論を抑止し、通常の index update は以前の dependency-lock 抽出 contract と reference-identity contract を無効化します。そのため、`callers` は無関係な lock file を接続したり、反復宣言を最初の一致行へ畳み込んだりせず、要求元 package を特定できます（#4409、#4845）。
@@ -6951,7 +7020,7 @@ USER_GUIDEの[終了コード](USER_GUIDE.md#終了コード)セクションを�
 - **依存 cycle cursor は topology に加えて表示 evidence にも束縛する** — graph fingerprint は retained evidence 各行の source language、origin、resolution state、reference kind、target kind、suppression reason、件数を決定的な順序で含めます。そのため metadata だけが更新された graph でも古い cursor を拒否し、異なる snapshot の evidence summary を混在させません。MCP の `format=json-graph` cycle request は CLI graph 出力と同じ上限付き node / edge 投影を使い、専用 graph node / edge schema の上限も cycle graph budget の最大値と一致させます（#5197）。
 - **ORMなし** — `Microsoft.Data.Sqlite`でパラメータ化クエリを直接使用。依存関係を最小限に、制御を明確に。
 - **バッチコミット** — 書き込み性能のため1トランザクション500レコード。fsyncオーバーヘッドを削減。
-- **C# instantiation fallback の集合処理** — rank 5 の無修飾 `instantiate` candidate 段階は、参照との照合前に C# type member、raw name / arity 単位の一意 family、family 内 constructor member、family ごとの明示 constructor summary を materialize します。一意 family から indexed constructor lookup を駆動するため、全 constructor scan や candidate ごとの相関 type / constructor scalar probe を行いません。raw type name・identity・constructor container は `BINARY`、family/member の arity join は NULL-safe のまま維持し、partial type は path/start/id 順の代表を使い、最後の lower-rank suppression も reference 単位に保つため、overload、implicit default、value type、enum、delegate、ambiguity、arity を解析できない場合の意味を変えずに高速化します。
+- **fact-backed C# instantiation family** — graph finalization はidentity fact完成後、対象となるC# type declaration / constructorごとにTEMP rowを1件materializeします。rank 0〜4はsymbol primary key join、rank 5はreference側からcomposite family indexをseekするため、candidate経路で相関constructor-family symbol scanを行いません。lower-rankとfallbackのbinding-sensitive flagを分離し、全partialと代表typeだけのprimary-constructor semanticsを保ちます。type declarationだけを母集団にしたBINARY一意性によりproject / file-local競合はambiguousのまま、constructor-only orphanはrank 5から除外し、overload、implicit default、optional / default / `params`、value type、enum、delegate、arity不明の挙動を維持します。
 - **部分的なバッチ失敗** — `DbWriter` は通常の chunk / symbol batch では高速な multi-row `INSERT` 経路を保ちます。SQLite が batch を拒否した場合、その batch を rollback し、各 row を per-row `SAVEPOINT` の下で再試行し、有効な row だけを commit し、失敗 row だけを skip して `BatchRowsSkipped` を増やし、row identifier と SQLite error を含む warning を出します。これにより、抽出された 1 行の破損で大きな indexing batch 全体が捨てられることを防ぎます（#1754）。
 - **WALモード + busy_timeout** — Write-Ahead Loggingで読み書き同時アクセスとクラッシュ安全性を確保。5秒のbusy_timeoutで即座のSQLITE_BUSYエラーを回避。
 - **複数 SELECT をまたぐ reader の snapshot 隔離** — 1 回の呼び出しで複数 SQL を発行する read エントリポイント（`DbReader.GetStatus`、`DbReader.AnalyzeSymbol`（CLI `inspect` / MCP `analyze_symbol`）、`RepoMapBuilder.Build`（CLI `map` / MCP `repo_map`））は、本体を 1 つの `BEGIN DEFERRED` transaction で囲み、すべての sub-query が同じ WAL snapshot を参照するようにする。これが無いと、2 つの `COUNT(*)` の間に writer が commit した結果として並行 reader が `files=836, refs=0` のような不整合状態を観測しうる（issue #180 で露見）。`DEFERRED` は最初の SELECT で `SHARED` lock を取るだけで writer を阻害せず、末尾で明示 Commit して `SHARED` lock を早期解放する。独自に `SqliteDataReader` を開く sub-query は内側ブロックに閉じ込めて `Commit()` より前に handle を解放すること — `SqliteTransaction.Commit()` は同じ connection 上で開いている reader があると失敗する。新しい多段 read エントリポイントは同じパターンに従うこと。単一 SQL のクエリは SQLite の auto-commit が文単位の snapshot を与えるため不要。

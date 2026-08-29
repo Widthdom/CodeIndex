@@ -8145,6 +8145,7 @@ public partial class McpServerTests
                     "post_load_statistics_started",
                     "post_load_statistics_completed",
                     "identity_started",
+                    "candidate_lookup_restored",
                     "graph_required_restored",
                     "mutual_started",
                     "readiness_committed",
@@ -8163,6 +8164,7 @@ public partial class McpServerTests
                     "deferred_graph_prepared",
                     "candidate_deferred",
                     "identity_started",
+                    "candidate_lookup_restored",
                     "graph_required_restored",
                     "mutual_started",
                     "readiness_committed",
@@ -8188,12 +8190,16 @@ public partial class McpServerTests
                     static state => state.Phase == "deferred_graph_prepared").PresentIndexNames);
             Assert.All(
                 referenceIndexStates.Where(
-                    static state => state.Phase is "candidate_deferred" or "identity_started" or "graph_required_restored" or "mutual_started" or "readiness_committed"),
+                    static state => state.Phase is "candidate_deferred" or "identity_started"),
                 state =>
                 {
                     Assert.DoesNotContain(candidateReverseIndexName, state.PresentIndexNames);
                     Assert.Equal(deferredGraphPreparedIndexNames, state.PresentIndexNames);
                 });
+            Assert.All(
+                referenceIndexStates.Where(
+                    static state => state.Phase is "candidate_lookup_restored" or "graph_required_restored" or "mutual_started" or "readiness_committed"),
+                state => Assert.Equal(canonicalReferenceIndexNames, state.PresentIndexNames));
             Assert.Contains(
                 candidateReverseIndexName,
                 referenceIndexStates[restoredStateIndex].PresentIndexNames);
@@ -10323,7 +10329,7 @@ public partial class McpServerTests
             Assert.Equal(1, optimizeCount);
             Assert.Equal(0, mergeCount);
             Assert.Equal(
-                ["dropped", "candidate_deferred", "identity_started", "graph_required_restored", "mutual_started", "restored"],
+                ["dropped", "candidate_deferred", "identity_started", "candidate_lookup_restored", "graph_required_restored", "mutual_started", "restored"],
                 referenceIndexPhases);
             Assert.NotNull(graphScopeStats);
             Assert.True(graphScopeStats!.UsedFullRefresh);

@@ -2214,6 +2214,8 @@ public partial class FileIndexerTests
         Assert.Equal(1, openCount);
         Assert.Equal(1, authorizationCount);
         Assert.NotNull(openedStream);
+        Assert.Equal(0, openedStream.ReadByteCallCount);
+        Assert.Equal(0, openedStream.ZeroByteReadCount);
         Assert.Equal(expectsRawCandidate, candidateContent is not null);
         Assert.Equal(
             expectsSemanticContract,
@@ -9124,7 +9126,9 @@ public partial class FileIndexerTests
 
         internal long BytesRead { get; private set; }
         internal long RawProbeBytes { get; private set; }
+        internal int ReadByteCallCount { get; private set; }
         internal int RewindCount { get; private set; }
+        internal int ZeroByteReadCount { get; private set; }
 
         public override int Read(byte[] buffer, int offset, int count)
         {
@@ -9142,6 +9146,7 @@ public partial class FileIndexerTests
 
         public override int ReadByte()
         {
+            ReadByteCallCount++;
             var value = base.ReadByte();
             if (value >= 0)
                 BytesRead++;
@@ -9161,6 +9166,8 @@ public partial class FileIndexerTests
 
         private void RecordRead(int read)
         {
+            if (read == 0)
+                ZeroByteReadCount++;
             BytesRead += read;
             if (read <= 0 || _firstReadObserved)
                 return;

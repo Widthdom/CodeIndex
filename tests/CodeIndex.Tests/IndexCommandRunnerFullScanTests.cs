@@ -1354,6 +1354,149 @@ public partial class IndexCommandRunnerTests
         Assert.Equal([8, 4, 5, 7, 3, 9, 2, 6], schedule);
     }
 
+    [Fact]
+    public void ResolveFullScanExtractionWorkOrdinal_ConsumesTailPermutationThenPrefixExactlyOnce()
+    {
+        int[] schedule = [8, 4, 5, 7, 3, 9, 2, 6];
+
+        var resolved = Enumerable.Range(0, 10)
+            .Select(extractionIndex =>
+                IndexCommandRunner.ResolveFullScanExtractionWorkOrdinal(
+                    extractionIndex,
+                    schedule))
+            .ToArray();
+
+        Assert.Equal([8, 4, 5, 7, 3, 9, 2, 6, 0, 1], resolved);
+        Assert.Equal(Enumerable.Range(0, 10), resolved.Order());
+        Assert.Equal(10, resolved.Distinct().Count());
+    }
+
+    [Fact]
+    public void ResolveFullScanExtractionWorkOrdinal_EmptySchedulePreservesOriginalOrder()
+    {
+        int[] schedule = [];
+
+        var resolved = Enumerable.Range(0, 6)
+            .Select(extractionIndex =>
+                IndexCommandRunner.ResolveFullScanExtractionWorkOrdinal(
+                    extractionIndex,
+                    schedule))
+            .ToArray();
+
+        Assert.Equal(Enumerable.Range(0, 6), resolved);
+    }
+
+    [Fact]
+    public void ResolveFullScanExtractionWorkOrdinal_ComposesWithSparseFileIndexes()
+    {
+        int[] schedule = [4, 3];
+        int[] extractionFileIndexes = [11, 3, 17, 5, 23];
+
+        var fileIndexes = Enumerable.Range(0, extractionFileIndexes.Length)
+            .Select(extractionIndex =>
+                IndexCommandRunner.ResolveFullScanExtractionFileIndex(
+                    extractionFileIndexes,
+                    IndexCommandRunner.ResolveFullScanExtractionWorkOrdinal(
+                        extractionIndex,
+                        schedule)))
+            .ToArray();
+
+        Assert.Equal([23, 5, 11, 3, 17], fileIndexes);
+    }
+
+    [Fact]
+    public async Task Run_InitialFullIndex_TailScheduleFeedsFirstParallelWorkerWave()
+    {
+        var projectRoot = CreateTempProject();
+        var previousContentLoadHook =
+            IndexCommandRunner.FullScanFileContentLoadForTesting;
+        using var firstWaveReady = new CountdownEvent(2);
+        using var releaseFirstWave = new ManualResetEventSlim();
+        using var runFinished = new ManualResetEventSlim();
+        var firstWavePaths = new ConcurrentQueue<string>();
+        Task<(int ExitCode, JsonElement Json)>? runTask = null;
+        var claimedCount = 0;
+        try
+        {
+            for (var index = 0; index < 10; index++)
+            {
+                File.WriteAllText(
+                    Path.Combine(projectRoot, $"item-{index:D2}.json"),
+                    $"{{\"value\":{index}}}\n");
+            }
+            var scanTargets = new FileIndexer(
+                    projectRoot,
+                    ignoreCase: false,
+                    ignoreRuleRoot: null)
+                .ScanFilesDetailedWithIndexingTargets()
+                .IndexingTargets;
+            Assert.Equal(10, scanTargets.Count);
+            var expectedSchedule = IndexCommandRunner.BuildFullScanExtractionTailSchedule(
+                scanTargets.Count,
+                workerCount: 2,
+                maxFileSizeBytes: long.MaxValue,
+                workOrdinal => new FileInfo(scanTargets[workOrdinal].FilePath).Length,
+                CancellationToken.None);
+            Assert.Equal([2, 3], expectedSchedule.Take(2));
+            var expectedFirstWavePaths = expectedSchedule
+                .Take(2)
+                .Select(workOrdinal => scanTargets[workOrdinal].DisplayRelativePath)
+                .Order(StringComparer.Ordinal)
+                .ToArray();
+
+            IndexCommandRunner.FullScanFileContentLoadForTesting =
+                path =>
+                {
+                    previousContentLoadHook?.Invoke(path);
+                    if (Interlocked.Increment(ref claimedCount) > 2)
+                        return;
+
+                    firstWavePaths.Enqueue(path);
+                    firstWaveReady.Signal();
+                    if (!releaseFirstWave.Wait(TimeSpan.FromSeconds(30)))
+                    {
+                        throw new TimeoutException(
+                            "The first full-scan worker wave was not released.");
+                    }
+                };
+            runTask = Task.Run(() =>
+            {
+                try
+                {
+                    return RunAndCaptureJson(
+                        [projectRoot, "--parallelism", "2", "--json", "--quiet"]);
+                }
+                finally
+                {
+                    runFinished.Set();
+                }
+            });
+
+            Assert.True(
+                firstWaveReady.Wait(TimeSpan.FromSeconds(30)),
+                "Both first-wave full-scan workers did not claim work.");
+            Assert.Equal(
+                expectedFirstWavePaths,
+                firstWavePaths.Order(StringComparer.Ordinal));
+
+            releaseFirstWave.Set();
+            var (exitCode, json) = await runTask;
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+        }
+        finally
+        {
+            releaseFirstWave.Set();
+            var cleanupSafe = runTask == null
+                || runFinished.Wait(TimeSpan.FromSeconds(30));
+            IndexCommandRunner.FullScanFileContentLoadForTesting =
+                previousContentLoadHook;
+            SqliteConnection.ClearAllPools();
+            if (cleanupSafe)
+                DeleteDirectory(projectRoot);
+        }
+    }
+
     [Theory]
     [InlineData(6, 1)]
     [InlineData(3, 4)]
@@ -3559,11 +3702,11 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void Run_FreshFullScan_RawReturningFailureRollsBackFileAndSerialConsumerContinues()
+    public void Run_FreshFullScan_RawChangedRowValidationFailureRollsBackFileAndSerialConsumerContinues()
     {
         var projectRoot = CreateTempProject();
         var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-        var previousRowHook = DbWriter.AuthoritativeFreshRawReturningRowForTesting;
+        var previousChangedRowsHook = DbWriter.AuthoritativeFreshRawChangedRowCountForTesting;
         var previousRawHook = DbWriter.AuthoritativeFreshRawInsertExecutingForTesting;
         var previousRawScopeHook = DbWriter.AuthoritativeFreshRawInsertScopeDisposedForTesting;
         var rawWork = new List<DbWriter.AuthoritativeFreshRawInsertWork>();
@@ -3580,16 +3723,16 @@ public partial class IndexCommandRunnerTests
                     $"def caller_{index}():\n    target_{index}()\n");
             }
 
-            DbWriter.AuthoritativeFreshRawReturningRowForTesting = row =>
+            DbWriter.AuthoritativeFreshRawChangedRowCountForTesting = change =>
             {
-                var transformed = previousRowHook?.Invoke(row) ?? row;
-                if (transformed.Operation == "insert_reference_lines"
+                var actual = previousChangedRowsHook?.Invoke(change) ?? change.ActualChangedRows;
+                if (change.Operation == "insert_reference_lines"
                     && Interlocked.Exchange(ref injected, 1) == 0)
                 {
                     throw new InvalidOperationException(
-                        "injected raw RETURNING failure after the first row");
+                        "injected raw changed-row validation failure");
                 }
-                return transformed;
+                return actual;
             };
             DbWriter.AuthoritativeFreshRawInsertExecutingForTesting = work =>
             {
@@ -3652,7 +3795,7 @@ public partial class IndexCommandRunnerTests
         }
         finally
         {
-            DbWriter.AuthoritativeFreshRawReturningRowForTesting = previousRowHook;
+            DbWriter.AuthoritativeFreshRawChangedRowCountForTesting = previousChangedRowsHook;
             DbWriter.AuthoritativeFreshRawInsertExecutingForTesting = previousRawHook;
             DbWriter.AuthoritativeFreshRawInsertScopeDisposedForTesting = previousRawScopeHook;
             DeleteDirectory(projectRoot);

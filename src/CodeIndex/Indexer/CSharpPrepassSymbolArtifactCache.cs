@@ -6,7 +6,7 @@ namespace CodeIndex.Indexer;
 
 internal sealed class CSharpPrepassSymbolArtifactCache
 {
-    internal const int DefaultMaxFiles = 4_096;
+    internal const int DefaultMaxFiles = int.MaxValue;
     internal const int DefaultMaxSymbols = 131_072;
     internal const long DefaultMaxEstimatedBytes = 32L * 1024 * 1024;
 

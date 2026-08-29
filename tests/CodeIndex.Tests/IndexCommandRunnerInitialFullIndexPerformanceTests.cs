@@ -122,7 +122,7 @@ public partial class IndexCommandRunnerTests
             });
             Assert.All(
                 rawWork.Where(work => work.Operation == "insert_reference_lines"),
-                work => Assert.Equal(work.StatementRows * 3, work.BoundParameterCount));
+                work => Assert.Equal(work.StatementRows * 3 + 1, work.BoundParameterCount));
             var rawScope = Assert.Single(rawScopeSnapshots);
             Assert.True(rawScope.Completed);
             Assert.Equal(32, rawScope.Capacity);

@@ -5,8 +5,19 @@ public partial class DbWriter
     private const string AuthoritativeFreshRawFileInsertSql = """
         INSERT INTO files (path, lang, size, lines, checksum, modified, generated, indexed_at)
         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, CURRENT_TIMESTAMP)
-        RETURNING id
         """;
+    private const string AuthoritativeFreshReferenceLineIdFloorSql = """
+        SELECT CASE
+            WHEN (SELECT COUNT(*) FROM sqlite_sequence WHERE name = 'reference_lines') > 1
+                THEN -1
+            ELSE MAX(
+                COALESCE((SELECT MAX(id) FROM reference_lines), 0),
+                COALESCE((SELECT MAX(seq) FROM sqlite_sequence WHERE name = 'reference_lines'), 0))
+        END
+        """;
+
+    internal static string AuthoritativeFreshReferenceLineIdFloorSqlForTesting
+        => AuthoritativeFreshReferenceLineIdFloorSql;
 
     internal sealed partial class AuthoritativeFreshBulkInsertScope
     {
@@ -15,18 +26,11 @@ public partial class DbWriter
             ArgumentNullException.ThrowIfNull(file);
             EnsureCanExecute();
             using var interrupt = _writer.RegisterSqliteInterrupt(_cancellationToken);
-            var sql = TransformReturningSqlForTesting(
-                "insert_files",
-                statementRows: 1,
-                AuthoritativeFreshRawFileInsertSql);
             var lease = RentStatementLease(
                 AuthoritativeFreshRawInsertKind.Files,
                 rows: 1,
-                sql,
-                expectedParameterCount: 7,
-                expectedColumnCount: 1);
-            Span<long> returnedIds = stackalloc long[1];
-            returnedIds.Clear();
+                AuthoritativeFreshRawFileInsertSql,
+                expectedParameterCount: 7);
             try
             {
                 lease.BindText(file.Path);
@@ -38,12 +42,17 @@ public partial class DbWriter
                 lease.BindInt64(file.Generated ? 1 : 0);
 
                 ReportStatementExecution("insert_files", rows: 1, lease);
-                lease.ExecuteReturningRows(
+                var fileId = lease.ExecuteDone(
                     "insert_files",
-                    expectedRowCount: 1,
-                    returnedIds,
-                    returnsInputOrdinal: false);
-                return returnedIds[0];
+                    expectedChangedRows: 1,
+                    captureLastInsertRowId: true)
+                    ?? throw new InvalidDataException(
+                        "Raw SQLite insert_files did not capture a last insert ID.");
+                // The fresh scope suspends the only files INSERT trigger and owns the
+                // connection synchronously, so no intervening INSERT can replace this ID.
+                // fresh scopeは唯一のfiles INSERT triggerを停止しconnectionを同期所有するため、
+                // このIDが別INSERTで置き換わる余地はない。
+                return fileId;
             }
             finally
             {
@@ -61,32 +70,31 @@ public partial class DbWriter
         {
             EnsureCanExecute();
             var statementRows = end - start;
-            var maximumRows = GetRowsPerAuthoritativeFreshRawInsertStatement(columnCount: 3);
+            var maximumRows = GetRowsPerAuthoritativeFreshRawInsertStatement(
+                columnCount: 3,
+                fixedParameterCount: 1);
             if (statementRows <= 0 || statementRows > maximumRows)
             {
                 throw new InvalidOperationException(
-                    "Raw reference-line RETURNING requires the authoritative fresh parameter budget "
+                    "Raw reference-line insert requires the authoritative fresh parameter budget "
                     + $"(rows={statementRows}, maximum={maximumRows}).");
             }
 
             using var interrupt = _writer.RegisterSqliteInterrupt(_cancellationToken);
-            var baseSql = ReferenceLineInsertSqlCache.GetOrAdd(
+            var idFloor = ReadReferenceLineIdFloor();
+            var firstId = checked(idFloor + 1);
+            _ = checked(firstId + statementRows - 1);
+            var sql = AuthoritativeFreshReferenceLineInsertSqlCache.GetOrAdd(
                 statementRows,
-                static count => BuildReferenceLineInsertSql(count));
-            var sql = TransformReturningSqlForTesting(
-                "insert_reference_lines",
-                statementRows,
-                baseSql);
+                static count => BuildAuthoritativeFreshReferenceLineInsertSql(count));
             var lease = RentStatementLease(
                 AuthoritativeFreshRawInsertKind.ReferenceLines,
                 statementRows,
                 sql,
-                expectedParameterCount: statementRows * 3,
-                expectedColumnCount: 2);
-            Span<long> returnedIds = stackalloc long[statementRows];
-            returnedIds.Clear();
+                expectedParameterCount: checked(statementRows * 3 + 1));
             try
             {
+                lease.BindInt64(firstId);
                 for (var row = start; row < end; row++)
                 {
                     var (fileId, line, context) = rows[row];
@@ -100,11 +108,7 @@ public partial class DbWriter
                     "insert_reference_lines",
                     statementRows,
                     statementRows);
-                lease.ExecuteReturningRows(
-                    "insert_reference_lines",
-                    statementRows,
-                    returnedIds,
-                    returnsInputOrdinal: true);
+                lease.ExecuteDone("insert_reference_lines", statementRows);
 
                 try
                 {
@@ -119,7 +123,7 @@ public partial class DbWriter
                         var rowIndex = checked(start + inputOrdinal);
                         var lineOrdinal = rowOrdinals[rowIndex];
                         var key = rows[rowIndex];
-                        var id = returnedIds[inputOrdinal];
+                        var id = checked(firstId + inputOrdinal);
                         lineIds.SetReferenceLineId(lineOrdinal, id);
                         knownLineIds.Add(key, id);
                     }
@@ -136,20 +140,30 @@ public partial class DbWriter
             }
         }
 
-        private static string TransformReturningSqlForTesting(
-            string operation,
-            int statementRows,
-            string sql)
+        private long ReadReferenceLineIdFloor()
         {
-            if (AuthoritativeFreshRawReturningSqlForTesting is not { } transform)
-                return sql;
-
-            return transform(new AuthoritativeFreshRawReturningSql(
-                    operation,
-                    statementRows,
-                    sql))
-                ?? throw new InvalidDataException(
-                    $"Raw SQLite {operation} RETURNING test hook produced no SQL.");
+            var lease = RentStatementLease(
+                AuthoritativeFreshRawInsertKind.ReferenceLineIdFloor,
+                rows: 1,
+                AuthoritativeFreshReferenceLineIdFloorSql,
+                expectedParameterCount: 0,
+                expectedColumnCount: 1);
+            try
+            {
+                ReportStatementExecution("read_reference_line_id_floor", rows: 1, lease);
+                var idFloor = lease.ExecuteInt64Scalar("read_reference_line_id_floor");
+                if (idFloor < 0)
+                {
+                    lease.Discard();
+                    throw new InvalidDataException(
+                        $"Raw SQLite reference-line ID floor was negative ({idFloor}).");
+                }
+                return idFloor;
+            }
+            finally
+            {
+                lease.Dispose();
+            }
         }
     }
 }

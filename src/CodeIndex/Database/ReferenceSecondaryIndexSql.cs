@@ -10,8 +10,9 @@ internal readonly record struct ReferenceSecondaryIndexDefinition(
 /// The raw-persistence set normally stays available while bulk extraction is writing rows;
 /// an authoritative empty-database CLI transaction may defer its two persistence-only
 /// probes. The candidate reverse lookup is dropped only when candidate materialization
-/// begins; the graph-finalization set is restored immediately before mutual-recursion
-/// evaluation, and the remaining query set is restored after graph finalization completes.
+/// begins and restored before candidate-backed resolution facts are prepared; the graph-
+/// finalization set is restored immediately before mutual-recursion evaluation, and the
+/// remaining query set is restored after graph finalization completes.
 /// </summary>
 internal static class ReferenceSecondaryIndexSql
 {
@@ -120,9 +121,9 @@ internal static class ReferenceSecondaryIndexSql
 
     private static readonly ReferenceSecondaryIndexDefinition[] CandidatePopulationDeferredDefinitions =
     [
-        // Candidate materialization and resolution use the primary key's reference_id
-        // prefix. Defer the reverse symbol lookup so bulk graph refresh can populate the
-        // candidate table without maintaining a second B-tree row by row.
+        // Candidate materialization uses the primary key's reference_id prefix. Defer the
+        // reverse symbol lookup while populating the table, then restore it so resolution
+        // facts can test candidate-bearing symbols with bounded symbol_id existence seeks.
         new(
             "idx_symbol_ref_candidates_symbol",
             "CREATE INDEX IF NOT EXISTS idx_symbol_ref_candidates_symbol ON symbol_reference_candidates(symbol_id, reference_id)"),

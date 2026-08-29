@@ -15,10 +15,8 @@ public partial class DbWriter
         ScopedAuthoritativeFreshRawInsertScopeDisposedForTesting = new();
     private static readonly AsyncLocal<int?>
         ScopedAuthoritativeFreshRawStatementCacheCapacityForTesting = new();
-    private static readonly AsyncLocal<Func<AuthoritativeFreshRawReturningRow, AuthoritativeFreshRawReturningRow>?>
-        ScopedAuthoritativeFreshRawReturningRowForTesting = new();
-    private static readonly AsyncLocal<Func<AuthoritativeFreshRawReturningSql, string>?>
-        ScopedAuthoritativeFreshRawReturningSqlForTesting = new();
+    private static readonly AsyncLocal<Func<AuthoritativeFreshRawChangedRowCount, int>?>
+        ScopedAuthoritativeFreshRawChangedRowCountForTesting = new();
     private AuthoritativeFreshBulkInsertScope? _authoritativeFreshBulkInsertScope;
 
     internal sealed record AuthoritativeFreshRawInsertWork(
@@ -39,17 +37,10 @@ public partial class DbWriter
         long FinalizeCount,
         bool Completed);
 
-    internal readonly record struct AuthoritativeFreshRawReturningRow(
+    internal readonly record struct AuthoritativeFreshRawChangedRowCount(
         string Operation,
         int StatementRows,
-        int ResultIndex,
-        long Id,
-        int? InputOrdinal);
-
-    internal sealed record AuthoritativeFreshRawReturningSql(
-        string Operation,
-        int StatementRows,
-        string Sql);
+        int ActualChangedRows);
 
     internal static Action<AuthoritativeFreshRawInsertWork>?
         AuthoritativeFreshRawInsertExecutingForTesting
@@ -71,18 +62,11 @@ public partial class DbWriter
         set => ScopedAuthoritativeFreshRawStatementCacheCapacityForTesting.Value = value;
     }
 
-    internal static Func<AuthoritativeFreshRawReturningRow, AuthoritativeFreshRawReturningRow>?
-        AuthoritativeFreshRawReturningRowForTesting
+    internal static Func<AuthoritativeFreshRawChangedRowCount, int>?
+        AuthoritativeFreshRawChangedRowCountForTesting
     {
-        get => ScopedAuthoritativeFreshRawReturningRowForTesting.Value;
-        set => ScopedAuthoritativeFreshRawReturningRowForTesting.Value = value;
-    }
-
-    internal static Func<AuthoritativeFreshRawReturningSql, string>?
-        AuthoritativeFreshRawReturningSqlForTesting
-    {
-        get => ScopedAuthoritativeFreshRawReturningSqlForTesting.Value;
-        set => ScopedAuthoritativeFreshRawReturningSqlForTesting.Value = value;
+        get => ScopedAuthoritativeFreshRawChangedRowCountForTesting.Value;
+        set => ScopedAuthoritativeFreshRawChangedRowCountForTesting.Value = value;
     }
 
     internal AuthoritativeFreshBulkInsertScope? BeginAuthoritativeFreshBulkInsertScope(
@@ -130,6 +114,8 @@ public partial class DbWriter
             DbContext.DropResourceListGenerationTriggersSql,
             _activeTransaction);
         cancellationToken.ThrowIfCancellationRequested();
+        InitializeAuthoritativeFreshReferenceSourceLookup(cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
 
         var scope = new AuthoritativeFreshBulkInsertScope(
             this,
@@ -146,6 +132,7 @@ public partial class DbWriter
         Chunks,
         Symbols,
         Issues,
+        ReferenceLineIdFloor,
         ReferenceLines,
         References,
     }
@@ -347,10 +334,14 @@ public partial class DbWriter
             var rows = end - start;
             using var interrupt = _writer.RegisterSqliteInterrupt(_cancellationToken);
             var sql = ReferenceInsertSqlCache.GetOrAdd(
-                (Rows: rows, FreshResolutionDefaults: true),
+                (
+                    Rows: rows,
+                    FreshResolutionDefaults: true,
+                    MaterializedFreshSourceLookup: true),
                 static key => BuildReferenceInsertSql(
                     key.Rows,
-                    key.FreshResolutionDefaults));
+                    key.FreshResolutionDefaults,
+                    key.MaterializedFreshSourceLookup));
             var lease = RentStatementLease(
                 AuthoritativeFreshRawInsertKind.References,
                 rows,
@@ -401,6 +392,15 @@ public partial class DbWriter
             {
                 lease.Dispose();
             }
+        }
+
+        internal void MaterializeReferenceSourceSymbols(
+            IReadOnlyList<CodeIndex.Models.ReferenceRecord> references)
+        {
+            EnsureCanExecute();
+            _writer.MaterializeAuthoritativeFreshReferenceSourceLookup(
+                references,
+                _cancellationToken);
         }
 
         internal void Complete()
@@ -770,7 +770,10 @@ public partial class DbWriter
                     bytes[..byteCount]));
             }
 
-            internal void ExecuteDone()
+            internal long? ExecuteDone(
+                string? operation = null,
+                int? expectedChangedRows = null,
+                bool captureLastInsertRowId = false)
             {
                 if (_boundParameterCount != _cached.ParameterCount)
                 {
@@ -778,9 +781,18 @@ public partial class DbWriter
                         "Raw SQLite binding did not fill the prepared statement "
                         + $"(expected={_cached.ParameterCount}, actual={_boundParameterCount}).");
                 }
+                if (expectedChangedRows.HasValue
+                    && (expectedChangedRows.Value <= 0 || string.IsNullOrWhiteSpace(operation)))
+                {
+                    throw new ArgumentException(
+                        "Raw SQLite changed-row validation requires an operation and a positive expected count.");
+                }
+                if (captureLastInsertRowId && !expectedChangedRows.HasValue)
+                    throw new ArgumentException("Last-insert ID capture requires changed-row validation.");
 
                 _scope._cancellationToken.ThrowIfCancellationRequested();
                 var stepResult = raw.sqlite3_step(_cached.Statement);
+                long? lastInsertRowId = null;
                 Exception? executionFailure = stepResult switch
                 {
                     raw.SQLITE_DONE => null,
@@ -788,6 +800,39 @@ public partial class DbWriter
                         "A raw SQLite INSERT unexpectedly returned a row."),
                     _ => _scope.CreateExecutionException(stepResult),
                 };
+                if (executionFailure == null && expectedChangedRows is { } expected)
+                {
+                    try
+                    {
+                        var actual = raw.sqlite3_changes(_scope._database);
+                        if (AuthoritativeFreshRawChangedRowCountForTesting is { } transform)
+                        {
+                            actual = transform(new AuthoritativeFreshRawChangedRowCount(
+                                operation!,
+                                expected,
+                                actual));
+                        }
+                        if (actual != expected)
+                        {
+                            executionFailure = new InvalidDataException(
+                                $"Raw SQLite {operation} changed an unexpected number of rows "
+                                + $"(expected={expected}, actual={actual}).");
+                        }
+                    }
+                    catch (Exception exception)
+                    {
+                        executionFailure = exception;
+                    }
+                }
+                if (executionFailure == null && captureLastInsertRowId)
+                {
+                    lastInsertRowId = raw.sqlite3_last_insert_rowid(_scope._database);
+                    if (lastInsertRowId <= 0)
+                    {
+                        executionFailure = new InvalidDataException(
+                            $"Raw SQLite {operation} produced a non-positive last insert ID {lastInsertRowId}.");
+                    }
+                }
 
                 var resetResult = raw.sqlite3_reset(_cached.Statement);
                 Exception? cleanupFailure = null;
@@ -800,8 +845,14 @@ public partial class DbWriter
                 if (clearResult != raw.SQLITE_OK && cleanupFailure == null)
                     cleanupFailure = _scope.CreateExecutionException(clearResult);
 
-                if (!resetIsReusable || clearResult != raw.SQLITE_OK)
+                var cancellationPending = _scope._cancellationToken.IsCancellationRequested;
+                if (!resetIsReusable
+                    || clearResult != raw.SQLITE_OK
+                    || (expectedChangedRows.HasValue
+                        && (executionFailure != null || cleanupFailure != null || cancellationPending)))
+                {
                     _scope.DiscardStatement(_cached);
+                }
                 _cleaned = true;
 
                 if (executionFailure != null)
@@ -809,13 +860,10 @@ public partial class DbWriter
                 if (cleanupFailure != null)
                     throw cleanupFailure;
                 _scope._cancellationToken.ThrowIfCancellationRequested();
+                return lastInsertRowId;
             }
 
-            internal void ExecuteReturningRows(
-                string operation,
-                int expectedRowCount,
-                Span<long> idsByInputOrdinal,
-                bool returnsInputOrdinal)
+            internal long ExecuteInt64Scalar(string operation)
             {
                 if (_boundParameterCount != _cached.ParameterCount)
                 {
@@ -823,121 +871,33 @@ public partial class DbWriter
                         "Raw SQLite binding did not fill the prepared statement "
                         + $"(expected={_cached.ParameterCount}, actual={_boundParameterCount}).");
                 }
-                if (expectedRowCount <= 0)
-                    throw new ArgumentOutOfRangeException(nameof(expectedRowCount));
-                if (idsByInputOrdinal.Length != expectedRowCount)
-                    throw new ArgumentException("The raw RETURNING ID buffer must match the expected row count.", nameof(idsByInputOrdinal));
+                if (string.IsNullOrWhiteSpace(operation))
+                    throw new ArgumentException("A raw SQLite scalar operation is required.", nameof(operation));
 
                 _scope._cancellationToken.ThrowIfCancellationRequested();
                 Exception? executionFailure = null;
-                var returnedRowCount = 0;
                 var terminalResult = raw.SQLITE_OK;
-                var returningRowTransform = AuthoritativeFreshRawReturningRowForTesting;
-                HashSet<long>? returnedIds = expectedRowCount > 1
-                    ? new HashSet<long>(expectedRowCount)
-                    : null;
+                var value = 0L;
                 try
                 {
-                    while (true)
+                    terminalResult = raw.sqlite3_step(_cached.Statement);
+                    if (terminalResult != raw.SQLITE_ROW)
                     {
-                        terminalResult = raw.sqlite3_step(_cached.Statement);
-                        if (terminalResult == raw.SQLITE_ROW)
-                        {
-                            if (returnedRowCount >= expectedRowCount)
-                            {
-                                throw new InvalidDataException(
-                                    $"Raw SQLite RETURNING produced more than {expectedRowCount} rows.");
-                            }
-
-                            if (raw.sqlite3_column_type(_cached.Statement, 0) != raw.SQLITE_INTEGER)
-                            {
-                                throw new InvalidDataException(
-                                    $"Raw SQLite {operation} RETURNING produced a non-integer ID.");
-                            }
-                            var id = raw.sqlite3_column_int64(_cached.Statement, 0);
-                            int? inputOrdinal = null;
-                            if (returnsInputOrdinal)
-                            {
-                                var ordinalType = raw.sqlite3_column_type(_cached.Statement, 1);
-                                if (ordinalType == raw.SQLITE_INTEGER)
-                                {
-                                    var ordinalValue = raw.sqlite3_column_int64(_cached.Statement, 1);
-                                    if (ordinalValue is >= int.MinValue and <= int.MaxValue)
-                                        inputOrdinal = (int)ordinalValue;
-                                }
-                                else if (ordinalType != raw.SQLITE_NULL)
-                                {
-                                    throw new InvalidDataException(
-                                        $"Raw SQLite {operation} RETURNING produced a non-integer input ordinal.");
-                                }
-                            }
-
-                            if (returningRowTransform is { } transform)
-                            {
-                                var returnedRow = transform(new AuthoritativeFreshRawReturningRow(
-                                    operation,
-                                    expectedRowCount,
-                                    returnedRowCount,
-                                    id,
-                                    inputOrdinal));
-                                id = returnedRow.Id;
-                                inputOrdinal = returnedRow.InputOrdinal;
-                            }
-
-                            var resolvedOrdinal = returnsInputOrdinal
-                                ? inputOrdinal
-                                : returnedRowCount;
-                            if (id <= 0)
-                            {
-                                throw new InvalidDataException(
-                                    $"Raw SQLite {operation} RETURNING produced a non-positive ID.");
-                            }
-                            if (resolvedOrdinal is not { } ordinal
-                                || (uint)ordinal >= (uint)expectedRowCount)
-                            {
-                                throw new InvalidDataException(
-                                    $"Raw SQLite {operation} RETURNING produced invalid input ordinal "
-                                    + $"{resolvedOrdinal?.ToString(CultureInfo.InvariantCulture) ?? "NULL"} "
-                                    + $"for {expectedRowCount} rows.");
-                            }
-                            if (idsByInputOrdinal[ordinal] != 0)
-                            {
-                                throw new InvalidDataException(
-                                    $"Raw SQLite {operation} RETURNING produced duplicate input ordinal {ordinal}.");
-                            }
-                            if (returnedIds != null && !returnedIds.Add(id))
-                            {
-                                throw new InvalidDataException(
-                                    $"Raw SQLite {operation} RETURNING produced duplicate ID {id}.");
-                            }
-                            idsByInputOrdinal[ordinal] = id;
-                            returnedRowCount++;
-                            // Do not throw only from the managed token between ROWs. A pending
-                            // sqlite3_interrupt must reach the next step so SQLite preserves its
-                            // transaction rollback semantics before the cancellation escapes.
-                            // ROW間ではmanaged tokenだけでthrowせず、pending interruptを次stepへ渡す。
-                            continue;
-                        }
-
-                        if (terminalResult != raw.SQLITE_DONE)
-                            throw _scope.CreateExecutionException(terminalResult);
-                        if (returnedRowCount != expectedRowCount)
-                        {
-                            throw new InvalidDataException(
-                                "Raw SQLite RETURNING produced an incomplete result "
-                                + $"(expected={expectedRowCount}, actual={returnedRowCount}).");
-                        }
-                        break;
+                        if (terminalResult == raw.SQLITE_DONE)
+                            throw new InvalidDataException($"Raw SQLite {operation} produced no scalar row.");
+                        throw _scope.CreateExecutionException(terminalResult);
                     }
-
-                    for (var ordinal = 0; ordinal < idsByInputOrdinal.Length; ordinal++)
+                    if (raw.sqlite3_column_type(_cached.Statement, 0) != raw.SQLITE_INTEGER)
                     {
-                        if (idsByInputOrdinal[ordinal] == 0)
-                        {
-                            throw new InvalidDataException(
-                                $"Raw SQLite {operation} RETURNING did not materialize input ordinal {ordinal}.");
-                        }
+                        throw new InvalidDataException(
+                            $"Raw SQLite {operation} produced a non-integer scalar.");
                     }
+                    value = raw.sqlite3_column_int64(_cached.Statement, 0);
+                    terminalResult = raw.sqlite3_step(_cached.Statement);
+                    if (terminalResult == raw.SQLITE_ROW)
+                        throw new InvalidDataException($"Raw SQLite {operation} produced more than one scalar row.");
+                    if (terminalResult != raw.SQLITE_DONE)
+                        throw _scope.CreateExecutionException(terminalResult);
                 }
                 catch (Exception exception)
                 {
@@ -961,10 +921,10 @@ public partial class DbWriter
                     || cleanupFailure != null
                     || cancellationPending)
                 {
-                    // SQLite applies a DML RETURNING statement before yielding its first ROW.
-                    // Reset is cleanup, not rollback. Never reuse a statement after any ROW
-                    // protocol failure; the caller's per-file SAVEPOINT owns data rollback.
-                    // DML RETURNINGは最初のROW前に適用済み。resetはrollbackではない。
+                    // A scalar ROW protocol failure can leave the native statement at an
+                    // uncertain step boundary. Reset is cleanup, not recovery, so reprepare.
+                    // scalar ROW protocol failure後のstep境界は不確実になり得る。
+                    // resetはcleanupであってrecoveryではないため再prepareする。
                     _scope.DiscardStatement(_cached);
                 }
                 _cleaned = true;
@@ -974,6 +934,7 @@ public partial class DbWriter
                 if (cleanupFailure != null)
                     throw cleanupFailure;
                 _scope._cancellationToken.ThrowIfCancellationRequested();
+                return value;
             }
 
             internal void Discard()

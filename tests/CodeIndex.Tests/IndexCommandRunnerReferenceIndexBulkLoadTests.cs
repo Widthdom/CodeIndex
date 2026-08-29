@@ -203,6 +203,7 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(1, captured.Count(snapshot => snapshot.Stage == "deferred_graph_prepared"));
             Assert.Equal(1, captured.Count(snapshot => snapshot.Stage == "candidate_deferred"));
             Assert.Equal(1, captured.Count(snapshot => snapshot.Stage == "identity_started"));
+            Assert.Equal(1, captured.Count(snapshot => snapshot.Stage == "candidate_lookup_restored"));
             Assert.Equal(1, captured.Count(snapshot => snapshot.Stage == "graph_required_restored"));
             Assert.Equal(1, captured.Count(snapshot => snapshot.Stage == "mutual_started"));
             Assert.Equal(1, captured.Count(snapshot => snapshot.Stage == "readiness_completed"));
@@ -211,7 +212,7 @@ public partial class IndexCommandRunnerTests
             Assert.Equal("dropped", captured[0].Stage);
             Assert.Equal("full_scan_committed", captured[^1].Stage);
             Assert.Equal(
-                ["dropped", "deferred_graph_prepared", "candidate_deferred", "identity_started", "graph_required_restored", "mutual_started", "readiness_completed", "restored", "full_scan_committed"],
+                ["dropped", "deferred_graph_prepared", "candidate_deferred", "identity_started", "candidate_lookup_restored", "graph_required_restored", "mutual_started", "readiness_completed", "restored", "full_scan_committed"],
                 captured
                     .Where(snapshot => snapshot.Stage is not "insert_reference_lines" and not "insert_references")
                     .Select(snapshot => snapshot.Stage));
@@ -225,8 +226,8 @@ public partial class IndexCommandRunnerTests
                 coreIndexPhases);
             Assert.Equal(
                 rebuild
-                    ? ["dropped", "deferred_graph_prepared", "candidate_deferred", "identity_started", "graph_required_restored", "mutual_started", "readiness_completed", "restored", "full_scan_committed"]
-                    : ["dropped", "deferred_graph_prepared", "candidate_deferred", "post_load_statistics_started", "post_load_statistics_completed", "identity_started", "graph_required_restored", "mutual_started", "readiness_completed", "restored", "full_scan_committed"],
+                    ? ["dropped", "deferred_graph_prepared", "candidate_deferred", "identity_started", "candidate_lookup_restored", "graph_required_restored", "mutual_started", "readiness_completed", "restored", "full_scan_committed"]
+                    : ["dropped", "deferred_graph_prepared", "candidate_deferred", "post_load_statistics_started", "post_load_statistics_completed", "identity_started", "candidate_lookup_restored", "graph_required_restored", "mutual_started", "readiness_completed", "restored", "full_scan_committed"],
                 lifecycle);
 
             var initialBulkNames = rebuild
@@ -242,12 +243,15 @@ public partial class IndexCommandRunnerTests
                 allNames,
                 captured.First(snapshot => snapshot.Stage == "deferred_graph_prepared").Names);
             Assert.All(
-                captured.Where(snapshot => snapshot.Stage is "candidate_deferred" or "identity_started" or "graph_required_restored" or "mutual_started" or "readiness_completed"),
+                captured.Where(snapshot => snapshot.Stage is "candidate_deferred" or "identity_started"),
                 snapshot =>
                 {
                     Assert.DoesNotContain("idx_symbol_ref_candidates_symbol", snapshot.Names);
                     Assert.Equal(deferredGraphNames, snapshot.Names);
                 });
+            Assert.All(
+                captured.Where(snapshot => snapshot.Stage is "candidate_lookup_restored" or "graph_required_restored" or "mutual_started" or "readiness_completed"),
+                snapshot => Assert.Equal(allNames, snapshot.Names));
             Assert.Equal(
                 allNames,
                 captured.First(snapshot => snapshot.Stage == "restored").Names);
@@ -358,7 +362,7 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(1, graphRefreshCount);
             Assert.Equal(0, augmentationGroupingCount);
             Assert.Equal(
-                ["dropped", "candidate_deferred", "post_load_statistics_started", "post_load_statistics_completed", "identity_started", "graph_required_restored", "mutual_started", "restored"],
+                ["dropped", "candidate_deferred", "post_load_statistics_started", "post_load_statistics_completed", "identity_started", "candidate_lookup_restored", "graph_required_restored", "mutual_started", "restored"],
                 lifecycle);
         }
         finally
@@ -374,6 +378,7 @@ public partial class IndexCommandRunnerTests
     [Theory]
     [InlineData("dropped")]
     [InlineData("candidate_deferred")]
+    [InlineData("candidate_lookup_restored")]
     [InlineData("graph_required_restored")]
     [InlineData("readiness_completed")]
     public void Run_FreshFullScan_FailureDuringStagedReferenceIndexLifecycleRollsBackSchema(
@@ -407,9 +412,12 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(failurePhase, statePhases[^1]);
             Assert.NotNull(failureSnapshot);
             Assert.Equal(
-                failurePhase == "dropped"
-                    ? GetAuthoritativeFreshInitialBulkPersistenceReferenceIndexNames()
-                    : GetDeferredGraphPreparationReferenceIndexNames(),
+                failurePhase switch
+                {
+                    "dropped" => GetAuthoritativeFreshInitialBulkPersistenceReferenceIndexNames(),
+                    "candidate_deferred" => GetDeferredGraphPreparationReferenceIndexNames(),
+                    _ => GetAllReferenceIndexNames(),
+                },
                 failureSnapshot!.Names);
             Assert.True(File.Exists(dbPath));
 
@@ -522,8 +530,8 @@ public partial class IndexCommandRunnerTests
                 scopedUpdate ? "restored" : "full_scan_committed",
                 captured[^1].Stage);
             string[] expectedLifecycle = scopedUpdate
-                ? ["dropped", "deferred_graph_prepared", "candidate_deferred", "identity_started", "graph_required_restored", "mutual_started", "readiness_committed", "restored"]
-                : ["dropped", "deferred_graph_prepared", "candidate_deferred", "identity_started", "graph_required_restored", "mutual_started", "readiness_completed", "restored", "full_scan_committed"];
+                ? ["dropped", "deferred_graph_prepared", "candidate_deferred", "identity_started", "candidate_lookup_restored", "graph_required_restored", "mutual_started", "readiness_committed", "restored"]
+                : ["dropped", "deferred_graph_prepared", "candidate_deferred", "identity_started", "candidate_lookup_restored", "graph_required_restored", "mutual_started", "readiness_completed", "restored", "full_scan_committed"];
             Assert.Equal(
                 expectedLifecycle,
                 captured
@@ -539,12 +547,15 @@ public partial class IndexCommandRunnerTests
                 GetAllReferenceIndexNames(),
                 captured.First(snapshot => snapshot.Stage == "deferred_graph_prepared").Names);
             Assert.All(
-                captured.Where(snapshot => snapshot.Stage is "candidate_deferred" or "identity_started" or "graph_required_restored" or "mutual_started" or "readiness_completed" or "readiness_committed"),
+                captured.Where(snapshot => snapshot.Stage is "candidate_deferred" or "identity_started"),
                 snapshot =>
                 {
                     Assert.DoesNotContain("idx_symbol_ref_candidates_symbol", snapshot.Names);
                     Assert.Equal(GetDeferredGraphPreparationReferenceIndexNames(), snapshot.Names);
                 });
+            Assert.All(
+                captured.Where(snapshot => snapshot.Stage is "candidate_lookup_restored" or "graph_required_restored" or "mutual_started" or "readiness_completed" or "readiness_committed"),
+                snapshot => Assert.Equal(GetAllReferenceIndexNames(), snapshot.Names));
             Assert.Equal(
                 GetAllReferenceIndexNames(),
                 captured.First(snapshot => snapshot.Stage == "restored").Names);
@@ -920,11 +931,11 @@ public partial class IndexCommandRunnerTests
                 exception.Message);
             Assert.True(readinessCommitObserved);
             Assert.Equal(
-                ["dropped", "deferred_graph_prepared", "candidate_deferred", "identity_started", "graph_required_restored", "mutual_started", "readiness_committed", "restored"],
+                ["dropped", "deferred_graph_prepared", "candidate_deferred", "identity_started", "candidate_lookup_restored", "graph_required_restored", "mutual_started", "readiness_committed", "restored"],
                 phases);
             Assert.NotNull(failureSnapshot);
             Assert.Equal(
-                GetDeferredGraphPreparationReferenceIndexNames(),
+                GetAllReferenceIndexNames(),
                 failureSnapshot!.Names);
             Assert.Equal(
                 expectedAugmentationVersion,

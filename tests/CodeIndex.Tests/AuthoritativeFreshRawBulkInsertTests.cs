@@ -134,6 +134,13 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
         Assert.Equal(
             0L,
             ScalarLong("SELECT COUNT(*) FROM files WHERE path = 'src/generation-rolled-back.cs'"));
+        Assert.Equal(
+            0L,
+            ScalarLong($"""
+                SELECT COUNT(*)
+                FROM temp.sqlite_schema
+                WHERE name = '{DbWriter.AuthoritativeFreshReferenceSourceSymbolsTableName}'
+                """));
 
         using (var freshGraph = _writer.BeginReferenceGraphRefreshScope(
                    forceFullRefresh: true,
@@ -183,7 +190,7 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
     [Fact]
     public void BatchStatements_PreserveShapesUnicodeNullsInt64AndProviderExclusions()
     {
-        PrimeSequencesForInt64Returning();
+        PrimeSequencesForInt64Ids();
         var rawWork = new List<DbWriter.AuthoritativeFreshRawInsertWork>();
         var batchWork = new List<DbWriter.DbWriterBatchStatement>();
         DbWriter.AuthoritativeFreshRawInsertScopeStats? observedStats = null;
@@ -322,7 +329,8 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
         Assert.Equal([(102, 510), (102, 510), (1, 5)], RowsAndParameters("insert_chunks"));
         Assert.Equal([(20, 500), (20, 500), (1, 25)], RowsAndParameters("insert_symbols"));
         Assert.Equal([(85, 510), (85, 510), (1, 6)], RowsAndParameters("insert_issues"));
-        Assert.Equal([(73, 219)], RowsAndParameters("insert_reference_lines"));
+        Assert.Equal([(1, 0)], RowsAndParameters("read_reference_line_id_floor"));
+        Assert.Equal([(73, 220)], RowsAndParameters("insert_reference_lines"));
         Assert.Equal([(36, 504), (36, 504), (1, 14)], RowsAndParameters("insert_references"));
         Assert.Contains(
             batchWork,
@@ -334,13 +342,13 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
         Assert.NotNull(observedStats);
         Assert.True(observedStats.Completed);
         Assert.Equal(32, observedStats.Capacity);
-        Assert.Equal(10, observedStats.PeakCachedStatementCount);
-        Assert.Equal(14, observedStats.StatementExecutionCount);
-        Assert.Equal(10, observedStats.PrepareCount);
+        Assert.Equal(11, observedStats.PeakCachedStatementCount);
+        Assert.Equal(15, observedStats.StatementExecutionCount);
+        Assert.Equal(11, observedStats.PrepareCount);
         Assert.Equal(4, observedStats.CacheHitCount);
         Assert.Equal(0, observedStats.EvictionCount);
         Assert.Equal(0, observedStats.DiscardCount);
-        Assert.Equal(10, observedStats.FinalizeCount);
+        Assert.Equal(11, observedStats.FinalizeCount);
 
         Assert.Equal(1L, ScalarLong("SELECT COUNT(*) FROM files WHERE lang IS NULL"));
         Assert.Equal(5_000_000_123L, ScalarLong("SELECT size FROM files WHERE path = 'src/raw-shapes.cs'"));
@@ -361,6 +369,473 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
                 .Where(work => work.Operation == operation)
                 .Select(work => (work.StatementRows, work.BoundParameterCount))
                 .ToArray();
+    }
+
+    [Fact]
+    public void ReferenceSourceLookup_PreservesMultiFileFoldFallbackAndNestedRankingAcrossBatches()
+    {
+        long firstFileId;
+        long secondFileId;
+        long firstNestedSourceId;
+        long aliasSourceId;
+        long duplicateProbeSourceId;
+        long legacyAsciiSourceId;
+        long secondNestedSourceId;
+
+        using (var graph = _writer.BeginReferenceGraphRefreshScope(
+                   forceFullRefresh: true,
+                   useFreshReferenceResolutionDefaults: true))
+        using (var transaction = _writer.BeginTransaction())
+        using (var raw = _writer.BeginAuthoritativeFreshBulkInsertScope(
+                   enabled: true,
+                   CancellationToken.None)!)
+        {
+            firstFileId = InsertNewFile("src/source-lookup-a.cs");
+            secondFileId = InsertNewFile("src/source-lookup-b.cs");
+            _writer.InsertSymbols([
+                SourceSymbol(firstFileId, "Caller", line: 1, startLine: 1, endLine: 100),
+                SourceSymbol(firstFileId, "Caller", line: 10, startLine: 10, endLine: 30),
+                SourceSymbol(firstFileId, "Caller", line: 10, startLine: 10, endLine: 30),
+                SourceSymbol(
+                    firstFileId,
+                    "Canonical",
+                    line: 40,
+                    startLine: 40,
+                    endLine: 55,
+                    displayNameFolded: "displayalias"),
+                SourceSymbol(
+                    firstFileId,
+                    "Dup",
+                    line: 56,
+                    startLine: 56,
+                    endLine: 65,
+                    displayNameFolded: "dup"),
+                SourceSymbol(firstFileId, "LegacyASCII", line: 66, startLine: 66, endLine: 75),
+                SourceSymbol(firstFileId, "ÅLegacy", line: 76, startLine: 76, endLine: 85),
+                SourceSymbol(secondFileId, "Caller", line: 1, startLine: 1, endLine: 100),
+                SourceSymbol(secondFileId, "Caller", line: 50, startLine: 50, endLine: 60),
+            ]);
+            Execute($"""
+                UPDATE symbols
+                SET name_folded = NULL
+                WHERE file_id = {firstFileId}
+                  AND name IN ('LegacyASCII', 'ÅLegacy')
+                """);
+
+            firstNestedSourceId = ScalarLong($"""
+                SELECT MIN(id)
+                FROM symbols
+                WHERE file_id = {firstFileId}
+                  AND name = 'Caller'
+                  AND start_line = 10
+                """);
+            aliasSourceId = ScalarLong($"""
+                SELECT id FROM symbols
+                WHERE file_id = {firstFileId} AND name = 'Canonical'
+                """);
+            duplicateProbeSourceId = ScalarLong($"""
+                SELECT id FROM symbols
+                WHERE file_id = {firstFileId} AND name = 'Dup'
+                """);
+            legacyAsciiSourceId = ScalarLong($"""
+                SELECT id FROM symbols
+                WHERE file_id = {firstFileId} AND name = 'LegacyASCII'
+                """);
+            secondNestedSourceId = ScalarLong($"""
+                SELECT id FROM symbols
+                WHERE file_id = {secondFileId}
+                  AND name = 'Caller'
+                  AND start_line = 50
+                """);
+
+            var references = Enumerable.Range(0, 40)
+                .Select(index => SourceReference(
+                    firstFileId,
+                    $"nested_probe_{index}",
+                    line: 15,
+                    containerName: "Caller"))
+                .ToList();
+            references.Add(SourceReference(
+                firstFileId,
+                "display_probe",
+                line: 45,
+                containerName: "DisplayAlias"));
+            references.Add(SourceReference(
+                firstFileId,
+                "duplicate_probe",
+                line: 60,
+                containerName: "Dup"));
+            references.Add(SourceReference(
+                firstFileId,
+                "legacy_ascii_probe",
+                line: 70,
+                containerName: "legacyascii"));
+            references.Add(SourceReference(
+                firstFileId,
+                "legacy_unicode_probe",
+                line: 80,
+                containerName: "ålegacy"));
+            references.Add(SourceReference(
+                firstFileId,
+                "null_container_probe",
+                line: 90,
+                containerName: null));
+            references.Add(SourceReference(
+                firstFileId,
+                "empty_container_probe",
+                line: 91,
+                containerName: string.Empty));
+            references.Add(SourceReference(
+                secondFileId,
+                "second_file_probe",
+                line: 55,
+                containerName: "Caller"));
+
+            _writer.InsertReferencesForNewFilesInAtomicFileScope(
+                references,
+                refreshMutualRecursionFlags: false,
+                CancellationToken.None);
+
+            Assert.Equal(
+                2L,
+                ScalarLong($"""
+                    SELECT COUNT(DISTINCT file_id)
+                    FROM temp.{DbWriter.AuthoritativeFreshReferenceSourceSymbolsTableName}
+                    """));
+            Assert.Equal(
+                9L,
+                ScalarLong($"""
+                    SELECT COUNT(*)
+                    FROM temp.{DbWriter.AuthoritativeFreshReferenceSourceSymbolsTableName}
+                    """));
+            Assert.Equal(
+                3L,
+                ScalarLong("""
+                    SELECT COUNT(*)
+                    FROM temp.sqlite_schema
+                    WHERE type = 'index'
+                      AND name LIKE 'idx_authoritative_fresh_source_%'
+                    """));
+
+            raw.Complete();
+            transaction.Commit();
+        }
+
+        Assert.Equal(
+            40L,
+            ScalarLong($"""
+                SELECT COUNT(*)
+                FROM symbol_references
+                WHERE symbol_name LIKE 'nested_probe_%'
+                  AND source_symbol_id = {firstNestedSourceId}
+                """));
+        Assert.Equal(aliasSourceId, SourceSymbolId("display_probe"));
+        Assert.Equal(duplicateProbeSourceId, SourceSymbolId("duplicate_probe"));
+        Assert.Equal(legacyAsciiSourceId, SourceSymbolId("legacy_ascii_probe"));
+        Assert.Null(SourceSymbolId("legacy_unicode_probe"));
+        Assert.Null(SourceSymbolId("null_container_probe"));
+        Assert.Null(SourceSymbolId("empty_container_probe"));
+        Assert.Equal(secondNestedSourceId, SourceSymbolId("second_file_probe"));
+
+        static SymbolRecord SourceSymbol(
+            long fileId,
+            string name,
+            int line,
+            int startLine,
+            int endLine,
+            string? displayNameFolded = null)
+            => new()
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = name,
+                Line = line,
+                StartLine = startLine,
+                EndLine = endLine,
+                DisplayNameFolded = displayNameFolded,
+            };
+
+        static ReferenceRecord SourceReference(
+            long fileId,
+            string symbolName,
+            int line,
+            string? containerName)
+            => new()
+            {
+                FileId = fileId,
+                SymbolName = symbolName,
+                ReferenceKind = "call",
+                Line = line,
+                Column = 1,
+                Context = $"{symbolName}();",
+                ContainerKind = containerName == null ? null : "function",
+                ContainerName = containerName,
+            };
+    }
+
+    [Fact]
+    public void ReferenceSourceLookup_QueryPlansUseRetainedAndPartialIndexesWithoutSourceScans()
+    {
+        using var graph = _writer.BeginReferenceGraphRefreshScope(
+            forceFullRefresh: true,
+            useFreshReferenceResolutionDefaults: true);
+        using var transaction = _writer.BeginTransaction();
+        using var raw = _writer.BeginAuthoritativeFreshBulkInsertScope(
+            enabled: true,
+            CancellationToken.None)!;
+
+        var materializationPlan = ExplainQueryPlan(
+            DbWriter.PopulateAuthoritativeFreshReferenceSourceLookupSqlForTesting,
+            command => command.Parameters.AddWithValue("$file_id", 1L));
+        Assert.Contains(
+            materializationPlan,
+            detail => detail.Contains("idx_symbols_file", StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            materializationPlan,
+            detail => detail.Contains("SCAN persisted", StringComparison.OrdinalIgnoreCase));
+
+        var sourceValueSql =
+            DbWriter.BuildMaterializedFreshReferenceSourceSymbolValueSqlForTesting("r");
+        var sourceLookupPlan = ExplainQueryPlan($"""
+            WITH reference_row(file_id, line, container_name, container_name_folded) AS (
+                VALUES (1, 15, 'Caller', 'caller')
+            )
+            SELECT {sourceValueSql}
+            FROM reference_row AS r
+            """);
+        Assert.Contains(
+            sourceLookupPlan,
+            detail => detail.Contains(
+                "idx_authoritative_fresh_source_name_folded",
+                StringComparison.Ordinal));
+        Assert.Contains(
+            sourceLookupPlan,
+            detail => detail.Contains(
+                "idx_authoritative_fresh_source_display_name_folded",
+                StringComparison.Ordinal));
+        Assert.Contains(
+            sourceLookupPlan,
+            detail => detail.Contains(
+                "idx_authoritative_fresh_source_name_nocase",
+                StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            sourceLookupPlan,
+            detail => detail.Contains("SCAN source", StringComparison.OrdinalIgnoreCase));
+
+        raw.Complete();
+        transaction.Commit();
+
+        IReadOnlyList<string> ExplainQueryPlan(
+            string sql,
+            Action<SqliteCommand>? bind = null)
+        {
+            using var command = _db.Connection.CreateCommand();
+            command.CommandText = "EXPLAIN QUERY PLAN " + sql;
+            bind?.Invoke(command);
+            using var reader = command.ExecuteReader();
+            var plan = new List<string>();
+            while (reader.Read())
+                plan.Add(reader.GetString(3));
+            return plan;
+        }
+    }
+
+    [Fact]
+    public void ReferenceSourceLookup_FileSavepointRollbackRestoresPreviousRowsAndReprepares()
+    {
+        long firstFileId;
+        long thirdFileId;
+        using (var graph = _writer.BeginReferenceGraphRefreshScope(
+                   forceFullRefresh: true,
+                   useFreshReferenceResolutionDefaults: true))
+        using (var outerTransaction = _writer.BeginTransaction())
+        using (var raw = _writer.BeginAuthoritativeFreshBulkInsertScope(
+                   enabled: true,
+                   CancellationToken.None)!)
+        {
+            using (var firstFile = _writer.BeginTransaction())
+            {
+                firstFileId = InsertNewFile("src/source-savepoint-a.cs");
+                _writer.InsertSymbols([
+                    CreateSourceSymbol(firstFileId, "CallerA"),
+                ]);
+                _writer.InsertReferencesForNewFilesInAtomicFileScope(
+                    [CreateSourceReference(firstFileId, "first_probe", "CallerA")],
+                    refreshMutualRecursionFlags: false,
+                    CancellationToken.None);
+                firstFile.Commit();
+            }
+
+            Assert.Equal(
+                1L,
+                ScalarLong($"""
+                    SELECT COUNT(*)
+                    FROM temp.{DbWriter.AuthoritativeFreshReferenceSourceSymbolsTableName}
+                    WHERE file_id = {firstFileId}
+                    """));
+
+            using (var failedFile = _writer.BeginTransaction())
+            {
+                var failedFileId = InsertNewFile("src/source-savepoint-failed.cs");
+                _writer.InsertSymbols([
+                    CreateSourceSymbol(failedFileId, "FailedCaller"),
+                ]);
+                Execute($"""
+                    CREATE TEMP TRIGGER reject_materialized_source_reference
+                    BEFORE INSERT ON symbol_references
+                    WHEN NEW.file_id = {failedFileId}
+                    BEGIN
+                        SELECT RAISE(ABORT, 'reject materialized source reference');
+                    END;
+                    """);
+                Assert.Throws<SqliteException>(() =>
+                    _writer.InsertReferencesForNewFilesInAtomicFileScope(
+                        [CreateSourceReference(
+                            failedFileId,
+                            "failed_probe",
+                            "FailedCaller")],
+                        refreshMutualRecursionFlags: false,
+                        CancellationToken.None));
+            }
+
+            Assert.Equal(
+                0L,
+                ScalarLong("""
+                    SELECT COUNT(*) FROM files
+                    WHERE path = 'src/source-savepoint-failed.cs'
+                    """));
+            Assert.Equal(
+                1L,
+                ScalarLong($"""
+                    SELECT COUNT(*)
+                    FROM temp.{DbWriter.AuthoritativeFreshReferenceSourceSymbolsTableName}
+                    WHERE file_id = {firstFileId}
+                    """));
+
+            using (var thirdFile = _writer.BeginTransaction())
+            {
+                thirdFileId = InsertNewFile("src/source-savepoint-c.cs");
+                _writer.InsertSymbols([
+                    CreateSourceSymbol(thirdFileId, "CallerC"),
+                ]);
+                _writer.InsertReferencesForNewFilesInAtomicFileScope(
+                    [CreateSourceReference(thirdFileId, "third_probe", "CallerC")],
+                    refreshMutualRecursionFlags: false,
+                    CancellationToken.None);
+                thirdFile.Commit();
+            }
+
+            raw.Complete();
+            outerTransaction.Commit();
+        }
+
+        Assert.Equal(firstFileId, SourceFileId("first_probe"));
+        Assert.Equal(thirdFileId, SourceFileId("third_probe"));
+        Assert.Equal(
+            0L,
+            ScalarLong("""
+                SELECT COUNT(*) FROM symbol_references
+                WHERE symbol_name = 'failed_probe'
+                """));
+
+        static SymbolRecord CreateSourceSymbol(long fileId, string name)
+            => new()
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = name,
+                Line = 1,
+                StartLine = 1,
+                EndLine = 10,
+            };
+
+        static ReferenceRecord CreateSourceReference(
+            long fileId,
+            string symbolName,
+            string containerName)
+            => new()
+            {
+                FileId = fileId,
+                SymbolName = symbolName,
+                ReferenceKind = "call",
+                Line = 5,
+                Column = 1,
+                Context = $"{symbolName}();",
+                ContainerKind = "function",
+                ContainerName = containerName,
+            };
+    }
+
+    [Fact]
+    public void ReferenceSourceLookup_InterruptRollsBackTempAndMainState()
+    {
+        using var cancellation = new CancellationTokenSource();
+        _db.Connection.CreateFunction<long>(
+            "cancel_authoritative_fresh_source_lookup",
+            () =>
+            {
+                cancellation.Cancel();
+                return 0;
+            });
+
+        OperationCanceledException exception;
+        using (var graph = _writer.BeginReferenceGraphRefreshScope(
+                   forceFullRefresh: true,
+                   useFreshReferenceResolutionDefaults: true))
+        using (var transaction = _writer.BeginTransaction())
+        using (var raw = _writer.BeginAuthoritativeFreshBulkInsertScope(
+                   enabled: true,
+                   cancellation.Token)!)
+        {
+            var fileId = InsertNewFile("src/source-lookup-interrupted.cs");
+            _writer.InsertSymbols([
+                new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "function",
+                    Name = "Caller",
+                    Line = 1,
+                    StartLine = 1,
+                    EndLine = 10,
+                },
+            ]);
+            Execute($"""
+                CREATE TEMP TRIGGER cancel_authoritative_fresh_source_materialization
+                BEFORE INSERT ON {DbWriter.AuthoritativeFreshReferenceSourceSymbolsTableName}
+                BEGIN
+                    SELECT cancel_authoritative_fresh_source_lookup();
+                END;
+                """);
+            exception = Assert.Throws<OperationCanceledException>(() =>
+                _writer.InsertReferencesForNewFilesInAtomicFileScope(
+                    [new ReferenceRecord
+                    {
+                        FileId = fileId,
+                        SymbolName = "interrupted_probe",
+                        ReferenceKind = "call",
+                        Line = 5,
+                        Column = 1,
+                        Context = "interrupted_probe();",
+                        ContainerKind = "function",
+                        ContainerName = "Caller",
+                    }],
+                    refreshMutualRecursionFlags: false,
+                    cancellation.Token));
+        }
+
+        Assert.Equal(cancellation.Token, exception.CancellationToken);
+        var sqliteException = Assert.IsType<SqliteException>(exception.InnerException);
+        Assert.Equal(9, sqliteException.SqliteErrorCode);
+        Assert.Equal(0L, ScalarLong("SELECT COUNT(*) FROM files"));
+        Assert.Equal(0L, ScalarLong("SELECT COUNT(*) FROM symbols"));
+        Assert.Equal(0L, ScalarLong("SELECT COUNT(*) FROM symbol_references"));
+        Assert.Equal(
+            0L,
+            ScalarLong($"""
+                SELECT COUNT(*)
+                FROM temp.sqlite_schema
+                WHERE name = '{DbWriter.AuthoritativeFreshReferenceSourceSymbolsTableName}'
+                """));
     }
 
     [Fact]
@@ -604,44 +1079,24 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
         Assert.Equal(0L, ScalarLong("SELECT COUNT(*) FROM chunks"));
     }
 
-    [Theory]
-    [InlineData("callback")]
-    [InlineData("null_ordinal")]
-    [InlineData("duplicate_ordinal")]
-    [InlineData("out_of_range_ordinal")]
-    [InlineData("duplicate_id")]
-    public void ReferenceLineReturningFailure_DiscardsStatementAndFileSavepointAllowsNextFile(
-        string failureMode)
+    [Fact]
+    public void ReferenceLineChangedRowCountFailure_DiscardsStatementAndFileSavepointAllowsNextFile()
     {
         var rawWork = new List<DbWriter.AuthoritativeFreshRawInsertWork>();
-        long? firstReturnedId = null;
         DbWriter.AuthoritativeFreshRawInsertScopeStats? observedStats = null;
-        var previousRowHook = DbWriter.AuthoritativeFreshRawReturningRowForTesting;
+        var previousChangedRowsHook = DbWriter.AuthoritativeFreshRawChangedRowCountForTesting;
         var previousRawHook = DbWriter.AuthoritativeFreshRawInsertExecutingForTesting;
         var previousStatsHook = DbWriter.AuthoritativeFreshRawInsertScopeDisposedForTesting;
+        var injected = 0;
         try
         {
-            DbWriter.AuthoritativeFreshRawReturningRowForTesting = row =>
+            DbWriter.AuthoritativeFreshRawChangedRowCountForTesting = change =>
             {
-                var transformed = previousRowHook?.Invoke(row) ?? row;
-                if (transformed.Operation != "insert_reference_lines")
-                    return transformed;
-                if (failureMode == "duplicate_id")
-                {
-                    if (transformed.ResultIndex == 0)
-                        firstReturnedId = transformed.Id;
-                    else if (transformed.ResultIndex == 1)
-                        return transformed with { Id = firstReturnedId!.Value };
-                }
-                return failureMode switch
-                {
-                    "callback" => throw new InvalidOperationException("returning row callback failed"),
-                    "null_ordinal" => transformed with { InputOrdinal = null },
-                    "duplicate_ordinal" when transformed.ResultIndex == 1
-                        => transformed with { InputOrdinal = 0 },
-                    "out_of_range_ordinal" => transformed with { InputOrdinal = transformed.StatementRows },
-                    _ => transformed,
-                };
+                var actual = previousChangedRowsHook?.Invoke(change) ?? change.ActualChangedRows;
+                return change.Operation == "insert_reference_lines"
+                    && Interlocked.Exchange(ref injected, 1) == 0
+                        ? actual - 1
+                        : actual;
             };
             DbWriter.AuthoritativeFreshRawInsertExecutingForTesting = work =>
             {
@@ -664,34 +1119,19 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
 
             using (var failedFile = _writer.BeginTransaction())
             {
-                var failedFileId = InsertNewFile("src/failed-returning.cs");
-                var exception = Record.Exception(() =>
+                var failedFileId = InsertNewFile("src/failed-row-count.cs");
+                var exception = Assert.Throws<InvalidDataException>(() =>
                     _writer.InsertReferencesForNewFilesInAtomicFileScope(
                         CreateReferences(failedFileId, 2, "failed"),
                         refreshMutualRecursionFlags: false,
                         CancellationToken.None));
-                if (failureMode == "callback")
-                {
-                    var callbackException = Assert.IsType<InvalidOperationException>(exception);
-                    Assert.Equal("returning row callback failed", callbackException.Message);
-                }
-                else
-                {
-                    var protocolException = Assert.IsType<InvalidDataException>(exception);
-                    var expectedMessagePart = failureMode switch
-                    {
-                        "duplicate_ordinal" => "duplicate input ordinal",
-                        "duplicate_id" => "duplicate ID",
-                        _ => "invalid input ordinal",
-                    };
-                    Assert.Contains(expectedMessagePart, protocolException.Message, StringComparison.Ordinal);
-                }
+                Assert.Contains("expected=2, actual=1", exception.Message, StringComparison.Ordinal);
             }
 
-            DbWriter.AuthoritativeFreshRawReturningRowForTesting = previousRowHook;
+            DbWriter.AuthoritativeFreshRawChangedRowCountForTesting = previousChangedRowsHook;
             using (var succeedingFile = _writer.BeginTransaction())
             {
-                var succeedingFileId = InsertNewFile("src/succeeding-returning.cs");
+                var succeedingFileId = InsertNewFile("src/succeeding-row-count.cs");
                 _writer.InsertReferencesForNewFilesInAtomicFileScope(
                     CreateReferences(succeedingFileId, 2, "succeeding"),
                     refreshMutualRecursionFlags: false,
@@ -704,13 +1144,13 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
         }
         finally
         {
-            DbWriter.AuthoritativeFreshRawReturningRowForTesting = previousRowHook;
+            DbWriter.AuthoritativeFreshRawChangedRowCountForTesting = previousChangedRowsHook;
             DbWriter.AuthoritativeFreshRawInsertExecutingForTesting = previousRawHook;
             DbWriter.AuthoritativeFreshRawInsertScopeDisposedForTesting = previousStatsHook;
         }
 
-        Assert.Equal(0L, ScalarLong("SELECT COUNT(*) FROM files WHERE path = 'src/failed-returning.cs'"));
-        Assert.Equal(1L, ScalarLong("SELECT COUNT(*) FROM files WHERE path = 'src/succeeding-returning.cs'"));
+        Assert.Equal(0L, ScalarLong("SELECT COUNT(*) FROM files WHERE path = 'src/failed-row-count.cs'"));
+        Assert.Equal(1L, ScalarLong("SELECT COUNT(*) FROM files WHERE path = 'src/succeeding-row-count.cs'"));
         Assert.Equal(2L, ScalarLong("SELECT COUNT(*) FROM reference_lines"));
         Assert.Equal(2L, ScalarLong("SELECT COUNT(*) FROM symbol_references"));
         var referenceLineWork = rawWork
@@ -718,43 +1158,36 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
             .ToArray();
         Assert.Equal(2, referenceLineWork.Length);
         Assert.All(referenceLineWork, work => Assert.False(work.CacheHit));
+        var floorWork = rawWork
+            .Where(work => work.Operation == "read_reference_line_id_floor")
+            .ToArray();
+        Assert.Equal(2, floorWork.Length);
+        Assert.False(floorWork[0].CacheHit);
+        Assert.True(floorWork[1].CacheHit);
         Assert.NotNull(observedStats);
         Assert.True(observedStats.Completed);
         Assert.Equal(1, observedStats.DiscardCount);
         Assert.Equal(observedStats.PrepareCount, observedStats.FinalizeCount);
     }
 
-    [Theory]
-    [InlineData("missing")]
-    [InlineData("extra")]
-    public void FileReturningRowCountFailure_DiscardsStatementAndRollsBackEveryReturnedFile(
-        string failureMode)
+    [Fact]
+    public void FileChangedRowCountFailure_DiscardsStatementAndRollsBackInsertedFile()
     {
         var rawWork = new List<DbWriter.AuthoritativeFreshRawInsertWork>();
         DbWriter.AuthoritativeFreshRawInsertScopeStats? observedStats = null;
-        var previousSqlHook = DbWriter.AuthoritativeFreshRawReturningSqlForTesting;
+        var previousChangedRowsHook = DbWriter.AuthoritativeFreshRawChangedRowCountForTesting;
         var previousRawHook = DbWriter.AuthoritativeFreshRawInsertExecutingForTesting;
         var previousStatsHook = DbWriter.AuthoritativeFreshRawInsertScopeDisposedForTesting;
+        var injected = 0;
         try
         {
-            DbWriter.AuthoritativeFreshRawReturningSqlForTesting = statement =>
+            DbWriter.AuthoritativeFreshRawChangedRowCountForTesting = change =>
             {
-                if (statement.Operation != "insert_files")
-                    return previousSqlHook?.Invoke(statement) ?? statement.Sql;
-                return failureMode == "missing"
-                    ? """
-                        INSERT INTO files (path, lang, size, lines, checksum, modified, generated, indexed_at)
-                        SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, CURRENT_TIMESTAMP
-                        WHERE 0
-                        RETURNING id
-                        """
-                    : """
-                        INSERT INTO files (path, lang, size, lines, checksum, modified, generated, indexed_at)
-                        SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, CURRENT_TIMESTAMP
-                        UNION ALL
-                        SELECT ?1 || '.extra', ?2, ?3, ?4, ?5, ?6, ?7, CURRENT_TIMESTAMP
-                        RETURNING id
-                        """;
+                var actual = previousChangedRowsHook?.Invoke(change) ?? change.ActualChangedRows;
+                return change.Operation == "insert_files"
+                    && Interlocked.Exchange(ref injected, 1) == 0
+                        ? 0
+                        : actual;
             };
             DbWriter.AuthoritativeFreshRawInsertExecutingForTesting = work =>
             {
@@ -776,14 +1209,15 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
                 CancellationToken.None)!;
             using (var failedFile = _writer.BeginTransaction())
             {
-                Assert.Throws<InvalidDataException>(() =>
-                    InsertNewFile("src/file-row-count-failed.cs"));
+                var exception = Assert.Throws<InvalidDataException>(() =>
+                    InsertNewFile("src/file-change-count-failed.cs"));
+                Assert.Contains("expected=1, actual=0", exception.Message, StringComparison.Ordinal);
             }
 
-            DbWriter.AuthoritativeFreshRawReturningSqlForTesting = previousSqlHook;
+            DbWriter.AuthoritativeFreshRawChangedRowCountForTesting = previousChangedRowsHook;
             using (var succeedingFile = _writer.BeginTransaction())
             {
-                _ = InsertNewFile("src/file-row-count-succeeded.cs");
+                _ = InsertNewFile("src/file-change-count-succeeded.cs");
                 succeedingFile.Commit();
             }
             raw.Complete();
@@ -791,13 +1225,13 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
         }
         finally
         {
-            DbWriter.AuthoritativeFreshRawReturningSqlForTesting = previousSqlHook;
+            DbWriter.AuthoritativeFreshRawChangedRowCountForTesting = previousChangedRowsHook;
             DbWriter.AuthoritativeFreshRawInsertExecutingForTesting = previousRawHook;
             DbWriter.AuthoritativeFreshRawInsertScopeDisposedForTesting = previousStatsHook;
         }
 
-        Assert.Equal(0L, ScalarLong("SELECT COUNT(*) FROM files WHERE path LIKE 'src/file-row-count-failed.cs%'"));
-        Assert.Equal(1L, ScalarLong("SELECT COUNT(*) FROM files WHERE path = 'src/file-row-count-succeeded.cs'"));
+        Assert.Equal(0L, ScalarLong("SELECT COUNT(*) FROM files WHERE path = 'src/file-change-count-failed.cs'"));
+        Assert.Equal(1L, ScalarLong("SELECT COUNT(*) FROM files WHERE path = 'src/file-change-count-succeeded.cs'"));
         var fileWork = rawWork.Where(work => work.Operation == "insert_files").ToArray();
         Assert.Equal(2, fileWork.Length);
         Assert.All(fileWork, work => Assert.False(work.CacheHit));
@@ -807,7 +1241,7 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
     }
 
     [Fact]
-    public void ReferenceLineReturningConstraint_DiscardsStatementBeforeRowAndCanReprepare()
+    public void ReferenceLineConstraint_DiscardsStatementAndCanReprepare()
     {
         long fileId;
         using (var seedTransaction = _writer.BeginTransaction())
@@ -869,25 +1303,29 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
     }
 
     [Fact]
-    public void ReferenceLineReturningInterruptAfterFirstRow_PreservesCancellationAndRollsBackOuterTransaction()
+    public void ReferenceLineInterrupt_PreservesCancellationAndRollsBackOuterTransaction()
     {
         using var cancellation = new CancellationTokenSource();
+        _db.Connection.CreateFunction<long>(
+            "cancel_authoritative_fresh_reference_line",
+            () =>
+            {
+                cancellation.Cancel();
+                return 0;
+            });
+        Execute("""
+            CREATE TEMP TRIGGER cancel_authoritative_fresh_reference_line_insert
+            BEFORE INSERT ON reference_lines
+            BEGIN
+                SELECT cancel_authoritative_fresh_reference_line();
+            END
+            """);
+
         DbWriter.AuthoritativeFreshRawInsertScopeStats? observedStats = null;
-        var previousRowHook = DbWriter.AuthoritativeFreshRawReturningRowForTesting;
         var previousStatsHook = DbWriter.AuthoritativeFreshRawInsertScopeDisposedForTesting;
         OperationCanceledException exception;
         try
         {
-            DbWriter.AuthoritativeFreshRawReturningRowForTesting = row =>
-            {
-                var transformed = previousRowHook?.Invoke(row) ?? row;
-                if (transformed.Operation == "insert_reference_lines"
-                    && transformed.ResultIndex == 0)
-                {
-                    cancellation.Cancel();
-                }
-                return transformed;
-            };
             DbWriter.AuthoritativeFreshRawInsertScopeDisposedForTesting = stats =>
             {
                 observedStats = stats;
@@ -913,7 +1351,6 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
         }
         finally
         {
-            DbWriter.AuthoritativeFreshRawReturningRowForTesting = previousRowHook;
             DbWriter.AuthoritativeFreshRawInsertScopeDisposedForTesting = previousStatsHook;
         }
 
@@ -926,6 +1363,7 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
         Assert.False(observedStats.Completed);
         Assert.Equal(1, observedStats.DiscardCount);
 
+        Execute("DROP TRIGGER cancel_authoritative_fresh_reference_line_insert");
         using var retry = _writer.BeginTransaction();
         var retryFileId = InsertNewFile("src/reference-line-cancel-retry.cs");
         _writer.InsertReferencesForNewFilesInAtomicFileScope(
@@ -934,6 +1372,166 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
             CancellationToken.None);
         retry.Commit();
         Assert.Equal(1L, ScalarLong("SELECT COUNT(*) FROM reference_lines"));
+    }
+
+    [Fact]
+    public void ReferenceLineIds_RecheckFloorAcrossBatchesAndPreferTableMaximum()
+    {
+        long seedFileId;
+        using (var seedTransaction = _writer.BeginTransaction())
+        {
+            seedFileId = InsertNewFile("src/reference-line-floor-seed.cs");
+            seedTransaction.Commit();
+        }
+        Execute($"""
+            INSERT INTO reference_lines (id, file_id, line, context)
+            VALUES (9000, {seedFileId.ToString(CultureInfo.InvariantCulture)}, 1, 'table-floor');
+            UPDATE sqlite_sequence SET seq = 5 WHERE name = 'reference_lines';
+            """);
+
+        var previousRawHook = DbWriter.AuthoritativeFreshRawInsertExecutingForTesting;
+        var rawWork = new List<DbWriter.AuthoritativeFreshRawInsertWork>();
+        var floorReads = 0;
+        try
+        {
+            DbWriter.AuthoritativeFreshRawInsertExecutingForTesting = work =>
+            {
+                rawWork.Add(work);
+                if (work.Operation == "read_reference_line_id_floor"
+                    && Interlocked.Increment(ref floorReads) == 2)
+                {
+                    Execute($"""
+                        INSERT INTO reference_lines (id, file_id, line, context)
+                        VALUES (10000, {seedFileId.ToString(CultureInfo.InvariantCulture)}, 2, 'between-batches');
+                        """);
+                }
+                previousRawHook?.Invoke(work);
+            };
+
+            using var graph = _writer.BeginReferenceGraphRefreshScope(
+                forceFullRefresh: true,
+                useFreshReferenceResolutionDefaults: true);
+            using var transaction = _writer.BeginTransaction();
+            using var raw = _writer.BeginAuthoritativeFreshBulkInsertScope(
+                enabled: true,
+                CancellationToken.None)!;
+            var fileId = InsertNewFile("src/reference-line-floor-batches.cs");
+            _writer.InsertReferencesForNewFilesInAtomicFileScope(
+                CreateReferences(fileId, 171, "floor"),
+                refreshMutualRecursionFlags: false,
+                CancellationToken.None);
+            raw.Complete();
+            transaction.Commit();
+
+            Assert.Equal(9001L, ReferenceLineId(fileId, line: 1, "floor_0();"));
+            Assert.Equal(9170L, ReferenceLineId(fileId, line: 170, "floor_169();"));
+            Assert.Equal(10001L, ReferenceLineId(fileId, line: 171, "floor_170();"));
+        }
+        finally
+        {
+            DbWriter.AuthoritativeFreshRawInsertExecutingForTesting = previousRawHook;
+        }
+
+        Assert.Equal(2, floorReads);
+        Assert.Equal(
+            [(170, 511), (1, 4)],
+            rawWork
+                .Where(work => work.Operation == "insert_reference_lines")
+                .Select(work => (work.StatementRows, work.BoundParameterCount))
+                .ToArray());
+        Assert.Equal(10001L, ScalarLong("SELECT seq FROM sqlite_sequence WHERE name = 'reference_lines'"));
+    }
+
+    [Fact]
+    public void ReferenceLineIdReservation_OverflowFailsBeforeInsertAndRollsBackFileSavepoint()
+    {
+        long seedFileId;
+        using (var seedTransaction = _writer.BeginTransaction())
+        {
+            seedFileId = InsertNewFile("src/reference-line-overflow-seed.cs");
+            seedTransaction.Commit();
+        }
+        Execute($"""
+            INSERT INTO reference_lines (id, file_id, line, context)
+            VALUES ({long.MaxValue.ToString(CultureInfo.InvariantCulture)},
+                    {seedFileId.ToString(CultureInfo.InvariantCulture)}, 1, 'overflow-primer');
+            DELETE FROM reference_lines WHERE id = {long.MaxValue.ToString(CultureInfo.InvariantCulture)};
+            """);
+
+        using var graph = _writer.BeginReferenceGraphRefreshScope(
+            forceFullRefresh: true,
+            useFreshReferenceResolutionDefaults: true);
+        using var outerTransaction = _writer.BeginTransaction();
+        using var raw = _writer.BeginAuthoritativeFreshBulkInsertScope(
+            enabled: true,
+            CancellationToken.None)!;
+        using (var failedFile = _writer.BeginTransaction())
+        {
+            var fileId = InsertNewFile("src/reference-line-overflow.cs");
+            Assert.Throws<OverflowException>(() =>
+                _writer.InsertReferencesForNewFilesInAtomicFileScope(
+                    CreateReferences(fileId, 1, "overflow"),
+                    refreshMutualRecursionFlags: false,
+                    CancellationToken.None));
+        }
+        raw.Complete();
+        outerTransaction.Commit();
+
+        Assert.Equal(0L, ScalarLong("SELECT COUNT(*) FROM reference_lines"));
+        Assert.Equal(0L, ScalarLong("SELECT COUNT(*) FROM files WHERE path = 'src/reference-line-overflow.cs'"));
+    }
+
+    [Fact]
+    public void ReferenceLineIdFloor_DuplicateSequenceRowsFailBeforeInsertAndRollBackFileSavepoint()
+    {
+        Execute("""
+            INSERT INTO sqlite_sequence (name, seq)
+            VALUES ('reference_lines', 10), ('reference_lines', 20)
+            """);
+
+        var rawWork = new List<DbWriter.AuthoritativeFreshRawInsertWork>();
+        var previousRawHook = DbWriter.AuthoritativeFreshRawInsertExecutingForTesting;
+        try
+        {
+            DbWriter.AuthoritativeFreshRawInsertExecutingForTesting = work =>
+            {
+                rawWork.Add(work);
+                previousRawHook?.Invoke(work);
+            };
+
+            using var graph = _writer.BeginReferenceGraphRefreshScope(
+                forceFullRefresh: true,
+                useFreshReferenceResolutionDefaults: true);
+            using var outerTransaction = _writer.BeginTransaction();
+            using var raw = _writer.BeginAuthoritativeFreshBulkInsertScope(
+                enabled: true,
+                CancellationToken.None)!;
+            using (var failedFile = _writer.BeginTransaction())
+            {
+                var fileId = InsertNewFile("src/reference-line-duplicate-sequence.cs");
+                var exception = Assert.Throws<InvalidDataException>(() =>
+                    _writer.InsertReferencesForNewFilesInAtomicFileScope(
+                        CreateReferences(fileId, 1, "duplicate_sequence"),
+                        refreshMutualRecursionFlags: false,
+                        CancellationToken.None));
+                Assert.Contains("ID floor was negative (-1)", exception.Message, StringComparison.Ordinal);
+            }
+            raw.Complete();
+            outerTransaction.Commit();
+        }
+        finally
+        {
+            DbWriter.AuthoritativeFreshRawInsertExecutingForTesting = previousRawHook;
+        }
+
+        Assert.Equal(
+            ["insert_files", "read_reference_line_id_floor"],
+            rawWork.Select(work => work.Operation).ToArray());
+        Assert.Equal(0L, ScalarLong("SELECT COUNT(*) FROM reference_lines"));
+        Assert.Equal(
+            0L,
+            ScalarLong(
+                "SELECT COUNT(*) FROM files WHERE path = 'src/reference-line-duplicate-sequence.cs'"));
     }
 
     public void Dispose()
@@ -992,7 +1590,7 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
             })
             .ToArray();
 
-    private void PrimeSequencesForInt64Returning()
+    private void PrimeSequencesForInt64Ids()
     {
         Execute("""
             INSERT INTO files (
@@ -1020,6 +1618,51 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
         using var command = _db.Connection.CreateCommand();
         command.CommandText = sql;
         return Convert.ToInt64(command.ExecuteScalar(), CultureInfo.InvariantCulture);
+    }
+
+    private long ReferenceLineId(long fileId, int line, string context)
+    {
+        using var command = _db.Connection.CreateCommand();
+        command.CommandText = """
+            SELECT id
+            FROM reference_lines
+            WHERE file_id = @file_id AND line = @line AND context = @context
+            """;
+        command.Parameters.AddWithValue("@file_id", fileId);
+        command.Parameters.AddWithValue("@line", line);
+        command.Parameters.AddWithValue("@context", context);
+        return Convert.ToInt64(command.ExecuteScalar(), CultureInfo.InvariantCulture);
+    }
+
+    private long? SourceSymbolId(string symbolName)
+    {
+        using var command = _db.Connection.CreateCommand();
+        command.CommandText = """
+            SELECT source_symbol_id
+            FROM symbol_references
+            WHERE symbol_name = @symbol_name
+            """;
+        command.Parameters.AddWithValue("@symbol_name", symbolName);
+        var value = command.ExecuteScalar();
+        return value == null || value == DBNull.Value
+            ? null
+            : Convert.ToInt64(value, CultureInfo.InvariantCulture);
+    }
+
+    private long? SourceFileId(string symbolName)
+    {
+        using var command = _db.Connection.CreateCommand();
+        command.CommandText = """
+            SELECT source.file_id
+            FROM symbol_references AS reference
+            LEFT JOIN symbols AS source ON source.id = reference.source_symbol_id
+            WHERE reference.symbol_name = @symbol_name
+            """;
+        command.Parameters.AddWithValue("@symbol_name", symbolName);
+        var value = command.ExecuteScalar();
+        return value == null || value == DBNull.Value
+            ? null
+            : Convert.ToInt64(value, CultureInfo.InvariantCulture);
     }
 
     private long ResourceListGeneration()

@@ -69,10 +69,9 @@ public static partial class IndexCommandRunner
                     if (extractionIndex >= extractionWorkItemCount)
                         break;
 
-                    var tailStart = extractionWorkItemCount - extractionTailSchedule.Length;
-                    var workOrdinal = extractionIndex >= tailStart
-                        ? extractionTailSchedule[extractionIndex - tailStart]
-                        : extractionIndex;
+                    var workOrdinal = ResolveFullScanExtractionWorkOrdinal(
+                        extractionIndex,
+                        extractionTailSchedule);
                     var fileIndex = ResolveFullScanExtractionFileIndex(
                         extractionFileIndexes,
                         workOrdinal);
