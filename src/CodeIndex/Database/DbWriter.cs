@@ -38,6 +38,7 @@ public partial class DbWriter
     private static readonly AsyncLocal<Action<string>?> ScopedBatchRowSkipWarningForTesting = new();
     private static readonly AsyncLocal<Action<DbWriterBatchProgress>?> ScopedBatchProgressCheckpointForTesting = new();
     private static readonly AsyncLocal<Action?> ScopedMutualRecursionRefreshForTesting = new();
+    private static readonly AsyncLocal<Action?> ScopedReferenceCandidateRefreshCompletedForTesting = new();
     private static readonly AsyncLocal<Action?> ScopedCSharpContractPreflightForTesting = new();
     private static readonly AsyncLocal<Action?> ScopedCSharpContractWorkspaceReadForTesting = new();
     private static readonly AsyncLocal<Action<CSharpContractWorkspaceReadStats>?>
@@ -93,6 +94,12 @@ public partial class DbWriter
     {
         get => ScopedMutualRecursionRefreshForTesting.Value;
         set => ScopedMutualRecursionRefreshForTesting.Value = value;
+    }
+
+    internal static Action? ReferenceCandidateRefreshCompletedForTesting
+    {
+        get => ScopedReferenceCandidateRefreshCompletedForTesting.Value;
+        set => ScopedReferenceCandidateRefreshCompletedForTesting.Value = value;
     }
 
     internal static Action? CSharpContractPreflightForTesting

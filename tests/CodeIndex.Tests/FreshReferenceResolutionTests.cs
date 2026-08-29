@@ -275,7 +275,12 @@ public sealed class FreshReferenceResolutionTests : IDisposable
         Assert.Contains("FROM resolution_facts AS resolution", sql, StringComparison.Ordinal);
         Assert.Contains("WHERE r.id = resolution.reference_id", sql, StringComparison.Ordinal);
         Assert.Contains("is_self_reference = CASE", sql, StringComparison.Ordinal);
-        Assert.DoesNotContain("WHERE EXISTS", sql, StringComparison.Ordinal);
+        Assert.Contains(
+            "FROM symbol_reference_candidates AS candidate",
+            sql,
+            StringComparison.Ordinal);
+        Assert.Contains("INDEXED BY idx_symbol_ref_candidates_symbol", sql, StringComparison.Ordinal);
+        Assert.Contains("WHERE EXISTS", sql, StringComparison.Ordinal);
         Assert.Equal(1, CountOccurrences(sql, "UPDATE symbol_references AS r"));
     }
 
@@ -302,6 +307,9 @@ public sealed class FreshReferenceResolutionTests : IDisposable
                 "JOIN temp.reference_resolution_symbol_facts AS target_fact",
                 resolutionSql,
                 StringComparison.Ordinal);
+            Assert.DoesNotContain("COUNT(DISTINCT", resolutionSql, StringComparison.Ordinal);
+            Assert.Contains("MIN(target_fact.target_key COLLATE BINARY)", resolutionSql, StringComparison.Ordinal);
+            Assert.Contains("IS MAX(target_fact.target_key COLLATE BINARY)", resolutionSql, StringComparison.Ordinal);
             Assert.Equal(
                 scope is "differential" or "scoped" ? 2 : 1,
                 CountOccurrences(resolutionSql, "JOIN temp.reference_resolution_symbol_facts AS target_fact"));
@@ -320,13 +328,124 @@ public sealed class FreshReferenceResolutionTests : IDisposable
             StringComparison.Ordinal);
         Assert.Contains("GROUP BY candidate.symbol_id", scoped.MaterializationSql, StringComparison.Ordinal);
 
-        foreach (var allSymbolsScope in new[] { "fresh", "full", "differential", "retained" })
+        foreach (var candidateBoundScope in new[] { "fresh", "full", "differential", "retained" })
         {
             var materialization = Assert.Single(
                 DbWriter.ReferenceResolutionFactSqlForTesting,
-                entry => entry.Scope == allSymbolsScope).MaterializationSql;
+                entry => entry.Scope == candidateBoundScope).MaterializationSql;
             Assert.Contains("FROM symbols AS target", materialization, StringComparison.Ordinal);
+            Assert.Contains("WHERE EXISTS", materialization, StringComparison.Ordinal);
+            Assert.Contains(
+                "INDEXED BY idx_symbol_ref_candidates_symbol",
+                materialization,
+                StringComparison.Ordinal);
+            Assert.Contains(
+                "candidate.symbol_id = target.id",
+                materialization,
+                StringComparison.Ordinal);
             Assert.DoesNotContain("dirty_target_symbols", materialization, StringComparison.Ordinal);
+            Assert.DoesNotContain("GROUP BY candidate.symbol_id", materialization, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void ReferenceResolutionFacts_MaterializeOnlyCandidateBearingSymbolsWithReverseSeeks()
+    {
+        var callerFileId = InsertFile("src/bounded-caller.py", "python");
+        var targetFileId = InsertFile("src/bounded-target.py", "python");
+        _writer.InsertSymbols([
+            CreateSymbol(targetFileId, "CandidateTarget", line: 1),
+            CreateSymbol(targetFileId, "UnusedTarget", line: 2),
+        ]);
+        _writer.InsertReferences(
+            [CreateReference(callerFileId, "CandidateTarget", line: 10)],
+            refreshMutualRecursionFlags: false);
+        Execute("""
+            INSERT INTO symbol_reference_candidates(reference_id, symbol_id, scope_rank)
+            SELECT reference.id, target.id, 0
+            FROM symbol_references AS reference
+            JOIN symbols AS target ON target.name = reference.symbol_name;
+            """);
+
+        Execute(DbWriter.RefreshReferenceResolutionFullSqlForTesting);
+
+        Assert.Equal(
+            "CandidateTarget",
+            ScalarString("""
+                SELECT target.name
+                FROM temp.reference_resolution_symbol_facts AS fact
+                JOIN symbols AS target ON target.id = fact.symbol_id
+                """));
+        Assert.Equal(1, ScalarLong("SELECT COUNT(*) FROM temp.reference_resolution_symbol_facts"));
+
+        var fullFacts = Assert.Single(
+            DbWriter.ReferenceResolutionFactSqlForTesting,
+            static entry => entry.Scope == "full").MaterializationSql;
+        var insert = Assert.Single(
+            fullFacts.Split(
+                    ';',
+                    StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Where(static statement => statement.StartsWith(
+                    "INSERT INTO temp.reference_resolution_symbol_facts",
+                    StringComparison.Ordinal)));
+        var plan = ReadQueryPlanDetails(insert);
+        Assert.Contains(plan, static detail => detail.Contains(
+            "SEARCH candidate USING COVERING INDEX idx_symbol_ref_candidates_symbol",
+            StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(plan, static detail =>
+            detail.Equals("SCAN candidate", StringComparison.OrdinalIgnoreCase)
+            || detail.StartsWith("SCAN candidate ", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(plan, static detail => detail.Contains(
+            "USE TEMP B-TREE",
+            StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain("DISTINCT", insert, StringComparison.Ordinal);
+        Assert.DoesNotContain("GROUP BY candidate.symbol_id", insert, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SingletonAggregate_MinMaxMatchesCountDistinctNullAndBinarySemantics()
+    {
+        Execute("""
+            CREATE TEMP TABLE singleton_oracle_values (
+                value TEXT COLLATE BINARY
+            );
+            """);
+        var cases = new (string Name, string?[] Values)[]
+        {
+            ("empty", []),
+            ("all-null", [null, null]),
+            ("null-and-a", [null, "A"]),
+            ("duplicate-a", ["A", "A"]),
+            ("binary-case-variants", ["A", "a"]),
+            ("a-and-b", ["A", "B"]),
+        };
+
+        foreach (var testCase in cases)
+        {
+            Execute("DELETE FROM temp.singleton_oracle_values;");
+            using (var insert = _db.Connection.CreateCommand())
+            {
+                insert.CommandText = "INSERT INTO temp.singleton_oracle_values(value) VALUES (@value)";
+                var value = insert.Parameters.Add("@value", SqliteType.Text);
+                foreach (var item in testCase.Values)
+                {
+                    value.Value = item == null ? DBNull.Value : item;
+                    insert.ExecuteNonQuery();
+                }
+            }
+
+            var distinctSingleton = ScalarLong("""
+                SELECT COUNT(DISTINCT value COLLATE BINARY) = 1
+                FROM temp.singleton_oracle_values
+                """);
+            var minMaxSingleton = ScalarLong("""
+                SELECT COUNT(value) > 0
+                   AND MIN(value COLLATE BINARY) IS MAX(value COLLATE BINARY)
+                FROM temp.singleton_oracle_values
+                """);
+            Assert.True(
+                distinctSingleton == minMaxSingleton,
+                $"Singleton aggregate mismatch for {testCase.Name}.");
         }
     }
 
@@ -859,6 +978,17 @@ public sealed class FreshReferenceResolutionTests : IDisposable
         return value == null || value == DBNull.Value
             ? null
             : Convert.ToString(value, CultureInfo.InvariantCulture);
+    }
+
+    private IReadOnlyList<string> ReadQueryPlanDetails(string sql)
+    {
+        using var command = _db.Connection.CreateCommand();
+        command.CommandText = "EXPLAIN QUERY PLAN " + sql;
+        using var reader = command.ExecuteReader();
+        var details = new List<string>();
+        while (reader.Read())
+            details.Add(reader.GetString(3));
+        return details;
     }
 
     private static int CountOccurrences(string text, string value)

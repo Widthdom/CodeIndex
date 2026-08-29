@@ -398,9 +398,14 @@ indexes on `symbol_references` until raw reference persistence completes. The
 reverse candidate-symbol lookup remains available during raw persistence and is
 dropped only when an actual graph refresh is about to delete or materialize
 candidate rows, so marker-only and high-cardinality no-op updates do not rebuild
-that whole index. The candidate primary key remains available for reference-scoped
-materialization and resolution, and the file and reference-line maintenance indexes
-normally remain available during the load. The sole exception is an authoritative
+that whole index. Candidate construction uses the `(reference_id, symbol_id)`
+primary key without maintaining the reverse B-tree. Immediately after candidate
+construction, restore `idx_symbol_ref_candidates_symbol` before renting or
+preparing the separate resolution command, so target-fact materialization can use
+bounded `(symbol_id, reference_id)` existence seeks. The candidate primary key
+remains available for reference-scoped materialization and resolution, and the file
+and reference-line maintenance indexes normally remain available during the load.
+The sole exception is an authoritative
 empty-database first CLI full scan whose transaction-local recheck still owns the
 fresh-resolution claim: while it persists raw references, it also defers
 `idx_symbol_refs_reference_line` and `idx_reference_lines_file_line`. It restores
@@ -423,14 +428,12 @@ expression single-evaluation: repeating it in both `SET` and `WHERE` causes
 fresh large graphs to perform the same random B-tree probes twice.
 When a TypeScript augmentation rebuild owns the sole graph pass, restore every
 ordinary graph/query index before readiness, then drop the reverse candidate-symbol
-lookup immediately before augmentation candidate population and keep it deferred
-through that graph pass. Transactional full
-scans restore that final index after readiness work and before committing the outer
-full-scan transaction, preserving atomic schema rollback on cancellation or
-failure. Recoverable scoped updates and MCP indexing retain guard ownership through
-the readiness transaction commit and restore the final index immediately afterward.
-Both lifecycles keep readiness queries available without maintaining the candidate
-B-tree row by row. MCP uses the recoverable lifecycle whenever its established
+lookup immediately before augmentation candidate population. Restore that lookup
+immediately after population and before preparing resolution. Transactional rollback
+and recoverable disposal still repair failures before that boundary; successful
+resolution and readiness observe the canonical candidate lookup without maintaining
+the reverse B-tree row by row during candidate inserts. MCP uses the recoverable
+lifecycle whenever its established
 dirty-byte policy selects FTS bulk loading, and restores every index on completion
 or disposal. Schema initialization and read repair must use the same canonical
 index catalog so every path converges on an identical schema.
@@ -462,8 +465,10 @@ non-mutating skips, unchanged targets, and sparsely mutating target sets keep ev
 Any preflight uncertainty keeps staging enabled. This preflight is only a cost
 decision—the file loop must repeat its live authoritative lookup so changes after
 the snapshot are still indexed with all indexes present.
-Keep the query-only set deferred through identity and resolution work,
-restore the three reverse-edge indexes immediately before mutual recursion, then
+Keep the query-only set deferred through identity and resolution work, except that
+the candidate-symbol reverse lookup returns between candidate population and
+resolution-command preparation. Restore the three reverse-edge indexes immediately
+before mutual recursion, then
 restore the remainder after that update. Small scoped updates must keep every
 index in place so a fixed rebuild cost does not dominate the update.
 
@@ -504,13 +509,20 @@ family once. Only the final projection expands a matched family back to every
 physical member. This preserves row-per-symbol candidates for partial types while
 avoiding repeated compatibility and ambiguity work for every partial declaration.
 
-Resolution also materializes the nullable target-family key once per target symbol
-into a primary-keyed TEMP fact table. Full, fresh, differential, and retained
-refreshes populate all symbols; scoped refreshes first deduplicate target symbol
-IDs reachable from dirty-reference candidates. Resolution must join candidates to
-that fact by symbol ID instead of rebuilding the language/path/container/name key
-for every physical candidate. Preserve a `NULL` key when legacy target language is
-missing, while still resolving a single valid candidate by ID.
+Resolution also materializes the nullable target-family key once per candidate-bearing
+target symbol into a primary-keyed TEMP fact table. Full, fresh, differential, and
+retained refreshes filter that population with indexed candidate-symbol existence
+probes; scoped refreshes first deduplicate target symbol IDs reachable from
+dirty-reference candidates. Candidate construction and resolution stay in separate
+SQLite commands, and the resolution command is rented and prepared only after the
+reverse lookup is restored. Resolution joins candidates to facts by symbol ID instead
+of rebuilding the language/path/container/name key for every physical candidate.
+Singleton-family detection preserves `COUNT(DISTINCT)` NULL semantics without a
+per-group distinct set: at least one non-NULL key must exist and the BINARY minimum
+must be null-safely `IS` the BINARY maximum. All-NULL groups remain non-families,
+NULL plus one non-NULL family retains that family, duplicate keys collapse, and
+binary-distinct keys remain ambiguous. A single physical legacy candidate with a
+NULL key still resolves by ID.
 
 Repository-wide incremental scans load stat-reuse candidates with one SQLite
 statement before the C# contract prepass and parallel extraction. Each candidate
@@ -1810,7 +1822,8 @@ the compatibility filter are treated as non-authoritative until a normal index r
 their candidates.
 
 Existing-index, rebuild, and retained-graph finalization paths compute candidate count, minimum
-symbol ID, distinct target-family count, and stable target key in one correlated aggregate per
+symbol ID, a single-target-family flag from a positive non-NULL count plus BINARY
+`MIN(...) IS MAX(...)`, and the stable target key in one correlated aggregate per
 reference. Keep these four resolution fields on the row-value assignment path; separate scalar
 subqueries multiply the candidate-index and symbol/file lookup work on large graphs. The
 language/name families that
@@ -4647,8 +4660,12 @@ fresh な CLI scan と明示的 rebuild は、raw reference の永続化が完�
 `symbol_references` の query / graph 用 secondary index を遅延します。candidate-symbol の
 reverse lookup は raw persistence 中は維持し、実際の graph refresh が candidate row を削除・
 構築する直前だけ外すため、marker-only / 高 cardinality no-op update はこの index 全体を
-再構築しません。reference scope の materialization / resolution に使う candidate primary key は
-維持します。load 中も通常は file と reference-line の保守用 index を残します。唯一の例外は、
+再構築しません。candidate 構築は `(reference_id, symbol_id)` primary key を使い、reverse B-tree
+を行ごとに保守しません。candidate 構築完了直後かつ独立した resolution command の rent / prepare
+前に `idx_symbol_ref_candidates_symbol` を復元し、target fact の materialization は bounded な
+`(symbol_id, reference_id)` existence seek を使います。reference scope の materialization /
+resolution に使う candidate primary key は維持します。load 中も通常は file と reference-line の
+保守用 index を残します。唯一の例外は、
 transaction-local な再確認後も fresh-resolution claim を所有する authoritative な空DB初回CLI
 full scan です。この経路だけは raw reference の永続化中に
 `idx_symbol_refs_reference_line` と `idx_reference_lines_file_line` も遅延し、candidate、
@@ -4663,12 +4680,11 @@ identity / resolution finalization 中は query index を遅延したままに�
 legacy NOCASE、resolved reverse-edge の3本だけを復元し、残りの query index は mutual update
 後に戻します。TypeScript augmentation rebuild が唯一の graph pass を担当する場合は、readiness
 前に通常の graph / query index を復元し、augmentation の candidate 構築直前にだけ
-candidate-symbol reverse lookup を外して graph pass の完了まで遅延します。transactional full scan は readiness work 後
-かつ outer full-scan transaction の commit 前に最後の1本を復元し、cancellation や失敗時の
-schema rollback を原子的に保ちます。recoverable scoped update と MCP indexing は readiness
-transaction の commit まで guard ownership を保持し、その直後に最後の index を復元します。
-どちらの lifecycle も readiness query を利用可能なまま candidate B-tree の行ごとの保守を
-省きます。MCP は既定の dirty-byte policy が FTS bulk load を選ぶ場合に recoverable lifecycle
+candidate-symbol reverse lookup を外します。candidate 構築直後かつ resolution の prepare 前に
+この lookup を復元します。その境界より前の失敗は transactional rollback / recoverable disposal
+が修復し、正常な resolution と readiness は canonical な candidate lookup を利用できます。
+candidate insert 中だけ reverse B-tree の行ごとの保守を省きます。MCP は既定の dirty-byte policy
+が FTS bulk load を選ぶ場合に recoverable lifecycle
 を使い、正常完了時と dispose 時の両方で全 index を復元します。schema initialization と read
 repair は同じ canonical index catalog を使い、すべての経路が同一の最終 schema に収束する状態を
 保ってください。
@@ -4695,8 +4711,9 @@ index 退避を使います。scoped update には workspace 全体の authorita
 unchanged、または sparse mutation の target 集合では全 index を維持します。preflight
 に不確実性があれば保守的に staging を維持します。この preflight は cost 判定に限り、snapshot 後の
 変更も全 index を維持したまま更新できるよう、file loop は authoritative な live lookup を必ず再実行
-してください。identity / resolution 中は query-only 集合を遅延したままにし、mutual recursion の
-直前に reverse-edge 用3本を復元して、その update 後に残りを戻してください。小規模 scoped
+してください。identity / resolution 中は query-only 集合を遅延したままにしますが、candidate-symbol
+reverse lookup だけは candidate 構築後かつ resolution command の prepare 前に復元します。mutual
+recursion の直前に reverse-edge 用3本を復元して、その update 後に残りを戻してください。小規模 scoped
 update は固定的な再構築 cost が更新時間を支配しないよう、全 index を維持します。
 full mutual-recursion update は、call-like または非canonicalな row ごとに望ましい flag を
 1回 materialize してから変更を適用します。相関 reverse-edge 式を `SET` と `WHERE` の
@@ -4734,12 +4751,18 @@ family単位で1回だけ行います。一致したfamilyを全物理memberへ�
 これによりpartial typeのsymbolごとのcandidate行を維持しつつ、各partial宣言でcompatibilityとambiguity
 判定を繰り返しません。
 
-resolution は nullable な target-family key も target symbol ごとに1回だけ primary-keyed TEMP
-fact table へ materialize します。full / fresh / differential / retained refresh は全 symbol を投入し、
-scoped refresh は dirty-reference candidate から到達する target symbol ID を先に重複排除します。
+resolution は nullable な target-family key も candidate を持つ target symbol ごとに1回だけ
+primary-keyed TEMP fact table へ materialize します。full / fresh / differential / retained refresh は
+indexed な candidate-symbol existence probe で対象を限定し、scoped refresh は dirty-reference
+candidate から到達する target symbol ID を先に重複排除します。candidate 構築と resolution は別の
+SQLite command とし、reverse lookup の復元後にだけ resolution command を rent / prepare します。
 resolution は物理 candidate ごとに language / path / container / name key を再構築せず、symbol IDで
-このfactへjoinしてください。legacy targetのlanguageが欠ける場合はkeyを`NULL`のまま保ちつつ、
-有効candidateが1件ならIDによるresolved状態を維持します。
+このfactへjoinしてください。singleton family 判定は per-group の DISTINCT set を作らず、非NULL
+key が1件以上あり、BINARY の `MIN(...) IS MAX(...)` であることを使って従来の
+`COUNT(DISTINCT)` NULL semantics を維持します。all-NULL は family なし、NULL と1つの非NULL
+family はその family、重複 key は1 family、BINARY で異なる key は ambiguous です。legacy target
+の language が欠ける場合は key を `NULL` のまま保ちつつ、物理 candidate が1件なら ID による
+resolved 状態を維持します。
 
 リポジトリ全体の incremental scan は、C# contract prepass と parallel extraction の前に
 stat-reuse 候補を 1 回の SQLite statement で読みます。各候補は引き続き最新の filesystem
@@ -5972,7 +5995,8 @@ Java の reference resolution は変更しません。
 作成された index は、通常の index 更新で candidate を再構築するまで非 authoritative として扱います。
 
 既存index、rebuild、retained graph の reference finalization は、candidate count、最小 symbol ID、
-distinct target-family count、安定 target key を reference ごとに1回の correlated aggregate で
+非NULL count が正で BINARY の `MIN(...) IS MAX(...)` となる single-target-family flag、安定 target key
+を reference ごとに1回の correlated aggregate で
 計算します。この4つの resolution field は row-value assignment のまま維持してください。
 scalar subquery を分けると、大規模 graph で candidate index と symbol/file lookup が重複します。
 global に一意な language/name family は

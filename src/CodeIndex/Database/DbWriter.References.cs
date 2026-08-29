@@ -236,7 +236,13 @@ public partial class DbWriter
         SELECT target.id,
                {BuildReferenceResolutionTargetKeySql()}
         FROM symbols AS target
-        JOIN files AS target_file ON target_file.id = target.file_id;
+        JOIN files AS target_file ON target_file.id = target.file_id
+        WHERE EXISTS (
+            SELECT 1
+            FROM symbol_reference_candidates AS candidate
+                 INDEXED BY idx_symbol_ref_candidates_symbol
+            WHERE candidate.symbol_id = target.id
+        );
         """;
 
     private static string BuildRefreshCSharpReferenceFactsSql(string scopePredicate)
@@ -1134,9 +1140,15 @@ public partial class DbWriter
         WHERE s.name_folded IS NOT NULL
           AND target_file.lang <> 'ambiguous_m'
         GROUP BY target_file.lang, s.name_folded
-        HAVING COUNT(DISTINCT target_file.path || char(31) ||
-                              COALESCE(s.container_qualified_name, s.container_name, '') || char(31) ||
-                              COALESCE(s.name, '')) = 1;
+        HAVING COUNT(target_file.path || char(31) ||
+                     COALESCE(s.container_qualified_name, s.container_name, '') || char(31) ||
+                     COALESCE(s.name, '')) > 0
+           AND MIN(target_file.path || char(31) ||
+                   COALESCE(s.container_qualified_name, s.container_name, '') || char(31) ||
+                   COALESCE(s.name, ''))
+               IS MAX(target_file.path || char(31) ||
+                      COALESCE(s.container_qualified_name, s.container_name, '') || char(31) ||
+                      COALESCE(s.name, ''));
 
         -- An ambiguous .m caller can bind to either dialect, so uniqueness must hold
         -- across the MATLAB/Objective-C union rather than within either language alone.
@@ -1153,9 +1165,15 @@ public partial class DbWriter
         WHERE s.name_folded IS NOT NULL
           AND target_file.lang IN ('matlab', 'objc')
         GROUP BY s.name_folded
-        HAVING COUNT(DISTINCT target_file.path || char(31) ||
-                              COALESCE(s.container_qualified_name, s.container_name, '') || char(31) ||
-                              COALESCE(s.name, '')) = 1;
+        HAVING COUNT(target_file.path || char(31) ||
+                     COALESCE(s.container_qualified_name, s.container_name, '') || char(31) ||
+                     COALESCE(s.name, '')) > 0
+           AND MIN(target_file.path || char(31) ||
+                   COALESCE(s.container_qualified_name, s.container_name, '') || char(31) ||
+                   COALESCE(s.name, ''))
+               IS MAX(target_file.path || char(31) ||
+                      COALESCE(s.container_qualified_name, s.container_name, '') || char(31) ||
+                      COALESCE(s.name, ''));
         """;
 
     private static string RefreshReferenceCandidatesSql => $"""
@@ -1468,7 +1486,9 @@ public partial class DbWriter
             GROUP BY type_member.name_folded,
                      type_member.name,
                      type_member.type_arity
-            HAVING COUNT(DISTINCT type_member.type_identity COLLATE BINARY) = 1
+            HAVING COUNT(type_member.type_identity) > 0
+               AND MIN(type_member.type_identity COLLATE BINARY)
+                   IS MAX(type_member.type_identity COLLATE BINARY)
         ),
         matched_csharp_type_reference_families(
             reference_id,
@@ -1661,7 +1681,9 @@ public partial class DbWriter
             GROUP BY type_member.name_folded,
                      type_member.name COLLATE BINARY,
                      type_member.type_arity
-            HAVING COUNT(DISTINCT type_member.type_identity COLLATE BINARY) = 1
+            HAVING COUNT(type_member.type_identity) > 0
+               AND MIN(type_member.type_identity COLLATE BINARY)
+                   IS MAX(type_member.type_identity COLLATE BINARY)
         ),
         csharp_instantiation_constructor_members(
             symbol_id,
@@ -1886,18 +1908,24 @@ public partial class DbWriter
     private const string ReferenceResolutionValueSql = """
         (
             SELECT CASE WHEN candidate_count = 1 THEN minimum_symbol_id END,
-                   CASE WHEN target_family_count = 1 THEN minimum_target_key END,
+                   CASE WHEN has_single_target_family = 1 THEN minimum_target_key END,
                    candidate_count,
                    CASE
                        WHEN candidate_count = 0 THEN 'unresolved'
                        WHEN candidate_count = 1 THEN 'resolved'
-                       WHEN target_family_count = 1 THEN 'resolved_group'
+                       WHEN has_single_target_family = 1 THEN 'resolved_group'
                        ELSE 'ambiguous'
                    END
             FROM (
                 SELECT COUNT(*) AS candidate_count,
                        MIN(c.symbol_id) AS minimum_symbol_id,
-                       COUNT(DISTINCT target_fact.target_key) AS target_family_count,
+                       CASE
+                           WHEN COUNT(target_fact.target_key) > 0
+                            AND MIN(target_fact.target_key COLLATE BINARY)
+                                IS MAX(target_fact.target_key COLLATE BINARY)
+                               THEN 1
+                           ELSE 0
+                       END AS has_single_target_family,
                        MIN(target_fact.target_key) AS minimum_target_key
                     FROM symbol_reference_candidates AS c
                     JOIN temp.reference_resolution_symbol_facts AS target_fact
@@ -1948,7 +1976,13 @@ public partial class DbWriter
             SELECT candidate.reference_id,
                    COUNT(*) AS candidate_count,
                    MIN(candidate.symbol_id) AS minimum_symbol_id,
-                   COUNT(DISTINCT target_fact.target_key) AS target_family_count,
+                   CASE
+                       WHEN COUNT(target_fact.target_key) > 0
+                        AND MIN(target_fact.target_key COLLATE BINARY)
+                            IS MAX(target_fact.target_key COLLATE BINARY)
+                           THEN 1
+                       ELSE 0
+                   END AS has_single_target_family,
                    MIN(target_fact.target_key) AS minimum_target_key
             FROM symbol_reference_candidates AS candidate
             JOIN temp.{ReferenceResolutionSymbolFactsTable} AS target_fact
@@ -1960,12 +1994,13 @@ public partial class DbWriter
                 WHEN resolution.candidate_count = 1 THEN resolution.minimum_symbol_id
             END,
             target_symbol_key = CASE
-                WHEN resolution.target_family_count = 1 THEN resolution.minimum_target_key
+                WHEN resolution.has_single_target_family = 1
+                    THEN resolution.minimum_target_key
             END,
             resolution_candidate_count = resolution.candidate_count,
             resolution_state = CASE
                 WHEN resolution.candidate_count = 1 THEN 'resolved'
-                WHEN resolution.target_family_count = 1 THEN 'resolved_group'
+                WHEN resolution.has_single_target_family = 1 THEN 'resolved_group'
                 ELSE 'ambiguous'
             END,
             is_self_reference = CASE
@@ -2026,9 +2061,9 @@ public partial class DbWriter
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var command = connection.CreateCommand();
-        command.Transaction = transaction;
-        command.CommandText =
+        using var candidateCommand = connection.CreateCommand();
+        candidateCommand.Transaction = transaction;
+        candidateCommand.CommandText =
             CreateReferenceUniqueFamiliesSql + ";\n" +
             CreateCSharpReferenceFactIndexesSql + ";\n" +
             RefreshReferenceSourceSymbolsFullSql + ";\n" +
@@ -2039,12 +2074,25 @@ public partial class DbWriter
             RefreshCSharpPropertyTargetFactsFullSql + "\n" +
             NormalizeCSharpPropertyReceiverReferencesFullSql + "\n" +
             RefreshReferenceUniqueFamiliesSql + "\n" +
-            RefreshReferenceCandidatesSql + "\n" +
+            RefreshReferenceCandidatesSql;
+        using (var candidateCancellationRegistration =
+               cancellationToken.Register(candidateCommand.Cancel))
+        {
+            candidateCommand.ExecuteNonQuery();
+        }
+        cancellationToken.ThrowIfCancellationRequested();
+        ReferenceCandidateRefreshCompletedForTesting?.Invoke();
+        cancellationToken.ThrowIfCancellationRequested();
+
+        using var resolutionCommand = connection.CreateCommand();
+        resolutionCommand.Transaction = transaction;
+        resolutionCommand.CommandText =
             RefreshReferenceResolutionSymbolFactsFullSql + "\n" +
             RefreshReferenceResolutionFullSql + "\n" +
             RefreshMutualRecursionFlagsSql;
-        using var cancellationRegistration = cancellationToken.Register(command.Cancel);
-        command.ExecuteNonQuery();
+        using var resolutionCancellationRegistration =
+            cancellationToken.Register(resolutionCommand.Cancel);
+        resolutionCommand.ExecuteNonQuery();
         cancellationToken.ThrowIfCancellationRequested();
     }
 
@@ -2950,7 +2998,8 @@ public partial class DbWriter
             graphScope.IsCompleting = true;
         SqliteCommand? createUniqueFamiliesCommand = null;
         SqliteCommand? createCSharpReferenceFactIndexesCommand = null;
-        SqliteCommand? refreshIdentityCommand = null;
+        SqliteCommand? refreshCandidateCommand = null;
+        SqliteCommand? refreshResolutionCommand = null;
         SqliteCommand? refreshMutualCommand = null;
         try
         {
@@ -2987,7 +3036,8 @@ public partial class DbWriter
             // 真に空のdatabaseではcandidate側resolution factsを1回集約し、candidateを持つ
             // referenceだけをseekする。その他の既存resolutionはstable rowを書き換えない
             // differential pathを維持する。
-            string refreshIdentitySql;
+            string refreshCandidateSql;
+            string refreshResolutionSql;
             if (refreshPlan.UseFullRefresh)
             {
                 var hasPersistedReferenceResolutionState = !useFreshReferenceResolutionDefaults
@@ -3000,7 +3050,7 @@ public partial class DbWriter
                     : hasPersistedReferenceResolutionState
                         ? RefreshReferenceResolutionDifferentialSql
                         : RefreshReferenceResolutionFullSql;
-                refreshIdentitySql =
+                refreshCandidateSql =
                     (refreshReferenceSourcesSql == null
                         ? string.Empty
                         : refreshReferenceSourcesSql + ";\n") +
@@ -3011,14 +3061,15 @@ public partial class DbWriter
                                      RefreshCSharpPropertyTargetFactsFullSql + "\n" +
                                      NormalizeCSharpPropertyReceiverReferencesFullSql + "\n" +
                                      RefreshReferenceUniqueFamiliesSql + "\n" +
-                                     RefreshReferenceCandidatesSql + "\n" +
-                                     RefreshReferenceResolutionSymbolFactsFullSql + "\n" +
-                                     refreshReferenceResolutionSql + "\n";
+                                     RefreshReferenceCandidatesSql + "\n";
+                refreshResolutionSql =
+                    RefreshReferenceResolutionSymbolFactsFullSql + "\n" +
+                    refreshReferenceResolutionSql + "\n";
             }
             else
             {
                 DeleteRemovedReferenceCandidates(cancellationToken);
-                refreshIdentitySql = RefreshScopedReferenceSourceSymbolsSql + "\n" +
+                refreshCandidateSql = RefreshScopedReferenceSourceSymbolsSql + "\n" +
                                      RefreshCSharpReferenceFactsScopedSql + "\n" +
                                      RefreshCSharpSymbolFactsScopedSql + "\n" +
                                      RefreshCSharpTypeIdentityFactsSql + "\n" +
@@ -3026,15 +3077,16 @@ public partial class DbWriter
                                      RefreshCSharpPropertyTargetFactsScopedSql + "\n" +
                                      NormalizeCSharpPropertyReceiverReferencesScopedSql + "\n" +
                                      RefreshScopedReferenceUniqueFamiliesSql + "\n" +
-                                     RefreshScopedReferenceCandidatesSql + "\n" +
-                                     RefreshScopedReferenceResolutionSymbolFactsSql + "\n" +
-                                     RefreshScopedReferenceResolutionSql + "\n" +
-                                     ExpandReferenceGraphNewMutualScopeSql + "\n";
+                                     RefreshScopedReferenceCandidatesSql + "\n";
+                refreshResolutionSql =
+                    RefreshScopedReferenceResolutionSymbolFactsSql + "\n" +
+                    RefreshScopedReferenceResolutionSql + "\n" +
+                    ExpandReferenceGraphNewMutualScopeSql + "\n";
             }
             var hotspotReferenceFileIds = GetReferenceGraphRefreshFileIds(
                 refreshPlan.UseFullRefresh,
                 cancellationToken);
-            refreshIdentityCommand = RentCommand(refreshIdentitySql, static _ => { });
+            refreshCandidateCommand = RentCommand(refreshCandidateSql, static _ => { });
             // Reconcile the marker inside the same transaction, but before the graph refresh
             // so the public SQLite changes() result continues to describe recursion updates.
             // High-level indexing defers v7 while untouched legacy C# family rows remain.
@@ -3046,7 +3098,19 @@ public partial class DbWriter
                 ClearReferenceIdentityContractReady();
             cancellationToken.ThrowIfCancellationRequested();
             referenceSecondaryIndexBulkLoad?.ReportIdentityRefreshStarted();
-            refreshIdentityCommand.ExecuteNonQuery();
+            refreshCandidateCommand.ExecuteNonQuery();
+            cancellationToken.ThrowIfCancellationRequested();
+            ReferenceCandidateRefreshCompletedForTesting?.Invoke();
+            cancellationToken.ThrowIfCancellationRequested();
+            referenceSecondaryIndexBulkLoad?.PrepareForReferenceResolution(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            // Rent only after the reverse candidate index is restored. SQLite prepares a
+            // cached command on first use, so this ordering keeps the candidate-symbol EXISTS
+            // probe on its bounded (symbol_id, reference_id) lookup plan.
+            // candidate逆引きindexの復元後に初めてRentし、初回prepareから
+            // (symbol_id, reference_id)のbounded EXISTS lookup planを選ばせる。
+            refreshResolutionCommand = RentCommand(refreshResolutionSql, static _ => { });
+            refreshResolutionCommand.ExecuteNonQuery();
             cancellationToken.ThrowIfCancellationRequested();
             // Resolution changes alter the default C# common-call hotspot projection even
             // when the caller file itself was skipped. Refresh those source-file aggregates
@@ -3079,8 +3143,10 @@ public partial class DbWriter
         {
             if (refreshMutualCommand != null)
                 ReleaseCommand(refreshMutualCommand);
-            if (refreshIdentityCommand != null)
-                ReleaseCommand(refreshIdentityCommand);
+            if (refreshResolutionCommand != null)
+                ReleaseCommand(refreshResolutionCommand);
+            if (refreshCandidateCommand != null)
+                ReleaseCommand(refreshCandidateCommand);
             if (createCSharpReferenceFactIndexesCommand != null)
                 ReleaseCommand(createCSharpReferenceFactIndexesCommand);
             if (createUniqueFamiliesCommand != null)

@@ -4,7 +4,8 @@ namespace CodeIndex.Database;
 
 /// <summary>
 /// Temporarily removes reference-query and graph indexes while raw rows are populated, then
-/// removes the candidate reverse lookup only when graph candidate materialization begins.
+/// removes the candidate reverse lookup only while graph candidates are materialized. The
+/// reverse lookup is restored before candidate-backed resolution facts are prepared.
 /// File and reference-line maintenance indexes normally remain available; an authoritative
 /// empty-database CLI transaction may defer its two persistence-only probes until graph work.
 /// </summary>
@@ -172,6 +173,24 @@ internal sealed class ReferenceSecondaryIndexBulkLoadGuard : IDisposable
     }
 
     /// <summary>
+    /// Restore the candidate reverse lookup after candidate population and before the
+    /// separately prepared resolution command. Full resolution can then materialize target
+    /// keys only for candidate-bearing symbols using bounded reverse-index existence seeks.
+    /// candidate生成後、別commandのresolutionをprepareする前に逆引きindexを復元する。
+    /// これによりfull resolution factはboundedな逆引き存在seekを使い、candidateを持つ
+    /// symbolだけのtarget keyをmaterializeする。
+    /// </summary>
+    internal void PrepareForReferenceResolution(CancellationToken cancellationToken = default)
+    {
+        var writer = _writer;
+        if (writer == null)
+            return;
+
+        RestoreAuthoritativeFreshPersistenceIndexes(writer, cancellationToken);
+        writer.RestoreCandidateResolutionReferenceSecondaryIndexes(cancellationToken);
+    }
+
+    /// <summary>
     /// Restore every deferred index except the candidate reverse lookup. A later graph
     /// refresh can then populate candidates without maintaining that B-tree, while readiness
     /// work retains the ordinary reference query paths.
@@ -307,6 +326,15 @@ public partial class DbWriter
             ReferenceSecondaryIndexSql.GraphFinalizationRequired,
             cancellationToken);
         ReportReferenceSecondaryIndexBulkLoadState("graph_required_restored");
+    }
+
+    internal void RestoreCandidateResolutionReferenceSecondaryIndexes(
+        CancellationToken cancellationToken = default)
+    {
+        RestoreReferenceSecondaryIndexes(
+            ReferenceSecondaryIndexSql.CandidatePopulationDeferred,
+            cancellationToken);
+        ReportReferenceSecondaryIndexBulkLoadState("candidate_lookup_restored");
     }
 
     internal void RestoreReferenceSecondaryIndexesForDeferredGraph(

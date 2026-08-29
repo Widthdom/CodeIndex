@@ -387,9 +387,18 @@ public class DatabaseTests : IDisposable
                 sql,
                 StringComparison.Ordinal);
             Assert.Contains(
-                "HAVING COUNT(DISTINCT type_member.type_identity COLLATE BINARY) = 1",
+                "HAVING COUNT(type_member.type_identity) > 0",
                 sql,
                 StringComparison.Ordinal);
+            Assert.Contains(
+                "MIN(type_member.type_identity COLLATE BINARY)",
+                sql,
+                StringComparison.Ordinal);
+            Assert.Contains(
+                "IS MAX(type_member.type_identity COLLATE BINARY)",
+                sql,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain("COUNT(DISTINCT", sql, StringComparison.Ordinal);
             Assert.DoesNotContain("symbols AS other_type", sql, StringComparison.Ordinal);
             Assert.DoesNotContain("file-local:", sql, StringComparison.Ordinal);
             Assert.DoesNotContain("ranked_constructor_owners", sql, StringComparison.Ordinal);
@@ -1958,6 +1967,28 @@ public class DatabaseTests : IDisposable
             detail.Equals("SCAN type_symbol", StringComparison.OrdinalIgnoreCase)
             || detail.StartsWith("SCAN type_symbol ", StringComparison.OrdinalIgnoreCase));
 
+        var fullResolutionFacts = Assert.Single(
+            DbWriter.ReferenceResolutionFactSqlForTesting,
+            static entry => entry.Scope == "full");
+        var fullResolutionFactInsert = Assert.Single(
+            fullResolutionFacts.MaterializationSql
+                .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Where(static statement => statement.StartsWith(
+                    "INSERT INTO temp.reference_resolution_symbol_facts",
+                    StringComparison.Ordinal)));
+        var fullResolutionFactPlan = ReadQueryPlanDetails(
+            _db.Connection,
+            fullResolutionFactInsert);
+        Assert.Contains(fullResolutionFactPlan, static detail => detail.Contains(
+            "SEARCH candidate USING COVERING INDEX idx_symbol_ref_candidates_symbol",
+            StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(fullResolutionFactPlan, static detail =>
+            detail.Equals("SCAN candidate", StringComparison.OrdinalIgnoreCase)
+            || detail.StartsWith("SCAN candidate ", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(fullResolutionFactPlan, static detail => detail.Contains(
+            "USE TEMP B-TREE",
+            StringComparison.OrdinalIgnoreCase));
+
         var scopedResolutionFacts = Assert.Single(
             DbWriter.ReferenceResolutionFactSqlForTesting,
             static entry => entry.Scope == "scoped");
@@ -2759,6 +2790,175 @@ public class DatabaseTests : IDisposable
               AND symbol_name = 'helper'
             """));
         Assert.Equal("resolved", ReadReferenceResolutionState(fileId));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void RefreshReferenceIdentities_CancellationAfterCandidatesRollsBackAndRetries(
+        bool forceFullRefresh)
+    {
+        var fileId = UpsertTestFileWithLanguage(
+            "src/candidate-boundary.py",
+            "python",
+            $"candidate-boundary-{forceFullRefresh}");
+        _writer.InsertSymbols([
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "CandidateBoundary",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 1,
+            },
+        ]);
+        _writer.InsertReferences([
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "CandidateBoundary",
+                ReferenceKind = "call",
+                Line = 10,
+                Column = 1,
+                Context = "CandidateBoundary();",
+            },
+        ], refreshMutualRecursionFlags: false);
+        _writer.RefreshMutualRecursionFlags();
+        Assert.Equal(1, ExecuteScalarLong("SELECT COUNT(*) FROM symbol_reference_candidates"));
+        Assert.Equal("resolved", ReadReferenceResolutionState(fileId));
+
+        using var scope = _writer.BeginReferenceGraphRefreshScope(
+            forceFullRefresh: forceFullRefresh);
+        using (var transaction = _writer.BeginTransaction())
+        {
+            _writer.InsertSymbols([
+                new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "function",
+                    Name = "CandidateBoundary",
+                    Line = 2,
+                    StartLine = 2,
+                    EndLine = 2,
+                },
+            ]);
+            transaction.Commit();
+        }
+
+        var previousHook = DbWriter.ReferenceCandidateRefreshCompletedForTesting;
+        using var cancellation = new CancellationTokenSource();
+        var boundaryCount = 0;
+        try
+        {
+            DbWriter.ReferenceCandidateRefreshCompletedForTesting = () =>
+            {
+                boundaryCount++;
+                Assert.Equal(
+                    2,
+                    ExecuteScalarLong("SELECT COUNT(*) FROM symbol_reference_candidates"));
+                cancellation.Cancel();
+                previousHook?.Invoke();
+            };
+
+            var exception = Assert.Throws<OperationCanceledException>(() =>
+                _writer.RefreshMutualRecursionFlags(cancellation.Token));
+
+            Assert.Equal(cancellation.Token, exception.CancellationToken);
+            Assert.Equal(1, boundaryCount);
+            Assert.Equal(1, ExecuteScalarLong("SELECT COUNT(*) FROM symbol_reference_candidates"));
+            Assert.Equal("resolved", ReadReferenceResolutionState(fileId));
+        }
+        finally
+        {
+            DbWriter.ReferenceCandidateRefreshCompletedForTesting = previousHook;
+        }
+
+        _writer.RefreshMutualRecursionFlags();
+        Assert.Equal(2, ExecuteScalarLong("SELECT COUNT(*) FROM symbol_reference_candidates"));
+        Assert.Equal("resolved_group", ReadReferenceResolutionState(fileId));
+    }
+
+    [Fact]
+    public void RebuildRetainedReferenceGraph_CancellationAfterCandidatesRollsBackAndRetries()
+    {
+        var fileId = UpsertTestFileWithLanguage(
+            "src/retained-candidate-boundary.py",
+            "python",
+            "retained-candidate-boundary");
+        _writer.InsertSymbols([
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "RetainedBoundary",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 1,
+            },
+        ]);
+        _writer.InsertReferences([
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "RetainedBoundary",
+                ReferenceKind = "call",
+                Line = 10,
+                Column = 1,
+                Context = "RetainedBoundary();",
+            },
+        ], refreshMutualRecursionFlags: false);
+        _writer.RefreshMutualRecursionFlags();
+        Assert.Equal(1, ExecuteScalarLong("SELECT COUNT(*) FROM symbol_reference_candidates"));
+
+        _writer.InsertSymbols([
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "RetainedBoundary",
+                Line = 2,
+                StartLine = 2,
+                EndLine = 2,
+            },
+        ]);
+
+        var previousHook = DbWriter.ReferenceCandidateRefreshCompletedForTesting;
+        using var cancellation = new CancellationTokenSource();
+        try
+        {
+            DbWriter.ReferenceCandidateRefreshCompletedForTesting = () =>
+            {
+                Assert.Equal(
+                    2,
+                    ExecuteScalarLong("SELECT COUNT(*) FROM symbol_reference_candidates"));
+                cancellation.Cancel();
+                previousHook?.Invoke();
+            };
+            using var transaction = _db.Connection.BeginTransaction();
+            var exception = Assert.Throws<OperationCanceledException>(() =>
+                DbWriter.RebuildRetainedReferenceGraph(
+                    _db.Connection,
+                    transaction,
+                    cancellation.Token));
+            Assert.Equal(cancellation.Token, exception.CancellationToken);
+        }
+        finally
+        {
+            DbWriter.ReferenceCandidateRefreshCompletedForTesting = previousHook;
+        }
+
+        Assert.Equal(1, ExecuteScalarLong("SELECT COUNT(*) FROM symbol_reference_candidates"));
+        using (var retry = _db.Connection.BeginTransaction())
+        {
+            DbWriter.RebuildRetainedReferenceGraph(
+                _db.Connection,
+                retry,
+                CancellationToken.None);
+            retry.Commit();
+        }
+        Assert.Equal(2, ExecuteScalarLong("SELECT COUNT(*) FROM symbol_reference_candidates"));
+        Assert.Equal("resolved_group", ReadReferenceResolutionState(fileId));
     }
 
     [Fact]

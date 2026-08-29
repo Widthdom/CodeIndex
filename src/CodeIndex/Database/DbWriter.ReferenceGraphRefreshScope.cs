@@ -88,9 +88,15 @@ public partial class DbWriter
           AND target_file.lang = dirty_name.lang
           AND target_file.lang <> 'ambiguous_m'
         GROUP BY target_file.lang, s.name_folded
-        HAVING COUNT(DISTINCT target_file.path || char(31) ||
-                              COALESCE(s.container_qualified_name, s.container_name, '') || char(31) ||
-                              COALESCE(s.name, '')) = 1;
+        HAVING COUNT(target_file.path || char(31) ||
+                     COALESCE(s.container_qualified_name, s.container_name, '') || char(31) ||
+                     COALESCE(s.name, '')) > 0
+           AND MIN(target_file.path || char(31) ||
+                   COALESCE(s.container_qualified_name, s.container_name, '') || char(31) ||
+                   COALESCE(s.name, ''))
+               IS MAX(target_file.path || char(31) ||
+                      COALESCE(s.container_qualified_name, s.container_name, '') || char(31) ||
+                      COALESCE(s.name, ''));
 
         -- Keep the scoped projection aligned with the full-refresh union-wide
         -- uniqueness contract for callers whose .m dialect is unresolved.
@@ -109,9 +115,15 @@ public partial class DbWriter
           AND s.name_folded = dirty_name.name_folded
           AND target_file.lang IN ('matlab', 'objc')
         GROUP BY s.name_folded
-        HAVING COUNT(DISTINCT target_file.path || char(31) ||
-                              COALESCE(s.container_qualified_name, s.container_name, '') || char(31) ||
-                              COALESCE(s.name, '')) = 1;
+        HAVING COUNT(target_file.path || char(31) ||
+                     COALESCE(s.container_qualified_name, s.container_name, '') || char(31) ||
+                     COALESCE(s.name, '')) > 0
+           AND MIN(target_file.path || char(31) ||
+                   COALESCE(s.container_qualified_name, s.container_name, '') || char(31) ||
+                   COALESCE(s.name, ''))
+               IS MAX(target_file.path || char(31) ||
+                      COALESCE(s.container_qualified_name, s.container_name, '') || char(31) ||
+                      COALESCE(s.name, ''));
         """;
 
     private static readonly string RefreshScopedReferenceCandidatesSql = BuildScopedReferenceCandidatesSql();
