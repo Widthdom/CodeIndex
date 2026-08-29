@@ -33,6 +33,11 @@ public static partial class SymbolExtractor
         int LineIndex,
         PreparedPatternLine PreparedLine);
 
+    private struct PatternLineScanState
+    {
+        public CSharpPropertyMatchCandidate? CSharpPropertyCandidateForLine;
+    }
+
     // Candidate-local proof cache shared only by the outer C# pattern loop and its
     // recoverable-pattern helper. The count encoding keeps default(struct) empty and prevents
     // an out-of-order miss from claiming an unproven gap in pattern priority.

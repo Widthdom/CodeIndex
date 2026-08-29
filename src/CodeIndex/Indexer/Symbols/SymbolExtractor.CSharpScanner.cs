@@ -1560,6 +1560,8 @@ public static partial class SymbolExtractor
         bool applyCSharpRegexProbeOptimizations,
         CSharpRegexProbeCounts? csharpRegexProbeCounts)
     {
+        if (csharpRegexProbeCounts != null)
+            csharpRegexProbeCounts.PropertyCandidateBuildCount++;
         var matchLine = csharpMatchLines[startLineIndex];
         var matchLineSpan = matchLine.AsSpan();
         if (IsCSharpNonMemberHeaderLine(matchLineSpan))
@@ -1570,6 +1572,14 @@ public static partial class SymbolExtractor
         {
             if (csharpRegexProbeCounts != null)
                 csharpRegexProbeCounts.PropertyPrefixSuffixSkipCount++;
+            return new CSharpPropertyMatchCandidate(matchLine, startLineIndex, startLineIndex);
+        }
+
+        if (applyCSharpRegexProbeOptimizations
+            && CanSkipCSharpPropertyStructuralShape(trimmedMatchLine))
+        {
+            if (csharpRegexProbeCounts != null)
+                csharpRegexProbeCounts.PropertyStructuralShapeSkipCount++;
             return new CSharpPropertyMatchCandidate(matchLine, startLineIndex, startLineIndex);
         }
 
@@ -1760,6 +1770,22 @@ public static partial class SymbolExtractor
         var terminal = line[^1];
         return terminal is ';' or '}'
             || terminal == '=' && line.IndexOf('(') < 0;
+    }
+
+    private static bool CanSkipCSharpPropertyStructuralShape(ReadOnlySpan<char> line)
+    {
+        if (line[0] is '{' or '}' or '#')
+            return true;
+        if (line[^1] != '{')
+            return false;
+
+        for (var index = line.Length - 2; index >= 0; index--)
+        {
+            if (!char.IsWhiteSpace(line[index]))
+                return line[index] == ')';
+        }
+
+        return true;
     }
 
     private static bool IsCSharpNonMemberHeaderLine(ReadOnlySpan<char> line)

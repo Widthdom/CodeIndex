@@ -55,11 +55,15 @@ public static partial class SymbolExtractor
         PreparedPatternLine preparedLine)
     {
         var lineContext = new PatternLineScanContext(context, i, preparedLine);
+        var lineScanState = new PatternLineScanState();
         var patternStartOffset = preparedLine.PatternStartOffset;
         while (patternStartOffset >= 0
             && patternStartOffset < preparedLine.MatchLine.Length)
         {
-            var result = ScanPatternListAtOffset(lineContext, patternStartOffset);
+            var result = ScanPatternListAtOffset(
+                lineContext,
+                patternStartOffset,
+                ref lineScanState);
             if (result.Flow != PatternScanFlow.RestartPatternList
                 || result.NextOffset <= patternStartOffset)
             {
@@ -72,7 +76,8 @@ public static partial class SymbolExtractor
 
     private static PatternScanResult ScanPatternListAtOffset(
         PatternLineScanContext lineContext,
-        int patternStartOffset)
+        int patternStartOffset,
+        ref PatternLineScanState lineScanState)
     {
         var extraction = lineContext.Extraction;
         var patternStartState = new PatternStartScanState();
@@ -87,7 +92,8 @@ public static partial class SymbolExtractor
                 pattern,
                 patternIndex,
                 patternStartOffset,
-                ref patternStartState);
+                ref patternStartState,
+                ref lineScanState);
             var result = ScanApplicablePattern(
                 ref patternScan,
                 ref patternStartState);
@@ -132,7 +138,8 @@ public static partial class SymbolExtractor
         SymbolPattern pattern,
         int patternIndex,
         int patternStartOffset,
-        ref PatternStartScanState patternStartState)
+        ref PatternStartScanState patternStartState,
+        ref PatternLineScanState lineScanState)
     {
         var extraction = lineContext.Extraction;
         var lines = extraction.Lines;
@@ -152,13 +159,21 @@ public static partial class SymbolExtractor
         // 受け付けないため影響を受けず、merger は元の行をそのまま返す。Closes #355.
         var csharpPropertyCandidate = extraction.Lang == "csharp"
             && pattern.Kind is "property" or "function"
-                ? patternStartState.CSharpPropertyCandidateForLine ??=
-                    BuildCSharpPropertyMatchLine(
-                        lines,
-                        csharpMatchLines!,
-                        i,
-                        extraction.ApplyCSharpRegexProbeOptimizations,
-                        extraction.CSharpRegexProbeCounts)
+                ? extraction.ApplyCSharpRegexProbeOptimizations
+                    ? lineScanState.CSharpPropertyCandidateForLine ??=
+                        BuildCSharpPropertyMatchLine(
+                            lines,
+                            csharpMatchLines!,
+                            i,
+                            applyCSharpRegexProbeOptimizations: true,
+                            extraction.CSharpRegexProbeCounts)
+                    : patternStartState.CSharpPropertyCandidateForLine ??=
+                        BuildCSharpPropertyMatchLine(
+                            lines,
+                            csharpMatchLines!,
+                            i,
+                            applyCSharpRegexProbeOptimizations: false,
+                            extraction.CSharpRegexProbeCounts)
                 : new CSharpPropertyMatchCandidate(
                     lineContext.PreparedLine.MatchLine,
                     i,

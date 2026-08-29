@@ -351,6 +351,8 @@ public static partial class SymbolExtractor
     private sealed class CSharpRegexProbeCounts
     {
         public int PropertyPrefixSuffixSkipCount { get; set; }
+        public int PropertyCandidateBuildCount { get; set; }
+        public int PropertyStructuralShapeSkipCount { get; set; }
         public int PropertyHeaderRegexAttemptCount { get; set; }
         public int MethodHeaderRegexAttemptCount { get; set; }
         public int PlainFieldTerminatorSkipCount { get; set; }
@@ -368,6 +370,8 @@ public static partial class SymbolExtractor
 
     internal readonly record struct CSharpRegexProbeMetrics(
         int PropertyPrefixSuffixSkipCount,
+        int PropertyCandidateBuildCount,
+        int PropertyStructuralShapeSkipCount,
         int PropertyHeaderRegexAttemptCount,
         int MethodHeaderRegexAttemptCount,
         int PlainFieldTerminatorSkipCount,
@@ -448,6 +452,8 @@ public static partial class SymbolExtractor
             csharpRegexProbeCounts: counts);
         metrics = new CSharpRegexProbeMetrics(
             counts.PropertyPrefixSuffixSkipCount,
+            counts.PropertyCandidateBuildCount,
+            counts.PropertyStructuralShapeSkipCount,
             counts.PropertyHeaderRegexAttemptCount,
             counts.MethodHeaderRegexAttemptCount,
             counts.PlainFieldTerminatorSkipCount,
