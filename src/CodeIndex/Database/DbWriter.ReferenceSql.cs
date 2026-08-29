@@ -172,6 +172,36 @@ public partial class DbWriter
     internal static string BuildReferenceLineInsertSqlForTesting(int rowCount)
         => BuildReferenceLineInsertSql(rowCount);
 
+    private static string BuildAuthoritativeFreshReferenceLineInsertSql(int rowCount)
+    {
+        var sql = CreateBatchSqlBuilder(rowCount, estimatedCharsPerRow: 72);
+        sql.Append(@"
+                WITH input(input_ordinal, file_id, line, context) AS (
+                    VALUES ");
+        // ?1 is the checked first ID. The remaining slots preserve row/column order.
+        var parameterIndex = 1;
+        for (var row = 0; row < rowCount; row++)
+        {
+            if (row > 0)
+                sql.Append(", ");
+            sql.Append('(').Append(row);
+            for (var column = 0; column < 3; column++)
+            {
+                sql.Append(", ");
+                AppendBatchParameter(sql, ref parameterIndex);
+            }
+            sql.Append(')');
+        }
+        return sql.Append(@"
+                )
+                INSERT INTO reference_lines (id, file_id, line, context)
+                SELECT ?1 + input_ordinal, file_id, line, context
+                FROM input").ToString();
+    }
+
+    internal static string BuildAuthoritativeFreshReferenceLineInsertSqlForTesting(int rowCount)
+        => BuildAuthoritativeFreshReferenceLineInsertSql(rowCount);
+
     private static string BuildReferenceLineValuesInsertSql(int rowCount, string suffix)
     {
         var sql = CreateBatchSqlBuilder(rowCount, estimatedCharsPerRow: 64);

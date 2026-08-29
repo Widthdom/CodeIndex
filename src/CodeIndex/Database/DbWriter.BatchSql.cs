@@ -104,13 +104,17 @@ public partial class DbWriter
             MaxCallerTransactionBatchParameters / columnCount));
     }
 
-    private static int GetRowsPerAuthoritativeFreshRawInsertStatement(int columnCount)
+    private static int GetRowsPerAuthoritativeFreshRawInsertStatement(
+        int columnCount,
+        int fixedParameterCount = 0)
     {
         if (columnCount <= 0)
             throw new ArgumentOutOfRangeException(nameof(columnCount));
+        if (fixedParameterCount < 0 || fixedParameterCount >= MaxAuthoritativeFreshRawBatchParameters)
+            throw new ArgumentOutOfRangeException(nameof(fixedParameterCount));
 
         return Math.Max(1, Math.Min(
             GetRowsPerInsertStatement(columnCount),
-            MaxAuthoritativeFreshRawBatchParameters / columnCount));
+            (MaxAuthoritativeFreshRawBatchParameters - fixedParameterCount) / columnCount));
     }
 }

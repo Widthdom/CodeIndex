@@ -3559,11 +3559,11 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void Run_FreshFullScan_RawReturningFailureRollsBackFileAndSerialConsumerContinues()
+    public void Run_FreshFullScan_RawChangedRowValidationFailureRollsBackFileAndSerialConsumerContinues()
     {
         var projectRoot = CreateTempProject();
         var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-        var previousRowHook = DbWriter.AuthoritativeFreshRawReturningRowForTesting;
+        var previousChangedRowsHook = DbWriter.AuthoritativeFreshRawChangedRowCountForTesting;
         var previousRawHook = DbWriter.AuthoritativeFreshRawInsertExecutingForTesting;
         var previousRawScopeHook = DbWriter.AuthoritativeFreshRawInsertScopeDisposedForTesting;
         var rawWork = new List<DbWriter.AuthoritativeFreshRawInsertWork>();
@@ -3580,16 +3580,16 @@ public partial class IndexCommandRunnerTests
                     $"def caller_{index}():\n    target_{index}()\n");
             }
 
-            DbWriter.AuthoritativeFreshRawReturningRowForTesting = row =>
+            DbWriter.AuthoritativeFreshRawChangedRowCountForTesting = change =>
             {
-                var transformed = previousRowHook?.Invoke(row) ?? row;
-                if (transformed.Operation == "insert_reference_lines"
+                var actual = previousChangedRowsHook?.Invoke(change) ?? change.ActualChangedRows;
+                if (change.Operation == "insert_reference_lines"
                     && Interlocked.Exchange(ref injected, 1) == 0)
                 {
                     throw new InvalidOperationException(
-                        "injected raw RETURNING failure after the first row");
+                        "injected raw changed-row validation failure");
                 }
-                return transformed;
+                return actual;
             };
             DbWriter.AuthoritativeFreshRawInsertExecutingForTesting = work =>
             {
@@ -3652,7 +3652,7 @@ public partial class IndexCommandRunnerTests
         }
         finally
         {
-            DbWriter.AuthoritativeFreshRawReturningRowForTesting = previousRowHook;
+            DbWriter.AuthoritativeFreshRawChangedRowCountForTesting = previousChangedRowsHook;
             DbWriter.AuthoritativeFreshRawInsertExecutingForTesting = previousRawHook;
             DbWriter.AuthoritativeFreshRawInsertScopeDisposedForTesting = previousRawScopeHook;
             DeleteDirectory(projectRoot);

@@ -177,6 +177,8 @@ public partial class DbWriter
     private static readonly ConcurrentDictionary<int, string> ReferenceLineUpsertSqlCache = new();
     private static readonly ConcurrentDictionary<int, string> ReferenceLineLookupSqlCache = new();
     private static readonly ConcurrentDictionary<int, string> ReferenceLineInsertSqlCache = new();
+    private static readonly ConcurrentDictionary<int, string>
+        AuthoritativeFreshReferenceLineInsertSqlCache = new();
     private static readonly BoundedRegex CSharpExternAliasSignatureRegex = new(
         @"^\s*extern\s+alias\b",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);

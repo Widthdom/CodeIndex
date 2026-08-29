@@ -2687,7 +2687,9 @@ public partial class DbWriter
         }
 
         int rowsPerStatement = useAuthoritativeFreshRawInsert
-            ? GetRowsPerAuthoritativeFreshRawInsertStatement(columnCount: 3)
+            ? GetRowsPerAuthoritativeFreshRawInsertStatement(
+                columnCount: 3,
+                fixedParameterCount: 1)
             : useCallerTransactionParameterBudget
                 ? GetRowsPerCallerTransactionInsertStatement(columnCount: 3)
                 : GetRowsPerInsertStatement(columnCount: 3);

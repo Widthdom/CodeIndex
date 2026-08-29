@@ -9492,7 +9492,7 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
-    public void ReferenceLineFreshInsert_ReturnsOnlyIdAndInputOrdinal()
+    public void ReferenceLineProviderFreshInsert_ReturnsOnlyIdAndInputOrdinal()
     {
         const int StatementRowCount = 4;
         var sql = DbWriter.BuildReferenceLineInsertSqlForTesting(StatementRowCount);
@@ -9535,6 +9535,90 @@ public class DatabaseTests : IDisposable
             Enumerable.Range(0, StatementRowCount),
             returned.Select(static row => row.Ordinal).OrderBy(static ordinal => ordinal));
         Assert.All(returned, static row => Assert.True(row.Id > 0));
+    }
+
+    [Fact]
+    public void AuthoritativeFreshReferenceLineInsert_AssignsContiguousIdsWithoutReturningScan()
+    {
+        const int statementRowCount = 4;
+        const long firstId = 50_000;
+        var sql = DbWriter.BuildAuthoritativeFreshReferenceLineInsertSqlForTesting(statementRowCount);
+
+        Assert.Contains(
+            "WITH input(input_ordinal, file_id, line, context)",
+            sql,
+            StringComparison.Ordinal);
+        Assert.Contains("INSERT INTO reference_lines (id, file_id, line, context)", sql, StringComparison.Ordinal);
+        Assert.Contains("SELECT ?1 + input_ordinal", sql, StringComparison.Ordinal);
+        Assert.DoesNotContain("RETURNING", sql, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("SELECT input_ordinal", sql, StringComparison.Ordinal);
+        Assert.Contains("?13", sql, StringComparison.Ordinal);
+        Assert.DoesNotContain("?14", sql, StringComparison.Ordinal);
+
+        using (var command = _db.Connection.CreateCommand())
+        {
+            command.CommandText = "EXPLAIN QUERY PLAN "
+                + DbWriter.AuthoritativeFreshReferenceLineIdFloorSqlForTesting;
+            var plan = new List<string>();
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+                plan.Add(reader.GetString(3));
+            Assert.Contains(
+                plan,
+                detail => detail.Contains("SEARCH reference_lines", StringComparison.OrdinalIgnoreCase));
+            Assert.DoesNotContain(
+                plan,
+                detail => detail.Contains("SCAN reference_lines", StringComparison.OrdinalIgnoreCase));
+        }
+
+        var fileIds = Enumerable.Range(0, statementRowCount)
+            .Select(row => UpsertTestFile(
+                $"src/reference-line-raw-{row}.cs",
+                checksum: $"reference-line-raw-{row}"))
+            .ToArray();
+        using (var command = _db.Connection.CreateCommand())
+        {
+            command.CommandText = sql;
+            Bind(command, fileIds);
+            Assert.Equal(statementRowCount, command.ExecuteNonQuery());
+        }
+
+        using (var command = _db.Connection.CreateCommand())
+        {
+            command.CommandText = "EXPLAIN QUERY PLAN " + sql;
+            Bind(command, fileIds);
+            var plan = new List<string>();
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+                plan.Add(reader.GetString(3));
+            Assert.DoesNotContain(
+                plan,
+                detail => detail.Contains("CORRELATED", StringComparison.OrdinalIgnoreCase));
+        }
+
+        using (var command = _db.Connection.CreateCommand())
+        {
+            command.CommandText = "SELECT id FROM reference_lines ORDER BY id";
+            using var reader = command.ExecuteReader();
+            var ids = new List<long>();
+            while (reader.Read())
+                ids.Add(reader.GetInt64(0));
+            Assert.Equal(
+                Enumerable.Range(0, statementRowCount).Select(offset => firstId + offset),
+                ids);
+        }
+
+        static void Bind(SqliteCommand command, IReadOnlyList<long> fileIds)
+        {
+            command.Parameters.AddWithValue("?1", firstId);
+            for (var row = 0; row < statementRowCount; row++)
+            {
+                var parameterBase = row * 3 + 1;
+                command.Parameters.AddWithValue($"?{parameterBase + 1}", fileIds[row]);
+                command.Parameters.AddWithValue($"?{parameterBase + 2}", row + 20);
+                command.Parameters.AddWithValue($"?{parameterBase + 3}", $"raw-文脈-{row}-😀");
+            }
+        }
     }
 
     [Fact]
