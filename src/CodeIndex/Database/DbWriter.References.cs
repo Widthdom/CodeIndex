@@ -1335,135 +1335,88 @@ public partial class DbWriter
           );
 
         INSERT INTO symbol_reference_candidates(reference_id, symbol_id, scope_rank)
-        SELECT r.id, s.id, 1
-        FROM symbol_references AS r
-        JOIN files AS source_file ON source_file.id = r.file_id
-        JOIN symbols AS s
-          ON s.name_folded IN (
-              r.symbol_name_folded,
-              CASE WHEN source_file.lang = 'csharp' AND r.reference_kind = 'attribute'
-                   THEN r.symbol_name_folded || 'attribute' END
-          )
-        JOIN files AS target_file ON target_file.id = s.file_id
-        JOIN symbols AS source ON source.id = r.source_symbol_id
-        WHERE (
-              (source_file.lang = target_file.lang
-               AND (source_file.lang <> 'ambiguous_m' OR source_file.id = target_file.id))
-              OR (source_file.lang = 'ambiguous_m' AND target_file.lang IN ('matlab', 'objc'))
-          )
-          AND {CSharpTypeReferenceCandidatePredicateSql}
-          AND source_file.lang <> 'markdown'
-          AND (
-              r.target_qualifier IS NULL
-              OR (source_file.lang = 'csharp'
-                  AND r.target_qualifier = char(31) || 'csharp_nonlocal')
-          )
-          AND s.file_id = r.file_id
-          AND source.container_name IS NOT NULL
-          AND source.container_name <> ''
-          AND (
-              s.container_name = source.container_name COLLATE NOCASE
-              OR s.container_qualified_name = source.container_qualified_name COLLATE NOCASE
-          )
-          AND NOT EXISTS (
-              SELECT 1 FROM symbol_reference_candidates AS existing
-              WHERE existing.reference_id = r.id
-          );
-
-        INSERT INTO symbol_reference_candidates(reference_id, symbol_id, scope_rank)
-        SELECT r.id, s.id, 2
-        FROM symbol_references AS r
-        JOIN files AS source_file ON source_file.id = r.file_id
-        JOIN symbols AS s
-          ON s.name_folded IN (
-              r.symbol_name_folded,
-              CASE WHEN source_file.lang = 'csharp' AND r.reference_kind = 'attribute'
-                   THEN r.symbol_name_folded || 'attribute' END
-          )
-        JOIN files AS target_file ON target_file.id = s.file_id
-        JOIN symbols AS source ON source.id = r.source_symbol_id
-        WHERE (
-              (source_file.lang = target_file.lang
-               AND (source_file.lang <> 'ambiguous_m' OR source_file.id = target_file.id))
-              OR (source_file.lang = 'ambiguous_m' AND target_file.lang IN ('matlab', 'objc'))
-          )
-          AND {CSharpTypeReferenceCandidatePredicateSql}
-          AND source_file.lang <> 'markdown'
-          AND (
-              r.target_qualifier IS NULL
-              OR (source_file.lang = 'csharp'
-                  AND r.target_qualifier = char(31) || 'csharp_nonlocal')
-          )
-          AND (source_file.lang <> 'dependency_lock' OR s.file_id = r.file_id)
-          AND source.container_qualified_name IS NOT NULL
-          AND source.container_qualified_name <> ''
-          AND s.container_qualified_name = source.container_qualified_name COLLATE NOCASE
-          AND NOT EXISTS (
-              SELECT 1 FROM symbol_reference_candidates AS existing
-              WHERE existing.reference_id = r.id
-          );
-
-        INSERT INTO symbol_reference_candidates(reference_id, symbol_id, scope_rank)
-        SELECT r.id, s.id, 3
-        FROM symbol_references AS r
-        JOIN files AS source_file ON source_file.id = r.file_id
-        JOIN symbols AS s
-          ON s.name_folded IN (
-              r.symbol_name_folded,
-              CASE WHEN source_file.lang = 'csharp' AND r.reference_kind = 'attribute'
-                   THEN r.symbol_name_folded || 'attribute' END
-          )
-        JOIN files AS target_file ON target_file.id = s.file_id
-        WHERE (
-              (source_file.lang = target_file.lang
-               AND (source_file.lang <> 'ambiguous_m' OR source_file.id = target_file.id))
-              OR (source_file.lang = 'ambiguous_m' AND target_file.lang IN ('matlab', 'objc'))
-          )
-          AND {CSharpTypeReferenceCandidatePredicateSql}
-          AND source_file.lang <> 'markdown'
-          AND (
-              r.target_qualifier IS NULL
-              OR (source_file.lang = 'csharp'
-                  AND r.target_qualifier = char(31) || 'csharp_nonlocal')
-          )
-          AND s.file_id = r.file_id
-          AND NOT EXISTS (
-              SELECT 1 FROM symbol_reference_candidates AS existing
-              WHERE existing.reference_id = r.id
-          );
-
-        INSERT INTO symbol_reference_candidates(reference_id, symbol_id, scope_rank)
-        SELECT r.id, s.id, 4
-        FROM symbol_references AS r
-        JOIN files AS source_file ON source_file.id = r.file_id
-        JOIN symbols AS s
-          ON s.name_folded IN (
-              r.symbol_name_folded,
-              CASE WHEN source_file.lang = 'csharp' AND r.reference_kind = 'attribute'
-                   THEN r.symbol_name_folded || 'attribute' END
-          )
-        JOIN files AS target_file ON target_file.id = s.file_id
-        JOIN symbols AS source ON source.id = r.source_symbol_id
-        WHERE (
-              (source_file.lang = target_file.lang
-               AND (source_file.lang <> 'ambiguous_m' OR source_file.id = target_file.id))
-              OR (source_file.lang = 'ambiguous_m' AND target_file.lang IN ('matlab', 'objc'))
-          )
-          AND {CSharpTypeReferenceCandidatePredicateSql}
-          AND source_file.lang <> 'markdown'
-          AND (
-              r.target_qualifier IS NULL
-              OR (source_file.lang = 'csharp'
-                  AND r.target_qualifier = char(31) || 'csharp_nonlocal')
-          )
-          AND (source_file.lang <> 'dependency_lock' OR s.file_id = r.file_id)
-          AND source.container_name IS NOT NULL
-          AND source.container_name <> ''
-          AND s.container_name = source.container_name COLLATE NOCASE
-          AND NOT EXISTS (
-              SELECT 1 FROM symbol_reference_candidates AS existing
-              WHERE existing.reference_id = r.id
-          );
+        -- Ranks 1-4 share the same reference/name/language candidate relation. Materialize
+        -- that relation once, assign each pair its best applicable rank, then retain every
+        -- candidate tied at the reference's minimum rank. A LEFT JOIN preserves the rank-3
+        -- same-file fallback when source-symbol attribution is unavailable.
+        -- rank 1-4で共通するreference/name/language候補を一度だけmaterializeし、各pairの
+        -- 最良rankを求めた後、referenceごとの最小rankに同順位の全candidateを保持する。
+        -- source symbol不明でもrank 3のsame-file fallbackを残すためLEFT JOINを使う。
+        WITH scope_candidates(reference_id, symbol_id, scope_rank) AS MATERIALIZED (
+            SELECT r.id,
+                   s.id,
+                   CASE
+                       WHEN s.file_id = r.file_id
+                        AND source.container_name IS NOT NULL
+                        AND source.container_name <> ''
+                        AND (
+                            s.container_name = source.container_name COLLATE NOCASE
+                            OR s.container_qualified_name =
+                                source.container_qualified_name COLLATE NOCASE
+                        ) THEN 1
+                       WHEN source.container_qualified_name IS NOT NULL
+                        AND source.container_qualified_name <> ''
+                        AND s.container_qualified_name =
+                            source.container_qualified_name COLLATE NOCASE THEN 2
+                       WHEN s.file_id = r.file_id THEN 3
+                       WHEN source.container_name IS NOT NULL
+                        AND source.container_name <> ''
+                        AND s.container_name = source.container_name COLLATE NOCASE THEN 4
+                   END
+            FROM symbol_references AS r
+            JOIN files AS source_file ON source_file.id = r.file_id
+            JOIN symbols AS s
+              ON s.name_folded IN (
+                  r.symbol_name_folded,
+                  CASE WHEN source_file.lang = 'csharp' AND r.reference_kind = 'attribute'
+                       THEN r.symbol_name_folded || 'attribute' END
+              )
+            JOIN files AS target_file ON target_file.id = s.file_id
+            LEFT JOIN symbols AS source ON source.id = r.source_symbol_id
+            WHERE (
+                  (source_file.lang = target_file.lang
+                   AND (source_file.lang <> 'ambiguous_m' OR source_file.id = target_file.id))
+                  OR (source_file.lang = 'ambiguous_m' AND target_file.lang IN ('matlab', 'objc'))
+              )
+              AND {CSharpTypeReferenceCandidatePredicateSql}
+              AND source_file.lang <> 'markdown'
+              AND (
+                  r.target_qualifier IS NULL
+                  OR (source_file.lang = 'csharp'
+                      AND r.target_qualifier = char(31) || 'csharp_nonlocal')
+              )
+              AND (source_file.lang <> 'dependency_lock' OR s.file_id = r.file_id)
+              AND (
+                  s.file_id = r.file_id
+                  OR (
+                      source.container_qualified_name IS NOT NULL
+                      AND source.container_qualified_name <> ''
+                      AND s.container_qualified_name =
+                          source.container_qualified_name COLLATE NOCASE
+                  )
+                  OR (
+                      source.container_name IS NOT NULL
+                      AND source.container_name <> ''
+                      AND s.container_name = source.container_name COLLATE NOCASE
+                  )
+              )
+              AND NOT EXISTS (
+                  SELECT 1 FROM symbol_reference_candidates AS existing
+                  WHERE existing.reference_id = r.id
+              )
+        ),
+        minimum_scopes(reference_id, scope_rank) AS MATERIALIZED (
+            SELECT reference_id, MIN(scope_rank)
+            FROM scope_candidates
+            GROUP BY reference_id
+        )
+        SELECT candidate.reference_id,
+               candidate.symbol_id,
+               candidate.scope_rank
+        FROM scope_candidates AS candidate
+        JOIN minimum_scopes AS minimum_scope
+          ON minimum_scope.reference_id = candidate.reference_id
+         AND minimum_scope.scope_rank = candidate.scope_rank;
 
         -- Rank-5 fallbacks only need to know whether a lower rank matched. Keep that
         -- one-row-per-reference fact compact instead of probing the much larger

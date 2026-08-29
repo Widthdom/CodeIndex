@@ -478,6 +478,12 @@ retained rebuilds use the complete C# symbol-fact population. Property-receiver
 normalization must likewise drive from flagged reference facts and the target fact
 primary key; scoped target materialization is restricted to its lookup-name set.
 
+Language-independent scope ranks 1–4 must build their shared reference/name/language
+candidate relation once in a materialized CTE, assign each reference/symbol pair its best
+applicable rank, and retain every candidate tied at the reference's minimum rank. Keep source
+symbol attribution optional so the rank-3 same-file fallback survives missing source identity,
+and keep scoped refreshes driven from dirty reference IDs into the reference primary key.
+
 After rank 0–4 candidate construction, graph finalization materializes the
 distinct matching reference IDs into a compact `WITHOUT ROWID` TEMP table. All
 language-independent and C# rank-5 fallbacks consult that set instead of probing
@@ -4699,6 +4705,12 @@ scalar function へ再入したりせず、primary-key の fact lookup を使い
 lookup-name 集合だけに限定し、identity fact もその限定済み集合から作ります。full / retained rebuild は
 C# symbol fact の全対象を使います。property-receiver normalization も flag 済み reference fact と target fact の
 primary key から駆動し、scoped target materialization は lookup-name 集合だけに限定してください。
+
+言語共通の scope rank 1〜4 は、共有する reference / name / language candidate relation を
+materialized CTE で1回だけ構築し、reference / symbol pair ごとの最良rankを割り当てたうえで、
+reference ごとの最小rankに同順位の全candidateを保持します。source identity が不明でも rank 3 の
+same-file fallback を残し、scoped refresh は dirty reference ID から reference primary key へ
+駆動する契約を維持してください。
 
 rank 0〜4 の candidate 構築後は、一致した reference ID の distinct 集合を compact な
 `WITHOUT ROWID` TEMP table に materialize します。言語共通および C# の rank 5 fallback は

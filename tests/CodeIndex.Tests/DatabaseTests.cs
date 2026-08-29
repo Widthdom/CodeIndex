@@ -361,6 +361,17 @@ public class DatabaseTests : IDisposable
         Assert.Equal(["full", "scoped", "retained"], candidateStages.Select(static stage => stage.Scope));
         foreach (var (scope, sql) in candidateStages)
         {
+            Assert.Equal(1, CountOccurrences(sql, "scope_candidates("));
+            Assert.Equal(1, CountOccurrences(sql, "minimum_scopes("));
+            Assert.Contains(
+                "scope_candidates(reference_id, symbol_id, scope_rank) AS MATERIALIZED",
+                sql,
+                StringComparison.Ordinal);
+            Assert.Contains(
+                "minimum_scopes(reference_id, scope_rank) AS MATERIALIZED",
+                sql,
+                StringComparison.Ordinal);
+            Assert.Contains("LEFT JOIN symbols AS source", sql, StringComparison.Ordinal);
             Assert.Contains("temp.csharp_type_identity_facts", sql, StringComparison.Ordinal);
             Assert.Contains("temp.csharp_constructor_identity_facts", sql, StringComparison.Ordinal);
             Assert.Contains(
@@ -469,6 +480,143 @@ public class DatabaseTests : IDisposable
 
             return count;
         }
+    }
+
+    [Theory]
+    [InlineData("csharp", ".cs")]
+    [InlineData("python", ".py")]
+    public void ReferenceScopeCandidates_MaterializeMinimumRankAndPreserveTies(
+        string language,
+        string extension)
+    {
+        var callerFileId = UpsertTestFileWithLanguage(
+            $"scope/{language}/Caller{extension}",
+            language,
+            $"{language}-scope-caller");
+        var targetFileId = UpsertTestFileWithLanguage(
+            $"scope/{language}/Targets{extension}",
+            language,
+            $"{language}-scope-targets");
+        _writer.InsertSymbols([
+            new SymbolRecord
+            {
+                FileId = callerFileId,
+                Kind = "function",
+                Name = "Caller",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 20,
+                ContainerName = "Outer",
+                ContainerQualifiedName = "Demo.Outer",
+            },
+            Target(callerFileId, "TieTarget", 30, "Outer", "Demo.Outer"),
+            Target(callerFileId, "TieTarget", 31, "Other", "Demo.Outer"),
+            Target(targetFileId, "TieTarget", 1, "Other", "Demo.Outer"),
+            Target(targetFileId, "QualifiedTarget", 2, "Other", "Demo.Outer"),
+            Target(callerFileId, "QualifiedTarget", 32, "Other", "Other.Qualified"),
+            Target(callerFileId, "FileTarget", 33, "Other", "Other.File"),
+            Target(targetFileId, "FileTarget", 3, "Outer", "Other.Outer"),
+            Target(targetFileId, "ContainerTarget", 4, "Outer", "Other.Outer"),
+            Target(targetFileId, "ContainerTarget", 5, "Other", "Other.Container"),
+            Target(callerFileId, "NoSourceTarget", 34, "Other", "Other.NoSource"),
+        ]);
+        _writer.InsertReferences([
+            Reference("TieTarget", line: 5, containerName: "Caller"),
+            Reference("QualifiedTarget", line: 6, containerName: "Caller"),
+            Reference("FileTarget", line: 7, containerName: "Caller"),
+            Reference("ContainerTarget", line: 8, containerName: "Caller"),
+            Reference("NoSourceTarget", line: 25, containerName: null),
+        ], refreshMutualRecursionFlags: false);
+
+        _writer.RefreshMutualRecursionFlags();
+        const string expected = "5:1:30|5:1:31|6:2:2|7:3:33|8:4:4|25:3:34";
+        Assert.Equal(expected, ReadCandidates());
+
+        using (var scope = _writer.BeginReferenceGraphRefreshScope())
+        {
+            using var transaction = _writer.BeginTransaction();
+            var distractorFileId = _writer.InsertNewFile(new FileRecord
+            {
+                Path = $"scope/{language}/Distractors{extension}",
+                Lang = language,
+                Size = 100,
+                Lines = 10,
+                Modified = new DateTime(2026, 8, 29, 0, 0, 0, DateTimeKind.Utc),
+                Checksum = $"{language}-scope-distractors",
+            });
+            _writer.InsertSymbols(
+            [
+                Target(distractorFileId, "TieTarget", 1, "Elsewhere", "Elsewhere.Type"),
+                Target(distractorFileId, "QualifiedTarget", 2, "Elsewhere", "Elsewhere.Type"),
+                Target(distractorFileId, "FileTarget", 3, "Elsewhere", "Elsewhere.Type"),
+                Target(distractorFileId, "ContainerTarget", 4, "Elsewhere", "Elsewhere.Type"),
+                Target(distractorFileId, "NoSourceTarget", 5, "Elsewhere", "Elsewhere.Type"),
+            ]);
+            transaction.Commit();
+            _writer.RefreshMutualRecursionFlags();
+        }
+
+        Assert.Equal(expected, ReadCandidates());
+        var scopedSnapshot = ReadReferenceGraphSemanticSnapshot();
+
+        _writer.RefreshMutualRecursionFlags();
+        Assert.Equal(expected, ReadCandidates());
+        var fullSnapshot = ReadReferenceGraphSemanticSnapshot();
+        Assert.Equal(scopedSnapshot, fullSnapshot);
+
+        using (var transaction = _db.Connection.BeginTransaction())
+        {
+            DbWriter.RebuildRetainedReferenceGraph(
+                _db.Connection,
+                transaction,
+                CancellationToken.None);
+            transaction.Commit();
+        }
+
+        Assert.Equal(expected, ReadCandidates());
+        Assert.Equal(fullSnapshot, ReadReferenceGraphSemanticSnapshot());
+
+        SymbolRecord Target(
+            long fileId,
+            string name,
+            int line,
+            string containerName,
+            string containerQualifiedName)
+            => new()
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = name,
+                Line = line,
+                StartLine = line,
+                EndLine = line,
+                ContainerName = containerName,
+                ContainerQualifiedName = containerQualifiedName,
+            };
+
+        ReferenceRecord Reference(string name, int line, string? containerName)
+            => new()
+            {
+                FileId = callerFileId,
+                SymbolName = name,
+                ReferenceKind = "reference",
+                Line = line,
+                Column = 1,
+                Context = name,
+                ContainerName = containerName,
+            };
+
+        string ReadCandidates()
+            => ExecuteScalarString("""
+                SELECT COALESCE(group_concat(entry, '|'), '')
+                FROM (
+                    SELECT reference.line || ':' || candidate.scope_rank || ':' || target.line AS entry
+                    FROM symbol_reference_candidates AS candidate
+                    JOIN symbol_references AS reference ON reference.id = candidate.reference_id
+                    JOIN symbols AS target ON target.id = candidate.symbol_id
+                    ORDER BY reference.line, candidate.scope_rank, target.line
+                )
+                """);
     }
 
     [Fact]
@@ -1668,7 +1816,7 @@ public class DatabaseTests : IDisposable
                 StringComparison.Ordinal));
         Assert.True(fullMaterializationIndex >= 0);
         Assert.Equal(
-            9,
+            6,
             fullCandidateStatements[..fullMaterializationIndex].Count(static statement =>
                 statement.StartsWith(
                     "INSERT INTO symbol_reference_candidates",
@@ -1695,7 +1843,7 @@ public class DatabaseTests : IDisposable
             candidateSql,
             StringComparison.Ordinal);
         Assert.Equal(
-            15,
+            12,
             candidateSql.Split(
                 "FROM temp.reference_graph_dirty_references AS dirty_reference",
                 StringSplitOptions.None).Length - 1);
@@ -1732,7 +1880,7 @@ public class DatabaseTests : IDisposable
                 "INSERT INTO symbol_reference_candidates",
                 StringComparison.Ordinal))
             .ToArray();
-        Assert.Equal(14, candidateInserts.Length);
+        Assert.Equal(11, candidateInserts.Length);
         var candidatePlans = new List<string>();
         foreach (var statement in candidateInserts)
         {
