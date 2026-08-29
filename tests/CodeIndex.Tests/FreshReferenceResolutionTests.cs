@@ -76,6 +76,13 @@ public sealed class FreshReferenceResolutionTests : IDisposable
     {
         var fileId = InsertFile("src/provisional.py", "python");
         _writer.InsertSymbols([CreateSymbol(fileId, "Caller", line: 1)]);
+        Assert.Equal(
+            0L,
+            ScalarLong($"""
+                SELECT COUNT(*)
+                FROM temp.sqlite_schema
+                WHERE name = '{DbWriter.AuthoritativeFreshReferenceSourceSymbolsTableName}'
+                """));
         var observedWork = new List<DbWriter.ReferenceInsertBindingWork>();
         var previousHook = DbWriter.ReferenceInsertBindingWorkForTesting;
         try
@@ -138,6 +145,13 @@ public sealed class FreshReferenceResolutionTests : IDisposable
                   AND source_symbol_id IS NOT NULL
                 """));
         Assert.Equal(
+            0L,
+            ScalarLong($"""
+                SELECT COUNT(*)
+                FROM temp.sqlite_schema
+                WHERE name = '{DbWriter.AuthoritativeFreshReferenceSourceSymbolsTableName}'
+                """));
+        Assert.Equal(
             1,
             ScalarLong("""
                 SELECT COUNT(*)
@@ -149,6 +163,10 @@ public sealed class FreshReferenceResolutionTests : IDisposable
         var freshSql = DbWriter.BuildReferenceInsertSqlForTesting(
             rowCount: 2,
             useFreshReferenceResolutionDefaults: true);
+        var materializedFreshSql = DbWriter.BuildReferenceInsertSqlForTesting(
+            rowCount: 2,
+            useFreshReferenceResolutionDefaults: true,
+            useMaterializedFreshSourceLookup: true);
         var standardSql = DbWriter.BuildReferenceInsertSqlForTesting(
             rowCount: 2,
             useFreshReferenceResolutionDefaults: false);
@@ -160,10 +178,33 @@ public sealed class FreshReferenceResolutionTests : IDisposable
         Assert.Contains("ORDER BY (COALESCE(s.end_line", freshSql, StringComparison.Ordinal);
         Assert.Equal(28, CountOccurrences(freshSql, "?"));
         Assert.DoesNotContain("?0", freshSql, StringComparison.Ordinal);
+        Assert.Contains("FROM symbols AS s", freshSql, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            DbWriter.AuthoritativeFreshReferenceSourceSymbolsTableName,
+            freshSql,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"FROM temp.{DbWriter.AuthoritativeFreshReferenceSourceSymbolsTableName} AS source",
+            materializedFreshSql,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("FROM symbols AS s", materializedFreshSql, StringComparison.Ordinal);
+        Assert.Equal(2, CountOccurrences(materializedFreshSql, "UNION"));
+        Assert.DoesNotContain("UNION ALL", materializedFreshSql, StringComparison.Ordinal);
+        Assert.Contains(
+            "COALESCE(candidate.start_line, candidate.line) DESC",
+            materializedFreshSql,
+            StringComparison.Ordinal);
+        Assert.Equal(28, CountOccurrences(materializedFreshSql, "?"));
+        Assert.DoesNotContain("?0", materializedFreshSql, StringComparison.Ordinal);
         Assert.DoesNotContain("WITH fresh_reference(", standardSql, StringComparison.Ordinal);
         Assert.DoesNotContain("source_symbol_id", standardSql, StringComparison.Ordinal);
         Assert.Equal(28, CountOccurrences(standardSql, "?"));
         Assert.DoesNotContain("?0", standardSql, StringComparison.Ordinal);
+        Assert.Throws<ArgumentException>(() =>
+            DbWriter.BuildReferenceInsertSqlForTesting(
+                rowCount: 1,
+                useFreshReferenceResolutionDefaults: false,
+                useMaterializedFreshSourceLookup: true));
 
         var freshRefresh = DbWriter.SelectReferenceSourceRefreshSqlForTesting(
             useFreshReferenceResolutionDefaults: true,

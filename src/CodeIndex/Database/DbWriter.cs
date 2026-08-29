@@ -172,7 +172,9 @@ public partial class DbWriter
     private static readonly ConcurrentDictionary<int, string> ChunkInsertSqlCache = new();
     private static readonly ConcurrentDictionary<int, string> SymbolInsertSqlCache = new();
     private static readonly ConcurrentDictionary<int, string> IssueInsertSqlCache = new();
-    private static readonly ConcurrentDictionary<(int Rows, bool FreshResolutionDefaults), string>
+    private static readonly ConcurrentDictionary<
+        (int Rows, bool FreshResolutionDefaults, bool MaterializedFreshSourceLookup),
+        string>
         ReferenceInsertSqlCache = new();
     private static readonly ConcurrentDictionary<int, string> ReferenceLineUpsertSqlCache = new();
     private static readonly ConcurrentDictionary<int, string> ReferenceLineLookupSqlCache = new();

@@ -134,6 +134,13 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
         Assert.Equal(
             0L,
             ScalarLong("SELECT COUNT(*) FROM files WHERE path = 'src/generation-rolled-back.cs'"));
+        Assert.Equal(
+            0L,
+            ScalarLong($"""
+                SELECT COUNT(*)
+                FROM temp.sqlite_schema
+                WHERE name = '{DbWriter.AuthoritativeFreshReferenceSourceSymbolsTableName}'
+                """));
 
         using (var freshGraph = _writer.BeginReferenceGraphRefreshScope(
                    forceFullRefresh: true,
@@ -362,6 +369,473 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
                 .Where(work => work.Operation == operation)
                 .Select(work => (work.StatementRows, work.BoundParameterCount))
                 .ToArray();
+    }
+
+    [Fact]
+    public void ReferenceSourceLookup_PreservesMultiFileFoldFallbackAndNestedRankingAcrossBatches()
+    {
+        long firstFileId;
+        long secondFileId;
+        long firstNestedSourceId;
+        long aliasSourceId;
+        long duplicateProbeSourceId;
+        long legacyAsciiSourceId;
+        long secondNestedSourceId;
+
+        using (var graph = _writer.BeginReferenceGraphRefreshScope(
+                   forceFullRefresh: true,
+                   useFreshReferenceResolutionDefaults: true))
+        using (var transaction = _writer.BeginTransaction())
+        using (var raw = _writer.BeginAuthoritativeFreshBulkInsertScope(
+                   enabled: true,
+                   CancellationToken.None)!)
+        {
+            firstFileId = InsertNewFile("src/source-lookup-a.cs");
+            secondFileId = InsertNewFile("src/source-lookup-b.cs");
+            _writer.InsertSymbols([
+                SourceSymbol(firstFileId, "Caller", line: 1, startLine: 1, endLine: 100),
+                SourceSymbol(firstFileId, "Caller", line: 10, startLine: 10, endLine: 30),
+                SourceSymbol(firstFileId, "Caller", line: 10, startLine: 10, endLine: 30),
+                SourceSymbol(
+                    firstFileId,
+                    "Canonical",
+                    line: 40,
+                    startLine: 40,
+                    endLine: 55,
+                    displayNameFolded: "displayalias"),
+                SourceSymbol(
+                    firstFileId,
+                    "Dup",
+                    line: 56,
+                    startLine: 56,
+                    endLine: 65,
+                    displayNameFolded: "dup"),
+                SourceSymbol(firstFileId, "LegacyASCII", line: 66, startLine: 66, endLine: 75),
+                SourceSymbol(firstFileId, "ÅLegacy", line: 76, startLine: 76, endLine: 85),
+                SourceSymbol(secondFileId, "Caller", line: 1, startLine: 1, endLine: 100),
+                SourceSymbol(secondFileId, "Caller", line: 50, startLine: 50, endLine: 60),
+            ]);
+            Execute($"""
+                UPDATE symbols
+                SET name_folded = NULL
+                WHERE file_id = {firstFileId}
+                  AND name IN ('LegacyASCII', 'ÅLegacy')
+                """);
+
+            firstNestedSourceId = ScalarLong($"""
+                SELECT MIN(id)
+                FROM symbols
+                WHERE file_id = {firstFileId}
+                  AND name = 'Caller'
+                  AND start_line = 10
+                """);
+            aliasSourceId = ScalarLong($"""
+                SELECT id FROM symbols
+                WHERE file_id = {firstFileId} AND name = 'Canonical'
+                """);
+            duplicateProbeSourceId = ScalarLong($"""
+                SELECT id FROM symbols
+                WHERE file_id = {firstFileId} AND name = 'Dup'
+                """);
+            legacyAsciiSourceId = ScalarLong($"""
+                SELECT id FROM symbols
+                WHERE file_id = {firstFileId} AND name = 'LegacyASCII'
+                """);
+            secondNestedSourceId = ScalarLong($"""
+                SELECT id FROM symbols
+                WHERE file_id = {secondFileId}
+                  AND name = 'Caller'
+                  AND start_line = 50
+                """);
+
+            var references = Enumerable.Range(0, 40)
+                .Select(index => SourceReference(
+                    firstFileId,
+                    $"nested_probe_{index}",
+                    line: 15,
+                    containerName: "Caller"))
+                .ToList();
+            references.Add(SourceReference(
+                firstFileId,
+                "display_probe",
+                line: 45,
+                containerName: "DisplayAlias"));
+            references.Add(SourceReference(
+                firstFileId,
+                "duplicate_probe",
+                line: 60,
+                containerName: "Dup"));
+            references.Add(SourceReference(
+                firstFileId,
+                "legacy_ascii_probe",
+                line: 70,
+                containerName: "legacyascii"));
+            references.Add(SourceReference(
+                firstFileId,
+                "legacy_unicode_probe",
+                line: 80,
+                containerName: "ålegacy"));
+            references.Add(SourceReference(
+                firstFileId,
+                "null_container_probe",
+                line: 90,
+                containerName: null));
+            references.Add(SourceReference(
+                firstFileId,
+                "empty_container_probe",
+                line: 91,
+                containerName: string.Empty));
+            references.Add(SourceReference(
+                secondFileId,
+                "second_file_probe",
+                line: 55,
+                containerName: "Caller"));
+
+            _writer.InsertReferencesForNewFilesInAtomicFileScope(
+                references,
+                refreshMutualRecursionFlags: false,
+                CancellationToken.None);
+
+            Assert.Equal(
+                2L,
+                ScalarLong($"""
+                    SELECT COUNT(DISTINCT file_id)
+                    FROM temp.{DbWriter.AuthoritativeFreshReferenceSourceSymbolsTableName}
+                    """));
+            Assert.Equal(
+                9L,
+                ScalarLong($"""
+                    SELECT COUNT(*)
+                    FROM temp.{DbWriter.AuthoritativeFreshReferenceSourceSymbolsTableName}
+                    """));
+            Assert.Equal(
+                3L,
+                ScalarLong("""
+                    SELECT COUNT(*)
+                    FROM temp.sqlite_schema
+                    WHERE type = 'index'
+                      AND name LIKE 'idx_authoritative_fresh_source_%'
+                    """));
+
+            raw.Complete();
+            transaction.Commit();
+        }
+
+        Assert.Equal(
+            40L,
+            ScalarLong($"""
+                SELECT COUNT(*)
+                FROM symbol_references
+                WHERE symbol_name LIKE 'nested_probe_%'
+                  AND source_symbol_id = {firstNestedSourceId}
+                """));
+        Assert.Equal(aliasSourceId, SourceSymbolId("display_probe"));
+        Assert.Equal(duplicateProbeSourceId, SourceSymbolId("duplicate_probe"));
+        Assert.Equal(legacyAsciiSourceId, SourceSymbolId("legacy_ascii_probe"));
+        Assert.Null(SourceSymbolId("legacy_unicode_probe"));
+        Assert.Null(SourceSymbolId("null_container_probe"));
+        Assert.Null(SourceSymbolId("empty_container_probe"));
+        Assert.Equal(secondNestedSourceId, SourceSymbolId("second_file_probe"));
+
+        static SymbolRecord SourceSymbol(
+            long fileId,
+            string name,
+            int line,
+            int startLine,
+            int endLine,
+            string? displayNameFolded = null)
+            => new()
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = name,
+                Line = line,
+                StartLine = startLine,
+                EndLine = endLine,
+                DisplayNameFolded = displayNameFolded,
+            };
+
+        static ReferenceRecord SourceReference(
+            long fileId,
+            string symbolName,
+            int line,
+            string? containerName)
+            => new()
+            {
+                FileId = fileId,
+                SymbolName = symbolName,
+                ReferenceKind = "call",
+                Line = line,
+                Column = 1,
+                Context = $"{symbolName}();",
+                ContainerKind = containerName == null ? null : "function",
+                ContainerName = containerName,
+            };
+    }
+
+    [Fact]
+    public void ReferenceSourceLookup_QueryPlansUseRetainedAndPartialIndexesWithoutSourceScans()
+    {
+        using var graph = _writer.BeginReferenceGraphRefreshScope(
+            forceFullRefresh: true,
+            useFreshReferenceResolutionDefaults: true);
+        using var transaction = _writer.BeginTransaction();
+        using var raw = _writer.BeginAuthoritativeFreshBulkInsertScope(
+            enabled: true,
+            CancellationToken.None)!;
+
+        var materializationPlan = ExplainQueryPlan(
+            DbWriter.PopulateAuthoritativeFreshReferenceSourceLookupSqlForTesting,
+            command => command.Parameters.AddWithValue("$file_id", 1L));
+        Assert.Contains(
+            materializationPlan,
+            detail => detail.Contains("idx_symbols_file", StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            materializationPlan,
+            detail => detail.Contains("SCAN persisted", StringComparison.OrdinalIgnoreCase));
+
+        var sourceValueSql =
+            DbWriter.BuildMaterializedFreshReferenceSourceSymbolValueSqlForTesting("r");
+        var sourceLookupPlan = ExplainQueryPlan($"""
+            WITH reference_row(file_id, line, container_name, container_name_folded) AS (
+                VALUES (1, 15, 'Caller', 'caller')
+            )
+            SELECT {sourceValueSql}
+            FROM reference_row AS r
+            """);
+        Assert.Contains(
+            sourceLookupPlan,
+            detail => detail.Contains(
+                "idx_authoritative_fresh_source_name_folded",
+                StringComparison.Ordinal));
+        Assert.Contains(
+            sourceLookupPlan,
+            detail => detail.Contains(
+                "idx_authoritative_fresh_source_display_name_folded",
+                StringComparison.Ordinal));
+        Assert.Contains(
+            sourceLookupPlan,
+            detail => detail.Contains(
+                "idx_authoritative_fresh_source_name_nocase",
+                StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            sourceLookupPlan,
+            detail => detail.Contains("SCAN source", StringComparison.OrdinalIgnoreCase));
+
+        raw.Complete();
+        transaction.Commit();
+
+        IReadOnlyList<string> ExplainQueryPlan(
+            string sql,
+            Action<SqliteCommand>? bind = null)
+        {
+            using var command = _db.Connection.CreateCommand();
+            command.CommandText = "EXPLAIN QUERY PLAN " + sql;
+            bind?.Invoke(command);
+            using var reader = command.ExecuteReader();
+            var plan = new List<string>();
+            while (reader.Read())
+                plan.Add(reader.GetString(3));
+            return plan;
+        }
+    }
+
+    [Fact]
+    public void ReferenceSourceLookup_FileSavepointRollbackRestoresPreviousRowsAndReprepares()
+    {
+        long firstFileId;
+        long thirdFileId;
+        using (var graph = _writer.BeginReferenceGraphRefreshScope(
+                   forceFullRefresh: true,
+                   useFreshReferenceResolutionDefaults: true))
+        using (var outerTransaction = _writer.BeginTransaction())
+        using (var raw = _writer.BeginAuthoritativeFreshBulkInsertScope(
+                   enabled: true,
+                   CancellationToken.None)!)
+        {
+            using (var firstFile = _writer.BeginTransaction())
+            {
+                firstFileId = InsertNewFile("src/source-savepoint-a.cs");
+                _writer.InsertSymbols([
+                    CreateSourceSymbol(firstFileId, "CallerA"),
+                ]);
+                _writer.InsertReferencesForNewFilesInAtomicFileScope(
+                    [CreateSourceReference(firstFileId, "first_probe", "CallerA")],
+                    refreshMutualRecursionFlags: false,
+                    CancellationToken.None);
+                firstFile.Commit();
+            }
+
+            Assert.Equal(
+                1L,
+                ScalarLong($"""
+                    SELECT COUNT(*)
+                    FROM temp.{DbWriter.AuthoritativeFreshReferenceSourceSymbolsTableName}
+                    WHERE file_id = {firstFileId}
+                    """));
+
+            using (var failedFile = _writer.BeginTransaction())
+            {
+                var failedFileId = InsertNewFile("src/source-savepoint-failed.cs");
+                _writer.InsertSymbols([
+                    CreateSourceSymbol(failedFileId, "FailedCaller"),
+                ]);
+                Execute($"""
+                    CREATE TEMP TRIGGER reject_materialized_source_reference
+                    BEFORE INSERT ON symbol_references
+                    WHEN NEW.file_id = {failedFileId}
+                    BEGIN
+                        SELECT RAISE(ABORT, 'reject materialized source reference');
+                    END;
+                    """);
+                Assert.Throws<SqliteException>(() =>
+                    _writer.InsertReferencesForNewFilesInAtomicFileScope(
+                        [CreateSourceReference(
+                            failedFileId,
+                            "failed_probe",
+                            "FailedCaller")],
+                        refreshMutualRecursionFlags: false,
+                        CancellationToken.None));
+            }
+
+            Assert.Equal(
+                0L,
+                ScalarLong("""
+                    SELECT COUNT(*) FROM files
+                    WHERE path = 'src/source-savepoint-failed.cs'
+                    """));
+            Assert.Equal(
+                1L,
+                ScalarLong($"""
+                    SELECT COUNT(*)
+                    FROM temp.{DbWriter.AuthoritativeFreshReferenceSourceSymbolsTableName}
+                    WHERE file_id = {firstFileId}
+                    """));
+
+            using (var thirdFile = _writer.BeginTransaction())
+            {
+                thirdFileId = InsertNewFile("src/source-savepoint-c.cs");
+                _writer.InsertSymbols([
+                    CreateSourceSymbol(thirdFileId, "CallerC"),
+                ]);
+                _writer.InsertReferencesForNewFilesInAtomicFileScope(
+                    [CreateSourceReference(thirdFileId, "third_probe", "CallerC")],
+                    refreshMutualRecursionFlags: false,
+                    CancellationToken.None);
+                thirdFile.Commit();
+            }
+
+            raw.Complete();
+            outerTransaction.Commit();
+        }
+
+        Assert.Equal(firstFileId, SourceFileId("first_probe"));
+        Assert.Equal(thirdFileId, SourceFileId("third_probe"));
+        Assert.Equal(
+            0L,
+            ScalarLong("""
+                SELECT COUNT(*) FROM symbol_references
+                WHERE symbol_name = 'failed_probe'
+                """));
+
+        static SymbolRecord CreateSourceSymbol(long fileId, string name)
+            => new()
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = name,
+                Line = 1,
+                StartLine = 1,
+                EndLine = 10,
+            };
+
+        static ReferenceRecord CreateSourceReference(
+            long fileId,
+            string symbolName,
+            string containerName)
+            => new()
+            {
+                FileId = fileId,
+                SymbolName = symbolName,
+                ReferenceKind = "call",
+                Line = 5,
+                Column = 1,
+                Context = $"{symbolName}();",
+                ContainerKind = "function",
+                ContainerName = containerName,
+            };
+    }
+
+    [Fact]
+    public void ReferenceSourceLookup_InterruptRollsBackTempAndMainState()
+    {
+        using var cancellation = new CancellationTokenSource();
+        _db.Connection.CreateFunction<long>(
+            "cancel_authoritative_fresh_source_lookup",
+            () =>
+            {
+                cancellation.Cancel();
+                return 0;
+            });
+
+        OperationCanceledException exception;
+        using (var graph = _writer.BeginReferenceGraphRefreshScope(
+                   forceFullRefresh: true,
+                   useFreshReferenceResolutionDefaults: true))
+        using (var transaction = _writer.BeginTransaction())
+        using (var raw = _writer.BeginAuthoritativeFreshBulkInsertScope(
+                   enabled: true,
+                   cancellation.Token)!)
+        {
+            var fileId = InsertNewFile("src/source-lookup-interrupted.cs");
+            _writer.InsertSymbols([
+                new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "function",
+                    Name = "Caller",
+                    Line = 1,
+                    StartLine = 1,
+                    EndLine = 10,
+                },
+            ]);
+            Execute($"""
+                CREATE TEMP TRIGGER cancel_authoritative_fresh_source_materialization
+                BEFORE INSERT ON {DbWriter.AuthoritativeFreshReferenceSourceSymbolsTableName}
+                BEGIN
+                    SELECT cancel_authoritative_fresh_source_lookup();
+                END;
+                """);
+            exception = Assert.Throws<OperationCanceledException>(() =>
+                _writer.InsertReferencesForNewFilesInAtomicFileScope(
+                    [new ReferenceRecord
+                    {
+                        FileId = fileId,
+                        SymbolName = "interrupted_probe",
+                        ReferenceKind = "call",
+                        Line = 5,
+                        Column = 1,
+                        Context = "interrupted_probe();",
+                        ContainerKind = "function",
+                        ContainerName = "Caller",
+                    }],
+                    refreshMutualRecursionFlags: false,
+                    cancellation.Token));
+        }
+
+        Assert.Equal(cancellation.Token, exception.CancellationToken);
+        var sqliteException = Assert.IsType<SqliteException>(exception.InnerException);
+        Assert.Equal(9, sqliteException.SqliteErrorCode);
+        Assert.Equal(0L, ScalarLong("SELECT COUNT(*) FROM files"));
+        Assert.Equal(0L, ScalarLong("SELECT COUNT(*) FROM symbols"));
+        Assert.Equal(0L, ScalarLong("SELECT COUNT(*) FROM symbol_references"));
+        Assert.Equal(
+            0L,
+            ScalarLong($"""
+                SELECT COUNT(*)
+                FROM temp.sqlite_schema
+                WHERE name = '{DbWriter.AuthoritativeFreshReferenceSourceSymbolsTableName}'
+                """));
     }
 
     [Fact]
@@ -1158,6 +1632,37 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
         command.Parameters.AddWithValue("@line", line);
         command.Parameters.AddWithValue("@context", context);
         return Convert.ToInt64(command.ExecuteScalar(), CultureInfo.InvariantCulture);
+    }
+
+    private long? SourceSymbolId(string symbolName)
+    {
+        using var command = _db.Connection.CreateCommand();
+        command.CommandText = """
+            SELECT source_symbol_id
+            FROM symbol_references
+            WHERE symbol_name = @symbol_name
+            """;
+        command.Parameters.AddWithValue("@symbol_name", symbolName);
+        var value = command.ExecuteScalar();
+        return value == null || value == DBNull.Value
+            ? null
+            : Convert.ToInt64(value, CultureInfo.InvariantCulture);
+    }
+
+    private long? SourceFileId(string symbolName)
+    {
+        using var command = _db.Connection.CreateCommand();
+        command.CommandText = """
+            SELECT source.file_id
+            FROM symbol_references AS reference
+            LEFT JOIN symbols AS source ON source.id = reference.source_symbol_id
+            WHERE reference.symbol_name = @symbol_name
+            """;
+        command.Parameters.AddWithValue("@symbol_name", symbolName);
+        var value = command.ExecuteScalar();
+        return value == null || value == DBNull.Value
+            ? null
+            : Convert.ToInt64(value, CultureInfo.InvariantCulture);
     }
 
     private long ResourceListGeneration()

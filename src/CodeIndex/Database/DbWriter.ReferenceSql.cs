@@ -24,8 +24,16 @@ public partial class DbWriter
 
     private static string BuildReferenceInsertSql(
         int rowCount,
-        bool useFreshReferenceResolutionDefaults)
+        bool useFreshReferenceResolutionDefaults,
+        bool useMaterializedFreshSourceLookup = false)
     {
+        if (useMaterializedFreshSourceLookup && !useFreshReferenceResolutionDefaults)
+        {
+            throw new ArgumentException(
+                "The materialized source lookup is only valid for authoritative fresh reference inserts.",
+                nameof(useMaterializedFreshSourceLookup));
+        }
+
         var sql = CreateBatchSqlBuilder(rowCount, estimatedCharsPerRow: 256);
         if (useFreshReferenceResolutionDefaults)
         {
@@ -70,7 +78,9 @@ public partial class DbWriter
                        r.is_self_reference,
                        r.is_mutual_recursion,
                        r.target_qualifier,
-                       {BuildReferenceSourceSymbolValueSql("r")},
+                       {(useMaterializedFreshSourceLookup
+                           ? BuildMaterializedFreshReferenceSourceSymbolValueSql("r")
+                           : BuildReferenceSourceSymbolValueSql("r"))},
                        'unresolved',
                        0
                 FROM fresh_reference AS r
@@ -101,8 +111,12 @@ public partial class DbWriter
 
     internal static string BuildReferenceInsertSqlForTesting(
         int rowCount,
-        bool useFreshReferenceResolutionDefaults)
-        => BuildReferenceInsertSql(rowCount, useFreshReferenceResolutionDefaults);
+        bool useFreshReferenceResolutionDefaults,
+        bool useMaterializedFreshSourceLookup = false)
+        => BuildReferenceInsertSql(
+            rowCount,
+            useFreshReferenceResolutionDefaults,
+            useMaterializedFreshSourceLookup);
 
     private static void AppendReferenceInsertParameterTuple(
         StringBuilder sql,

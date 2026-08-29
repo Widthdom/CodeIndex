@@ -114,6 +114,8 @@ public partial class DbWriter
             DbContext.DropResourceListGenerationTriggersSql,
             _activeTransaction);
         cancellationToken.ThrowIfCancellationRequested();
+        InitializeAuthoritativeFreshReferenceSourceLookup(cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
 
         var scope = new AuthoritativeFreshBulkInsertScope(
             this,
@@ -332,10 +334,14 @@ public partial class DbWriter
             var rows = end - start;
             using var interrupt = _writer.RegisterSqliteInterrupt(_cancellationToken);
             var sql = ReferenceInsertSqlCache.GetOrAdd(
-                (Rows: rows, FreshResolutionDefaults: true),
+                (
+                    Rows: rows,
+                    FreshResolutionDefaults: true,
+                    MaterializedFreshSourceLookup: true),
                 static key => BuildReferenceInsertSql(
                     key.Rows,
-                    key.FreshResolutionDefaults));
+                    key.FreshResolutionDefaults,
+                    key.MaterializedFreshSourceLookup));
             var lease = RentStatementLease(
                 AuthoritativeFreshRawInsertKind.References,
                 rows,
@@ -386,6 +392,15 @@ public partial class DbWriter
             {
                 lease.Dispose();
             }
+        }
+
+        internal void MaterializeReferenceSourceSymbols(
+            IReadOnlyList<CodeIndex.Models.ReferenceRecord> references)
+        {
+            EnsureCanExecute();
+            _writer.MaterializeAuthoritativeFreshReferenceSourceLookup(
+                references,
+                _cancellationToken);
         }
 
         internal void Complete()

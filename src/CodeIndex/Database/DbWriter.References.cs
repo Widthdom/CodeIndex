@@ -2179,6 +2179,10 @@ public partial class DbWriter
         var useAuthoritativeFreshRawInsert = batchesAreAtomicInCaller
             && referenceLinesAreNew
             && _authoritativeFreshBulkInsertScope != null;
+        if (useAuthoritativeFreshRawInsert)
+        {
+            _authoritativeFreshBulkInsertScope!.MaterializeReferenceSourceSymbols(references);
+        }
         int rowsPerStatement = useAuthoritativeFreshRawInsert
             ? GetRowsPerAuthoritativeFreshRawInsertStatement(
                 columnCount: ReferenceInsertParameterCountPerRow)
@@ -2402,10 +2406,14 @@ public partial class DbWriter
         };
         var cacheKey = (
             Rows: rowsInBatch,
-            FreshResolutionDefaults: useFreshReferenceResolutionDefaults);
+            FreshResolutionDefaults: useFreshReferenceResolutionDefaults,
+            MaterializedFreshSourceLookup: false);
         var sql = ReferenceInsertSqlCache.GetOrAdd(
             cacheKey,
-            static key => BuildReferenceInsertSql(key.Rows, key.FreshResolutionDefaults));
+            static key => BuildReferenceInsertSql(
+                key.Rows,
+                key.FreshResolutionDefaults,
+                key.MaterializedFreshSourceLookup));
         var cmd = RentCommand(sql, c => AddReferenceInsertParameters(c, rowsInBatch));
         try
         {

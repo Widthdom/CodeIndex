@@ -105,10 +105,10 @@ public class PerformanceTests : IDisposable
             {
                 FileId = 1,
                 Kind = "function",
-                Name = $"target_{index}",
+                Name = index == 0 ? "caller" : $"target_{index}",
                 Line = index + 1,
-                StartLine = index + 1,
-                EndLine = index + 1,
+                StartLine = index == 0 ? 1 : index + 1,
+                EndLine = index == 0 ? RowCount : index + 1,
                 Signature = index % 2 == 0 ? null : $"void target_{index}()",
             })
             .ToArray();
@@ -249,7 +249,8 @@ public class PerformanceTests : IDisposable
                     (SELECT generated FROM files WHERE id = 1),
                     (SELECT hex(CAST(content AS BLOB)) FROM chunks WHERE chunk_index = 0),
                     (SELECT COUNT(*) FROM symbols WHERE signature IS NULL),
-                    (SELECT COUNT(*) FROM symbol_references WHERE context IS NULL)
+                    (SELECT COUNT(*) FROM symbol_references WHERE context IS NULL),
+                    (SELECT COUNT(*) FROM symbol_references WHERE source_symbol_id IS NOT NULL)
                 """;
             using var reader = snapshotCommand.ExecuteReader();
             Assert.True(reader.Read());

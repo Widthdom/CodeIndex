@@ -9637,6 +9637,12 @@ public class DatabaseTests : IDisposable
                 rowCount: 2,
                 useFreshReferenceResolutionDefaults: true),
             expectedParameterCount: 28);
+        AssertNumericParameterOrdinals(
+            DbWriter.BuildReferenceInsertSqlForTesting(
+                rowCount: 2,
+                useFreshReferenceResolutionDefaults: true,
+                useMaterializedFreshSourceLookup: true),
+            expectedParameterCount: 28);
 
         static void AssertNumericParameterOrdinals(string sql, int expectedParameterCount)
         {
