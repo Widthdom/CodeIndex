@@ -235,6 +235,48 @@ public sealed class SymbolExtractorCSharpRegexProbeTests
             + $"optimized={optimizedAllocatedBytes:N0}, baseline={baselineAllocatedBytes:N0} bytes.");
     }
 
+    [Fact]
+    public void Extract_CSharpLineStartStates_ReuseInitialLexerPassAndReduceAllocations()
+    {
+        var content = string.Join(
+            '\n',
+            Enumerable.Range(0, 32).Select(index => $$""""
+                internal class Lexed{{index}}
+                {
+                    /* A multiline comment with declaration-shaped noise:
+                       public int Hidden { get; set; }
+                    */
+                    private const string Verbatim = @"first
+                { still literal }";
+                    private const string Raw = """
+                public int AlsoHidden { get; set; }
+                """;
+                    public int Value { get; set; }
+                }
+                """"));
+
+        var baseline = Extract(content, applyOptimizations: false, out var baselineMetrics);
+        var optimized = Extract(content, applyOptimizations: true, out var optimizedMetrics);
+
+        AssertSymbolsEqual(baseline, optimized);
+        Assert.Equal(32, optimized.Count(symbol => symbol.Kind == "class"));
+        Assert.Equal(32, optimized.Count(symbol => symbol.Kind == "property" && symbol.Name == "Value"));
+        Assert.DoesNotContain(optimized, symbol => symbol.Name is "Hidden" or "AlsoHidden");
+        Assert.Equal(0, baselineMetrics.LineStartStateReuseCount);
+        Assert.Equal(content.Split('\n').Length, optimizedMetrics.LineStartStateReuseCount);
+
+        _ = Extract(content, applyOptimizations: false, out _);
+        _ = Extract(content, applyOptimizations: true, out _);
+
+        var baselineAllocatedBytes = MeasureAllocatedBytes(content, applyOptimizations: false);
+        var optimizedAllocatedBytes = MeasureAllocatedBytes(content, applyOptimizations: true);
+
+        Assert.True(
+            optimizedAllocatedBytes < baselineAllocatedBytes,
+            $"Expected initial lexer-state reuse to allocate less: "
+            + $"optimized={optimizedAllocatedBytes:N0}, baseline={baselineAllocatedBytes:N0} bytes.");
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

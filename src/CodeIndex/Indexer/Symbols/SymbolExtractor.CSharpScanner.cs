@@ -3918,12 +3918,16 @@ public static partial class SymbolExtractor
         CSharpRegexProbeCounts? csharpRegexProbeCounts,
         out int[]?[] collapsedToRaw,
         out string[] scopeLines,
-        out bool[] testMethodAttributedDeclarationLines)
+        out bool[] testMethodAttributedDeclarationLines,
+        out CSharpLexState[]? lineStartStates)
     {
         var matchLines = new string[rawLines.Length];
         collapsedToRaw = new int[]?[rawLines.Length];
         scopeLines = new string[rawLines.Length];
         testMethodAttributedDeclarationLines = new bool[rawLines.Length];
+        lineStartStates = applyCSharpRegexProbeOptimizations
+            ? new CSharpLexState[rawLines.Length]
+            : null;
         var csharpLexState = new CSharpLexState();
         var testAttributeScanner = new CSharpTestAttributePrefixScanner();
         var inLeadingAttributeBlock = false;
@@ -3933,6 +3937,9 @@ public static partial class SymbolExtractor
         var activeEnumBodyDepth = 0;
         for (int lineIndex = 0; lineIndex < rawLines.Length; lineIndex++)
         {
+            if (lineStartStates != null)
+                lineStartStates[lineIndex] = csharpLexState;
+
             var lexedLine = LexCSharpLine(rawLines[lineIndex], csharpLexState);
             csharpLexState = lexedLine.EndState;
             // Scope scans need the full C# lexer's literal/comment masking while preserving

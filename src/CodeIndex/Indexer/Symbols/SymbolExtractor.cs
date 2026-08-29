@@ -363,6 +363,7 @@ public static partial class SymbolExtractor
         public int WrappedModifierMatchInputMaterializationCount { get; set; }
         public int DeclarationPatternRegexAttemptCount { get; set; }
         public int PhysicalInputNegativePrefixCacheHitCount { get; set; }
+        public int LineStartStateReuseCount { get; set; }
     }
 
     internal readonly record struct CSharpRegexProbeMetrics(
@@ -378,7 +379,8 @@ public static partial class SymbolExtractor
         int WrappedModifierPrefixMaterializationCount,
         int WrappedModifierMatchInputMaterializationCount,
         int DeclarationPatternRegexAttemptCount,
-        int PhysicalInputNegativePrefixCacheHitCount);
+        int PhysicalInputNegativePrefixCacheHitCount,
+        int LineStartStateReuseCount);
 
     internal static List<SymbolRecord> ExtractForRequiredLiteralGateTesting(
         long fileId,
@@ -457,7 +459,8 @@ public static partial class SymbolExtractor
             counts.WrappedModifierPrefixMaterializationCount,
             counts.WrappedModifierMatchInputMaterializationCount,
             counts.DeclarationPatternRegexAttemptCount,
-            counts.PhysicalInputNegativePrefixCacheHitCount);
+            counts.PhysicalInputNegativePrefixCacheHitCount,
+            counts.LineStartStateReuseCount);
         return symbols;
     }
 
