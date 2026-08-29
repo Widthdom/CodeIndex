@@ -87,7 +87,7 @@ internal sealed partial class FileContentLoader(
         var readPath = _resolveFileReadPath(absolutePath);
         cancellationToken.ThrowIfCancellationRequested();
         byte[]? bytes = null;
-        bool lengthChanged;
+        long bytesRead;
         bool pathIdentityChanged;
         FileIndexer.FileHandleSnapshot initialSnapshot;
         FileIndexer.FileHandleSnapshot finalSnapshot;
@@ -102,7 +102,7 @@ internal sealed partial class FileContentLoader(
                 initialLength);
 
             var probe = CSharpStaticInterfacePrepass.CreateRawByteContractProbe();
-            var rawCandidate = RawByteChunksMayMatch(
+            var scan = RawByteChunksMayMatch(
                 stream,
                 initialLength,
                 normalizedRelativePath,
@@ -110,27 +110,34 @@ internal sealed partial class FileContentLoader(
                     ? probe
                         .AppendAndCheckWorkspaceOrQualifiedMemberAccessCandidate
                     : probe.AppendAndCheckWorkspaceCandidate,
+                readGrowthToEnd: !retryOnMutation,
                 cancellationToken);
-            if (rawCandidate)
+            bytesRead = scan.BytesRead;
+            if (scan.Matched)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 stream.Seek(0, SeekOrigin.Begin);
-                (bytes, _) = ReadStreamBytesWithKnownInitialLength(
+                (bytes, bytesRead) = ReadStreamBytesWithKnownInitialLength(
                     stream,
                     initialLength,
                     normalizedRelativePath,
+                    readGrowthToEnd: !retryOnMutation,
                     cancellationToken);
             }
 
             finalSnapshot = CaptureFileHandleSnapshot(stream);
-            lengthChanged = finalSnapshot.Length != initialLength;
+            ThrowIfReadExceedsMaxFileSize(
+                normalizedRelativePath,
+                finalSnapshot.Length);
             pathIdentityChanged = ReadPathIdentityChanged(absolutePath, finalSnapshot);
         }
 
         if (retryOnMutation
-            && (finalSnapshot.ModifiedUtc != initialSnapshot.ModifiedUtc
-                || lengthChanged
-                || pathIdentityChanged))
+            && !InitialLengthReadIsStable(
+                initialSnapshot,
+                finalSnapshot,
+                bytesRead,
+                pathIdentityChanged))
         {
             return (null, RequiresRetry: true);
         }

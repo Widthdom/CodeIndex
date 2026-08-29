@@ -18,18 +18,15 @@ internal sealed partial class FileContentLoader
         string normalizedRelativePath,
         CancellationToken cancellationToken)
     {
-        // Read raw bytes through a single FileStream and cap the accumulated payload at
-        // the configured max-file limit so a file that grew between the size probe and the read can no
-        // longer bypass the cap. Splitting `FileInfo.Length` from `File.ReadAllBytes`
-        // left a TOCTOU window where an attacker (or any build/log emitter rapidly
-        // appending to a generated file) could grow a 1 MB file to multi-GB between
-        // stat and read and force the indexer into an OOM-sized allocation; reading
-        // through one open handle removes the second stat call, and the read loop's
-        // running total guarantees we never accumulate more than the configured max-file bytes
-        // regardless of how aggressively a concurrent writer extends the file.
-        // ファイルを 1 本の FileStream で開き、設定された max-file byte 上限として累積バッファを
-        // 制限することで、サイズ確認と読み込みの間にファイルが肥大化しても上限を
-        // 回避できないようにする。
+        // Read raw bytes through one FileStream. Attempt zero stops at the initial
+        // handle length and validates the final handle metadata instead of probing
+        // EOF; a changed snapshot retries once with the conventional bounded EOF
+        // loop. Both paths reject a final handle length over the configured cap, and
+        // the retry's running total prevents concurrent growth from forcing an
+        // unbounded allocation.
+        // 1本のFileStreamでraw byteを読みます。attempt 0はinitial handle lengthで停止し、
+        // EOF probeの代わりにfinal handle metadataを検証します。snapshot変化時だけ従来の
+        // bounded EOF loopで1回retryし、どちらの経路もfinal handle lengthの上限超過を拒否します。
         byte[] bytes;
         long sizeBytes;
         DateTime modifiedUtc;
@@ -52,13 +49,25 @@ internal sealed partial class FileContentLoader
                     stream,
                     initialLength,
                     normalizedRelativePath,
+                    readGrowthToEnd: attempt > 0,
                     cancellationToken);
                 var finalSnapshot = CaptureFileHandleSnapshot(stream);
                 modifiedUtc = finalSnapshot.ModifiedUtc;
+                ThrowIfReadExceedsMaxFileSize(
+                    normalizedRelativePath,
+                    finalSnapshot.Length);
                 pathIdentityChanged = ReadPathIdentityChanged(absolutePath, finalSnapshot);
+
+                if (attempt > 0
+                    || InitialLengthReadIsStable(
+                        initialSnapshot,
+                        finalSnapshot,
+                        sizeBytes,
+                        pathIdentityChanged))
+                {
+                    break;
+                }
             }
-            if ((modifiedUtc == initialSnapshot.ModifiedUtc && !pathIdentityChanged) || attempt > 0)
-                break;
         }
 
         return new RawFileSnapshot(bytes, sizeBytes, modifiedUtc);
@@ -76,7 +85,7 @@ internal sealed partial class FileContentLoader
             FileIndexer.FileHandleSnapshot initialSnapshot;
             FileIndexer.FileHandleSnapshot finalSnapshot;
             bool pathIdentityChanged;
-            bool matched;
+            RawByteScanResult scan;
             using (var stream = OpenValidatedReadStream(
                        absolutePath,
                        readPath,
@@ -87,25 +96,46 @@ internal sealed partial class FileContentLoader
                     normalizedRelativePath,
                     initialLength);
 
-                matched = RawByteChunksMayMatch(
+                scan = RawByteChunksMayMatch(
                     stream,
                     initialLength,
                     normalizedRelativePath,
                     chunkPredicate,
+                    readGrowthToEnd: attempt > 0,
                     cancellationToken);
                 finalSnapshot = CaptureFileHandleSnapshot(stream);
                 pathIdentityChanged = ReadPathIdentityChanged(absolutePath, finalSnapshot);
             }
 
-            if (matched)
+            if (scan.Matched)
                 return true;
 
-            if ((finalSnapshot.ModifiedUtc == initialSnapshot.ModifiedUtc
-                 && !pathIdentityChanged)
-                || attempt > 0)
+            ThrowIfReadExceedsMaxFileSize(
+                normalizedRelativePath,
+                finalSnapshot.Length);
+            if (attempt > 0
+                || InitialLengthReadIsStable(
+                    initialSnapshot,
+                    finalSnapshot,
+                    scan.BytesRead,
+                    pathIdentityChanged))
+            {
                 return false;
+            }
         }
     }
+
+    private static bool InitialLengthReadIsStable(
+        FileIndexer.FileHandleSnapshot initialSnapshot,
+        FileIndexer.FileHandleSnapshot finalSnapshot,
+        long bytesRead,
+        bool pathIdentityChanged)
+        => bytesRead == initialSnapshot.Length
+            && finalSnapshot.Length == initialSnapshot.Length
+            && finalSnapshot.Length == bytesRead
+            && finalSnapshot.ModifiedUtc == initialSnapshot.ModifiedUtc
+            && finalSnapshot.Identity == initialSnapshot.Identity
+            && !pathIdentityChanged;
 
     private FileStream OpenValidatedReadStream(
         string absolutePath,
@@ -160,6 +190,7 @@ internal sealed partial class FileContentLoader
         FileStream stream,
         long initialLength,
         string normalizedRelativePath,
+        bool readGrowthToEnd,
         CancellationToken cancellationToken)
     {
         var expectedLength = (int)initialLength;
@@ -176,6 +207,9 @@ internal sealed partial class FileContentLoader
         }
 
         cancellationToken.ThrowIfCancellationRequested();
+        if (!readGrowthToEnd)
+            return (bytes, total);
+
         var extra = stream.ReadByte();
         if (extra < 0)
             return (bytes, total);
@@ -189,11 +223,14 @@ internal sealed partial class FileContentLoader
             cancellationToken);
     }
 
-    private bool RawByteChunksMayMatch(
+    private readonly record struct RawByteScanResult(bool Matched, long BytesRead);
+
+    private RawByteScanResult RawByteChunksMayMatch(
         FileStream stream,
         long initialLength,
         string normalizedRelativePath,
         RawByteChunkPredicate chunkPredicate,
+        bool readGrowthToEnd,
         CancellationToken cancellationToken)
     {
         var buffer = ArrayPool<byte>.Shared.Rent(StreamBufferSize);
@@ -209,12 +246,16 @@ internal sealed partial class FileContentLoader
                     0,
                     (int)Math.Min(buffer.Length, initialLength - total));
                 if (read == 0)
-                    return false;
+                    return new RawByteScanResult(Matched: false, total);
 
                 total += read;
                 if (chunkPredicate(buffer.AsSpan(0, read)))
-                    return true;
+                    return new RawByteScanResult(Matched: true, total);
             }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!readGrowthToEnd)
+                return new RawByteScanResult(Matched: false, total);
 
             return RawByteGrowthChunksMayMatch(
                 stream,
@@ -230,7 +271,7 @@ internal sealed partial class FileContentLoader
         }
     }
 
-    private bool RawByteGrowthChunksMayMatch(
+    private RawByteScanResult RawByteGrowthChunksMayMatch(
         FileStream stream,
         long total,
         string normalizedRelativePath,
@@ -246,13 +287,13 @@ internal sealed partial class FileContentLoader
                 0,
                 GetReadLengthWithinLimit(total, maxFileSizeBytes, buffer.Length));
             if (read == 0)
-                return false;
+                return new RawByteScanResult(Matched: false, total);
 
             total += read;
             ThrowIfReadExceedsMaxFileSize(normalizedRelativePath, total);
 
             if (chunkPredicate(buffer.AsSpan(0, read)))
-                return true;
+                return new RawByteScanResult(Matched: true, total);
         }
     }
 
