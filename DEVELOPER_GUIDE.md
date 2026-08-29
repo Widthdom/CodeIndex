@@ -336,10 +336,15 @@ body. To keep a large file near the input tail from starting only in the final
 worker wave, they probe at most the last `min(4 * workers, 64)` work items and
 claim known, indexable sizes largest-first. Equal sizes, unavailable metadata,
 and files already above the configured size cap retain their original order.
-The target array and logical file indexes never move, serial hook/filter paths
-do not probe, and the bounded completion queue still publishes in completion
-order. Keep this tail probe and its schedule state independent of repository
-size; an all-file metadata pass can regress network and virtual filesystems.
+Workers consume that scheduled suffix before the unscheduled prefix, so its
+largest eligible candidates enter the first worker wave; after the schedule is
+exhausted, prefix ordinals resume in their original order. Together those two
+segments form an exactly-once permutation, and only then does the existing
+sparse logical-file mapping apply. The target array and logical file indexes
+never move, serial hook/filter paths do not probe, and the bounded completion
+queue still publishes in completion order. Keep this tail probe and its
+schedule state independent of repository size; an all-file metadata pass can
+regress network and virtual filesystems.
 
 Parallel full-scan workers also carry symbol-preparation state to the single
 persistence consumer. Reuse the worker's family-scope key and completed C#
@@ -4589,9 +4594,12 @@ parallel full scan は extraction 本体を共有dynamic claimで配分します
 最後のworker waveまで開始されないことを防ぐため、末尾の
 `min(4 * workers, 64)` work itemだけをprobeし、size取得済みかつ上限内のfileを大きい順に
 claimします。同一size、metadata取得不能、設定size上限を既に超えるfileは元順を維持します。
-target arrayと論理file indexは並べ替えず、serialなhook/filter経路はprobeせず、bounded completion
-queueは引き続き完了順でpublishします。network/virtual filesystemで全file metadata passへ
-退行しないよう、tail probeとschedule stateをrepository規模に依存しない固定上限に保ってください。
+workerはこのschedule済みsuffixを未scheduleのprefixより先に消費するため、末尾で最大の対象候補も
+最初のworker waveへ入ります。schedule消費後はprefix ordinalを元順で再開し、両segment全体で
+exactly-onceのpermutationを作ってから既存のsparseな論理file mappingを適用します。target arrayと
+論理file indexは並べ替えず、serialなhook/filter経路はprobeせず、bounded completion queueは
+引き続き完了順でpublishします。network/virtual filesystemで全file metadata passへ退行しないよう、
+tail probeとschedule stateをrepository規模に依存しない固定上限に保ってください。
 
 parallel full scan の worker は、symbol preparation の状態も single persistence consumer へ
 引き渡します。worker が解決した family-scope key と完了済みの C# source observation を再利用し、
