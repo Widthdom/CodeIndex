@@ -67,7 +67,7 @@ public partial class DbWriter
             WHERE f.lang = 'csharp'
               AND " + CSharpStaticInterfaceContractMemberPredicateSql;
 
-    private const string CSharpMemberReadTargetPredicateSql = @"
+    internal const string CSharpMemberReadTargetPredicateSql = @"
               (
                     (s.kind = 'enum' AND s.container_kind = 'enum')
                     OR (
@@ -449,7 +449,7 @@ public partial class DbWriter
               AND f.lang = 'csharp'";
     }
 
-    private static SymbolRecord ReadCSharpContractWorkspaceSymbol(SqliteDataReader reader)
+    internal static SymbolRecord ReadCSharpContractWorkspaceSymbol(SqliteDataReader reader)
         => new()
         {
             FileId = reader.GetInt64(1),

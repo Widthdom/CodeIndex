@@ -113,6 +113,8 @@ public static partial class IndexCommandRunner
     internal static Action<int, int>? UpdateFileCommittedForTesting { get; set; }
     internal static Func<TimeSpan>? IndexExtractionStallTimeoutForTesting { get; set; }
     internal static Func<string, Exception?>? DryRunParseEstimateFailureForTesting { get; set; }
+    internal static Action? DryRunCSharpExpansionScanStartingForTesting { get; set; }
+    internal static Func<string, Exception?>? DryRunFileProbeFailureForTesting { get; set; }
     internal static Action<string>? DryRunFileIndexabilityValidatedForTesting { get; set; }
     internal static Action? HotspotFamilyUpdateRestampReadyForCommitForTesting { get; set; }
     internal static Action<string>? WriteScanCheckpointForTesting { get; set; }
