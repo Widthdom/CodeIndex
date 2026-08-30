@@ -29,6 +29,10 @@ public static class WorkspaceMetadataEnricher
             status.ProjectRoot = runtime.ProjectRoot;
             status.GitHead = runtime.RuntimeHead;
             status.GitIsDirty = runtime.IsDirty;
+            status.GitIndexMayHideWorktreeChanges = ResolveGitIndexVisibility(
+                status,
+                runtime.ProjectRoot,
+                cancellationToken);
             status.WorktreeHeadChanged = ResolveHeadChanged(
                 runtime.RuntimeHead,
                 runtime.RuntimeBranch,
@@ -53,6 +57,10 @@ public static class WorkspaceMetadataEnricher
         status.ProjectRoot = metadata.ProjectRoot;
         status.GitHead = metadata.RuntimeHead;
         status.GitIsDirty = metadata.IsDirty;
+        status.GitIndexMayHideWorktreeChanges = ResolveGitIndexVisibility(
+            status,
+            metadata.ProjectRoot,
+            cancellationToken);
         status.IndexedHeadCommit = metadata.LegacyIndexedHead;
         status.WorkspaceVerifiedHeadSha = metadata.WorkspaceVerifiedHead;
         status.WorktreeHeadChanged = metadata.HeadChanged;
@@ -61,6 +69,28 @@ public static class WorkspaceMetadataEnricher
         // signals remain explicit instead of silently substituting for each other.
         if (metadata.ProjectRoot != null && !string.IsNullOrWhiteSpace(status.IndexedHeadSha))
             status.CommitsAheadOfIndexedHead = GitHelper.TryCountCommitsAhead(metadata.ProjectRoot, status.IndexedHeadSha, cancellationToken);
+    }
+
+    private static bool? ResolveGitIndexVisibility(
+        StatusResult status,
+        string? projectRoot,
+        CancellationToken cancellationToken)
+    {
+        if (projectRoot == null
+            || !status.IndexedAt.HasValue
+            || !status.LatestModified.HasValue
+            || !status.LastWorkspaceFreshenedAt.HasValue
+            || status.IndexedAt.Value >= status.LatestModified.Value
+            || status.LastWorkspaceFreshenedAt.Value < status.LatestModified.Value)
+        {
+            return null;
+        }
+
+        // Keep ordinary status cheap outside the checksum-reused no-op case. Only the
+        // fallback proof needs to rule out index flags that can mask later changes.
+        // checksum 再利用 no-op の fallback 証拠を使う場合だけ index flag を確認し、
+        // それ以外の通常 status には追加の Git 列挙を行わない。
+        return GitHelper.TryHasWorktreeVisibilityLimitingIndexFlags(projectRoot, cancellationToken);
     }
 
     public static void Enrich(

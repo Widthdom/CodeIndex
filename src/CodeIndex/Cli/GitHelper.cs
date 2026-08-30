@@ -1183,6 +1183,45 @@ public static partial class GitHelper
         return paths;
     }
 
+    /// <summary>
+    /// Return whether tracked index flags can hide worktree changes from ordinary Git status.
+    /// Null means Git could not provide a trustworthy answer. Both skip-worktree and
+    /// assume-unchanged are visibility-limiting for freshness purposes (#5227).
+    /// 通常の Git status から worktree 変更を隠し得る tracked index flag の有無を返す。
+    /// Git で確認できない場合は null。freshness 判定では skip-worktree と
+    /// assume-unchanged の両方を visibility 制限として扱う (#5227)。
+    /// </summary>
+    internal static bool? TryHasWorktreeVisibilityLimitingIndexFlags(
+        string projectRoot,
+        CancellationToken cancellationToken = default)
+    {
+        var output = TryRunGit(
+            projectRoot,
+            gitEnvironmentOverrides: null,
+            cancellationToken,
+            "-c",
+            "core.quotePath=false",
+            "ls-files",
+            "-v");
+        if (output == null)
+            return null;
+
+        foreach (var rawLine in output.Split('\n'))
+        {
+            var line = rawLine.TrimEnd('\r');
+            if (line.Length < 3 || line[1] != ' ')
+                continue;
+
+            // `S` is skip-worktree. With `-v`, any lowercase tag means the
+            // assume-unchanged bit is set (including lowercase `s`).
+            // `S` は skip-worktree。`-v` の小文字 tag は assume-unchanged を示す。
+            if (line[0] == 'S' || char.IsLower(line[0]))
+                return true;
+        }
+
+        return false;
+    }
+
     internal static string? TryGetRepositoryRoot(
         string projectPath,
         IReadOnlyDictionary<string, string?>? gitEnvironmentOverrides,

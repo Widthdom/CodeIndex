@@ -21,6 +21,12 @@ public class StatusFreshnessEvaluatorTests
         Assert.Equal("fresh", trusted.SummaryLabel);
         Assert.Contains("index fresh", QueryCommandRunner.BuildStatusSummary(status, EvaluatedAt));
 
+        status.GitIndexMayHideWorktreeChanges = true;
+        var hiddenIndexState = StatusFreshnessEvaluator.Evaluate(status, EvaluatedAt);
+        Assert.Equal(StatusFreshnessState.Unknown, hiddenIndexState.State);
+        Assert.Equal("workspace_freshening_unverified", hiddenIndexState.Reason);
+
+        status.GitIndexMayHideWorktreeChanges = false;
         status.WorkspaceVerifiedHeadSha = null;
         var unverified = StatusFreshnessEvaluator.Evaluate(status, EvaluatedAt);
         Assert.Equal(StatusFreshnessState.Unknown, unverified.State);
@@ -55,6 +61,17 @@ public class StatusFreshnessEvaluatorTests
         Assert.Equal(StatusFreshnessState.HeadChanged, headChanged.State);
         Assert.Equal("head_changed", headChanged.Reason);
 
+        status.WorkspaceCheck = new IndexFreshnessCheckResult
+        {
+            Checked = true,
+            MatchesWorkspace = true,
+            Reason = "matched",
+        };
+        var checkedHeadChanged = StatusFreshnessEvaluator.Evaluate(status, EvaluatedAt);
+        Assert.Equal(StatusFreshnessState.HeadChanged, checkedHeadChanged.State);
+        Assert.Equal("head_changed", checkedHeadChanged.Reason);
+
+        status.WorkspaceCheck = null;
         status.WorktreeHeadChanged = false;
         status.GitIsDirty = true;
         var dirty = StatusFreshnessEvaluator.Evaluate(status, EvaluatedAt);
@@ -99,6 +116,7 @@ public class StatusFreshnessEvaluatorTests
         LastWorkspaceFreshenedAt = FreshenedAt,
         GitHead = "0123456789abcdef",
         GitIsDirty = false,
+        GitIndexMayHideWorktreeChanges = false,
         IndexedHeadSha = "0123456789abcdef",
         WorkspaceVerifiedHeadSha = "0123456789abcdef",
         WorktreeHeadChanged = false,

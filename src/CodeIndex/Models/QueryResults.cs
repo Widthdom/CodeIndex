@@ -1628,6 +1628,14 @@ public class StatusResult
     public StatusSqliteConnectionPolicy SqliteConnectionPolicy { get; set; } = new();
     public string? GitHead { get; set; }
     public bool? GitIsDirty { get; set; }
+    // Ordinary status consults this internal runtime signal only when a no-op freshening
+    // stamp would otherwise prove freshness. False means Git confirmed that no tracked
+    // entry uses skip-worktree or assume-unchanged; true/null keeps that proof unverified.
+    // no-op freshening stamp を信頼する場合だけ使う runtime 内部 signal。
+    // false は skip-worktree / assume-unchanged が無いことを Git で確認済み、
+    // true/null は worktree 変更を隠せるため未検証として扱う。
+    [JsonIgnore]
+    internal bool? GitIndexMayHideWorktreeChanges { get; set; }
     /// <summary>
     /// Best-effort Linux mandatory-access-control profile for the running process, such as
     /// `apparmor:snap.cdidx.cdidx` or `selinux:user_u:user_r:user_t:s0`. Null on non-Linux

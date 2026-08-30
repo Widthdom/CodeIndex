@@ -6484,6 +6484,73 @@ public sealed class Caller
             Assert.Contains(
                 "index fresh",
                 checkedMcpResponse["result"]!["structuredContent"]!["summary"]!.GetValue<string>());
+
+            RunGit(projectRoot, "update-index", "--skip-worktree", "app.py");
+            File.WriteAllText(sourcePath, "print('changed after freshening')\n");
+            clock.Advance(TimeSpan.FromMinutes(1));
+
+            using (var hiddenChangeDb = new DbContext(DbOpenIntent.QueryOnly, dbPath))
+            using (var hiddenChangeReader = new DbReader(hiddenChangeDb))
+            {
+                var hiddenChange = hiddenChangeReader.GetStatus();
+                WorkspaceMetadataEnricher.Enrich(hiddenChange, dbPath, dbPathExplicit: true);
+                Assert.False(hiddenChange.GitIsDirty);
+                Assert.True(hiddenChange.GitIndexMayHideWorktreeChanges);
+                Assert.Contains(
+                    "index unknown",
+                    QueryCommandRunner.BuildStatusSummary(hiddenChange, clock.GetUtcNow().UtcDateTime));
+
+                hiddenChange.WorkspaceCheck = IndexFreshnessChecker.Check(
+                    hiddenChangeReader,
+                    projectRoot,
+                    internalIndexDatabasePath: DbPathResolver.NormalizeDbPath(dbPath));
+                Assert.False(hiddenChange.WorkspaceCheck.MatchesWorkspace);
+                Assert.Contains(
+                    "index stale",
+                    QueryCommandRunner.BuildStatusSummary(hiddenChange, clock.GetUtcNow().UtcDateTime));
+            }
+
+            var hiddenOrdinaryMcpResponse = server.HandleMessage(JsonNode.Parse(
+                """{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!)!;
+            var hiddenCheckedMcpResponse = server.HandleMessage(JsonNode.Parse(
+                """{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"status","arguments":{"check":true}}}""")!)!;
+            Assert.Contains(
+                "index unknown",
+                hiddenOrdinaryMcpResponse["result"]!["structuredContent"]!["summary"]!.GetValue<string>());
+            Assert.Contains(
+                "index stale",
+                hiddenCheckedMcpResponse["result"]!["structuredContent"]!["summary"]!.GetValue<string>());
+
+            RunGit(projectRoot, "update-index", "--no-skip-worktree", "app.py");
+            RunGit(projectRoot, "checkout", "--", "app.py");
+            RunGit(projectRoot, "checkout", "--detach", "HEAD");
+
+            using (var detachedDb = new DbContext(DbOpenIntent.QueryOnly, dbPath))
+            using (var detachedReader = new DbReader(detachedDb))
+            {
+                var detached = detachedReader.GetStatus();
+                WorkspaceMetadataEnricher.Enrich(detached, dbPath, dbPathExplicit: true);
+                Assert.False(detached.GitIsDirty);
+                Assert.True(detached.WorktreeHeadChanged);
+                Assert.Contains(
+                    "index stale",
+                    QueryCommandRunner.BuildStatusSummary(detached, clock.GetUtcNow().UtcDateTime));
+
+                detached.WorkspaceCheck = IndexFreshnessChecker.Check(
+                    detachedReader,
+                    projectRoot,
+                    internalIndexDatabasePath: DbPathResolver.NormalizeDbPath(dbPath));
+                Assert.True(detached.WorkspaceCheck.MatchesWorkspace);
+                Assert.Contains(
+                    "index stale",
+                    QueryCommandRunner.BuildStatusSummary(detached, clock.GetUtcNow().UtcDateTime));
+            }
+
+            var detachedCheckedMcpResponse = server.HandleMessage(JsonNode.Parse(
+                """{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"status","arguments":{"check":true}}}""")!)!;
+            Assert.Contains(
+                "index stale",
+                detachedCheckedMcpResponse["result"]!["structuredContent"]!["summary"]!.GetValue<string>());
         }
         finally
         {
