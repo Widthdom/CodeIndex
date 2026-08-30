@@ -1371,21 +1371,8 @@ public static partial class QueryCommandRunner
     private static string BuildFoldNotReadyWarning(string? foldReadyReason, string backfillCommand, string rebuildCommand)
         => $"{BuildFoldNotReadyExplanation(foldReadyReason)} Run `{backfillCommand}` to restamp folded-name columns in place, or `{rebuildCommand}` for a full rebuild.";
 
-    private static string BuildStatusFreshnessLabel(StatusResult status)
-    {
-        if (status.WorkspaceCheck != null)
-            return status.WorkspaceCheck.Checked
-                ? (status.WorkspaceCheck.MatchesWorkspace ? "fresh" : "stale")
-                : "unknown";
-
-        if (!status.IndexedAt.HasValue || !status.LatestModified.HasValue)
-            return "unknown";
-
-        if (status.GitIsDirty == true)
-            return "stale";
-
-        return status.IndexedAt.Value >= status.LatestModified.Value ? "fresh" : "stale";
-    }
+    private static string BuildStatusFreshnessLabel(StatusResult status, DateTime utcNow)
+        => StatusFreshnessEvaluator.Evaluate(status, utcNow).SummaryLabel;
 
     private static void WriteWorkspaceCheck(IndexFreshnessCheckResult check)
     {
@@ -1480,10 +1467,10 @@ public static partial class QueryCommandRunner
         status.SymbolsByLanguageKindNamesTruncated = truncatedLanguages;
     }
 
-    internal static string BuildStatusSummary(StatusResult status)
+    internal static string BuildStatusSummary(StatusResult status, DateTime? utcNow = null)
     {
         var topLangs = status.Languages.OrderByDescending(kv => kv.Value).Take(3).Select(kv => kv.Key);
-        var freshness = BuildStatusFreshnessLabel(status);
+        var freshness = BuildStatusFreshnessLabel(status, utcNow ?? GetUtcNow());
         var dirty = status.GitIsDirty == true ? ", dirty" : "";
         var degraded = IsStatusDegraded(status) ? ", DEGRADED" : "";
         var incomplete = status.IndexComplete ? "" : ", INCOMPLETE";

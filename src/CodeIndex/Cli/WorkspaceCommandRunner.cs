@@ -430,17 +430,18 @@ internal static class WorkspaceCommandRunner
                 projectRoot,
                 cancellationToken,
                 internalIndexDatabasePath: DbPathResolver.NormalizeDbPath(dbPath));
+            var freshnessEvaluation = StatusFreshnessEvaluator.Evaluate(freshness);
             var status = "ready";
             var reason = "ready";
-            if (!freshness.Checked)
+            if (freshnessEvaluation.State == StatusFreshnessState.Unknown)
             {
                 status = "degraded";
-                reason = "freshness_check_unavailable";
+                reason = freshnessEvaluation.Reason;
             }
-            else if (!freshness.MatchesWorkspace)
+            else if (freshnessEvaluation.State != StatusFreshnessState.Fresh)
             {
                 status = "stale";
-                reason = freshness.Reason;
+                reason = freshnessEvaluation.Reason;
             }
             else if (!snapshot.IndexComplete)
             {

@@ -115,7 +115,7 @@ public partial class McpServer
                 status.RecommendedAction = BuildFoldBackfillCommand(_dbPath, _dbPathExplicit);
                 status.AlternativeAction = BuildFoldRebuildRepairCommand(status.ProjectRoot, _dbPath, _dbPathExplicit);
             }
-            status.Summary = QueryCommandRunner.BuildStatusSummary(status);
+            status.Summary = QueryCommandRunner.BuildStatusSummary(status, GetUtcNow());
             var checkFailures = checkWorkspace
                 ? BuildMcpStatusCheckFailures(status, statusScopes)
                 : [];

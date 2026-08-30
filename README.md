@@ -197,6 +197,14 @@ visible here as a compact compatibility index.
 | Remediation | `degraded_root_cause`, `degraded_reason`, `recommended_action`, `alternative_action`, `readiness_degradations`, `repair_commands`. |
 | MCP-only session diagnostics | `mcp_session`, `mcp_session.metrics`, `queue_capacity`, `queue_depth`, `queued_event_count`, `written_event_count`, `dropped_event_count`, `queue_full_drop_count`, `serialization_failure_count`, `write_failure_count`, `rotation_failure_count`, `batch_flush_count`, `consecutive_failure_count`, `recovery_count`, `next_retry_at`, `last_recovery_at`, `last_failure`, `mcp_session.audit_log`, `queued_record_count`, `written_record_count`, `mcp.rate_limit.bucket_limit`, `mcp.rate_limit.bucket_limit_rejection_count`. |
 
+Ordinary status summaries use `last_workspace_freshened_at` as freshness evidence
+after a checksum-reused no-op update only when the runtime HEAD,
+`workspace_verified_head_sha`, and `indexed_head_sha` agree and the worktree is
+clean. Missing provenance or a future timestamp yields `unknown`; an actual
+workspace change remains `stale`. `status --check` performs the authoritative
+workspace comparison, and CLI, workspace, and MCP summaries share the same
+classification.
+
 Persisted JSON subdocuments for `last_index_run.reference_extraction_cap_hits`,
 `last_index_run.rebuild_reclaim`, and
 `last_failed_or_partial_index_run.file_errors` have a 512 KiB UTF-8 input limit
@@ -442,6 +450,13 @@ field group を表に残します。
 | database size attribution | `database_size_attribution`。 |
 | remediation | `degraded_root_cause`、`degraded_reason`、`recommended_action`、`alternative_action`、`readiness_degradations`、`repair_commands`。 |
 | MCP-only session diagnostics | `mcp_session`、`mcp_session.metrics`、`queue_capacity`、`queue_depth`、`queued_event_count`、`written_event_count`、`dropped_event_count`、`queue_full_drop_count`、`serialization_failure_count`、`write_failure_count`、`rotation_failure_count`、`batch_flush_count`、`consecutive_failure_count`、`recovery_count`、`next_retry_at`、`last_recovery_at`、`last_failure`、`mcp_session.audit_log`、`queued_record_count`、`written_record_count`、`mcp.rate_limit.bucket_limit`、`mcp.rate_limit.bucket_limit_rejection_count`。 |
+
+通常の status summary は、checksum 再利用による no-op update 後の鮮度証拠として
+`last_workspace_freshened_at` を使います。ただし runtime HEAD、
+`workspace_verified_head_sha`、`indexed_head_sha` が一致し、worktree が clean な場合に
+限ります。provenance が欠けている場合や timestamp が未来の場合は `unknown`、実際の
+workspace 変更がある場合は引き続き `stale` です。`status --check` は authoritative な
+workspace 比較を行い、CLI、workspace、MCP の summary は同じ分類を共有します。
 
 `last_index_run.reference_extraction_cap_hits`、`last_index_run.rebuild_reclaim`、
 `last_failed_or_partial_index_run.file_errors` の永続化 JSON subdocument には、
