@@ -36,15 +36,24 @@ public partial class McpServer
             maxDepthClampWarning = $"maxHops was clamped from {maxDepthRequested} to {maxDepth} (server cap is [0, {MaxImpactDepth}]).";
             adjustments.AddClamped("maxHops", maxDepthRequested, maxDepth, 0, MaxImpactDepth);
         }
-        var limit = ReadLimit(args, QueryCommandRunner.DefaultImpactLimit, adjustments);
+        var countOnly = ReadCountOnly(args);
+        var requestedLimit = ReadOptionalIntArgument(args, "limit");
+        var limit = countOnly
+            ? QueryCommandRunner.DefaultImpactLimit
+            : ReadLimit(args, QueryCommandRunner.DefaultImpactLimit, adjustments);
+        if (countOnly && requestedLimit is int ignoredLimit)
+        {
+            adjustments.AddIgnored(
+                "limit",
+                ignoredLimit,
+                "countOnly uses a dedicated traversal safety cap instead of a presentation limit.");
+        }
         var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
         var pathPatterns = ReadScopedPathList(args);
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
         var withPaths = args?["withPaths"]?.GetValue<bool>() ?? false;
         var includeMemberReads = args?["includeMemberReads"]?.GetValue<bool>() ?? false;
-        var countOnly = ReadCountOnly(args);
-
         return WithDbReader(id, args, reader =>
         {
             if (TryResolveMcpGraphSelector(id, reader, selectorValue, out var selectedDefinition) is JsonNode selectorError)

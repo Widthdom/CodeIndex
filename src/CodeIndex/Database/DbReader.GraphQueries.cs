@@ -724,7 +724,7 @@ public partial class DbReader
     /// SQL 側で要求された LIMIT/OFFSET を適用し、呼び出し側が要求以上の中間ページを
     /// materialize しないようにする。
     /// </summary>
-    private List<CallerResult> GetCallersExactCore(string symbolName, int limit, int offset, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, IReadOnlyList<long>? targetSymbolIds, bool requireAuthoritativeIdentity, bool includeAmbiguousMSource, bool includeMemberReads)
+    private List<CallerResult> GetCallersExactCore(string symbolName, int limit, int offset, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, IReadOnlyList<long>? targetSymbolIds, IReadOnlyList<string>? countTargetSymbolNames, bool requireAuthoritativeIdentity, bool includeAmbiguousMSource, bool includeMemberReads, bool countOnly)
     {
         if (!_hasReferencesTable) return new List<CallerResult>();
         using var cmd = _conn.CreateCommand();
@@ -758,11 +758,27 @@ public partial class DbReader
         // caller rows whose stored callee casing differs from the resolved definition.
         // caller 側も leaf `--exact` と同じく FoldReady なら folded equality、legacy DB では
         // `COLLATE NOCASE` fallback。definition と caller 行の casing 差もここで吸収する。
-        var allowSqlLeafFallback = !SqlNameResolver.HasQualifier(symbolName);
-        var allowCSharpQualifiedContextMatch = SqlNameResolver.HasQualifier(symbolName)
+        var normalizedCountTargetNames = countTargetSymbolNames?
+            .Where(static name => !string.IsNullOrWhiteSpace(name))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList() ?? [];
+        var hasCountNameBatch = countOnly
+            && normalizedCountTargetNames.Count > 1
+            && normalizedCountTargetNames.All(static name => !SqlNameResolver.HasQualifier(name));
+        var allowSqlLeafFallback = hasCountNameBatch || !SqlNameResolver.HasQualifier(symbolName);
+        var allowCSharpQualifiedContextMatch = !hasCountNameBatch
+            && SqlNameResolver.HasQualifier(symbolName)
             && !HasQualifiedSymbolDefinition(symbolName, lang, pathPatterns, excludePathPatterns, excludeTests);
-        var allowQualifiedLeafFallback = HasSingleQualifiedSymbolDefinition(symbolName, lang, pathPatterns, excludePathPatterns, excludeTests);
-        var polymorphicCSharpSymbolNames = lang is null or "csharp"
+        var allowQualifiedLeafFallback = !hasCountNameBatch
+            && !allowSqlLeafFallback
+            && HasSingleQualifiedSymbolDefinition(symbolName, lang, pathPatterns, excludePathPatterns, excludeTests);
+        // Identity-scoped pages select C# edges by target ID; their name predicate applies only
+        // to non-C# fallback rows, where a C# polymorphic-name disjunct cannot match. Repeating
+        // dispatch-name discovery for every BFS frontier node is therefore redundant.
+        // identity scope の page は C# edge を target ID で選び、name predicate は non-C#
+        // fallback row だけに適用されるため、C# polymorphic name 条件は一致しない。
+        // したがって BFS の各 frontier node で dispatch name を再探索する必要はない。
+        var polymorphicCSharpSymbolNames = !hasIdentityTargetScope && (lang is null or "csharp")
             ? GetCSharpPolymorphicDispatchSymbolNames(symbolName)
             : [];
         var polymorphicNameCondition = polymorphicCSharpSymbolNames.Count == 0
@@ -770,13 +786,17 @@ public partial class DbReader
             : _foldReady
                 ? " OR (f.lang = 'csharp' AND r.symbol_name_folded IN (" + string.Join(", ", polymorphicCSharpSymbolNames.Select((_, i) => $"@polymorphicSymbolNameFolded{i}")) + "))"
                 : " OR (f.lang = 'csharp' AND r.symbol_name COLLATE NOCASE IN (" + string.Join(", ", polymorphicCSharpSymbolNames.Select((_, i) => $"@polymorphicSymbolName{i}")) + "))";
-        var namePredicate = _foldReady
-            ? allowSqlLeafFallback
-                ? "(" + BuildPersistedFoldedNameMatchSql("r.symbol_name_folded", "@symbolNameFolded") + " OR (f.lang = 'sql' AND r.symbol_name_folded = @symbolNameLeafFolded)" + polymorphicNameCondition + " OR (f.lang = 'solution' AND r.reference_kind = 'project_reference' AND r.container_name = @symbolName COLLATE NOCASE))"
-                : "(((f.lang = 'sql') AND sql_context_has_name_folded_at(" + contextSql + @", @symbolName, r.column_number) = 1) OR ((f.lang != 'sql') AND " + BuildPersistedFoldedNameMatchSql("r.symbol_name_folded", "@symbolNameFolded") + ") OR " + BuildCSharpQualifiedContextFallbackSql(BuildQualifiedContextMatchSql(contextSql, "r.column_number", folded: true, like: false)) + " OR " + BuildQualifiedLeafFallbackSql("r.symbol_name", "r.symbol_name_folded", folded: true) + polymorphicNameCondition + " OR (f.lang = 'solution' AND r.reference_kind = 'project_reference' AND r.container_name = @symbolName COLLATE NOCASE))"
-            : allowSqlLeafFallback
-                ? "(r.symbol_name = @symbolName COLLATE NOCASE OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@symbolName) COLLATE NOCASE)" + polymorphicNameCondition + " OR (f.lang = 'solution' AND r.reference_kind = 'project_reference' AND r.container_name = @symbolName COLLATE NOCASE))"
-                : "(((f.lang = 'sql') AND sql_context_has_name_at(" + contextSql + @", @symbolName, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name = @symbolName COLLATE NOCASE) OR " + BuildCSharpQualifiedContextFallbackSql(BuildQualifiedContextMatchSql(contextSql, "r.column_number", folded: false, like: false)) + " OR " + BuildQualifiedLeafFallbackSql("r.symbol_name", "r.symbol_name_folded", folded: false) + polymorphicNameCondition + " OR (f.lang = 'solution' AND r.reference_kind = 'project_reference' AND r.container_name = @symbolName COLLATE NOCASE))";
+        var namePredicate = hasCountNameBatch
+            ? _foldReady
+                ? "(r.symbol_name_folded IN (SELECT value FROM json_each(@countTargetNamesFoldedJson)) OR (f.lang = 'solution' AND r.reference_kind = 'project_reference' AND r.container_name COLLATE NOCASE IN (SELECT value FROM json_each(@countTargetNamesJson))))"
+                : "(r.symbol_name COLLATE NOCASE IN (SELECT value FROM json_each(@countTargetNamesJson)) OR (f.lang = 'solution' AND r.reference_kind = 'project_reference' AND r.container_name COLLATE NOCASE IN (SELECT value FROM json_each(@countTargetNamesJson))))"
+            : _foldReady
+                ? allowSqlLeafFallback
+                    ? "(" + BuildPersistedFoldedNameMatchSql("r.symbol_name_folded", "@symbolNameFolded") + " OR (f.lang = 'sql' AND r.symbol_name_folded = @symbolNameLeafFolded)" + polymorphicNameCondition + " OR (f.lang = 'solution' AND r.reference_kind = 'project_reference' AND r.container_name = @symbolName COLLATE NOCASE))"
+                    : "(((f.lang = 'sql') AND sql_context_has_name_folded_at(" + contextSql + @", @symbolName, r.column_number) = 1) OR ((f.lang != 'sql') AND " + BuildPersistedFoldedNameMatchSql("r.symbol_name_folded", "@symbolNameFolded") + ") OR " + BuildCSharpQualifiedContextFallbackSql(BuildQualifiedContextMatchSql(contextSql, "r.column_number", folded: true, like: false)) + " OR " + BuildQualifiedLeafFallbackSql("r.symbol_name", "r.symbol_name_folded", folded: true) + polymorphicNameCondition + " OR (f.lang = 'solution' AND r.reference_kind = 'project_reference' AND r.container_name = @symbolName COLLATE NOCASE))"
+                : allowSqlLeafFallback
+                    ? "(r.symbol_name = @symbolName COLLATE NOCASE OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@symbolName) COLLATE NOCASE)" + polymorphicNameCondition + " OR (f.lang = 'solution' AND r.reference_kind = 'project_reference' AND r.container_name = @symbolName COLLATE NOCASE))"
+                    : "(((f.lang = 'sql') AND sql_context_has_name_at(" + contextSql + @", @symbolName, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name = @symbolName COLLATE NOCASE) OR " + BuildCSharpQualifiedContextFallbackSql(BuildQualifiedContextMatchSql(contextSql, "r.column_number", folded: false, like: false)) + " OR " + BuildQualifiedLeafFallbackSql("r.symbol_name", "r.symbol_name_folded", folded: false) + polymorphicNameCondition + " OR (f.lang = 'solution' AND r.reference_kind = 'project_reference' AND r.container_name = @symbolName COLLATE NOCASE))";
         var nameCondition = "\n              AND " + namePredicate;
         // Selector traversal admits only references authoritatively resolved to that target.
         // Name-resolved roots, including a partial family that currently has one member, retain
@@ -816,7 +836,33 @@ public partial class DbReader
         // `subscribe` エッジ（`Click += OnClick` 等）も推移 caller に含める。`attribute` /
         // `annotation` のような metadata エッジは引き続き除外する。
         var callerContainerPredicate = BuildCallerContainerPredicate("f", "r");
-        var sql = $@"
+        var sql = countOnly
+            ? $@"
+                SELECT f.path, f.lang, {BuildCallerKindProjectionSql("r")} AS container_kind,
+                       CASE WHEN f.lang = 'solution' AND r.reference_kind = 'project_reference' THEN f.path
+                            ELSE {BuildCallerNameProjectionSql("r")} END AS container_name,
+                       r.symbol_name,
+                       r.reference_kind,
+                       MIN(r.line) AS first_line,
+                       COALESCE(MIN(r.column_number), 0) AS first_column,
+                       MIN(CASE WHEN {referenceSpanLengthSql} > 0 THEN {referenceSpanLengthSql} ELSE NULL END) AS first_length,
+                       COUNT(*) AS reference_count,
+                       MAX({selfReferenceSql}) AS is_self_reference,
+                       MAX({mutualRecursionSql}) AS is_mutual_recursion,
+                       {sourceSymbolIdSql} AS source_symbol_id,
+                       CASE
+                           WHEN COUNT(DISTINCT COALESCE({targetSymbolIdSql}, -1)) = 1
+                           THEN MIN({targetSymbolIdSql})
+                           ELSE NULL
+                       END AS target_symbol_id,
+                       GROUP_CONCAT(DISTINCT {targetSymbolIdSql}) AS target_symbol_ids
+                FROM symbol_references r
+                JOIN files f ON r.file_id = f.id{referenceLineJoin}
+                WHERE {callerContainerPredicate}
+                  AND (r.reference_kind IN {CallGraphReferenceKindsSql}{(includeMemberReads ? " OR r.reference_kind = 'member_read'" : string.Empty)})
+                  AND {supportedLangFilter}
+                  {targetCondition}"
+            : $@"
             WITH logical_references AS (
                 SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.reference_kind, r.line, r.column_number,
                        {sourceSymbolIdSql} AS source_symbol_id,
@@ -843,46 +889,59 @@ public partial class DbReader
             "r",
             includeQualifiedCommonCalls: false);
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
-        sql += @"
-                GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.reference_kind, r.file_id, r.line, r.column_number, source_symbol_id, target_symbol_id
-            ),
-            ranked_references AS (
-                SELECT r.*,
-                       ROW_NUMBER() OVER (
-                           PARTITION BY path, lang, " + BuildCallerKindProjectionSql("r") + @",
-                                        CASE WHEN lang = 'solution' AND reference_kind = 'project_reference' THEN path
-                                             ELSE " + BuildCallerNameProjectionSql("r") + @" END,
-                                        symbol_name, reference_kind, source_symbol_id
-                           ORDER BY line,
-                                    CASE WHEN column_number IS NULL THEN 1 ELSE 0 END,
-                                    column_number,
-                                    CASE WHEN span_length IS NULL OR span_length <= 0 THEN 1 ELSE 0 END,
-                                    COALESCE(span_length, 0),
-                                    COALESCE(target_symbol_id, -1)
-                       ) AS location_rank
-                FROM logical_references r
-            )
-            SELECT path, lang, " + BuildCallerKindProjectionSql("r") + @" AS container_kind,
-                   CASE WHEN lang = 'solution' AND reference_kind = 'project_reference' THEN path
-                        ELSE " + BuildCallerNameProjectionSql("r") + @" END AS container_name,
-                   symbol_name,
-                   reference_kind,
-                   MAX(CASE WHEN location_rank = 1 THEN line END) AS first_line,
-                   COALESCE(MAX(CASE WHEN location_rank = 1 THEN column_number END), 0) AS first_column,
-                   MAX(CASE WHEN location_rank = 1 THEN span_length END) AS first_length,
-                   COUNT(*) AS reference_count,
-                   MAX(is_self_reference) AS is_self_reference,
-                   MAX(is_mutual_recursion) AS is_mutual_recursion,
-                   source_symbol_id,
-                   CASE
-                       WHEN COUNT(DISTINCT COALESCE(target_symbol_id, -1)) = 1
-                       THEN MIN(target_symbol_id)
-                       ELSE NULL
-                   END AS target_symbol_id,
-                   GROUP_CONCAT(DISTINCT target_symbol_id) AS target_symbol_ids
-            FROM ranked_references r
-            GROUP BY path, lang, container_kind, container_name, symbol_name, reference_kind, source_symbol_id";
-        sql += $" ORDER BY {GetPathBucketOrderSql("r.path")}, reference_count DESC, r.path, COALESCE(r.container_name, ''), COALESCE(r.container_kind, ''), r.symbol_name, reference_kind, first_line, COALESCE(source_symbol_id, -1) LIMIT @limit OFFSET @offset";
+        if (countOnly)
+        {
+            sql += $@"
+                GROUP BY f.path, f.lang, {BuildCallerKindProjectionSql("r")},
+                         CASE WHEN f.lang = 'solution' AND r.reference_kind = 'project_reference' THEN f.path
+                              ELSE {BuildCallerNameProjectionSql("r")} END,
+                         r.symbol_name, r.reference_kind, {sourceSymbolIdSql}";
+        }
+        else
+        {
+            sql += @"
+                    GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.reference_kind, r.file_id, r.line, r.column_number, source_symbol_id, target_symbol_id
+                ),
+                ranked_references AS (
+                    SELECT r.*,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY path, lang, " + BuildCallerKindProjectionSql("r") + @",
+                                            CASE WHEN lang = 'solution' AND reference_kind = 'project_reference' THEN path
+                                                 ELSE " + BuildCallerNameProjectionSql("r") + @" END,
+                                            symbol_name, reference_kind, source_symbol_id
+                               ORDER BY line,
+                                        CASE WHEN column_number IS NULL THEN 1 ELSE 0 END,
+                                        column_number,
+                                        CASE WHEN span_length IS NULL OR span_length <= 0 THEN 1 ELSE 0 END,
+                                        COALESCE(span_length, 0),
+                                        COALESCE(target_symbol_id, -1)
+                           ) AS location_rank
+                    FROM logical_references r
+                )
+                SELECT path, lang, " + BuildCallerKindProjectionSql("r") + @" AS container_kind,
+                       CASE WHEN lang = 'solution' AND reference_kind = 'project_reference' THEN path
+                            ELSE " + BuildCallerNameProjectionSql("r") + @" END AS container_name,
+                       symbol_name,
+                       reference_kind,
+                       MAX(CASE WHEN location_rank = 1 THEN line END) AS first_line,
+                       COALESCE(MAX(CASE WHEN location_rank = 1 THEN column_number END), 0) AS first_column,
+                       MAX(CASE WHEN location_rank = 1 THEN span_length END) AS first_length,
+                       COUNT(*) AS reference_count,
+                       MAX(is_self_reference) AS is_self_reference,
+                       MAX(is_mutual_recursion) AS is_mutual_recursion,
+                       source_symbol_id,
+                       CASE
+                           WHEN COUNT(DISTINCT COALESCE(target_symbol_id, -1)) = 1
+                           THEN MIN(target_symbol_id)
+                           ELSE NULL
+                       END AS target_symbol_id,
+                       GROUP_CONCAT(DISTINCT target_symbol_id) AS target_symbol_ids
+                FROM ranked_references r
+                GROUP BY path, lang, container_kind, container_name, symbol_name, reference_kind, source_symbol_id";
+        }
+        sql += countOnly
+            ? $" ORDER BY {GetPathBucketOrderSql("f.path")}, reference_count DESC, f.path, COALESCE(container_name, ''), COALESCE(container_kind, ''), r.symbol_name, reference_kind, first_line, COALESCE(source_symbol_id, -1) LIMIT @limit OFFSET @offset"
+            : $" ORDER BY {GetPathBucketOrderSql("r.path")}, reference_count DESC, r.path, COALESCE(r.container_name, ''), COALESCE(r.container_kind, ''), r.symbol_name, reference_kind, first_line, COALESCE(source_symbol_id, -1) LIMIT @limit OFFSET @offset";
 
         cmd.CommandText = sql;
         SqliteCommandPolicy.Add(cmd, "@symbolName", symbolName);
@@ -892,6 +951,14 @@ public partial class DbReader
         SqliteCommandPolicy.Add(cmd, "@symbolNameLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(symbolName)) ?? SqlNameResolver.GetLeafName(symbolName));
         if (_foldReady)
             AddPersistedFoldedNameQueryParameters(cmd, "@symbolNameFolded", symbolName, lang);
+        if (hasCountNameBatch)
+        {
+            SqliteCommandPolicy.Add(cmd, "@countTargetNamesJson", JsonStringListCodec.Serialize(normalizedCountTargetNames));
+            SqliteCommandPolicy.Add(
+                cmd,
+                "@countTargetNamesFoldedJson",
+                JsonStringListCodec.Serialize(normalizedCountTargetNames.Select(static name => NameFold.Fold(name) ?? name).ToList()));
+        }
         for (var i = 0; i < polymorphicCSharpSymbolNames.Count; i++)
         {
             if (_foldReady)

@@ -64,7 +64,7 @@ public partial class McpServerTests
                 $"public sealed class McpIssue5226Caller{i} {{ public void Run() {{ McpIssue5226Target.Hit(); }} }}");
         }
 
-        JsonNode Call(bool countOnly)
+        JsonNode Call(bool countOnly, int limit)
         {
             var request = new JsonObject
             {
@@ -79,7 +79,7 @@ public partial class McpServerTests
                         ["query"] = "McpIssue5226Target.Hit",
                         ["lang"] = "csharp",
                         ["maxHops"] = 1,
-                        ["limit"] = 1,
+                        ["limit"] = limit,
                         ["countOnly"] = countOnly,
                     },
                 },
@@ -87,7 +87,7 @@ public partial class McpServerTests
             return _server.HandleMessage(request)!["result"]!["structuredContent"]!;
         }
 
-        var count = Call(countOnly: true);
+        var count = Call(countOnly: true, limit: 1000);
         Assert.True(count["count_only"]!.GetValue<bool>());
         Assert.Equal(6, count["count"]!.GetValue<int>());
         Assert.Equal(6, count["file_count"]!.GetValue<int>());
@@ -96,8 +96,13 @@ public partial class McpServerTests
         Assert.True(count["authoritative_count"]!.GetValue<bool>());
         Assert.Empty(count["results"]!.AsArray());
         Assert.Equal(5, count["top_files"]!.AsArray().Count);
+        var limitAdjustment = Assert.Single(count["argument_adjustments"]!.AsArray());
+        Assert.Equal("limit", limitAdjustment!["argument"]!.GetValue<string>());
+        Assert.Equal("ignored", limitAdjustment["action"]!.GetValue<string>());
+        Assert.Equal(1000, limitAdjustment["requested"]!.GetValue<int>());
+        Assert.Null(limitAdjustment["effective"]);
 
-        var rows = Call(countOnly: false);
+        var rows = Call(countOnly: false, limit: 1);
         Assert.Equal(1, rows["count"]!.GetValue<int>());
         Assert.Single(rows["callers"]!.AsArray());
         Assert.True(rows["truncated"]!.GetValue<bool>());
@@ -116,7 +121,7 @@ public partial class McpServerTests
             Assert.Equal(1, command.ExecuteNonQuery());
         }
 
-        var incomplete = Call(countOnly: true);
+        var incomplete = Call(countOnly: true, limit: 1);
         Assert.Equal(6, incomplete["count"]!.GetValue<int>());
         Assert.False(incomplete["reference_graph_complete"]!.GetValue<bool>());
         Assert.False(incomplete["authoritative_count"]!.GetValue<bool>());

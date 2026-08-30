@@ -16,6 +16,10 @@ public partial class DbReader
     // Count-only traversal uses a dedicated result budget instead of the presentation limit.
     // count-only traversal は表示用 limit ではなく専用の result budget を使う。
     internal const int DefaultImpactCountTraversalLimit = 10_000;
+    // Keep count traversal SQL pages bounded independently of the overall count budget.
+    // count traversal の SQL page size は全体の count budget と分離して小さく保つ。
+    internal const int ImpactCountCallerPageSize = 64;
+    internal const int ImpactCountCallerTargetBatchSize = 128;
     internal const int DefaultImpactPartialFamilyMemberBudget = 10_000;
     internal int ImpactPartialFamilyMemberBudget { get; set; } = DefaultImpactPartialFamilyMemberBudget;
     internal const int ImpactBoundaryCallerProbeBudget = 512;
@@ -481,9 +485,47 @@ public partial class DbReader
             request.ExcludePathPatterns,
             request.ExcludeTests,
             targetIds,
+            countTargetSymbolNames: null,
             requireAuthoritativeIdentity: request.SelectedDefinition != null,
             includeAmbiguousMSource: includeAmbiguousMSource,
-            includeMemberReads: request.IncludeMemberReads);
+            includeMemberReads: request.IncludeMemberReads,
+            countOnly: request.CountOnly);
+    }
+
+    private List<CallerResult> ReadImpactCountCallerBatch(
+        IReadOnlyList<ImpactTraversalFrontierNode> nodes,
+        ImpactTraversalRequest request,
+        int pageSize,
+        int pageOffset,
+        bool includeAmbiguousMSource)
+    {
+        var targetIds = nodes
+            .SelectMany(static node => node.TargetSymbolIds is { Count: > 0 }
+                ? node.TargetSymbolIds
+                : node.SymbolId is long symbolId
+                    ? [symbolId]
+                    : Array.Empty<long>())
+            .Distinct()
+            .Order()
+            .ToArray();
+        var targetNames = nodes
+            .Select(static node => node.Symbol)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        return GetCallersExactCore(
+            targetNames[0],
+            pageSize,
+            pageOffset,
+            request.Lang,
+            request.PathPatterns,
+            request.ExcludePathPatterns,
+            request.ExcludeTests,
+            targetIds,
+            targetNames,
+            requireAuthoritativeIdentity: request.SelectedDefinition != null,
+            includeAmbiguousMSource: includeAmbiguousMSource,
+            includeMemberReads: request.IncludeMemberReads,
+            countOnly: true);
     }
 
     private int GetImpactGraphStateEntryBudget(int limit)
