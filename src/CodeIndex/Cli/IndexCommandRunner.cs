@@ -45,6 +45,11 @@ public static partial class IndexCommandRunner
         string? writerVersion,
         string symbolKindFilterSignature)
     {
+        // Stamp an old-writer-visible user_version guard in the same successful write scope as
+        // the policy and audit generation. Pre-#5224 writers then reject writable opens instead
+        // of preserving a current marker beside stale per-file counts.
+        // policy / audit 世代と同じ成功 write scope で旧 writer 可視の guard を立てる。
+        writer.MarkSymbolKindFilterAuditStorageContract();
         if (string.IsNullOrWhiteSpace(writerVersion))
         {
             writer.SetMetaValues(
@@ -529,9 +534,10 @@ public static partial class IndexCommandRunner
                 var priorIndexedProjectRoot = PriorMeta(DbContext.IndexedProjectRootMetaKey);
                 var priorSymbolKindFilterSignature = PriorMeta(SymbolKindFilterMetaKey);
                 var priorSymbolKindFilterAuditCurrent = string.Equals(
-                    PriorMeta(SymbolKindFilterAuditVersionMetaKey),
-                    DbContext.SymbolKindFilterAuditVersion,
-                    StringComparison.Ordinal);
+                        PriorMeta(SymbolKindFilterAuditVersionMetaKey),
+                        DbContext.SymbolKindFilterAuditVersion,
+                        StringComparison.Ordinal)
+                    && (priorReadiness & DbContext.SymbolKindFilterAuditStorageContractFlag) != 0;
                 // Captured BEFORE `--rebuild` drops the DB so an incremental run can warn the user when
                 // the worktree's HEAD has moved since the previously indexed snapshot. The same value
                 // is read at `status` time (without `--check`) to surface a worktree branch / HEAD
@@ -773,6 +779,30 @@ public sealed class SymbolKindFilter
 
     public static SymbolKindFilter Create(IEnumerable<string> include, IEnumerable<string> exclude, string? parseError)
     {
+        static string? Validate(IEnumerable<string> values)
+        {
+            foreach (var value in values)
+            {
+                if (value.Contains(';', StringComparison.Ordinal)
+                    || value.Contains(',', StringComparison.Ordinal))
+                {
+                    return "symbol kinds cannot contain the reserved ',' or ';' policy delimiters";
+                }
+
+                if (value.Any(char.IsControl))
+                    return "symbol kinds cannot contain control characters";
+            }
+
+            return null;
+        }
+
+        var includeValues = include.ToArray();
+        var excludeValues = exclude.ToArray();
+        parseError ??= Validate(includeValues) ?? Validate(excludeValues);
+
+        if (parseError != null)
+            return new SymbolKindFilter([], [], parseError);
+
         static IReadOnlyList<string> Normalize(IEnumerable<string> values)
             => values
                 .Select(value => value.Trim())
@@ -781,7 +811,10 @@ public sealed class SymbolKindFilter
                 .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
                 .ToArray();
 
-        return new SymbolKindFilter(Normalize(include), Normalize(exclude), parseError);
+        return new SymbolKindFilter(
+            Normalize(includeValues),
+            Normalize(excludeValues),
+            parseError);
     }
 
     internal static bool TryParsePersistedSignature(string? signature, out SymbolKindFilter filter)
@@ -815,7 +848,8 @@ public sealed class SymbolKindFilter
             includeText.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
             excludeText.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
             parseError: null);
-        return string.Equals(filter.Signature, signature, StringComparison.Ordinal);
+        return filter.ParseError == null
+            && string.Equals(filter.Signature, signature, StringComparison.Ordinal);
     }
 
     internal static bool SignatureRetainsCSharpStaticInterfaceContractMembers(string? signature)

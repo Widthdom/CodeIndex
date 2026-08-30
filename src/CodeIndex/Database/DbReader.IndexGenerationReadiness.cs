@@ -171,9 +171,10 @@ public partial class DbReader
             signature,
             out var filter);
         var auditCurrent = string.Equals(
-            TryGetMetaStringInternal(DbContext.SymbolKindFilterAuditVersionMetaKey),
-            DbContext.SymbolKindFilterAuditVersion,
-            StringComparison.Ordinal);
+                TryGetMetaStringInternal(DbContext.SymbolKindFilterAuditVersionMetaKey),
+                DbContext.SymbolKindFilterAuditVersion,
+                StringComparison.Ordinal)
+            && (_userVersion & DbContext.SymbolKindFilterAuditStorageContractFlag) != 0;
         long? symbolsDropped = null;
         if (provenanceAvailable
             && (!filter.IsActive || auditCurrent)

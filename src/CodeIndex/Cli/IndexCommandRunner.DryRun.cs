@@ -1616,6 +1616,12 @@ public static partial class IndexCommandRunner
             if (!DryRunTableExists(connection, "files"))
                 return DryRunDbSnapshot.Empty;
 
+            using var userVersionCommand = connection.CreateCommand();
+            userVersionCommand.CommandText = "PRAGMA user_version";
+            var userVersion = SqliteCommandPolicy.ReadInt32Scalar(
+                userVersionCommand,
+                "dry-run user_version");
+
             var metadata = DryRunReadMetadata(connection);
             metadata.TryGetValue(
                 DbContext.IndexedProjectRootMetaKey,
@@ -1785,6 +1791,7 @@ public static partial class IndexCommandRunner
                 hasSymbolReferences,
                 hasReferenceLines,
                 hasFileIssues,
+                userVersion,
                 ReadFailed: false);
         }
         catch (SqliteException)
@@ -2002,15 +2009,17 @@ public static partial class IndexCommandRunner
         bool SymbolReferencesAvailable,
         bool ReferenceLinesAvailable,
         bool FileIssuesAvailable,
+        int UserVersion,
         bool ReadFailed)
     {
         internal string? SymbolKindFilterSignature
             => GetMeta(SymbolKindFilterMetaKey);
 
         internal bool SymbolKindFilterAuditCurrent => string.Equals(
-            GetMeta(SymbolKindFilterAuditVersionMetaKey),
-            DbContext.SymbolKindFilterAuditVersion,
-            StringComparison.Ordinal);
+                GetMeta(SymbolKindFilterAuditVersionMetaKey),
+                DbContext.SymbolKindFilterAuditVersion,
+                StringComparison.Ordinal)
+            && (UserVersion & DbContext.SymbolKindFilterAuditStorageContractFlag) != 0;
 
         internal bool SymbolsOnlyGraphOmitted => string.Equals(
             GetMeta(DbContext.SymbolsOnlyGraphOmittedMetaKey),
@@ -2037,6 +2046,7 @@ public static partial class IndexCommandRunner
             false,
             false,
             false,
+            0,
             ReadFailed: false);
 
         public static DryRunDbSnapshot ReadFailure { get; } = Empty with

@@ -29,13 +29,14 @@ must refuse writes that could silently discard newer data.
 | `4` | `fold_ready` | Folded-name columns are current for Unicode-aware exact-name matching. |
 | `8` | hotspot reference aggregate storage contract | The database uses `hotspot_reference_counts`; this permanent downgrade guard is preserved while other readiness bits are cleared. |
 | `16` | hotspot reference aggregate readiness | `hotspot_reference_counts` is synchronized with raw reference rows. Writers clear this bit before reference mutations and restore it only after updating the aggregate. |
+| `32` | symbol-kind filter audit storage contract | The per-file `symbols_dropped_by_kind_filter` audit belongs to the persisted filter policy. This permanent downgrade guard blocks older writers that cannot maintain the column or audit generation. |
 
-The storage-contract bit is a downgrade guard: binaries that predate the
-maintained aggregate see an unknown bit and refuse write-capable opens instead
-of leaving hotspot counts stale. It remains set while the separate readiness
-bit is transiently cleared during reference mutations. Current query readers
-fall back to raw reference rows when readiness is absent; older query-only
-readers may still use their normal forward-compatibility degradation behavior.
+Storage-contract bits are downgrade guards: binaries that predate the
+maintained aggregate or per-file symbol-filter audit see an unknown bit and
+refuse write-capable opens instead of leaving evidence stale. They remain set
+while transient readiness bits are cleared. Current query readers fall back to
+raw reference rows when aggregate readiness is absent; older query-only readers
+may still use their normal forward-compatibility degradation behavior.
 
 Additional per-feature contract versions live in `codeindex_meta`, including
 folded-key metadata, C# symbol-name and metadata-target versions, SQL graph
@@ -67,7 +68,9 @@ the additive per-file `files.symbols_dropped_by_kind_filter` audit column.
 Current writable opens add the column in place. An active legacy generation
 without the audit marker omits the count until a full incremental scan
 re-extracts every file; scoped updates are rejected instead of mixing audit
-generations. Read-only legacy DBs without the column remain readable and report
+generations. A successful current index also stamps user-version bit `32`, so
+pre-change binaries refuse later writes that would update the policy without
+maintaining its per-file evidence. Read-only legacy DBs without the column remain readable and report
 `symbol_kind_filter_provenance_unavailable` when the policy stamp is also
 missing. Any active persisted policy reports `symbol_kind_filter_coverage_limited`
 and keeps negative symbol/graph results non-authoritative. Rebuild unfiltered to
@@ -130,10 +133,11 @@ degrade しなければなりません。古い binary が新しい database を
 | `4` | `fold_ready` | Unicode-aware exact-name matching 用の folded-name column が最新。 |
 | `8` | hotspot reference aggregate storage contract | database が `hotspot_reference_counts` を使用することを示す永続 downgrade guard。他の readiness bit のクリア時にも保持される。 |
 | `16` | hotspot reference aggregate readiness | `hotspot_reference_counts` と raw reference row が同期済み。writer は reference の変更前にこの bit をクリアし、aggregate 更新後だけ復元する。 |
+| `32` | symbol-kind filter audit storage contract | file ごとの `symbols_dropped_by_kind_filter` audit が永続 filter policy に属することを示す。column / audit 世代を維持できない旧 writer を拒否する永続 downgrade guard。 |
 
-storage-contract bit は downgrade guard です。maintained aggregate 導入前の binary は
-この未知 bit を検知し、hotspot count を stale にする write-capable open を拒否します。
-reference 更新中に別の readiness bit が一時的にクリアされても、この bit は保持されます。
+storage-contract bit は downgrade guard です。maintained aggregate または file ごとの
+symbol-filter audit 導入前の binary は未知 bit を検知し、証拠を stale にする
+write-capable open を拒否します。一時的な readiness bit のクリア中も保持されます。
 現行の query reader は readiness が無い場合に raw reference row へフォールバックし、
 旧 query-only reader は通常の forward-compatibility degradation を継続できます。
 
@@ -164,6 +168,8 @@ symbol-kind indexing policy は正規化済み `index_symbol_kind_filter` metada
 `files.symbols_dropped_by_kind_filter` audit column を使います。現行の writable open は列を
 in-place で追加します。audit marker の無い active な legacy generation は、全 file を再抽出する
 full incremental scan まで count を省略し、scoped update は audit 世代を混在させず拒否します。
+現行 binary の index 成功時には user-version bit `32` も stamp されるため、policy だけを
+更新して file ごとの証拠を維持できない旧 binary は以後の write を拒否します。
 列を持たない read-only legacy DB も読み取り可能で、policy stamp も無い場合は
 `symbol_kind_filter_provenance_unavailable` を報告します。active な永続 policy は
 `symbol_kind_filter_coverage_limited` を報告し、symbol/graph の否定結果を

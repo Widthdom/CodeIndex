@@ -35,8 +35,15 @@ public partial class DbContext : IDisposable
     public const int HotspotReferenceAggregateReadyFlag = 16;
     public const int HotspotReferenceAggregateFlags =
         HotspotReferenceAggregateStorageContractFlag | HotspotReferenceAggregateReadyFlag;
+    // bit 5 is a permanent downgrade guard for the per-file symbol-kind audit column. Binaries
+    // that predate this bit reject writable opens instead of changing the filter signature while
+    // leaving the audit generation marker and per-file counts stale.
+    // bit 5 は file ごとの symbol-kind audit 列を旧 writer から守る永続 downgrade guard。
+    public const int SymbolKindFilterAuditStorageContractFlag = 32;
+    public const int PreservedIndexStorageContractFlags =
+        HotspotReferenceAggregateFlags | SymbolKindFilterAuditStorageContractFlag;
     public const int CurrentSchemaVersion =
-        GraphReadyFlag | IssuesReadyFlag | FoldReadyFlag | HotspotReferenceAggregateFlags; // 31
+        GraphReadyFlag | IssuesReadyFlag | FoldReadyFlag | PreservedIndexStorageContractFlags; // 63
     public const int CodeIndexMetaSchemaVersion = 1;
     public const string CodeIndexMetaSchemaVersionMetaKey = "codeindex_meta_schema_version";
     // Query-semantic readiness for hotspot family grouping. Stored in codeindex_meta instead of
@@ -354,8 +361,8 @@ public partial class DbContext : IDisposable
     // index 開始時にビットをクリア。途中で落ちた場合は縮退状態のまま残す。
     public void ClearReadyFlags()
     {
-        var aggregateContractBits = GetUserVersion() & HotspotReferenceAggregateFlags;
-        Execute($"PRAGMA user_version = {aggregateContractBits}");
+        var preservedContractBits = GetUserVersion() & PreservedIndexStorageContractFlags;
+        Execute($"PRAGMA user_version = {preservedContractBits}");
     }
 
     /// <summary>

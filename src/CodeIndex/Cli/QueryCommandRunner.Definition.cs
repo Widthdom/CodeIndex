@@ -182,7 +182,10 @@ public static partial class QueryCommandRunner
             WriteExactSymbolWarningIfNeeded(exact, options.Json, exactSignal, reader, options);
             if (results.Count == 0)
             {
-                if (options.Json && TryWriteEmptyFormattedResult(options, jsonOptions))
+                if (options.Json && TryWriteEmptyFormattedResult(
+                    options,
+                    jsonOptions,
+                    authorityReader: reader))
                     return ZeroResultExitCode(options);
                 if (options.Json)
                 {

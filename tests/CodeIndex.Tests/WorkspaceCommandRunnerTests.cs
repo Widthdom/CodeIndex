@@ -69,6 +69,7 @@ public class WorkspaceCommandRunnerTests
         using (var db = new DbContext(DbOpenIntent.WriteIndex, readyDb))
         {
             var writer = new DbWriter(db.Connection);
+            writer.MarkSymbolKindFilterAuditStorageContract();
             writer.SetMeta(DbContext.SymbolKindFilterMetaKey, "include=class;exclude=");
             using var command = db.Connection.CreateCommand();
             command.CommandText = $"UPDATE files SET {DbContext.SymbolsDroppedByKindFilterColumn} = 7";

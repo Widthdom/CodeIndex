@@ -468,6 +468,13 @@ public partial class IndexCommandRunnerTests
             Assert.False(json.GetProperty("reference_graph_complete").GetBoolean());
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var verificationDb = new DbContext(DbOpenIntent.QueryOnly, dbPath))
+            using (var userVersionCommand = verificationDb.Connection.CreateCommand())
+            {
+                userVersionCommand.CommandText = "PRAGMA user_version";
+                var userVersion = (long)userVersionCommand.ExecuteScalar()!;
+                Assert.NotEqual(0, userVersion & DbContext.SymbolKindFilterAuditStorageContractFlag);
+            }
             var counts = ReadSymbolKindCounts(dbPath);
             Assert.True(counts.GetValueOrDefault("class") > 0);
             Assert.False(counts.ContainsKey("function"));
@@ -507,6 +514,16 @@ public partial class IndexCommandRunnerTests
                 humanDefinitionStderr,
                 StringComparison.Ordinal);
             Assert.Contains("not authoritative", humanDefinitionStderr, StringComparison.Ordinal);
+
+            var (lspDefinitionExitCode, lspDefinitionStdout, lspDefinitionStderr) =
+                RunDefinitionAndCaptureIssue5224(["helper", "--db", dbPath, "--format", "lsp"]);
+            Assert.Equal(CommandExitCodes.Success, lspDefinitionExitCode);
+            Assert.Equal("[]", lspDefinitionStdout.Trim());
+            Assert.Contains(
+                DbReader.SymbolKindFilterCoverageLimitedReason,
+                lspDefinitionStderr,
+                StringComparison.Ordinal);
+            Assert.Contains("not authoritative", lspDefinitionStderr, StringComparison.Ordinal);
         }
         finally
         {
@@ -559,20 +576,19 @@ public partial class IndexCommandRunnerTests
                 DbReader.SymbolKindFilterCoverageLimitedReason,
                 ReadCompletenessReasons(initial, "index_incomplete_reasons"));
 
-            // Simulate a DB written before the per-file audit generation marker existed.
-            // The aggregate must be unavailable until a whole-workspace pass re-extracts
-            // unchanged files; it must never publish the column default as a false zero.
-            // per-file audit 世代 marker 導入前の DB を再現する。unchanged file を全体
-            // 再抽出するまでは aggregate を省略し、列 default を偽の 0 として返さない。
+            // Simulate a pre-guard writer that preserved the policy and audit marker while
+            // resetting the per-file evidence. The permanent storage-contract bit must make
+            // the aggregate unavailable until a whole-workspace pass re-extracts unchanged files.
+            // policy と audit marker を残したまま per-file 証跡を reset する旧 writer を再現する。
+            // 永続 storage-contract bit により、unchanged file の全体再抽出までは aggregate を省略する。
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             SqliteConnection.ClearAllPools();
             using (var connection = OpenNonPoolingConnection(dbPath))
             {
                 connection.Open();
                 using var command = connection.CreateCommand();
-                command.CommandText = """
-                    DELETE FROM codeindex_meta
-                    WHERE key = 'index_symbol_kind_filter_audit_version';
+                command.CommandText = $"""
+                    PRAGMA user_version = {DbContext.CurrentSchemaVersion & ~DbContext.SymbolKindFilterAuditStorageContractFlag};
                     UPDATE files SET symbols_dropped_by_kind_filter = 0;
                     """;
                 command.ExecuteNonQuery();
@@ -589,6 +605,13 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, auditRepairExitCode);
             Assert.Equal(1, auditRepair.GetProperty("summary").GetProperty("files_extracted").GetInt64());
             Assert.Equal(1, auditRepair.GetProperty("symbols_dropped_by_kind_filter").GetInt64());
+            using (var verificationDb = new DbContext(DbOpenIntent.QueryOnly, dbPath))
+            using (var userVersionCommand = verificationDb.Connection.CreateCommand())
+            {
+                userVersionCommand.CommandText = "PRAGMA user_version";
+                var userVersion = (long)userVersionCommand.ExecuteScalar()!;
+                Assert.NotEqual(0, userVersion & DbContext.SymbolKindFilterAuditStorageContractFlag);
+            }
 
             File.WriteAllText(sourcePath, "class App:\n    pass\n\ndef helper():\n    return App()\n\ndef second():\n    return App()\n");
             var (updateExitCode, update) = RunAndCaptureJson(

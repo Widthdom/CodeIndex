@@ -26,6 +26,7 @@ public partial class McpServer
 
     private static IndexDatabaseSnapshot CaptureIndexDatabaseSnapshot(DbContext db)
     {
+        var readiness = db.GetUserVersion();
         var csharpMetadataTargetVersionMetaKey = DbContext.GetMetadataTargetVersionMetaKey("csharp");
         var meta = db.GetMetaStrings(
         [
@@ -65,7 +66,7 @@ public partial class McpServer
                 meta[DbContext.IndexCompletenessMetaKey],
                 "complete",
                 StringComparison.OrdinalIgnoreCase),
-            Readiness = db.GetUserVersion(),
+            Readiness = readiness,
             HotspotFamilyVersions = GetHotspotFamilyMetaSnapshot(
                 db,
                 DbContext.GetHotspotFamilyVersionMetaKey),
@@ -75,9 +76,10 @@ public partial class McpServer
             IndexedProjectRoot = meta[DbContext.IndexedProjectRootMetaKey],
             SymbolKindFilterSignature = meta[IndexCommandRunner.SymbolKindFilterMetaKey],
             SymbolKindFilterAuditCurrent = string.Equals(
-                meta[IndexCommandRunner.SymbolKindFilterAuditVersionMetaKey],
-                DbContext.SymbolKindFilterAuditVersion,
-                StringComparison.Ordinal),
+                    meta[IndexCommandRunner.SymbolKindFilterAuditVersionMetaKey],
+                    DbContext.SymbolKindFilterAuditVersion,
+                    StringComparison.Ordinal)
+                && (readiness & DbContext.SymbolKindFilterAuditStorageContractFlag) != 0,
         };
     }
 }

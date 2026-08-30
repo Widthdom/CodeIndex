@@ -764,6 +764,16 @@ public partial class McpServer
             db.DropAll();
             db.InitializeSchema();
             writer = new DbWriter(db);
+            // DropAll intentionally retains codeindex_meta, and InitializeSchema seeds a new
+            // files table with an unfiltered default. Clear both provenance keys immediately at
+            // the destructive boundary so cancellation or a first-file failure cannot expose the
+            // prior policy (or the seeded default) as evidence for the partial rebuilt DB.
+            // destructive rebuild 境界で provenance を即時消去し、最初の file 前の中断でも
+            // 旧 policy / seeded default を partial DB の証拠として公開しない。
+            writer.SetMetaValues(
+                (IndexCommandRunner.SymbolKindFilterMetaKey, null),
+                (IndexCommandRunner.SymbolKindFilterAuditVersionMetaKey, null));
+            symbolKindFilterMetaMarkedIncomplete = true;
         }
         writer.SetMeta(
             DbContext.WorkspaceVerificationPendingPathsCompleteMetaKey,

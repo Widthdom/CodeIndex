@@ -150,16 +150,43 @@ public static partial class QueryCommandRunner
         QueryCommandOptions options,
         JsonSerializerOptions jsonOptions,
         JsonObject? sarifRunProperties = null,
-        Action<JsonObject>? extraFields = null)
+        Action<JsonObject>? extraFields = null,
+        DbReader? authorityReader = null)
     {
+        var handled = options.OutputFormat is OutputFormatCount
+            or OutputFormatCompact
+            or OutputFormatCsv
+            or OutputFormatTsv
+            or OutputFormatLsp
+            or OutputFormatQf
+            or OutputFormatSarif;
+        if (!handled)
+            return false;
+
+        Action<JsonObject>? formattedExtraFields = extraFields;
+        if (authorityReader != null)
+        {
+            formattedExtraFields = payload =>
+            {
+                extraFields?.Invoke(payload);
+                AddIndexGenerationAuthorityJsonFields(payload, authorityReader, jsonOptions);
+            };
+            // Array, delimited, quickfix, and SARIF schemas cannot carry the shared authority
+            // object without breaking their output contract. stderr remains a separate terminal
+            // signal, while count/compact also receive the structured fields above.
+            // array / delimited / quickfix / SARIF は schema を壊さず authority object を持てない
+            // ため stderr warning を併用し、count / compact には structured field も加える。
+            WriteIndexGenerationAuthorityWarningIfNeeded(authorityReader);
+        }
+
         if (options.OutputFormat == OutputFormatCount)
         {
-            WriteFormattedCount(0, jsonOptions, extraFields);
+            WriteFormattedCount(0, jsonOptions, formattedExtraFields);
             return true;
         }
         if (options.OutputFormat == OutputFormatCompact)
         {
-            WriteCompactLocations([], options, jsonOptions, extraFields);
+            WriteCompactLocations([], options, jsonOptions, formattedExtraFields);
             return true;
         }
         if (options.OutputFormat == OutputFormatCsv || options.OutputFormat == OutputFormatTsv)

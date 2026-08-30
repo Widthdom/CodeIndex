@@ -272,7 +272,10 @@ public static partial class QueryCommandRunner
                         WriteDiscoveryJsonArray(results, rowFactory, rowExactSignal, jsonOptions);
                     return ZeroResultExitCode(options);
                 }
-                if (TryWriteEmptyFormattedResult(options, jsonOptions))
+                if (TryWriteEmptyFormattedResult(
+                    options,
+                    jsonOptions,
+                    authorityReader: reader))
                     return ZeroResultExitCode(options);
                 if (!options.Json)
                 {

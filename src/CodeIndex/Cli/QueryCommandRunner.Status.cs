@@ -320,7 +320,8 @@ public static partial class QueryCommandRunner
                 var symbolKindPolicy = status.SymbolKindFilter;
                 var policyText = symbolKindPolicy == null
                     ? "unavailable (legacy generation)"
-                    : $"include={string.Join(",", symbolKindPolicy.Include)};exclude={string.Join(",", symbolKindPolicy.Exclude)}";
+                    : ConsoleUi.FormatBoundedValue(
+                        $"include={string.Join(",", symbolKindPolicy.Include)};exclude={string.Join(",", symbolKindPolicy.Exclude)}");
                 Console.WriteLine(ConsoleUi.FormatSummaryLine("Kind policy", policyText));
                 if (status.SymbolsDroppedByKindFilter.HasValue)
                     Console.WriteLine(ConsoleUi.FormatSummaryLine("Kind drops", $"{status.SymbolsDroppedByKindFilter.Value:N0}"));
