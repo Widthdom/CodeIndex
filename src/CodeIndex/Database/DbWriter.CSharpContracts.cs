@@ -449,7 +449,7 @@ public partial class DbWriter
               AND f.lang = 'csharp'";
     }
 
-    private static SymbolRecord ReadCSharpContractWorkspaceSymbol(SqliteDataReader reader)
+    internal static SymbolRecord ReadCSharpContractWorkspaceSymbol(SqliteDataReader reader)
         => new()
         {
             FileId = reader.GetInt64(1),

@@ -967,6 +967,65 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_DryRun_PersistedMemberReadCandidateUsesExactPredicate_Issue5225()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "A.cs",
+                "public class A { public int nonstatic = 1; }\n");
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "B.cs",
+                "public class B { public int Value = 1; }\n");
+            var (indexExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "A.cs",
+                "public class A { public int nonstatic = 2; }\n");
+
+            var (dryRunExitCode, dryRunJson) = RunAndCaptureJson([
+                projectRoot,
+                "--files",
+                "A.cs",
+                "--dry-run",
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, dryRunExitCode);
+            Assert.Equal(
+                1,
+                dryRunJson.GetProperty("projected_file_updates").GetInt32());
+            Assert.Equal(
+                "not_required",
+                dryRunJson.GetProperty("csharp_workspace_expansion_status")
+                    .GetString());
+            Assert.True(
+                dryRunJson.GetProperty("projection_authoritative").GetBoolean());
+
+            var (executionExitCode, executionJson) = RunAndCaptureJson([
+                projectRoot,
+                "--files",
+                "A.cs",
+                "--json",
+            ]);
+            Assert.Equal(CommandExitCodes.Success, executionExitCode);
+            Assert.Equal(
+                1,
+                executionJson.GetProperty("summary")
+                    .GetProperty("updated")
+                    .GetInt32());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_DryRun_DeletedCSharpContractExpansionMatchesExecution_Issue5225()
     {
         var projectRoot = CreateTempProject();
@@ -1084,6 +1143,83 @@ public partial class IndexCommandRunnerTests
                 1,
                 executionJson.GetProperty("summary")
                     .GetProperty("updated")
+                    .GetInt32());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DryRun_CSharpCleanupPurgeExpandsWorkspace_Issue5225()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "contract.cs",
+                "public interface IContract<T> where T : IContract<T> { static abstract T Parse(string value); }\n");
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "consumer.cs",
+                "public sealed class Consumer : IContract<Consumer> { public static Consumer Parse(string value) => new(); }\n");
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "stale.cs",
+                "public class Stale { }\n");
+            var (indexExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            TestProjectHelper.DeleteFile(
+                TestProjectHelper.ProjectPath(projectRoot, "stale.cs"));
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "stale.md",
+                "public class Stale { }\n");
+
+            var (dryRunExitCode, dryRunJson) = RunAndCaptureJson([
+                projectRoot,
+                "--files",
+                "stale.md",
+                "--dry-run",
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, dryRunExitCode);
+            Assert.Equal(
+                3,
+                dryRunJson.GetProperty("projected_file_updates").GetInt32());
+            Assert.Equal(
+                1,
+                dryRunJson.GetProperty("projected_file_purges").GetInt32());
+            Assert.Equal(
+                "applied",
+                dryRunJson.GetProperty("csharp_workspace_expansion_status")
+                    .GetString());
+            Assert.Equal(
+                "persisted_csharp_contract_evidence",
+                dryRunJson.GetProperty("csharp_workspace_expansion_reason")
+                    .GetString());
+            Assert.True(
+                dryRunJson.GetProperty("projection_authoritative").GetBoolean());
+
+            var (executionExitCode, executionJson) = RunAndCaptureJson([
+                projectRoot,
+                "--files",
+                "stale.md",
+                "--json",
+            ]);
+            Assert.Equal(CommandExitCodes.Success, executionExitCode);
+            Assert.Equal(
+                3,
+                executionJson.GetProperty("summary")
+                    .GetProperty("updated")
+                    .GetInt32());
+            Assert.Equal(
+                1,
+                executionJson.GetProperty("summary")
+                    .GetProperty("removed")
                     .GetInt32());
         }
         finally
@@ -1229,6 +1365,73 @@ public partial class IndexCommandRunnerTests
         finally
         {
             IndexCommandRunner.DryRunParseEstimateFailureForTesting = null;
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DryRun_ExpandedCSharpProbeErrorIsNonAuthoritative_Issue5225()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "contract.cs",
+                "public interface IContract<T> where T : IContract<T> { }\n");
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "consumer.cs",
+                "public sealed class Consumer : IContract<Consumer> { public static Consumer Parse(string value) => new(); }\n");
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "unreadable.cs",
+                "public class Unreadable { }\n");
+            var (indexExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "contract.cs",
+                "public interface IContract<T> where T : IContract<T> { static abstract T Parse(string value); }\n");
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var databaseFilesBefore = ReadDatabaseFileSetFingerprint(dbPath);
+            IndexCommandRunner.DryRunFileProbeFailureForTesting =
+                static path => path == "unreadable.cs"
+                    ? new UnauthorizedAccessException("injected issue5225 read failure")
+                    : null;
+
+            var (exitCode, json) = RunAndCaptureJson([
+                projectRoot,
+                "--files",
+                "contract.cs",
+                "--dry-run",
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.False(
+                json.GetProperty("projection_authoritative").GetBoolean());
+            Assert.True(json.GetProperty("totals_lower_bound").GetBoolean());
+            Assert.Equal(
+                "unavailable",
+                json.GetProperty("csharp_workspace_expansion_status")
+                    .GetString());
+            Assert.Equal(
+                "csharp_workspace_preflight_unavailable",
+                json.GetProperty("csharp_workspace_expansion_reason")
+                    .GetString());
+            Assert.Contains(
+                "csharp_workspace_preflight_unavailable",
+                json.GetProperty("projection_unavailable_reasons")
+                    .EnumerateArray()
+                    .Select(static value => value.GetString()));
+            Assert.Equal(
+                databaseFilesBefore,
+                ReadDatabaseFileSetFingerprint(dbPath));
+        }
+        finally
+        {
+            IndexCommandRunner.DryRunFileProbeFailureForTesting = null;
             DeleteDirectory(projectRoot);
         }
     }

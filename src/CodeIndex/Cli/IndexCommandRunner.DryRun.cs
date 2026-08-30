@@ -203,8 +203,18 @@ public static partial class IndexCommandRunner
         var dryCandidateList = dryCandidates.ToList();
         var dryCandidateSet = dryCandidateList.ToHashSet(StringComparer.Ordinal);
         var dryDeleteCandidateList = dryDeleteCandidates.ToList();
+        var expandedCSharpCandidatePaths = new HashSet<string>(StringComparer.Ordinal);
+        var evaluatedProjectedCSharpPurgePaths = new HashSet<string>(StringComparer.Ordinal);
         var hadIndexedCSharpFiles = dbSnapshot.Files.Values.Any(
             static rows => rows.Language == "csharp");
+
+        void MarkCSharpWorkspaceExpansionUnavailable(string reason)
+        {
+            csharpWorkspaceEstimateUnavailable = true;
+            csharpWorkspaceExpansionStatus = "unavailable";
+            csharpWorkspaceExpansionReason = reason;
+            mutationEstimates.MarkAllUnknown(reason);
+        }
 
         bool TryExpandDryRunCSharpWorkspace(string reason)
         {
@@ -217,11 +227,8 @@ public static partial class IndexCommandRunner
 
             if (dryIndexingTargets != null)
             {
-                csharpWorkspaceExpansionStatus = "unavailable";
-                csharpWorkspaceExpansionReason =
-                    "csharp_workspace_target_capture_unavailable";
-                mutationEstimates.MarkAllUnknown(
-                    csharpWorkspaceExpansionReason);
+                MarkCSharpWorkspaceExpansionUnavailable(
+                    "csharp_workspace_target_capture_unavailable");
                 return true;
             }
 
@@ -236,11 +243,8 @@ public static partial class IndexCommandRunner
                 RecordDryRunScanErrors(expandedScan.Errors);
                 if (expandedScan.Errors.Any(static error => error.IsFatal))
                 {
-                    csharpWorkspaceExpansionStatus = "unavailable";
-                    csharpWorkspaceExpansionReason =
-                        "csharp_workspace_scan_incomplete";
-                    mutationEstimates.MarkAllUnknown(
-                        csharpWorkspaceExpansionReason);
+                    MarkCSharpWorkspaceExpansionUnavailable(
+                        "csharp_workspace_scan_incomplete");
                     return true;
                 }
 
@@ -254,6 +258,7 @@ public static partial class IndexCommandRunner
                         && dryCandidateSet.Add(path))
                     {
                         dryCandidateList.Add(path);
+                        expandedCSharpCandidatePaths.Add(path);
                     }
                 }
 
@@ -289,6 +294,26 @@ public static partial class IndexCommandRunner
                 && !dbSnapshot.CSharpWorkspaceEvidenceAvailable)
             {
                 csharpWorkspaceEvidenceUnavailable = true;
+            }
+
+            return true;
+        }
+
+        bool TryApplyProjectedCSharpPurgeEvidence()
+        {
+            foreach (var projectedPurgePath in projectedPurgePaths)
+            {
+                if (!evaluatedProjectedCSharpPurgePaths.Add(projectedPurgePath)
+                    || !dbSnapshot.Files.TryGetValue(
+                        projectedPurgePath,
+                        out var purgedCandidate)
+                    || purgedCandidate.Language != "csharp")
+                {
+                    continue;
+                }
+
+                if (!TryApplyPersistedCSharpExpansionEvidence(projectedPurgePath))
+                    return false;
             }
 
             return true;
@@ -395,6 +420,12 @@ public static partial class IndexCommandRunner
                 displayRelativePath,
                 knownLanguage,
                 cancellationToken);
+            if (expandedCSharpCandidatePaths.Contains(f)
+                && probe.Error != null)
+            {
+                MarkCSharpWorkspaceExpansionUnavailable(
+                    "csharp_workspace_preflight_unavailable");
+            }
             if (!authoritativeFullScan
                 && probe.Supported
                 && probe.Language == "csharp"
@@ -484,6 +515,9 @@ public static partial class IndexCommandRunner
                         dbRelativePath);
                 }
 
+                if (!TryApplyProjectedCSharpPurgeEvidence())
+                    return WriteDryRunInterrupted(options, jsonOptions);
+
                 if (probe.Error != null)
                 {
                     RecordDryRunError(displayRelativePath, probe.Error);
@@ -523,6 +557,8 @@ public static partial class IndexCommandRunner
                         projectPath,
                         dbRelativePath);
                 }
+                if (!TryApplyProjectedCSharpPurgeEvidence())
+                    return WriteDryRunInterrupted(options, jsonOptions);
             }
             var projectedSkip = IsDryRunLoadedFileReusable(
                 options,
@@ -621,15 +657,14 @@ public static partial class IndexCommandRunner
 
         if (!authoritativeFullScan
             && csharpTargetAffected
-            && csharpWorkspaceExpansionStatus != "applied"
             && (csharpWorkspaceEstimateUnavailable
                 || csharpWorkspaceEvidenceUnavailable))
         {
-            csharpWorkspaceExpansionStatus = "unavailable";
-            csharpWorkspaceExpansionReason =
-                "csharp_workspace_preflight_unavailable";
-            mutationEstimates.MarkAllUnknown(
-                csharpWorkspaceExpansionReason);
+            if (csharpWorkspaceExpansionStatus != "unavailable")
+            {
+                MarkCSharpWorkspaceExpansionUnavailable(
+                    "csharp_workspace_preflight_unavailable");
+            }
         }
 
         if (projectedCSharpSkips.Count > 0
@@ -1244,6 +1279,9 @@ public static partial class IndexCommandRunner
         try
         {
             DryRunFileIndexabilityValidatedForTesting?.Invoke(absolutePath);
+            var injectedFailure = DryRunFileProbeFailureForTesting?.Invoke(relativePath);
+            if (injectedFailure != null)
+                throw injectedFailure;
             var isAmbiguousExtension = FileIndexer.TryGetAmbiguousLanguageDescriptor(
                 Path.GetExtension(absolutePath),
                 out _);
@@ -1894,16 +1932,11 @@ public static partial class IndexCommandRunner
                     )
                     """
                 : "0";
-            var csharpMemberReadTarget = hasCSharpWorkspaceEvidence
-                ? $"""
-                    EXISTS (
-                        SELECT 1
-                        FROM symbols s
-                        WHERE s.file_id = f.id
-                          AND {DbWriter.CSharpMemberReadTargetPredicateSql}
-                    )
-                    """
-                : "0";
+            var csharpMemberReadTargetPaths = hasCSharpWorkspaceEvidence
+                ? DryRunReadCSharpMemberReadTargetPaths(
+                    connection,
+                    cancellationToken)
+                : [];
 
             using var command = connection.CreateCommand();
             command.CommandText = $"""
@@ -1922,8 +1955,7 @@ public static partial class IndexCommandRunner
                        {IssueExists("symbol_count_exceeded")} AS symbol_cap_issue,
                        {IssueExists("reference_count_exceeded")} AS reference_cap_issue,
                        {IssueExists("file_too_large")} AS file_too_large_issue,
-                       {staleIssueMetadata} AS stale_issue_metadata,
-                       {csharpMemberReadTarget} AS csharp_member_read_target
+                       {staleIssueMetadata} AS stale_issue_metadata
                 FROM files f
                 """;
 
@@ -1992,7 +2024,7 @@ public static partial class IndexCommandRunner
                     generatedSuppressed,
                     contentReuseEligible,
                     statReuseEligible,
-                    reader.GetInt64(16) != 0);
+                    csharpMemberReadTargetPaths.Contains(reader.GetString(0)));
             }
 
             return new DryRunDbSnapshot(
@@ -2035,6 +2067,25 @@ public static partial class IndexCommandRunner
         {
             return DryRunDbSnapshot.ReadFailure;
         }
+    }
+
+    private static HashSet<string> DryRunReadCSharpMemberReadTargetPaths(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        var paths = new HashSet<string>(StringComparer.Ordinal);
+        using var command = connection.CreateCommand();
+        command.CommandText = DbWriter.CSharpMemberReadTargetWorkspaceSql;
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var symbol = DbWriter.ReadCSharpContractWorkspaceSymbol(reader);
+            if (ReferenceExtractor.IsCSharpQualifiedMemberReadTargetSymbol(symbol))
+                paths.Add(reader.GetString(0));
+        }
+
+        return paths;
     }
 
     private static bool DryRunTableExists(SqliteConnection connection, string tableName)
