@@ -24,7 +24,7 @@ public partial class DbReader
             _state = new ImpactTraversalState(owner, request, root);
         }
 
-        internal (List<ImpactResult> Results, bool Truncated, string? TruncatedReason, string TerminationReason, List<ImpactCycleResult> Cycles) Run()
+        internal ImpactTraversalExecutionResult Run()
         {
             while (_state.CanTraverse)
             {
@@ -33,9 +33,13 @@ public partial class DbReader
             }
 
             _state.CompleteTraversal();
-            _state.Paths.Materialize(_state.Results, _request.MaxPathsPerResult);
-            return (
+            if (!_request.CountOnly)
+                _state.Paths.Materialize(_state.Results, _request.MaxPathsPerResult);
+            return new ImpactTraversalExecutionResult(
                 _state.Results,
+                _request.CountOnly ? _state.DiscoveredResultCount : _state.Results.Count,
+                _state.FileCounts,
+                _state.ActualDepth,
                 _state.Truncated,
                 _state.TruncatedReason,
                 _state.ResolveTerminationReason(),
@@ -79,7 +83,7 @@ public partial class DbReader
             {
                 if (_state.DiscoveredResultCount >= _state.ResultWindowEnd)
                 {
-                    _state.MarkUserLimit();
+                    _state.MarkResultWindowLimit();
                     break;
                 }
                 if (!ProcessCaller(in node, caller))
@@ -125,7 +129,7 @@ public partial class DbReader
             var result = _state.IncludeNextResult
                 ? BuildResult(caller, callerSymbolId, calleeSymbolId, node.Depth + 1)
                 : null;
-            var resultIndex = _state.AddResult(result, visitedKey);
+            var resultIndex = _state.AddResult(result, visitedKey, caller.Path, node.Depth + 1);
             _state.Paths.RecordCaller(
                 callerNodeKey,
                 node.NodeKey,

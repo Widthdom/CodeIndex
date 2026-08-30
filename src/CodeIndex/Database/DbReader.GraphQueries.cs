@@ -954,15 +954,21 @@ public partial class DbReader
     /// metadata and a class-like file-dependency fallback when symbol-level callers are absent.
     /// The <paramref name="maxDepth"/> bound is inclusive (callers at depth 1..N are returned);
     /// <c>maxDepth: 0</c> short-circuits to symbol resolution only.
+    /// When <paramref name="countOnly"/> is true, <paramref name="limit"/> is ignored as a
+    /// presentation limit and a dedicated traversal safety budget bounds the count instead.
     /// impact 用に caller BFS と解決メタデータを束ね、class 系で caller 不在なら
     /// file dependency をフォールバックとして返す。<paramref name="maxDepth"/> は inclusive で
     /// N 指定時は depth 1〜N の caller を返し、<c>maxDepth: 0</c> は symbol 解決のみで終了する。
+    /// <paramref name="countOnly"/> が true の場合、<paramref name="limit"/> は表示上限として
+    /// 無視し、件数は専用 traversal safety budget まで算出する。
     /// </summary>
-    public ImpactAnalysisResult AnalyzeImpact(string symbolName, int maxDepth = 5, int limit = 50, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool withPaths = false, int offset = 0, string? responseCollection = null, bool includeMemberReads = false, DefinitionResult? selectedDefinition = null)
+    public ImpactAnalysisResult AnalyzeImpact(string symbolName, int maxDepth = 5, int limit = 50, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool withPaths = false, int offset = 0, string? responseCollection = null, bool includeMemberReads = false, DefinitionResult? selectedDefinition = null, bool countOnly = false)
     {
         lang = NormalizeQueryLanguage(lang);
         var resolvedName = selectedDefinition?.Name ?? ResolveSymbolName(symbolName, lang);
-        var definitionOffset = string.Equals(responseCollection, "definitions", StringComparison.Ordinal) ? offset : 0;
+        var traversalLimit = countOnly ? GetImpactCountTraversalLimit() : limit;
+        var effectiveOffset = countOnly ? 0 : offset;
+        var definitionOffset = string.Equals(responseCollection, "definitions", StringComparison.Ordinal) ? effectiveOffset : 0;
         var selectedDefinitionMatchesFilters = selectedDefinition != null
             && SelectedDefinitionMatchesImpactFilters(
                 selectedDefinition,
@@ -974,12 +980,12 @@ public partial class DbReader
             ? selectedDefinitionMatchesFilters
                 ? ResolveSelectedImpactDefinition(selectedDefinition)
                 : EmptyImpactDefinitionResolution()
-            : ResolveImpactDefinitions(symbolName, limit, lang, pathPatterns, excludePathPatterns, excludeTests, definitionOffset);
+            : ResolveImpactDefinitions(symbolName, traversalLimit, lang, pathPatterns, excludePathPatterns, excludeTests, definitionOffset);
         if (selectedDefinition == null
             && definitionResolution.Definitions.Count == 0
             && !string.Equals(symbolName, resolvedName, StringComparison.Ordinal))
         {
-            definitionResolution = ResolveImpactDefinitions(resolvedName, limit, lang, pathPatterns, excludePathPatterns, excludeTests, definitionOffset);
+            definitionResolution = ResolveImpactDefinitions(resolvedName, traversalLimit, lang, pathPatterns, excludePathPatterns, excludeTests, definitionOffset);
         }
         var definitions = definitionResolution.Definitions;
         var indexedPathComparer = GetIndexedPathComparer();
@@ -1049,6 +1055,11 @@ public partial class DbReader
                 DefinitionFileCount = definitionResolution.PhysicalFileCount,
                 LogicalDefinitionCount = definitionResolution.LogicalCount,
                 HintCount = 0,
+                ConfirmedCount = 0,
+                ConfirmedFileCount = 0,
+                HintFileCount = 0,
+                ActualDepth = 0,
+                CountFileHistogram = new Dictionary<string, int>(indexedPathComparer),
                 HasClassLikeDefinitions = hasClassLikeDefinitions,
                 HasMultipleDefinitions = hasMultipleDefinitions,
                 HasMultipleDefinitionFiles = definitionResolution.PhysicalFileCount > 1,
@@ -1087,23 +1098,30 @@ public partial class DbReader
         }
 
         var callerOffset = responseCollection is null || string.Equals(responseCollection, "callers", StringComparison.Ordinal)
-            ? offset
+            ? effectiveOffset
             : 0;
-        var (callers, truncated, truncatedReason, terminationReason, cycles) = selectedDefinition != null
-            ? selectedDefinitionMatchesFilters
-                ? GetTransitiveCallersForCandidate(
-                selectedDefinition,
+        var traversal = selectedDefinition != null && !selectedDefinitionMatchesFilters
+            ? CreateEmptyImpactTraversalExecutionResult()
+            : AnalyzeTransitiveCallers(
+                symbolName,
                 maxDepth,
-                limit,
+                traversalLimit,
                 lang,
                 pathPatterns,
                 excludePathPatterns,
                 excludeTests,
                 withPaths,
                 callerOffset,
-                includeMemberReads)
-                : ([], false, null, ImpactTerminationReasons.Completed, [])
-            : GetTransitiveCallers(symbolName, maxDepth, limit, lang, pathPatterns, excludePathPatterns, excludeTests, withPaths, resultOffset: callerOffset, includeMemberReads: includeMemberReads);
+                includeMemberReads,
+                countOnly,
+                selectedDefinition);
+        var callers = traversal.Results;
+        var confirmedCount = traversal.Count;
+        var confirmedFileCount = traversal.FileCount;
+        var truncated = traversal.Truncated;
+        var truncatedReason = traversal.TruncatedReason;
+        var terminationReason = traversal.TerminationReason;
+        var cycles = traversal.Cycles;
         var callerExistsBeforeOffset = false;
         if (callers.Count == 0 && callerOffset > 0)
         {
@@ -1127,13 +1145,16 @@ public partial class DbReader
 
         var impactMode = "callers";
         var fileImpacts = new List<FileDependencyResult>();
+        var hintCount = 0;
+        var hintFileCount = 0;
+        IReadOnlyDictionary<string, int> countFileHistogram = traversal.FileCounts;
         string? zeroResultReason = null;
         List<string>? impactFailureChain = null;
         string? suggestionType = null;
         string? suggestion = null;
         var heuristic = !identityRootSignal.Available;
 
-        if (callers.Count == 0 && !callerExistsBeforeOffset)
+        if (confirmedCount == 0 && !callerExistsBeforeOffset)
         {
             impactMode = "none";
             impactFailureChain = [];
@@ -1174,12 +1195,12 @@ public partial class DbReader
                             ? definitionResolution.PhysicalDefinitionPaths
                             : null);
                     var fileImpactOffset = responseCollection is null || string.Equals(responseCollection, "file_impacts", StringComparison.Ordinal)
-                        ? offset
+                        ? effectiveOffset
                         : 0;
-                    var (hintResults, hintTruncated) = GetFileDependencyHintsToResolvedType(
+                    var hintAnalysis = GetFileDependencyHintsToResolvedType(
                         fallbackDefinitions[0],
                         fallbackNames,
-                        limit,
+                        traversalLimit,
                         lang,
                         pathPatterns,
                         excludePathPatterns,
@@ -1187,8 +1208,12 @@ public partial class DbReader
                         fileImpactOffset,
                         logicalPartialFamilyDefinition != null
                             ? definitionResolution.PhysicalDefinitionPaths
-                            : null);
-                    fileImpacts = hintResults;
+                            : null,
+                        countOnly);
+                    fileImpacts = hintAnalysis.Results;
+                    hintCount = hintAnalysis.Count;
+                    hintFileCount = hintAnalysis.FileCounts.Count;
+                    countFileHistogram = hintAnalysis.FileCounts;
                     var hintExistsBeforeOffset = false;
                     if (fileImpacts.Count == 0 && fileImpactOffset > 0)
                     {
@@ -1206,18 +1231,24 @@ public partial class DbReader
                                 : null);
                         hintExistsBeforeOffset = hintProbe.Results.Count > 0;
                     }
-                    if (hintTruncated)
+                    if (hintAnalysis.Truncated)
                     {
                         truncated = true;
-                        // Heuristic hints can only be capped by the user-supplied --limit, so this
-                        // path never escalates to safety_cap. Leave any pre-existing reason
-                        // (e.g. safety_cap propagated from the caller BFS above) intact since it
-                        // is the stronger signal. Issue #1533.
-                        // ヒント側の truncation は --limit による cap のみ。caller BFS で
-                        // safety_cap が立っていればそちらを優先する (#1533)。
-                        truncatedReason ??= ImpactTruncatedReasons.UserLimit;
+                        // Row output uses the user-supplied --limit; count-only uses its dedicated
+                        // traversal cap. Preserve the distinct retry contract from issue #1533.
+                        // 通常の row 出力は --limit、count-only は専用 traversal cap で打ち切る。
+                        // Issue #1533 の再試行契約を区別したまま維持する。
+                        if (countOnly)
+                        {
+                            truncatedReason = ImpactTruncatedReasons.SafetyCap;
+                            terminationReason = ImpactTerminationReasons.SafetyCap;
+                        }
+                        else
+                        {
+                            truncatedReason ??= ImpactTruncatedReasons.UserLimit;
+                        }
                     }
-                    if (fileImpacts.Count > 0 || hintExistsBeforeOffset)
+                    if (hintCount > 0 || hintExistsBeforeOffset)
                     {
                         impactMode = "file_dependency_hints";
                         heuristic = true;
@@ -1263,7 +1294,12 @@ public partial class DbReader
             DefinitionCount = definitionResolution.PhysicalCount,
             DefinitionFileCount = definitionResolution.PhysicalFileCount,
             LogicalDefinitionCount = definitionResolution.LogicalCount,
-            HintCount = fileImpacts.Count,
+            HintCount = hintCount,
+            ConfirmedCount = confirmedCount,
+            ConfirmedFileCount = confirmedFileCount,
+            HintFileCount = hintFileCount,
+            ActualDepth = traversal.ActualDepth,
+            CountFileHistogram = countFileHistogram,
             HasClassLikeDefinitions = hasClassLikeDefinitions,
             HasMultipleDefinitions = hasMultipleDefinitions,
             HasMultipleDefinitionFiles = definitionResolution.PhysicalFileCount > 1,
@@ -1399,7 +1435,13 @@ public partial class DbReader
         return results;
     }
 
-    private (List<FileDependencyResult> Results, bool Truncated) GetFileDependencyHintsToResolvedType(
+    private sealed record FileDependencyHintQueryResult(
+        List<FileDependencyResult> Results,
+        int Count,
+        IReadOnlyDictionary<string, int> FileCounts,
+        bool Truncated);
+
+    private FileDependencyHintQueryResult GetFileDependencyHintsToResolvedType(
         SymbolResult definition,
         IReadOnlyList<string> fallbackNames,
         int limit,
@@ -1408,10 +1450,15 @@ public partial class DbReader
         IReadOnlyList<string>? excludePathPatterns = null,
         bool excludeTests = false,
         int offset = 0,
-        IReadOnlySet<string>? physicalDefinitionPaths = null)
+        IReadOnlySet<string>? physicalDefinitionPaths = null,
+        bool countOnly = false)
     {
         if (!_hasReferencesTable || string.IsNullOrWhiteSpace(definition.Path) || fallbackNames.Count == 0)
-            return (new List<FileDependencyResult>(), false);
+            return new FileDependencyHintQueryResult(
+                [],
+                0,
+                new Dictionary<string, int>(GetIndexedPathComparer()),
+                false);
 
         var definitionPaths = physicalDefinitionPaths is { Count: > 0 }
             ? physicalDefinitionPaths.Order(StringComparer.Ordinal).ToList()
@@ -1550,9 +1597,17 @@ public partial class DbReader
 
         offset = Math.Max(0, offset);
         var truncated = filtered.Count > checked(offset + limit);
-        filtered = filtered.Skip(offset).Take(limit).ToList();
+        var counted = filtered.Skip(offset).Take(limit).ToList();
+        var fileCounts = counted
+            .GroupBy(static result => result.SourcePath, GetIndexedPathComparer())
+            .ToDictionary(
+                static group => group.Key,
+                static group => group.Count(),
+                GetIndexedPathComparer());
+        var count = counted.Count;
+        filtered = countOnly ? [] : counted;
 
-        return (filtered, truncated);
+        return new FileDependencyHintQueryResult(filtered, count, fileCounts, truncated);
     }
 
     // Returns true when the metadata target name resolves to at most one class-like

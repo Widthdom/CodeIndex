@@ -99,7 +99,8 @@ public static partial class QueryCommandRunner
                 JsonEnvelopeWrapper.GetBoundedResponseOffset("impact"),
                 JsonEnvelopeWrapper.GetBoundedImpactCollection(),
                 options.IncludeMemberReads,
-                selectedDefinition);
+                selectedDefinition,
+                countOnly: options.CountOnly);
             if (options.IncludeBody
                 && !options.CountOnly
                 && options.OutputFormat is (OutputFormatText or OutputFormatJson)
@@ -115,10 +116,10 @@ public static partial class QueryCommandRunner
                     || DbReader.ContainsSqlLanguage(analysis.Callers.Select(caller => caller.Lang))
                     || reader.AnyFilePathHasLanguage(analysis.FileImpacts.SelectMany(impact => new[] { impact.SourcePath, impact.TargetPath }), "sql"));
             var hdlGraphSignal = reader.GetHdlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
-            var confirmedCount = analysis.Callers.Count;
-            var confirmedFileCount = analysis.Callers.Select(r => r.Path).Distinct().Count();
-            var hintCount = analysis.FileImpacts.Count;
-            var hintFileCount = analysis.FileImpacts.Select(r => r.SourcePath).Distinct().Count();
+            var confirmedCount = analysis.ConfirmedCount;
+            var confirmedFileCount = analysis.ConfirmedFileCount;
+            var hintCount = analysis.HintCount;
+            var hintFileCount = analysis.HintFileCount;
             var hasHeuristicHints = analysis.ImpactMode == "file_dependency_hints";
             var visibleCount = hasHeuristicHints ? hintCount : confirmedCount;
             var visibleFileCount = hasHeuristicHints ? hintFileCount : confirmedFileCount;
@@ -206,6 +207,9 @@ public static partial class QueryCommandRunner
                             ["heuristic"] = analysis.Heuristic,
                             ["hint_count"] = analysis.HintCount,
                             ["hint_file_count"] = 0,
+                            ["max_hops"] = maxDepth,
+                            ["max_depth"] = maxDepth,
+                            ["actual_depth"] = analysis.ActualDepth,
                             ["definition_count"] = analysis.DefinitionCount,
                             ["definition_file_count"] = analysis.DefinitionFileCount,
                             ["has_multiple_definitions"] = analysis.HasMultipleDefinitions,
@@ -321,6 +325,9 @@ public static partial class QueryCommandRunner
                         ["heuristic"] = analysis.Heuristic,
                         ["hint_count"] = hintCount,
                         ["hint_file_count"] = hintFileCount,
+                        ["max_hops"] = maxDepth,
+                        ["max_depth"] = maxDepth,
+                        ["actual_depth"] = analysis.ActualDepth,
                         ["truncated"] = analysis.Truncated,
                     };
                     AddImpactTraversalRootJsonFields(payload, analysis);
@@ -356,7 +363,7 @@ public static partial class QueryCommandRunner
                     ["hint_file_count"] = hintFileCount,
                     ["max_hops"] = maxDepth,
                     ["max_depth"] = maxDepth,
-                    ["actual_depth"] = analysis.Callers.Count > 0 ? analysis.Callers.Max(r => r.Depth) : 0,
+                    ["actual_depth"] = analysis.ActualDepth,
                     ["truncated"] = analysis.Truncated,
                     ["impact_mode"] = analysis.ImpactMode,
                     ["heuristic"] = analysis.Heuristic,

@@ -67,26 +67,25 @@ public partial class McpServer
                 excludeTests,
                 withPaths,
                 includeMemberReads: includeMemberReads,
-                selectedDefinition: selectedDefinition);
+                selectedDefinition: selectedDefinition,
+                countOnly: countOnly);
             var sqlGraphSignal = QueryCommandRunner.NarrowSqlGraphContractSignal(
                 reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests),
                 DbReader.IsSqlLanguage(lang)
                     || DbReader.ContainsSqlLanguage(analysis.Definitions.Select(definition => definition.Lang))
                     || DbReader.ContainsSqlLanguage(analysis.Callers.Select(caller => caller.Lang))
                     || reader.AnyFilePathHasLanguage(analysis.FileImpacts.SelectMany(impact => new[] { impact.SourcePath, impact.TargetPath }), "sql"));
-            var confirmedCount = analysis.Callers.Count;
-            var confirmedFileCount = analysis.Callers.Select(r => r.Path).Distinct().Count();
-            var hintCount = analysis.FileImpacts.Count;
-            var hintFileCount = analysis.FileImpacts.Select(r => r.SourcePath).Distinct().Count();
+            var confirmedCount = analysis.ConfirmedCount;
+            var confirmedFileCount = analysis.ConfirmedFileCount;
+            var hintCount = analysis.HintCount;
+            var hintFileCount = analysis.HintFileCount;
             var hasHeuristicHints = analysis.ImpactMode == "file_dependency_hints" && hintCount > 0;
             var count = hasHeuristicHints ? hintCount : confirmedCount;
             var fileCount = hasHeuristicHints ? hintFileCount : confirmedFileCount;
-            var maxActualDepth = analysis.Callers.Count > 0 ? analysis.Callers.Max(r => r.Depth) : 0;
+            var maxActualDepth = analysis.ActualDepth;
             if (countOnly)
             {
-                var topFiles = hasHeuristicHints
-                    ? BuildTopFileHistogram(analysis.FileImpacts, impact => impact.SourcePath)
-                    : BuildTopFileHistogram(analysis.Callers, caller => caller.Path);
+                var topFiles = BuildTopFileHistogramFromCounts(analysis.CountFileHistogram);
                 var countOnlyPayload = new JsonObject
                 {
                     ["query"] = query,
