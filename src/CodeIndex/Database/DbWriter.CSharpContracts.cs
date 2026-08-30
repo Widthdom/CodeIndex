@@ -67,7 +67,7 @@ public partial class DbWriter
             WHERE f.lang = 'csharp'
               AND " + CSharpStaticInterfaceContractMemberPredicateSql;
 
-    private const string CSharpMemberReadTargetPredicateSql = @"
+    internal const string CSharpMemberReadTargetPredicateSql = @"
               (
                     (s.kind = 'enum' AND s.container_kind = 'enum')
                     OR (

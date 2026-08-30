@@ -976,6 +976,12 @@ internal sealed class IndexDryRunJsonResult : IVersionedJsonResult
     public int CandidatePathsProcessed { get; init; }
     public bool CandidatePathsTruncated { get; init; }
     public bool TotalsLowerBound { get; init; }
+    public bool ProjectionAuthoritative { get; init; }
+    public List<string> ProjectionUnavailableReasons { get; init; } = [];
+    [JsonPropertyName("csharp_workspace_expansion_status")]
+    public string CSharpWorkspaceExpansionStatus { get; init; } = string.Empty;
+    [JsonPropertyName("csharp_workspace_expansion_reason")]
+    public string? CSharpWorkspaceExpansionReason { get; init; }
     public int ParseEstimateFileLimit { get; init; }
     public int ParseEstimateFilesProcessed { get; init; }
     public bool ParseEstimateFilesTruncated { get; init; }
