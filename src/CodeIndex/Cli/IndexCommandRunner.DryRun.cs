@@ -86,14 +86,16 @@ public static partial class IndexCommandRunner
             || (dbSnapshot.SymbolKindFilterSignature == null
                 && !options.SymbolKindFilter.IsActive);
         if (IsUpdateMode(options)
-            && !scopedUpdateSymbolKindFilterMatchesPrior)
+            && (!scopedUpdateSymbolKindFilterMatchesPrior
+                || (options.SymbolKindFilter.IsActive
+                    && !dbSnapshot.SymbolKindFilterAuditCurrent)))
         {
             return WriteCommandError(
                 options.Json,
                 jsonOptions,
-                "symbol-kind filter policy cannot change during a scoped update because existing files would keep symbols from the prior index policy",
+                "symbol-kind filter policy cannot change and its per-file audit generation must be current during a scoped update because untouched files would retain incompatible evidence",
                 CommandExitCodes.UsageError,
-                "Run a full index refresh without --files, --commits, or --changed-between when changing --include-symbol-kind or --exclude-symbol-kind.",
+                "Run a full index refresh without --files, --commits, or --changed-between to establish one symbol-kind policy and audit generation.",
                 CommandErrorCodes.UsageError);
         }
         if (options.MemoryTrace)
@@ -1429,6 +1431,8 @@ public static partial class IndexCommandRunner
                 snapshot.SymbolKindFilterSignature,
                 options.SymbolKindFilter.Signature,
                 StringComparison.Ordinal)
+            || (options.SymbolKindFilter.IsActive
+                && !snapshot.SymbolKindFilterAuditCurrent)
             || !DryRunExtractorContractsMatchCurrent(snapshot, language))
         {
             return false;
@@ -2002,6 +2006,11 @@ public static partial class IndexCommandRunner
     {
         internal string? SymbolKindFilterSignature
             => GetMeta(SymbolKindFilterMetaKey);
+
+        internal bool SymbolKindFilterAuditCurrent => string.Equals(
+            GetMeta(SymbolKindFilterAuditVersionMetaKey),
+            DbContext.SymbolKindFilterAuditVersion,
+            StringComparison.Ordinal);
 
         internal bool SymbolsOnlyGraphOmitted => string.Equals(
             GetMeta(DbContext.SymbolsOnlyGraphOmittedMetaKey),

@@ -30,7 +30,8 @@ public static partial class IndexCommandRunner
     internal const int MaxGeneratedCodePatternCsvLength = 32_768;
     internal const int MaxGeneratedCodePatternCount = 128;
     internal const int MaxGitExcludeBytes = 256 * 1024;
-    internal const string SymbolKindFilterMetaKey = "index_symbol_kind_filter";
+    internal const string SymbolKindFilterMetaKey = DbContext.SymbolKindFilterMetaKey;
+    internal const string SymbolKindFilterAuditVersionMetaKey = DbContext.SymbolKindFilterAuditVersionMetaKey;
     private const int MaxIndexRunDiagnosticLength = 512;
     private const int ScanCheckpointVersion = 1;
     private const string ScanCheckpointFileName = "scan-checkpoint.json";
@@ -46,13 +47,16 @@ public static partial class IndexCommandRunner
     {
         if (string.IsNullOrWhiteSpace(writerVersion))
         {
-            writer.SetMeta(SymbolKindFilterMetaKey, symbolKindFilterSignature);
+            writer.SetMetaValues(
+                (SymbolKindFilterMetaKey, symbolKindFilterSignature),
+                (SymbolKindFilterAuditVersionMetaKey, DbContext.SymbolKindFilterAuditVersion));
             return;
         }
 
         writer.SetMetaValues(
             (DbContext.CdidxWriterVersionMetaKey, writerVersion),
-            (SymbolKindFilterMetaKey, symbolKindFilterSignature));
+            (SymbolKindFilterMetaKey, symbolKindFilterSignature),
+            (SymbolKindFilterAuditVersionMetaKey, DbContext.SymbolKindFilterAuditVersion));
     }
 
     private sealed record ScanCheckpoint(
@@ -488,6 +492,7 @@ public static partial class IndexCommandRunner
                     DbContext.SymbolsOnlyGraphOmittedMetaKey,
                     DbContext.IndexedProjectRootMetaKey,
                     SymbolKindFilterMetaKey,
+                    SymbolKindFilterAuditVersionMetaKey,
                     DbContext.IndexedHeadCommitMetaKey,
                     DbContext.WorkspaceVerifiedHeadShaMetaKey,
                     DbContext.WorkspaceVerificationPendingPathsMetaKey,
@@ -523,6 +528,10 @@ public static partial class IndexCommandRunner
                 var priorHotspotFamilyMarkerFingerprints = GetHotspotFamilyMetaSnapshot(db, DbContext.GetHotspotFamilyMarkerFingerprintMetaKey);
                 var priorIndexedProjectRoot = PriorMeta(DbContext.IndexedProjectRootMetaKey);
                 var priorSymbolKindFilterSignature = PriorMeta(SymbolKindFilterMetaKey);
+                var priorSymbolKindFilterAuditCurrent = string.Equals(
+                    PriorMeta(SymbolKindFilterAuditVersionMetaKey),
+                    DbContext.SymbolKindFilterAuditVersion,
+                    StringComparison.Ordinal);
                 // Captured BEFORE `--rebuild` drops the DB so an incremental run can warn the user when
                 // the worktree's HEAD has moved since the previously indexed snapshot. The same value
                 // is read at `status` time (without `--check`) to surface a worktree branch / HEAD
@@ -574,8 +583,8 @@ public static partial class IndexCommandRunner
                 var projectRoot = Path.GetFullPath(options.ProjectPath!);
 
                 initialExitCode = isUpdateMode
-                    ? RunUpdateMode(db, writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, runStartedAtUtc, spinnerFrames, jsonOptions, priorReadiness, priorIndexComplete, priorScopedUpdateRequiresFullScan, priorSymbolsOnlyGraphOmitted, priorFoldVersion, priorFoldFingerprint, priorSymbolExtractorVersionsMatchCurrent, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHdlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints!, priorIndexedProjectRoot, priorIndexedHeadCommit, priorWorkspaceVerifiedHead, priorWorkspaceVerificationPendingPaths, priorWorkspaceVerificationPendingPathsComplete, currentHeadCommit, priorSymbolKindFilterSignature, initialCwd, indexRunDiagnostics, indexCancellation.Token)
-                    : RunFullScan(db, writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, runStartedAtUtc, spinnerFrames, jsonOptions, priorReadiness, priorIndexComplete, priorSymbolsOnlyGraphOmitted, priorFoldVersion, priorFoldFingerprint, priorSymbolExtractorVersionsMatchCurrent, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHdlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, priorSymbolKindFilterSignature, initialCwd, indexRunDiagnostics, showNextSteps: !databaseExistedBeforeIndex, indexCancellation.Token);
+                    ? RunUpdateMode(db, writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, runStartedAtUtc, spinnerFrames, jsonOptions, priorReadiness, priorIndexComplete, priorScopedUpdateRequiresFullScan, priorSymbolsOnlyGraphOmitted, priorFoldVersion, priorFoldFingerprint, priorSymbolExtractorVersionsMatchCurrent, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHdlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints!, priorIndexedProjectRoot, priorIndexedHeadCommit, priorWorkspaceVerifiedHead, priorWorkspaceVerificationPendingPaths, priorWorkspaceVerificationPendingPathsComplete, currentHeadCommit, priorSymbolKindFilterSignature, priorSymbolKindFilterAuditCurrent, initialCwd, indexRunDiagnostics, indexCancellation.Token)
+                    : RunFullScan(db, writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, runStartedAtUtc, spinnerFrames, jsonOptions, priorReadiness, priorIndexComplete, priorSymbolsOnlyGraphOmitted, priorFoldVersion, priorFoldFingerprint, priorSymbolExtractorVersionsMatchCurrent, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHdlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, priorSymbolKindFilterSignature, priorSymbolKindFilterAuditCurrent, initialCwd, indexRunDiagnostics, showNextSteps: !databaseExistedBeforeIndex, indexCancellation.Token);
                 if (initialExitCode == CommandExitCodes.Success)
                 {
                     try
@@ -737,6 +746,7 @@ public sealed class IndexCommandOptions
 
 public sealed class SymbolKindFilter
 {
+    private const int MaxPersistedSignatureLength = 32_768;
     private static readonly string[] CSharpStaticInterfaceContractMemberKinds =
         ["function", "operator", "property"];
 
@@ -772,6 +782,40 @@ public sealed class SymbolKindFilter
                 .ToArray();
 
         return new SymbolKindFilter(Normalize(include), Normalize(exclude), parseError);
+    }
+
+    internal static bool TryParsePersistedSignature(string? signature, out SymbolKindFilter filter)
+    {
+        filter = Empty;
+        const string includePrefix = "include=";
+        const string excludeSeparator = ";exclude=";
+        if (string.IsNullOrEmpty(signature)
+            || signature.Length > MaxPersistedSignatureLength
+            || !signature.StartsWith(includePrefix, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var separatorIndex = signature.IndexOf(excludeSeparator, StringComparison.Ordinal);
+        if (separatorIndex < includePrefix.Length
+            || signature.IndexOf(excludeSeparator, separatorIndex + excludeSeparator.Length, StringComparison.Ordinal) >= 0)
+        {
+            return false;
+        }
+
+        var includeText = signature[includePrefix.Length..separatorIndex];
+        var excludeText = signature[(separatorIndex + excludeSeparator.Length)..];
+        if (includeText.Contains(';', StringComparison.Ordinal)
+            || excludeText.Contains(';', StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        filter = Create(
+            includeText.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
+            excludeText.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
+            parseError: null);
+        return string.Equals(filter.Signature, signature, StringComparison.Ordinal);
     }
 
     internal static bool SignatureRetainsCSharpStaticInterfaceContractMembers(string? signature)

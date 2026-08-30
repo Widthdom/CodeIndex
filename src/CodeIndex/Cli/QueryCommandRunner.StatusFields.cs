@@ -69,9 +69,27 @@ public static partial class QueryCommandRunner
         new(
             "index_complete",
             "Index generation completeness",
-            "the latest persisted index generation completed every candidate file.",
-            "one or more files failed while successful files and their graph rows were committed.",
-            "Fix the structured per-file failure under `last_failed_or_partial_index_run.file_errors`, then rerun the same index command; a rebuild is not required."),
+            "the latest persisted index generation completed every candidate file without a symbol-kind coverage filter.",
+            "one or more files failed, a persisted symbol-kind filter intentionally limited coverage, or legacy filter provenance is unavailable.",
+            "Inspect `index_incomplete_reasons`: fix structured file failures and rerun the same command, or rebuild without `--include-symbol-kind` / `--exclude-symbol-kind` when authoritative negative symbol and graph results are required."),
+        new(
+            "symbol_kind_filter_provenance_available",
+            "Persisted symbol-kind policy provenance",
+            "the normalized include/exclude policy for this persisted generation is available.",
+            "the DB predates persisted policy provenance, so negative symbol and graph results are conservatively non-authoritative.",
+            "Run `cdidx index <projectPath> --rebuild` with a current binary to stamp an explicit unfiltered or filtered policy."),
+        new(
+            "symbol_kind_filter",
+            "Persisted symbol-kind policy",
+            "the object publishes normalized `include` and `exclude` lists; empty lists mean an unfiltered generation.",
+            "a non-empty list intentionally limits generation coverage even when `symbols_dropped_by_kind_filter` is zero.",
+            "Rebuild without the symbol-kind options when full symbol and graph absence authority is required."),
+        new(
+            "symbols_dropped_by_kind_filter",
+            "Persisted symbol-kind drop count",
+            "zero means the persisted per-file audit facts recorded no dropped symbols for this generation.",
+            "a positive value counts symbols intentionally removed by the persisted kind policy; absence means the legacy DB has no per-file audit column.",
+            "Use the count for bounded audit evidence and inspect `symbol_kind_filter`; rebuild unfiltered for authoritative negative queries."),
         new(
             "sql_graph_contract_ready",
             "SQL graph contract",

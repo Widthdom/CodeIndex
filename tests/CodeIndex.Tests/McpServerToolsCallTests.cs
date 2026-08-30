@@ -10000,6 +10000,54 @@ public partial class McpServerTests
     }
 
     [Fact]
+    public void ToolsCall_Index_SymbolKindPolicyMatchesPersistedStatusReadiness_Issue5224()
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_symbol_policy_{Guid.NewGuid():N}");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_symbol_policy");
+        try
+        {
+            Directory.CreateDirectory(fixtureDir);
+            File.WriteAllText(
+                Path.Combine(fixtureDir, "app.py"),
+                "class App:\n    pass\n\ndef helper():\n    return App()\n");
+
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var response = CallIndex(
+                server,
+                fixtureDir,
+                args => args["includeSymbolKind"] = new JsonArray("class"));
+
+            Assert.False(response["result"]?["isError"]?.GetValue<bool>() ?? false, response.ToJsonString());
+            var structured = response["result"]!["structuredContent"]!;
+            Assert.False(structured["index_complete"]!.GetValue<bool>());
+            Assert.False(structured["graph_data_current"]!.GetValue<bool>());
+            Assert.False(structured["reference_graph_complete"]!.GetValue<bool>());
+            Assert.True(structured["symbol_kind_filter_provenance_available"]!.GetValue<bool>());
+            Assert.Equal(
+                "class",
+                structured["symbol_kind_filter"]!["include"]![0]!.GetValue<string>());
+            Assert.True(structured["symbols_dropped_by_kind_filter"]!.GetValue<long>() > 0);
+            Assert.Contains(
+                DbReader.SymbolKindFilterCoverageLimitedReason,
+                structured["index_incomplete_reasons"]!.AsArray()
+                    .Select(reason => reason!.GetValue<string>()));
+
+            using var db = new DbContext(DbOpenIntent.QueryOnly, dbPath);
+            var status = new DbReader(db.Connection, db.IsReadOnly).GetStatus();
+            Assert.Equal(status.IndexComplete, structured["index_complete"]!.GetValue<bool>());
+            Assert.Equal(status.GraphDataCurrent, structured["graph_data_current"]!.GetValue<bool>());
+            Assert.Equal(
+                status.SymbolsDroppedByKindFilter,
+                structured["symbols_dropped_by_kind_filter"]!.GetValue<long>());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
+    [Fact]
     public void ToolsCall_Index_MaxReferencesPerFilePersistsReferenceCountExceededIssue_Issue3719()
     {
         var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_reference_cap_{Guid.NewGuid():N}");

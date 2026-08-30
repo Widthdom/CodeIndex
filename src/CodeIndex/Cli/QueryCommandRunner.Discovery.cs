@@ -282,6 +282,7 @@ public static partial class QueryCommandRunner
                     WriteLangHint(options.Lang, reader);
                     WriteSymbolExtractionCapabilityHint(options.Lang, reader);
                     WriteZeroResultHints(options, reader);
+                    WriteIndexGenerationAuthorityWarningIfNeeded(reader);
                 }
                 return ZeroResultExitCode(options);
             }
@@ -1079,6 +1080,8 @@ public static partial class QueryCommandRunner
                 reader.GeneratedFileFilterAvailable);
         }
         AddFreshnessHint(payload, reader);
+        if (totalCount == 0)
+            AddIndexGenerationAuthorityJsonFields(payload, reader, jsonOptions);
         return payload;
     }
 

@@ -61,6 +61,18 @@ than a new schema bit. Current readers aggregate those rows into
 legacy database without inspectable issue state degrades rather than claiming
 complete graph coverage.
 
+Symbol-kind indexing policy uses normalized `index_symbol_kind_filter` metadata,
+the successful-generation `index_symbol_kind_filter_audit_version` marker, and
+the additive per-file `files.symbols_dropped_by_kind_filter` audit column.
+Current writable opens add the column in place. An active legacy generation
+without the audit marker omits the count until a full incremental scan
+re-extracts every file; scoped updates are rejected instead of mixing audit
+generations. Read-only legacy DBs without the column remain readable and report
+`symbol_kind_filter_provenance_unavailable` when the policy stamp is also
+missing. Any active persisted policy reports `symbol_kind_filter_coverage_limited`
+and keeps negative symbol/graph results non-authoritative. Rebuild unfiltered to
+restore full coverage; the additive column itself does not require a rebuild.
+
 ## Version Skew Behavior
 
 Use `cdidx status --json` or `cdidx status --check --json` before relying on a
@@ -146,6 +158,17 @@ reference-extraction cap hit は新しい schema bit ではなく、既存の fi
 `file_issues` row を使います。current reader はそれを `reference_extraction_cap_hits`
 へ集約して `reference_graph_complete=false` にします。issue state を確認できない
 legacy database は complete graph coverage を主張せず degraded になります。
+
+symbol-kind indexing policy は正規化済み `index_symbol_kind_filter` metadata、成功世代の
+`index_symbol_kind_filter_audit_version` marker、additive な file ごとの
+`files.symbols_dropped_by_kind_filter` audit column を使います。現行の writable open は列を
+in-place で追加します。audit marker の無い active な legacy generation は、全 file を再抽出する
+full incremental scan まで count を省略し、scoped update は audit 世代を混在させず拒否します。
+列を持たない read-only legacy DB も読み取り可能で、policy stamp も無い場合は
+`symbol_kind_filter_provenance_unavailable` を報告します。active な永続 policy は
+`symbol_kind_filter_coverage_limited` を報告し、symbol/graph の否定結果を
+non-authoritative に保ちます。full coverage の復元には filter なし rebuild を使いますが、
+additive column 自体のために rebuild する必要はありません。
 
 ## Version skew 時の動作
 

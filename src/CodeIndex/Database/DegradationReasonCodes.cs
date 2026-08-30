@@ -24,6 +24,8 @@ public static class DegradationReasonCodes
     public const string GraphTableMissing = "graph_table_available=false";
     public const string GraphDataNotCurrent = "graph_data_current=false";
     public const string IndexIncomplete = "index_complete=false";
+    public const string SymbolKindFilterCoverageLimited = "symbol_kind_filter_coverage_limited";
+    public const string SymbolKindFilterProvenanceUnavailable = "symbol_kind_filter_provenance_unavailable";
     public const string ReferenceGraphIncomplete = "reference_graph_complete=false";
     public const string SymbolsOnlyGraphOmitted = "symbols_only_graph_omitted";
     public const string ReferenceExtractionCapStateUnavailable = "reference_extraction_cap_state_unavailable";
@@ -55,6 +57,8 @@ public static class DegradationReasonCodes
         GraphTableMissing,
         GraphDataNotCurrent,
         IndexIncomplete,
+        SymbolKindFilterCoverageLimited,
+        SymbolKindFilterProvenanceUnavailable,
         ReferenceGraphIncomplete,
         SymbolsOnlyGraphOmitted,
         ReferenceExtractionCapStateUnavailable,
@@ -187,6 +191,16 @@ public static class DegradationReasonCodes
                 "Required input or extraction work was omitted or failed, so persisted rows cover only a partial index generation.",
                 "Run `cdidx status --json`, address `index_incomplete_reasons`, then rerun the same index command; a rebuild is normally not required.",
                 "Use `cdidx status --json` and inspect `last_failed_or_partial_index_run.file_errors` for extractor failures or the stable omission reasons for capped and symbols-only runs."),
+            SymbolKindFilterCoverageLimited => new(
+                code,
+                "The persisted generation intentionally filtered symbol kinds, so negative symbol and graph results are not authoritative.",
+                "Run `cdidx index <projectPath> --rebuild` without `--include-symbol-kind` or `--exclude-symbol-kind` for full coverage.",
+                "Run `cdidx status --json` to audit `symbol_kind_filter` and `symbols_dropped_by_kind_filter` while retaining the limited index."),
+            SymbolKindFilterProvenanceUnavailable => new(
+                code,
+                "This legacy DB does not record the symbol-kind policy used for its persisted generation, so negative symbol and graph results are conservatively non-authoritative.",
+                "Run `cdidx index <projectPath> --rebuild` with a current cdidx binary to stamp explicit policy provenance.",
+                "Run `cdidx status --json` and treat negative results as degraded until the DB can be rebuilt."),
             ReferenceGraphIncomplete => new(
                 code,
                 "Reference extraction hit one or more hard safety caps, so missing callers, callees, dependencies, or impact edges are not authoritative absences.",

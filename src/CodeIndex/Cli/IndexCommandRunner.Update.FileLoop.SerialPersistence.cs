@@ -150,6 +150,7 @@ public static partial class IndexCommandRunner
                 loaded.Content,
                 familyScopeKey);
             symbolsDroppedByKindFilter = options.SymbolKindFilter.Apply(symbols);
+            writer.SetSymbolsDroppedByKindFilter(fileId, symbolsDroppedByKindFilter);
             if (symbols.Count > options.MaxSymbolsPerFile)
             {
                 var issue = BuildSymbolCountExceededIssue(

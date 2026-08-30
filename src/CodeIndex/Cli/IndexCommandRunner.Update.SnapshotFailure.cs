@@ -59,6 +59,7 @@ public static partial class IndexCommandRunner
         var foldReady = (failure.PriorReadiness & DbContext.FoldReadyFlag) != 0;
         var memoryTimeline = BuildMemoryTimeline(failure.MemorySamples);
 
+        var persistedSymbolKindFilterPolicy = signalReader.GetPersistedSymbolKindFilterPolicy();
         if (failure.Options.Json)
         {
             CommandOutputWriter.WriteLine(JsonSerializer.Serialize(new IndexUpdateJsonResult
@@ -81,6 +82,9 @@ public static partial class IndexCommandRunner
                     FtsMergeRan = false,
                 },
                 SymbolKindFilter = failure.Options.SymbolKindFilter.ToJsonResult(),
+                SymbolKindFilterProvenanceAvailable =
+                    persistedSymbolKindFilterPolicy.ProvenanceAvailable,
+                SymbolsDroppedByKindFilter = persistedSymbolKindFilterPolicy.SymbolsDropped,
                 GraphTableAvailable = graphTableAvailable,
                 GraphDataCurrent = false,
                 IndexComplete = false,

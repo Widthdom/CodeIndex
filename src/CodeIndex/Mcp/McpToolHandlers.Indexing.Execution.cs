@@ -140,7 +140,8 @@ public partial class McpServer
         var symbolKindFilterMatchesPrior = string.Equals(
             indexSnapshot.SymbolKindFilterSignature,
             symbolKindFilter.Signature,
-            StringComparison.Ordinal);
+            StringComparison.Ordinal)
+            && (!symbolKindFilter.IsActive || indexSnapshot.SymbolKindFilterAuditCurrent);
         var priorFilterRetainedCSharpContractMembers =
             SymbolKindFilter.SignatureRetainsCSharpStaticInterfaceContractMembers(
                 indexSnapshot.SymbolKindFilterSignature);
@@ -206,7 +207,9 @@ public partial class McpServer
         {
             if (symbolKindFilterMetaMarkedIncomplete)
                 return;
-            writer.SetMeta(IndexCommandRunner.SymbolKindFilterMetaKey, null);
+            writer.SetMetaValues(
+                (IndexCommandRunner.SymbolKindFilterMetaKey, null),
+                (IndexCommandRunner.SymbolKindFilterAuditVersionMetaKey, null));
             symbolKindFilterMetaMarkedIncomplete = true;
         }
 

@@ -317,6 +317,13 @@ public static partial class QueryCommandRunner
                 // #1546: case-sensitivity を診断用に明示する。
                 if (status.PathCaseSensitive != null)
                     Console.WriteLine(ConsoleUi.FormatSummaryLine("FS Case", status.PathCaseSensitive == true ? "case-sensitive" : "case-insensitive"));
+                var symbolKindPolicy = status.SymbolKindFilter;
+                var policyText = symbolKindPolicy == null
+                    ? "unavailable (legacy generation)"
+                    : $"include={string.Join(",", symbolKindPolicy.Include)};exclude={string.Join(",", symbolKindPolicy.Exclude)}";
+                Console.WriteLine(ConsoleUi.FormatSummaryLine("Kind policy", policyText));
+                if (status.SymbolsDroppedByKindFilter.HasValue)
+                    Console.WriteLine(ConsoleUi.FormatSummaryLine("Kind drops", $"{status.SymbolsDroppedByKindFilter.Value:N0}"));
                 WriteStatusReadinessSummary(status, options);
                 if (status.WorktreeHeadChanged == true)
                     Console.WriteLine(ConsoleUi.FormatSummaryLine("WARN", $"worktree HEAD changed since the workspace was verified ({ShortSha(verifiedHead)} -> {ShortSha(status.GitHead)}). Run `{BuildReindexRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit)}` to refresh the index for the current branch."));
@@ -893,7 +900,11 @@ public static partial class QueryCommandRunner
         if (status.MigrationInProgress)
             result.Add(BuildStatusReadinessDegradation("migration_in_progress", DegradationReasonCodes.MigrationInProgress, options, status));
         if (!status.IndexComplete)
-            result.Add(BuildStatusReadinessDegradation("index_complete", DegradationReasonCodes.IndexIncomplete, options, status));
+            result.Add(BuildStatusReadinessDegradation(
+                "index_complete",
+                GetIndexGenerationDegradationRootCause(status),
+                options,
+                status));
         if (!status.GraphTableAvailable)
             result.Add(BuildStatusReadinessDegradation("graph_table_available", DegradationReasonCodes.GraphTableMissing, options, status));
         if (!status.ReferenceGraphComplete)
@@ -917,6 +928,26 @@ public static partial class QueryCommandRunner
         if (status.IndexNewerThanReader)
             result.Add(BuildStatusReadinessDegradation("index_newer_than_reader", DegradationReasonCodes.IndexNewerThanReader, options, status));
         return result;
+    }
+
+    private static string GetIndexGenerationDegradationRootCause(StatusResult status)
+    {
+        var reasons = status.IndexIncompleteReasons ?? [];
+        if (reasons.Contains(
+                DegradationReasonCodes.SymbolKindFilterProvenanceUnavailable,
+                StringComparer.Ordinal))
+        {
+            return DegradationReasonCodes.SymbolKindFilterProvenanceUnavailable;
+        }
+
+        if (reasons.Contains(
+                DegradationReasonCodes.SymbolKindFilterCoverageLimited,
+                StringComparer.Ordinal))
+        {
+            return DegradationReasonCodes.SymbolKindFilterCoverageLimited;
+        }
+
+        return DegradationReasonCodes.IndexIncomplete;
     }
 
     private static string GetReferenceGraphDegradationRootCause(StatusResult status)

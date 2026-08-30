@@ -180,6 +180,10 @@ public partial class DbContext : IDisposable
     public const string LastFailedIndexRunFileErrorsMetaKey = "last_failed_index_run_file_errors_json";
     public const string IndexCompletenessMetaKey = "index_completeness";
     public const string IndexIncompleteReasonsMetaKey = "index_incomplete_reasons_json";
+    public const string SymbolKindFilterMetaKey = "index_symbol_kind_filter";
+    public const string SymbolKindFilterAuditVersionMetaKey = "index_symbol_kind_filter_audit_version";
+    public const string SymbolKindFilterAuditVersion = "1";
+    public const string SymbolsDroppedByKindFilterColumn = "symbols_dropped_by_kind_filter";
     // Issue #1585: count of files seen by the most recent successful full-repository scan
     // whose filename or extension did not map to a known language. This is a scan coverage
     // signal, not an indexed-file count, and is omitted by readers until a current index pass

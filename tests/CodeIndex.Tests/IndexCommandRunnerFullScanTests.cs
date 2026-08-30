@@ -440,7 +440,7 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void Run_FullScan_ExcludeSymbolKindDropsMatchingSymbols()
+    public void Run_FullScan_ExcludeSymbolKindDropsMatchingSymbols_Issue5224()
     {
         var projectRoot = CreateTempProject();
         try
@@ -458,11 +458,184 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal("success", json.GetProperty("status").GetString());
             Assert.Equal(1, json.GetProperty("summary").GetProperty("symbols_dropped_by_kind_filter").GetInt32());
+            Assert.Equal(1, json.GetProperty("symbols_dropped_by_kind_filter").GetInt64());
+            Assert.True(json.GetProperty("symbol_kind_filter_provenance_available").GetBoolean());
             Assert.Equal(["function"], json.GetProperty("symbol_kind_filter").GetProperty("exclude").EnumerateArray().Select(value => value.GetString()).ToArray());
+            Assert.False(json.GetProperty("index_complete").GetBoolean());
+            Assert.Contains(
+                DbReader.SymbolKindFilterCoverageLimitedReason,
+                ReadCompletenessReasons(json, "index_incomplete_reasons"));
+            Assert.False(json.GetProperty("reference_graph_complete").GetBoolean());
 
-            var counts = ReadSymbolKindCounts(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var counts = ReadSymbolKindCounts(dbPath);
             Assert.True(counts.GetValueOrDefault("class") > 0);
             Assert.False(counts.ContainsKey("function"));
+
+            var (statusExitCode, status) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, statusExitCode);
+            Assert.False(status.GetProperty("index_complete").GetBoolean());
+            Assert.False(status.GetProperty("graph_data_current").GetBoolean());
+            Assert.Equal(1, status.GetProperty("symbols_dropped_by_kind_filter").GetInt64());
+            Assert.True(status.GetProperty("symbol_kind_filter_provenance_available").GetBoolean());
+            Assert.Equal(
+                ["function"],
+                status.GetProperty("symbol_kind_filter").GetProperty("exclude")
+                    .EnumerateArray().Select(value => value.GetString()).ToArray());
+
+            var (definitionExitCode, definitionStdout, definitionStderr) =
+                RunDefinitionAndCaptureIssue5224(["helper", "--db", dbPath, "--json"]);
+            Assert.Equal(CommandExitCodes.NotFound, definitionExitCode);
+            Assert.Equal(string.Empty, definitionStderr);
+            using (var definitionDocument = JsonDocument.Parse(definitionStdout))
+            {
+                var definitionJson = definitionDocument.RootElement;
+                Assert.False(definitionJson.GetProperty("index_complete").GetBoolean());
+                Assert.False(definitionJson.GetProperty("authoritative_count").GetBoolean());
+                Assert.Equal(1, definitionJson.GetProperty("symbols_dropped_by_kind_filter").GetInt64());
+                Assert.Contains(
+                    "not authoritative",
+                    definitionJson.GetProperty("index_generation_warning").GetString(),
+                    StringComparison.Ordinal);
+            }
+
+            var (humanDefinitionExitCode, _, humanDefinitionStderr) =
+                RunDefinitionAndCaptureIssue5224(["helper", "--db", dbPath]);
+            Assert.Equal(CommandExitCodes.Success, humanDefinitionExitCode);
+            Assert.Contains(
+                DbReader.SymbolKindFilterCoverageLimitedReason,
+                humanDefinitionStderr,
+                StringComparison.Ordinal);
+            Assert.Contains("not authoritative", humanDefinitionStderr, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    private (int ExitCode, string Stdout, string Stderr) RunDefinitionAndCaptureIssue5224(
+        string[] args)
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalOut = Console.Out;
+            var originalErr = Console.Error;
+            using var stdout = new StringWriter();
+            using var stderr = new StringWriter();
+            try
+            {
+                Console.SetOut(stdout);
+                Console.SetError(stderr);
+                var exitCode = QueryCommandRunner.RunDefinition(args, _jsonOptions);
+                return (exitCode, stdout.ToString(), stderr.ToString());
+            }
+            finally
+            {
+                Console.SetOut(originalOut);
+                Console.SetError(originalErr);
+            }
+        }
+    }
+
+    [Fact]
+    public void Run_SymbolKindPolicyPersistsAcrossIncrementalUpdateAndClearsOnUnfilteredRebuild_Issue5224()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "app.py");
+            File.WriteAllText(sourcePath, "class App:\n    pass\n\ndef helper():\n    return App()\n");
+
+            var (initialExitCode, initial) = RunAndCaptureJson(
+                [projectRoot, "--include-symbol-kind", "function,class", "--exclude-symbol-kind", "function", "--json", "--quiet"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.Equal(1, initial.GetProperty("symbols_dropped_by_kind_filter").GetInt64());
+            Assert.Equal(
+                ["class", "function"],
+                initial.GetProperty("symbol_kind_filter").GetProperty("include")
+                    .EnumerateArray().Select(value => value.GetString()).ToArray());
+            Assert.Contains(
+                DbReader.SymbolKindFilterCoverageLimitedReason,
+                ReadCompletenessReasons(initial, "index_incomplete_reasons"));
+
+            // Simulate a DB written before the per-file audit generation marker existed.
+            // The aggregate must be unavailable until a whole-workspace pass re-extracts
+            // unchanged files; it must never publish the column default as a false zero.
+            // per-file audit 世代 marker 導入前の DB を再現する。unchanged file を全体
+            // 再抽出するまでは aggregate を省略し、列 default を偽の 0 として返さない。
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            SqliteConnection.ClearAllPools();
+            using (var connection = OpenNonPoolingConnection(dbPath))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = """
+                    DELETE FROM codeindex_meta
+                    WHERE key = 'index_symbol_kind_filter_audit_version';
+                    UPDATE files SET symbols_dropped_by_kind_filter = 0;
+                    """;
+                command.ExecuteNonQuery();
+            }
+            SqliteConnection.ClearAllPools();
+
+            var (legacyStatusExitCode, legacyStatus) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, legacyStatusExitCode);
+            Assert.True(legacyStatus.GetProperty("symbol_kind_filter_provenance_available").GetBoolean());
+            Assert.False(legacyStatus.TryGetProperty("symbols_dropped_by_kind_filter", out _));
+
+            var (auditRepairExitCode, auditRepair) = RunAndCaptureJson(
+                [projectRoot, "--include-symbol-kind", "class,function", "--exclude-symbol-kind", "function", "--json", "--quiet"]);
+            Assert.Equal(CommandExitCodes.Success, auditRepairExitCode);
+            Assert.Equal(1, auditRepair.GetProperty("summary").GetProperty("files_extracted").GetInt64());
+            Assert.Equal(1, auditRepair.GetProperty("symbols_dropped_by_kind_filter").GetInt64());
+
+            File.WriteAllText(sourcePath, "class App:\n    pass\n\ndef helper():\n    return App()\n\ndef second():\n    return App()\n");
+            var (updateExitCode, update) = RunAndCaptureJson(
+                [projectRoot, "--include-symbol-kind", "class,function", "--exclude-symbol-kind", "function", "--json", "--quiet"]);
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.Equal("incremental", update.GetProperty("mode").GetString());
+            Assert.Equal(2, update.GetProperty("symbols_dropped_by_kind_filter").GetInt64());
+            Assert.False(update.GetProperty("index_complete").GetBoolean());
+
+            var (limitedStatusExitCode, limitedStatus) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, limitedStatusExitCode);
+            Assert.Equal(2, limitedStatus.GetProperty("symbols_dropped_by_kind_filter").GetInt64());
+
+            var (rebuildExitCode, rebuilt) = RunAndCaptureJson(
+                [projectRoot, "--rebuild", "--yes", "--json", "--quiet"]);
+            Assert.Equal(CommandExitCodes.Success, rebuildExitCode);
+            Assert.Equal("rebuild", rebuilt.GetProperty("mode").GetString());
+            Assert.True(rebuilt.GetProperty("index_complete").GetBoolean());
+            Assert.True(rebuilt.GetProperty("reference_graph_complete").GetBoolean());
+            Assert.Equal(0, rebuilt.GetProperty("symbols_dropped_by_kind_filter").GetInt64());
+            Assert.Empty(rebuilt.GetProperty("symbol_kind_filter").GetProperty("include").EnumerateArray());
+            Assert.Empty(rebuilt.GetProperty("symbol_kind_filter").GetProperty("exclude").EnumerateArray());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_ActiveSymbolKindPolicyWithZeroDropsStillLimitsPartialGeneration_Issue5224()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.py"), "class App:\n    pass\n");
+
+            var (exitCode, json) = RunAndCaptureJson(
+                [projectRoot, "--exclude-symbol-kind", "namespace", "--max-file-bytes", "1", "--json", "--quiet"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(0, json.GetProperty("symbols_dropped_by_kind_filter").GetInt64());
+            var reasons = ReadCompletenessReasons(json, "index_incomplete_reasons");
+            Assert.Contains(DbReader.SymbolKindFilterCoverageLimitedReason, reasons);
+            Assert.Contains("file_too_large", reasons);
+            Assert.False(json.GetProperty("graph_data_current").GetBoolean());
+            Assert.False(json.GetProperty("reference_graph_complete").GetBoolean());
         }
         finally
         {
