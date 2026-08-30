@@ -114,7 +114,8 @@ public static partial class QueryCommandRunner
                 DbReader.IsSqlLanguage(options.Lang)
                     || DbReader.ContainsSqlLanguage(analysis.Definitions.Select(definition => definition.Lang))
                     || DbReader.ContainsSqlLanguage(analysis.Callers.Select(caller => caller.Lang))
-                    || reader.AnyFilePathHasLanguage(analysis.FileImpacts.SelectMany(impact => new[] { impact.SourcePath, impact.TargetPath }), "sql"));
+                    || reader.AnyFilePathHasLanguage(analysis.FileImpacts.SelectMany(impact => new[] { impact.SourcePath, impact.TargetPath }), "sql")
+                    || reader.AnyFilePathHasLanguage(analysis.CountFileHistogram.Keys, "sql"));
             var hdlGraphSignal = reader.GetHdlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
             var confirmedCount = analysis.ConfirmedCount;
             var confirmedFileCount = analysis.ConfirmedFileCount;
@@ -244,7 +245,7 @@ public static partial class QueryCommandRunner
                     }
                     else
                     {
-                        Console.WriteLine("0");
+                        WriteImpactHumanCount(0, analysis);
                         if (!analysis.GraphTableAvailable)
                             CommandErrorWriter.WriteStderr("WARN: symbol_references table missing — this count result is degraded, not authoritative.");
                     }
@@ -344,7 +345,7 @@ public static partial class QueryCommandRunner
                 }
                 else
                 {
-                    Console.WriteLine($"{visibleCount}");
+                    WriteImpactHumanCount(visibleCount, analysis);
                 }
                 return CommandExitCodes.Success;
             }
@@ -521,6 +522,17 @@ public static partial class QueryCommandRunner
         var reason = analysis.IdentityRootUnavailableReason ?? "unknown";
         CommandErrorWriter.WriteStderr(
             $"WARN: impact traversal has no identity-backed root ({reason}); confirmed counts are not authoritative.");
+    }
+
+    internal static void WriteImpactHumanCount(int count, ImpactAnalysisResult analysis)
+    {
+        Console.WriteLine(count.ToString(CultureInfo.InvariantCulture));
+        if (!analysis.Truncated)
+            return;
+
+        var reason = analysis.TruncatedReason ?? analysis.TerminationReason;
+        CommandErrorWriter.WriteStderr(
+            $"WARN: impact count truncated ({reason}); {count.ToString(CultureInfo.InvariantCulture)} is a lower bound, not authoritative.");
     }
 
     private static List<SymbolResult> BuildImpactDefinitionJsonResults(IReadOnlyList<SymbolResult> definitions)

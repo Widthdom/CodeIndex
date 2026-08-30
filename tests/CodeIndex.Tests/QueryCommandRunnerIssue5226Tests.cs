@@ -1,10 +1,34 @@
 using CodeIndex.Cli;
+using CodeIndex.Database;
 using static CodeIndex.Tests.QueryCommandTestSupport;
 
 namespace CodeIndex.Tests;
 
 public partial class QueryCommandRunnerTests
 {
+    [Fact]
+    public void RunImpact_HumanCountWarnsWhenDedicatedSafetyCapReturnsLowerBound_Issue5226()
+    {
+        var analysis = new ImpactAnalysisResult
+        {
+            Truncated = true,
+            TruncatedReason = ImpactTruncatedReasons.SafetyCap,
+            TerminationReason = ImpactTerminationReasons.SafetyCap,
+        };
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() =>
+        {
+            QueryCommandRunner.WriteImpactHumanCount(2, analysis);
+            return CommandExitCodes.Success;
+        });
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal("2", stdout.Trim());
+        Assert.Contains("safety_cap", stderr, StringComparison.Ordinal);
+        Assert.Contains("lower bound", stderr, StringComparison.Ordinal);
+        Assert.Contains("not authoritative", stderr, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void RunImpact_CountModesReturnLimitIndependentTotalsAcrossDepthsAndFilters_Issue5226()
     {
@@ -98,6 +122,51 @@ public partial class QueryCommandRunnerTests
                 using var document = ParseJsonOutput(stdout);
                 return document.RootElement.Clone();
             }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunImpact_CountOnlyPreservesSqlCallerReadinessWithoutLanguageFilter_Issue5226()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_impact_count_sql_language_issue5226");
+        try
+        {
+            var dbPath = CreateSqlGraphContractFixtureDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/issue5226_target.py",
+                "python",
+                "def issue5226_cross_language():\n    return 0\n");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/issue5226_caller.sql",
+                "sql",
+                """
+                CREATE PROCEDURE dbo.issue5226_Caller
+                AS
+                BEGIN
+                    SELECT issue5226_cross_language();
+                END;
+                GO
+                """);
+            DowngradeSqlGraphContractRows(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["issue5226_cross_language", "--db", dbPath, "--json", "--count", "--limit", "1", "--max-hops", "1"],
+                _jsonOptions));
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(1, json.GetProperty("count").GetInt32());
+            Assert.False(json.GetProperty("sql_graph_contract_ready").GetBoolean());
+            Assert.False(json.GetProperty("authoritative_count").GetBoolean());
+            Assert.True(json.GetProperty("degraded").GetBoolean());
         }
         finally
         {

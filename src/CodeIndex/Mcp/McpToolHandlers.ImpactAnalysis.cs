@@ -74,7 +74,8 @@ public partial class McpServer
                 DbReader.IsSqlLanguage(lang)
                     || DbReader.ContainsSqlLanguage(analysis.Definitions.Select(definition => definition.Lang))
                     || DbReader.ContainsSqlLanguage(analysis.Callers.Select(caller => caller.Lang))
-                    || reader.AnyFilePathHasLanguage(analysis.FileImpacts.SelectMany(impact => new[] { impact.SourcePath, impact.TargetPath }), "sql"));
+                    || reader.AnyFilePathHasLanguage(analysis.FileImpacts.SelectMany(impact => new[] { impact.SourcePath, impact.TargetPath }), "sql")
+                    || reader.AnyFilePathHasLanguage(analysis.CountFileHistogram.Keys, "sql"));
             var confirmedCount = analysis.ConfirmedCount;
             var confirmedFileCount = analysis.ConfirmedFileCount;
             var hintCount = analysis.HintCount;

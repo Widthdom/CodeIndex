@@ -1,10 +1,54 @@
 using System.Text.Json.Nodes;
+using CodeIndex.Cli;
 using CodeIndex.Indexer;
+using CodeIndex.Mcp;
 
 namespace CodeIndex.Tests;
 
 public partial class McpServerTests
 {
+    [Fact]
+    public void ToolsCall_ImpactCountOnlyPreservesSqlCallerReadinessWithoutLanguageFilter_Issue5226()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_impact_count_sql_language_issue5226");
+        try
+        {
+            var dbPath = CreateSqlGraphContractFixtureDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/issue5226_target.py",
+                "python",
+                "def issue5226_cross_language():\n    return 0\n");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/issue5226_caller.sql",
+                "sql",
+                """
+                CREATE PROCEDURE dbo.issue5226_Caller
+                AS
+                BEGIN
+                    SELECT issue5226_cross_language();
+                END;
+                GO
+                """);
+            DowngradeSqlGraphContractRows(dbPath);
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+
+            var request = JsonNode.Parse(
+                """{"jsonrpc":"2.0","id":5226,"method":"tools/call","params":{"name":"impact_analysis","arguments":{"query":"issue5226_cross_language","countOnly":true,"limit":1,"maxHops":1}}}""")!;
+            var structured = server.HandleMessage(request)!["result"]!["structuredContent"]!;
+
+            Assert.Equal(1, structured["count"]!.GetValue<int>());
+            Assert.False(structured["sql_graph_contract_ready"]!.GetValue<bool>());
+            Assert.False(structured["authoritative_count"]!.GetValue<bool>());
+            Assert.Null(structured["total"]);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     [Fact]
     public void ToolsCall_ImpactCountOnlyIgnoresLimitAndPreservesCompletenessSignals_Issue5226()
     {
