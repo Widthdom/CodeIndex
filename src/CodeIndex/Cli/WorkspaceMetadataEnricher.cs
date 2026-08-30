@@ -240,7 +240,7 @@ public static class WorkspaceMetadataEnricher
             GitHelper.TryIsWorktreeDirty(projectRoot, cancellationToken));
     }
 
-    private static bool? ResolveHeadChanged(
+    internal static bool? ResolveHeadChanged(
         string? runtimeHead,
         string? runtimeBranch,
         string? workspaceVerifiedHead,

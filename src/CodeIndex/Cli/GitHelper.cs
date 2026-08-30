@@ -1110,7 +1110,14 @@ public static partial class GitHelper
     /// </summary>
     public static WorktreeStatus? TryGetWorktreeStatus(string projectRoot, CancellationToken cancellationToken = default)
     {
-        var output = TryRunGit(projectRoot, cancellationToken, "-c", "core.quotePath=false", "status", "--porcelain");
+        var output = TryRunGit(
+            projectRoot,
+            cancellationToken,
+            "-c",
+            "core.quotePath=false",
+            "status",
+            "--porcelain",
+            "--untracked-files=all");
         if (output == null)
             return null;
 

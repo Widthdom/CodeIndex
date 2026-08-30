@@ -31,11 +31,11 @@ internal static class StatusFreshnessEvaluator
 {
     public static StatusFreshnessEvaluation Evaluate(StatusResult status, DateTime utcNow)
     {
+        if (status.WorkspaceCheck is not null)
+            return Evaluate(status.WorkspaceCheck, status.WorktreeHeadChanged);
+
         if (status.WorktreeHeadChanged == true)
             return new(StatusFreshnessState.HeadChanged, "head_changed");
-
-        if (status.WorkspaceCheck is not null)
-            return Evaluate(status.WorkspaceCheck);
 
         if (status.GitIsDirty == true)
             return new(StatusFreshnessState.Stale, "worktree_dirty");
@@ -72,7 +72,14 @@ internal static class StatusFreshnessEvaluator
     }
 
     public static StatusFreshnessEvaluation Evaluate(IndexFreshnessCheckResult check)
+        => Evaluate(check, worktreeHeadChanged: null);
+
+    public static StatusFreshnessEvaluation Evaluate(
+        IndexFreshnessCheckResult check,
+        bool? worktreeHeadChanged)
     {
+        if (worktreeHeadChanged == true)
+            return new(StatusFreshnessState.HeadChanged, "head_changed");
         if (!check.Checked)
             return new(StatusFreshnessState.Unknown, "freshness_check_unavailable");
         if (check.MatchesWorkspace)

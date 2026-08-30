@@ -430,7 +430,19 @@ internal static class WorkspaceCommandRunner
                 projectRoot,
                 cancellationToken,
                 internalIndexDatabasePath: DbPathResolver.NormalizeDbPath(dbPath));
-            var freshnessEvaluation = StatusFreshnessEvaluator.Evaluate(freshness);
+            var worktreeHeadChanged = WorkspaceMetadataEnricher.ResolveHeadChanged(
+                GitHelper.TryGetHeadCommit(projectRoot, cancellationToken),
+                GitHelper.TryGetHeadBranch(projectRoot, cancellationToken),
+                snapshot.WorkspaceVerifiedHeadSha,
+                snapshot.IndexedHeadSha,
+                snapshot.IndexedHeadBranch,
+                snapshot.IndexedHeadBranchStampPresent,
+                snapshot.IndexedHeadCommit,
+                snapshot.IndexedHeadCommitBranch,
+                snapshot.IndexedHeadCommitBranchStampPresent);
+            var freshnessEvaluation = StatusFreshnessEvaluator.Evaluate(
+                freshness,
+                worktreeHeadChanged);
             var status = "ready";
             var reason = "ready";
             if (freshnessEvaluation.State == StatusFreshnessState.Unknown)
@@ -475,8 +487,10 @@ internal static class WorkspaceCommandRunner
                     projectRoot,
                     dbPath),
                 SchemaCompatible: true,
-                IndexMatchesWorkspace: freshness.Checked ? freshness.MatchesWorkspace : null,
-                FreshnessReason: freshness.Reason,
+                IndexMatchesWorkspace: freshness.Checked
+                    ? freshnessEvaluation.State == StatusFreshnessState.Fresh
+                    : null,
+                FreshnessReason: freshnessEvaluation.Reason,
                 IndexedAt: snapshot.IndexedAt,
                 LatestModified: snapshot.LatestModified,
                 GraphTableAvailable: snapshot.GraphTableAvailable,

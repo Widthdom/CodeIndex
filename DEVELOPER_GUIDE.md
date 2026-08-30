@@ -1526,12 +1526,15 @@ HEAD/branch drift takes precedence. Without that check,
 no-op update fresh only when the worktree is clean and the runtime,
 workspace-verified, and latest-index HEAD SHAs all agree, and Git reports no
 `skip-worktree` or `assume-unchanged` entry that could hide a later change.
-Missing provenance, hidden index state, and future timestamps are `unknown`; a
-later modification, dirty worktree, or changed HEAD remains conservative.
-Status-level HEAD/branch drift is evaluated before an authoritative file check,
-so a same-SHA detached/branch transition cannot produce contradictory summaries.
-Ordinary `head_freshness=head_current` semantics remain distinct from the
-authoritative checked `fresh` value.
+The Git dirtiness probe explicitly requests all untracked files, overriding a
+repository-level `status.showUntrackedFiles=no` setting. Missing provenance,
+hidden index state, and future timestamps are `unknown`; a later modification,
+dirty worktree, or changed HEAD remains conservative. Status-level HEAD/branch
+drift is evaluated before an authoritative file check and is propagated into
+checked failures, exit status, and workspace member health, so a same-SHA
+detached/branch transition cannot produce contradictory outcomes. Ordinary
+`head_freshness=head_current` semantics remain distinct from the authoritative
+checked `fresh` value.
 
 `vacuum --dry-run` accepts supported local SQLite URI spellings such as `file:/absolute/path/codeindex.db`, Windows `file:/C:/absolute/path/codeindex.db`, and canonical `file:///...` forms. Single-slash paths are canonicalized while retaining their original query string and ignoring URI fragments, and validation plus metric collection use that same query-only URI so an explicit `immutable=1` keeps its stale-snapshot semantics.
 
@@ -5707,11 +5710,13 @@ status freshness summary は1つの共有 evaluator で分類します。authori
 `last_workspace_freshened_at >= latest_modified` が checksum 再利用 no-op update の
 freshness を証明できるのは、worktree が clean で、runtime、workspace 検証済み、直近
 index の HEAD SHA がすべて一致し、後続変更を隠せる `skip-worktree` / `assume-unchanged`
-entry が Git index に無い場合だけです。provenance 不足、隠れた index state、未来 timestamp
-は `unknown` とし、後続の変更、dirty worktree、HEAD 変更は保守的な判定を維持します。
-status-level の HEAD / branch drift を authoritative file check より先に評価するため、同一
-SHA の detached / branch 遷移でも summary は矛盾しません。通常 status の
-`head_freshness=head_current` は、authoritative check 済みの `fresh` と引き続き区別します。
+entry が Git index に無い場合だけです。Git の dirtiness probe は未追跡 file を明示的に
+すべて要求し、repository の `status.showUntrackedFiles=no` 設定を上書きします。provenance
+不足、隠れた index state、未来 timestamp は `unknown` とし、後続の変更、dirty worktree、
+HEAD 変更は保守的な判定を維持します。status-level の HEAD / branch drift は authoritative
+file check より先に評価して checked failure、終了 status、workspace member health にも
+伝播するため、同一 SHA の detached / branch 遷移でも outcome は矛盾しません。通常 status
+の `head_freshness=head_current` は、authoritative check 済みの `fresh` と引き続き区別します。
 
 `vacuum --dry-run` は、`file:/absolute/path/codeindex.db`、Windows の `file:/C:/absolute/path/codeindex.db`、canonical な `file:///...` 形式を受け付けます。single-slash の path を canonicalize しつつ元の query string を維持して URI fragment を無視し、validation と metric 収集に同じ query-only URI を使うため、明示的な `immutable=1` の stale-snapshot semantics も維持されます。
 

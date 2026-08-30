@@ -201,11 +201,14 @@ Ordinary status summaries use `last_workspace_freshened_at` as freshness evidenc
 after a checksum-reused no-op update only when the runtime HEAD,
 `workspace_verified_head_sha`, and `indexed_head_sha` agree and the worktree is
 clean. Git index flags that can hide worktree changes (`skip-worktree` or
-`assume-unchanged`) make this ordinary-status proof `unknown`. Missing provenance
-or a future timestamp also yields `unknown`; an actual workspace change remains
-`stale`. `status --check` performs the authoritative workspace comparison, and a
-status-level HEAD/branch transition remains conservative even when file checks
-match. CLI, workspace, and MCP summaries share the same classification.
+`assume-unchanged`) make this ordinary-status proof `unknown`, while the Git
+dirtiness probe always includes untracked files even when
+`status.showUntrackedFiles=no`. Missing provenance or a future timestamp also
+yields `unknown`; an actual workspace change remains `stale`. `status --check`
+performs the authoritative workspace comparison, and a status-level HEAD/branch
+transition remains conservative even when file checks match. That transition also
+fails the checked status and member-health result; CLI, workspace, and MCP status
+surfaces therefore share the same classification and check outcome.
 
 Persisted JSON subdocuments for `last_index_run.reference_extraction_cap_hits`,
 `last_index_run.rebuild_reclaim`, and
@@ -457,11 +460,13 @@ field group を表に残します。
 `last_workspace_freshened_at` を使います。ただし runtime HEAD、
 `workspace_verified_head_sha`、`indexed_head_sha` が一致し、worktree が clean な場合に
 限ります。worktree 変更を隠せる Git index flag（`skip-worktree` または
-`assume-unchanged`）がある場合、この通常 status の証拠は `unknown` です。provenance が
-欠けている場合や timestamp が未来の場合も `unknown`、実際の workspace 変更がある場合は
-引き続き `stale` です。`status --check` は authoritative な workspace 比較を行いますが、
-file check が一致しても status-level の HEAD / branch 遷移は保守的に扱います。CLI、
-workspace、MCP の summary は同じ分類を共有します。
+`assume-unchanged`）がある場合、この通常 status の証拠は `unknown` です。また Git の
+dirtiness probe は `status.showUntrackedFiles=no` の設定時も未追跡 file を必ず含めます。
+provenance が欠けている場合や timestamp が未来の場合も `unknown`、実際の workspace
+変更がある場合は引き続き `stale` です。`status --check` は authoritative な workspace
+比較を行いますが、file check が一致しても status-level の HEAD / branch 遷移は保守的に
+扱います。この遷移は checked status と member-health result も失敗させるため、CLI、
+workspace、MCP の status surface は分類と check outcome の両方を共有します。
 
 `last_index_run.reference_extraction_cap_hits`、`last_index_run.rebuild_reclaim`、
 `last_failed_or_partial_index_run.file_errors` の永続化 JSON subdocument には、

@@ -137,7 +137,9 @@ public static partial class QueryCommandRunner
                     cancellationToken,
                     internalIndexDatabasePath: DbPathResolver.NormalizeDbPath(options.DbPath));
                 status.IndexMatchesWorkspace = status.WorkspaceCheck.Checked
-                    ? status.WorkspaceCheck.MatchesWorkspace
+                    ? StatusFreshnessEvaluator.Evaluate(
+                        status.WorkspaceCheck,
+                        status.WorktreeHeadChanged).State == StatusFreshnessState.Fresh
                     : null;
                 status.StaleAfterSeconds = (long)Math.Round(staleAfter.Value.TotalSeconds, MidpointRounding.AwayFromZero);
                 status.QueryContext = new StatusQueryContext
@@ -1004,13 +1006,19 @@ public static partial class QueryCommandRunner
             {
                 failures.Add(new StatusCheckFailure("workspace_unavailable", true, "[stale] workspace_check unavailable"));
             }
-            else if (!status.WorkspaceCheck.MatchesWorkspace)
+            else
             {
                 var check = status.WorkspaceCheck;
-                failures.Add(new StatusCheckFailure(
-                    "workspace_stale",
-                    true,
-                    $"[stale] workspace_check reason={check.Reason} changed={check.ChangedFileCount} missing={check.MissingFileCount} unindexed={check.UnindexedFileCount}"));
+                var freshness = StatusFreshnessEvaluator.Evaluate(
+                    check,
+                    status.WorktreeHeadChanged);
+                if (freshness.State != StatusFreshnessState.Fresh)
+                {
+                    failures.Add(new StatusCheckFailure(
+                        "workspace_stale",
+                        true,
+                        $"[stale] workspace_check reason={freshness.Reason} changed={check.ChangedFileCount} missing={check.MissingFileCount} unindexed={check.UnindexedFileCount}"));
+                }
             }
         }
 

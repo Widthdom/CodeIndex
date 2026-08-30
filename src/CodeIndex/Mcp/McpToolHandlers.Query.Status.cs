@@ -68,7 +68,9 @@ public partial class McpServer
                     requestToken,
                     internalIndexDatabasePath: DbPathResolver.NormalizeDbPath(_dbPath));
                 status.IndexMatchesWorkspace = status.WorkspaceCheck.Checked
-                    ? status.WorkspaceCheck.MatchesWorkspace
+                    ? StatusFreshnessEvaluator.Evaluate(
+                        status.WorkspaceCheck,
+                        status.WorktreeHeadChanged).State == StatusFreshnessState.Fresh
                     : null;
                 status.StaleAfterSeconds = staleAfterSeconds;
                 if (status.IndexedAt.HasValue)
@@ -342,13 +344,19 @@ public partial class McpServer
             {
                 failures.Add(new McpStatusCheckFailure("workspace_unavailable", true, "[stale] workspace_check unavailable"));
             }
-            else if (!status.WorkspaceCheck.MatchesWorkspace)
+            else
             {
                 var check = status.WorkspaceCheck;
-                failures.Add(new McpStatusCheckFailure(
-                    "workspace_stale",
-                    true,
-                    $"[stale] workspace_check reason={check.Reason} changed={check.ChangedFileCount} missing={check.MissingFileCount} unindexed={check.UnindexedFileCount}"));
+                var freshness = StatusFreshnessEvaluator.Evaluate(
+                    check,
+                    status.WorktreeHeadChanged);
+                if (freshness.State != StatusFreshnessState.Fresh)
+                {
+                    failures.Add(new McpStatusCheckFailure(
+                        "workspace_stale",
+                        true,
+                        $"[stale] workspace_check reason={freshness.Reason} changed={check.ChangedFileCount} missing={check.MissingFileCount} unindexed={check.UnindexedFileCount}"));
+                }
             }
         }
 

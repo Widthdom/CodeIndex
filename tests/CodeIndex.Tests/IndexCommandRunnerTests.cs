@@ -6546,11 +6546,76 @@ public sealed class Caller
                     QueryCommandRunner.BuildStatusSummary(detached, clock.GetUtcNow().UtcDateTime));
             }
 
+            var (detachedStatusExitCode, detachedStatusJson) = RunStatusAndCaptureJson(
+                ["--db", dbPath, "--check", "--json"]);
+            Assert.Equal(1, detachedStatusExitCode);
+            Assert.False(detachedStatusJson.GetProperty("index_matches_workspace").GetBoolean());
+            Assert.True(detachedStatusJson.GetProperty("workspace_check").GetProperty("matches_workspace").GetBoolean());
+            Assert.Contains(
+                detachedStatusJson.GetProperty("failed_checks").EnumerateArray(),
+                failure => failure.GetString() == "workspace_stale");
+
             var detachedCheckedMcpResponse = server.HandleMessage(JsonNode.Parse(
                 """{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"status","arguments":{"check":true}}}""")!)!;
+            var detachedMcpStatus = detachedCheckedMcpResponse["result"]!["structuredContent"]!;
             Assert.Contains(
                 "index stale",
-                detachedCheckedMcpResponse["result"]!["structuredContent"]!["summary"]!.GetValue<string>());
+                detachedMcpStatus["summary"]!.GetValue<string>());
+            Assert.False(detachedMcpStatus["index_matches_workspace"]!.GetValue<bool>());
+            Assert.Contains(
+                detachedMcpStatus["failed_checks"]!.AsArray(),
+                failure => failure!.GetValue<string>() == "workspace_stale");
+
+            RunGit(projectRoot, "checkout", "main");
+            RunGit(projectRoot, "config", "status.showUntrackedFiles", "no");
+            var untrackedPath = Path.Combine(projectRoot, "untracked.py");
+            File.WriteAllText(untrackedPath, "print('untracked v1')\n");
+            File.SetLastWriteTimeUtc(untrackedPath, initialNow.AddMinutes(3).UtcDateTime);
+            clock.Advance(TimeSpan.FromMinutes(2));
+            Assert.Equal(
+                CommandExitCodes.Success,
+                RunAndCaptureJson([projectRoot, "--db", dbPath, "--json"]).ExitCode);
+
+            File.SetLastWriteTimeUtc(untrackedPath, initialNow.AddMinutes(6).UtcDateTime);
+            clock.Advance(TimeSpan.FromMinutes(2));
+            Assert.Equal(
+                CommandExitCodes.Success,
+                RunAndCaptureJson([projectRoot, "--db", dbPath, "--json"]).ExitCode);
+
+            File.WriteAllText(untrackedPath, "print('untracked v2')\n");
+            File.SetLastWriteTimeUtc(untrackedPath, initialNow.AddMinutes(8).UtcDateTime);
+            clock.Advance(TimeSpan.FromMinutes(2));
+
+            using (var untrackedDb = new DbContext(DbOpenIntent.QueryOnly, dbPath))
+            using (var untrackedReader = new DbReader(untrackedDb))
+            {
+                var ordinary = untrackedReader.GetStatus();
+                WorkspaceMetadataEnricher.Enrich(ordinary, dbPath, dbPathExplicit: true);
+                Assert.True(ordinary.GitIsDirty);
+                Assert.Contains(
+                    "index stale",
+                    QueryCommandRunner.BuildStatusSummary(ordinary, clock.GetUtcNow().UtcDateTime));
+
+                ordinary.WorkspaceCheck = IndexFreshnessChecker.Check(
+                    untrackedReader,
+                    projectRoot,
+                    internalIndexDatabasePath: DbPathResolver.NormalizeDbPath(dbPath));
+                Assert.False(ordinary.WorkspaceCheck.MatchesWorkspace);
+                Assert.Contains(
+                    "index stale",
+                    QueryCommandRunner.BuildStatusSummary(ordinary, clock.GetUtcNow().UtcDateTime));
+            }
+
+            var untrackedOrdinaryMcpResponse = server.HandleMessage(JsonNode.Parse(
+                """{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!)!;
+            var untrackedCheckedMcpResponse = server.HandleMessage(JsonNode.Parse(
+                """{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"status","arguments":{"check":true}}}""")!)!;
+            Assert.Contains(
+                "index stale",
+                untrackedOrdinaryMcpResponse["result"]!["structuredContent"]!["summary"]!.GetValue<string>());
+            Assert.Contains(
+                "index stale",
+                untrackedCheckedMcpResponse["result"]!["structuredContent"]!["summary"]!.GetValue<string>());
         }
         finally
         {

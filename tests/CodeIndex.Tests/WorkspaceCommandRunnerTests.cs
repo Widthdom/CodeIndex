@@ -457,6 +457,49 @@ public class WorkspaceCommandRunnerTests
     }
 
     [Fact]
+    public void WorkspaceStatusCheck_ReportsSameCommitBranchDriftAsStale_Issue5227()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_workspace_status_head_drift_5227");
+        var root = project.Root;
+        File.WriteAllText(Path.Combine(root, "App.cs"), "class App {}\n");
+        File.WriteAllText(
+            Path.Combine(root, "cdidx.workspace.json"),
+            """{ "members": ["."] }""");
+        TestProjectHelper.RunGit(root, "init");
+        TestProjectHelper.RunGit(root, "config", "user.email", "tests@example.com");
+        TestProjectHelper.RunGit(root, "config", "user.name", "CodeIndex Tests");
+        TestProjectHelper.RunGit(root, "checkout", "-B", "main");
+        TestProjectHelper.RunGit(root, "add", "App.cs", "cdidx.workspace.json");
+        TestProjectHelper.RunGit(root, "commit", "--no-gpg-sign", "-m", "initial");
+        IndexProject(root);
+        TestProjectHelper.RunGit(root, "checkout", "--detach", "HEAD");
+
+        var previous = Environment.CurrentDirectory;
+        try
+        {
+            Environment.CurrentDirectory = root;
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(
+                () => WorkspaceCommandRunner.Run(["status", "--check", "--json"], _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.StaleIndex, exitCode);
+            Assert.Empty(stderr);
+            using var document = JsonDocument.Parse(stdout);
+            var health = document.RootElement.GetProperty("members")[0].GetProperty("index_health");
+            Assert.Equal("stale", health.GetProperty("status").GetString());
+            Assert.Equal("head_changed", health.GetProperty("reason").GetString());
+            Assert.False(health.GetProperty("index_matches_workspace").GetBoolean());
+            Assert.Equal("head_changed", health.GetProperty("freshness_reason").GetString());
+            var summary = document.RootElement.GetProperty("member_health_summary");
+            Assert.Equal("degraded", summary.GetProperty("status").GetString());
+            Assert.Equal(CommandExitCodes.StaleIndex, summary.GetProperty("check_exit_code").GetInt32());
+        }
+        finally
+        {
+            Environment.CurrentDirectory = previous;
+        }
+    }
+
+    [Fact]
     public void CheckedInWorkspaceManifest_ResolvesExistingProjectMembers_Issue4476()
     {
         var repositoryRoot = RepositoryTestPaths.Root;
