@@ -11,6 +11,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.45.1] - 2026-08-30
+
+#### Changed
+
+- **Cold reference resolution limits target-key work to candidates** — Graph finalization now restores the candidate reverse index immediately after candidate insertion, prepares resolution separately, materializes target-family facts only for candidate-bearing symbols, and replaces per-group DISTINCT sets with equivalent BINARY min/max singleton checks while preserving legacy NULL and ambiguity semantics.
+- **Stable cold-index file reads no longer probe past their initial snapshot** — language-common content loads, negative raw-token scans, the C# static-interface prepass, and unknown-language coverage stop at the initial handle length on their first attempt and validate the final handle metadata plus actual bytes read instead of issuing a redundant EOF or `ReadByte` growth probe. Mutated files still reopen once for a bounded EOF retry, over-limit growth still fails on the current handle, and positive raw-token matches remain conservative.
+- **Cold C# constructor matching reuses family facts** — Reference-graph finalization now materializes constructor-family compatibility once per relevant type or constructor and reuses indexed TEMP facts across every candidate rank. This removes per-candidate correlated symbol scans while preserving partial, project/file-local, overload, optional/default/`params`, orphan, value-type, and legacy ambiguity semantics.
+- **Cold C# indexing reuses lexer start states** — The initial symbol scan now carries its per-line C# lexer snapshots into later scope analysis instead of lexing the same file a second time, reducing first-index CPU and allocations without changing extracted symbols.
+- **Cold C# prepass caching now scales past 4,096 files** — Fresh full indexes retain reusable symbol artifacts up to the existing symbol and estimated-memory budgets, prioritizing larger decoded sources when capacity binds so costly extraction work is less likely to repeat.
+- **Cold C# indexing avoids repeated property probes** — Same-line declaration restarts now share one multiline property candidate, while completed method and structural lines bypass unnecessary property-header regexes without changing extracted symbols.
+- **Cold reference-line inserts avoid correlated `RETURNING` scans** — The authoritative empty-database path now assigns checked contiguous IDs from the live table and AUTOINCREMENT history, validates each DONE statement's changed-row count, and publishes IDs only after success. Provider, rebuild, incremental, and MCP paths retain their established behavior.
+- **Cold graph finalization reuses scope candidates** — Language-independent reference ranks 1–4 now materialize their shared candidate relation once and select each reference's minimum rank from it, avoiding three repeated reference/name/language scans while retaining all best-rank ties.
+- **Cold reference persistence probes one indexed per-file snapshot** — Empty-database raw loads now copy each relevant file's symbols once into a connection-local indexed TEMP table before resolving reference sources, preserving folded-name, display-name, legacy ASCII `NOCASE`, nesting, rollback, and query-result semantics while avoiding a persistent symbol lookup for every reference.
+- **Cold indexing streams symbol-worker requests** — Source content is now JSON-escaped through bounded pooled buffers directly into the worker pipe, avoiding a source-sized request byte array for every language and every parallel extraction worker.
+- **Cold full scans start scheduled tail work in the first worker wave** — The bounded cross-language tail schedule is now consumed before the untouched prefix, so large eligible files near the scan tail begin promptly while every work item still runs exactly once.
+
 ### [1.45.0] - 2026-08-29
 
 #### Added
@@ -6693,6 +6709,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.45.1] - 2026-08-30
+
+#### 変更
+
+- **初回 reference resolution の target-key 処理を candidate に限定** — graph finalization は candidate insert 直後に reverse index を復元して resolution を別 command で prepare し、candidate を持つ symbol だけの target-family fact を materialize します。legacy NULL と ambiguity semantics を維持したまま、group ごとの DISTINCT set を等価な BINARY min/max singleton 判定へ置き換えます。
+- **cold index時のstableなfile readがinitial snapshotを越えてprobeしなくなりました** — 言語共通content load、negative raw-token scan、C# static-interface prepass、unknown-language coverageは、初回attemptをinitial handle lengthで停止し、冗長なEOFまたは`ReadByte` growth probeの代わりにfinal handle metadataと実読byte数を検証します。mutation時は従来どおり1回だけ再openしてbounded EOF retryを行い、上限超過growthは現在のhandleで失敗し、positive raw-token matchは保守的な判定を維持します。
+- **初回 C# constructor 照合で family fact を再利用** — reference-graph finalization は対象type / constructorごとにconstructor-family互換性を1回だけmaterializeし、全candidate rankでindexed TEMP factを再利用します。candidateごとの相関symbol scanをなくしつつ、partial、project / file-local、overload、optional / default / `params`、orphan、value type、legacy ambiguityのsemanticsを維持します。
+- **C# の初回 index で lexer 開始状態を再利用** — 最初の symbol 走査で得た行別の C# lexer snapshot を後続の scope 解析へ引き継ぎ、同じ file の二重字句解析を避けることで、抽出結果を変えずに初回 index の CPU 時間と allocation を削減しました。
+- **C# の初回事前解析 cache が4,096 fileを超えて拡張** — fresh full index では既存の symbol 数・推定 memory budget まで再利用可能な artifact を保持し、容量到達時は decode 済み source の大きい順に優先して、高コストな抽出の繰り返しを減らします。
+- **C# の初回 index で property probe の重複を回避** — 同一行の宣言再開で複数行 property candidate を共有し、完結した method・構造行では不要な property-header regex を省いて、抽出結果を変えずに処理量を削減しました。
+- **初回 reference-line insert から相関 `RETURNING` scan を削減** — authoritative な空DB経路は live table と AUTOINCREMENT 履歴から検証済みの連続IDを割り当て、DONE statementごとの変更行数を確認し、成功後だけIDを公開します。provider、rebuild、incremental、MCP経路の既存挙動は維持します。
+- **初回 graph 確定で scope candidate を再利用** — 言語共通の reference rank 1〜4 は共有 candidate relation を1回だけ materialize し、そこから reference ごとの最小rankを選ぶようになりました。最良rankの全同順位を維持しながら、reference / name / language の重複走査を3回削減します。
+- **初回 reference 永続化は indexed file snapshot を1回だけ探索** — 空DBへのraw loadは、reference sourceを解決する前に関連fileのsymbolをconnection-localなindexed TEMP tableへ各1回copyするようになりました。referenceごとのpersistent symbol lookupを避けながら、fold済みname、display name、legacy ASCII `NOCASE`、nesting、rollback、query resultの意味を維持します。
+- **初回 index の symbol-worker request を streaming 化** — source content を bounded pooled buffer で JSON escape しながら worker pipe へ直接書き込み、全言語・各並列 extraction worker で source 規模の request byte array を作らないようにしました。
+- **初回full scanの最初のworker waveでtail scheduleを開始** — 全言語共通のbounded tail scheduleを未変更のprefixより先に消費し、scan末尾付近の大きな対象fileを早く開始しながら、全work itemを引き続き厳密に1回ずつ処理します。
+
 ### [1.45.0] - 2026-08-29
 
 #### 追加
@@ -13347,7 +13379,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.45.0...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.45.1...HEAD
+[1.45.1]: https://github.com/Widthdom/CodeIndex/compare/v1.45.0...v1.45.1
 [1.45.0]: https://github.com/Widthdom/CodeIndex/compare/v1.44.3...v1.45.0
 [1.44.3]: https://github.com/Widthdom/CodeIndex/compare/v1.44.2...v1.44.3
 [1.44.2]: https://github.com/Widthdom/CodeIndex/compare/v1.44.1...v1.44.2
