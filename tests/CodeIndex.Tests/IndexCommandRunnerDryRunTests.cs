@@ -1229,6 +1229,171 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_DryRun_ChangedBetweenIncludesOutOfRangeStaleCSharpCleanup_Issue5225()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            TestProjectHelper.InitializeGitRepo(projectRoot);
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "contract.cs",
+                "public interface IContract<T> where T : IContract<T> { static abstract T Parse(string value); }\n");
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "consumer.cs",
+                "public sealed class Consumer : IContract<Consumer> { public static Consumer Parse(string value) => new(); }\n");
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "stale.cs",
+                "public class Stale { }\n");
+            RunGit(projectRoot, "add", "contract.cs", "consumer.cs", "stale.cs");
+            RunGit(projectRoot, "commit", "-m", "initial workspace");
+            var (indexExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "contract.cs",
+                "public interface IContract<T> where T : IContract<T> { static abstract T Parse(string value); } // changed\n");
+            RunGit(projectRoot, "add", "contract.cs");
+            RunGit(projectRoot, "commit", "-m", "change contract");
+            TestProjectHelper.DeleteFile(
+                TestProjectHelper.ProjectPath(projectRoot, "stale.cs"));
+
+            var (dryRunExitCode, dryRunJson) = RunAndCaptureJson([
+                projectRoot,
+                "--changed-between",
+                "HEAD~1",
+                "HEAD",
+                "--dry-run",
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, dryRunExitCode);
+            Assert.Equal(
+                2,
+                dryRunJson.GetProperty("projected_file_updates").GetInt32());
+            Assert.Equal(
+                1,
+                dryRunJson.GetProperty("projected_file_purges").GetInt32());
+            Assert.True(
+                dryRunJson.GetProperty("projection_authoritative").GetBoolean());
+            Assert.Equal(
+                "applied",
+                dryRunJson.GetProperty("csharp_workspace_expansion_status")
+                    .GetString());
+
+            var (executionExitCode, executionJson) = RunAndCaptureJson([
+                projectRoot,
+                "--changed-between",
+                "HEAD~1",
+                "HEAD",
+                "--json",
+            ]);
+            Assert.Equal(CommandExitCodes.Success, executionExitCode);
+            Assert.Equal(
+                2,
+                executionJson.GetProperty("summary")
+                    .GetProperty("updated")
+                    .GetInt32());
+            Assert.Equal(
+                1,
+                executionJson.GetProperty("summary")
+                    .GetProperty("removed")
+                    .GetInt32());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DryRun_LegacyMemberReadProjectionKeepsSnapshotReadable_Issue5225()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "App.cs",
+                "public class App { public static int Value = 1; }\n");
+            TestProjectHelper.WriteTextFile(projectRoot, "notes.md", "old\n");
+            var (indexExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var connection = new SqliteConnection(
+                new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText =
+                    "ALTER TABLE symbols DROP COLUMN is_metadata_target";
+                command.ExecuteNonQuery();
+            }
+            SqliteConnection.ClearAllPools();
+            TestProjectHelper.WriteTextFile(projectRoot, "notes.md", "new\n");
+
+            var (nonCSharpExitCode, nonCSharpJson) = RunAndCaptureJson([
+                projectRoot,
+                "--files",
+                "notes.md",
+                "--dry-run",
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, nonCSharpExitCode);
+            Assert.Equal(
+                1,
+                nonCSharpJson.GetProperty("projected_file_updates").GetInt32());
+            Assert.True(
+                nonCSharpJson.GetProperty("projection_authoritative").GetBoolean());
+            Assert.NotEqual(
+                JsonValueKind.Null,
+                nonCSharpJson.GetProperty("estimated_table_mutations")
+                    .GetProperty("files")
+                    .ValueKind);
+
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "App.cs",
+                "public class App { public static int Value = 2; }\n");
+            var (csharpExitCode, csharpJson) = RunAndCaptureJson([
+                projectRoot,
+                "--files",
+                "App.cs",
+                "--dry-run",
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, csharpExitCode);
+            Assert.Equal(
+                1,
+                csharpJson.GetProperty("projected_file_updates").GetInt32());
+            Assert.False(
+                csharpJson.GetProperty("projection_authoritative").GetBoolean());
+            Assert.Equal(
+                "unavailable",
+                csharpJson.GetProperty("csharp_workspace_expansion_status")
+                    .GetString());
+            var unavailableReasons = csharpJson
+                .GetProperty("projection_unavailable_reasons")
+                .EnumerateArray()
+                .Select(static value => value.GetString())
+                .ToArray();
+            Assert.Contains(
+                "csharp_workspace_preflight_unavailable",
+                unavailableReasons);
+            Assert.DoesNotContain("index_snapshot_unavailable", unavailableReasons);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_DryRun_CSharpExpansionPathCapIsNonAuthoritative_Issue5225()
     {
         var projectRoot = CreateTempProject();

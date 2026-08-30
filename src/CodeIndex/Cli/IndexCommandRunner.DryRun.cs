@@ -332,6 +332,41 @@ public static partial class IndexCommandRunner
             }
         }
 
+        if (!authoritativeFullScan
+            && options.ChangedBetweenSpecified
+            && dbSnapshot.CSharpStaticInterfaceSourceEvidence != false)
+        {
+            try
+            {
+                var skipWorktreePaths = GitHelper.TryGetSkipWorktreePaths(
+                    projectPath,
+                    cancellationToken);
+                foreach (var (relativePath, existing) in dbSnapshot.Files)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (existing.Language != "csharp"
+                        || skipWorktreePaths?.Contains(relativePath) == true)
+                    {
+                        continue;
+                    }
+
+                    var absolutePath = Path.Combine(
+                        projectPath,
+                        relativePath.Replace('/', Path.DirectorySeparatorChar));
+                    if (!File.Exists(LongPath.EnsureWindowsPrefix(absolutePath)))
+                        projectedPurgePaths.Add(relativePath);
+                }
+            }
+            catch (OperationCanceledException) when (
+                cancellationToken.IsCancellationRequested)
+            {
+                return WriteDryRunInterrupted(options, jsonOptions);
+            }
+
+            if (!TryApplyProjectedCSharpPurgeEvidence())
+                return WriteDryRunInterrupted(options, jsonOptions);
+        }
+
         var currentHotspotFamilyMarkerFingerprints = authoritativeFullScan
             ? dryScanMetadata.ProjectMarkerFingerprints
             : GetHotspotFamilyMarkerFingerprints(dryIndexer, cancellationToken);
@@ -1870,17 +1905,35 @@ public static partial class IndexCommandRunner
                 "files",
                 "modified");
             var hasLines = DryRunColumnExists(connection, "files", "lines");
+            var csharpWorkspaceSymbolColumns = new[]
+            {
+                "file_id",
+                "kind",
+                "name",
+                "line",
+                "start_line",
+                "start_column",
+                "end_line",
+                "body_start_line",
+                "body_end_line",
+                "signature",
+                "container_kind",
+                "container_name",
+                "container_qualified_name",
+                "family_key",
+                "visibility",
+                "return_type",
+                "is_metadata_target",
+            };
             var hasCSharpWorkspaceEvidence = hasLanguage
                 && hasSymbols
-                && DryRunColumnExists(connection, "symbols", "kind")
-                && DryRunColumnExists(
-                    connection,
-                    "symbols",
-                    "container_kind")
-                && DryRunColumnExists(
-                    connection,
-                    "symbols",
-                    "signature");
+                && csharpWorkspaceSymbolColumns.All(
+                    column => DryRunColumnExists(
+                        connection,
+                        "symbols",
+                        column))
+                && DryRunIndexExists(connection, "idx_files_lang")
+                && DryRunIndexExists(connection, "idx_symbols_file_kind");
             var hasIssueKind = hasFileIssues
                 && DryRunColumnExists(
                     connection,
@@ -2093,6 +2146,14 @@ public static partial class IndexCommandRunner
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = @name LIMIT 1";
         SqliteCommandPolicy.Add(command, "@name", tableName);
+        return command.ExecuteScalar() != null;
+    }
+
+    private static bool DryRunIndexExists(SqliteConnection connection, string indexName)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = @name LIMIT 1";
+        SqliteCommandPolicy.Add(command, "@name", indexName);
         return command.ExecuteScalar() != null;
     }
 
