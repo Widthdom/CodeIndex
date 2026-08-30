@@ -122,6 +122,10 @@ public static partial class IndexCommandRunner
         var projectedCSharpSkips = new List<DryRunProjectedCSharpSkip>();
         var csharpWorkspaceContractDetected = false;
         var csharpWorkspaceEstimateUnavailable = false;
+        var csharpWorkspaceEvidenceUnavailable = false;
+        var csharpTargetAffected = false;
+        var csharpWorkspaceExpansionStatus = "not_required";
+        string? csharpWorkspaceExpansionReason = null;
         var unsupportedTotal = 0;
         var unknownExtensionTotal = 0;
         var unknownExtensionPaths = new List<string>();
@@ -198,6 +202,173 @@ public static partial class IndexCommandRunner
             return exitCode;
         }
 
+        var dryCandidateList = dryCandidates.ToList();
+        var dryCandidateSet = dryCandidateList.ToHashSet(StringComparer.Ordinal);
+        var dryDeleteCandidateList = dryDeleteCandidates.ToList();
+        var expandedCSharpCandidatePaths = new HashSet<string>(StringComparer.Ordinal);
+        var evaluatedProjectedCSharpPurgePaths = new HashSet<string>(StringComparer.Ordinal);
+        var hadIndexedCSharpFiles = dbSnapshot.Files.Values.Any(
+            static rows => rows.Language == "csharp");
+
+        void MarkCSharpWorkspaceExpansionUnavailable(string reason)
+        {
+            csharpWorkspaceEstimateUnavailable = true;
+            csharpWorkspaceExpansionStatus = "unavailable";
+            csharpWorkspaceExpansionReason = reason;
+            mutationEstimates.MarkAllUnknown(reason);
+        }
+
+        bool TryExpandDryRunCSharpWorkspace(string reason)
+        {
+            if (authoritativeFullScan
+                || csharpWorkspaceExpansionStatus == "applied"
+                || csharpWorkspaceExpansionStatus == "unavailable")
+            {
+                return true;
+            }
+
+            if (dryIndexingTargets != null)
+            {
+                MarkCSharpWorkspaceExpansionUnavailable(
+                    "csharp_workspace_target_capture_unavailable");
+                return true;
+            }
+
+            try
+            {
+                DryRunCSharpExpansionScanStartingForTesting?.Invoke();
+                cancellationToken.ThrowIfCancellationRequested();
+                var expandedScan = dryIndexer
+                    .ScanFilesDetailedWithDirectoryListingSnapshots(
+                        cancellationToken: cancellationToken)
+                    .ScanResult;
+                RecordDryRunScanErrors(expandedScan.Errors);
+                if (expandedScan.Errors.Any(static error => error.IsFatal))
+                {
+                    MarkCSharpWorkspaceExpansionUnavailable(
+                        "csharp_workspace_scan_incomplete");
+                    return true;
+                }
+
+                foreach (var path in expandedScan.Files)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (expandedScan.FileLanguages.TryGetValue(
+                            path,
+                            out var language)
+                        && language == "csharp"
+                        && dryCandidateSet.Add(path))
+                    {
+                        dryCandidateList.Add(path);
+                        expandedCSharpCandidatePaths.Add(path);
+                    }
+                }
+
+                csharpWorkspaceExpansionStatus = "applied";
+                csharpWorkspaceExpansionReason = reason;
+                return true;
+            }
+            catch (OperationCanceledException) when (
+                cancellationToken.IsCancellationRequested)
+            {
+                return false;
+            }
+        }
+
+        bool TryApplyPersistedCSharpExpansionEvidence(string indexPath)
+        {
+            csharpTargetAffected = true;
+            if (hadIndexedCSharpFiles
+                && dbSnapshot.CSharpStaticInterfaceSourceEvidence != false)
+            {
+                return TryExpandDryRunCSharpWorkspace(
+                    "persisted_csharp_contract_evidence");
+            }
+
+            if (dbSnapshot.Files.TryGetValue(indexPath, out var existing)
+                && existing.HasCSharpMemberReadTarget)
+            {
+                return TryExpandDryRunCSharpWorkspace(
+                    "persisted_csharp_member_read_target");
+            }
+
+            if (hadIndexedCSharpFiles
+                && !dbSnapshot.CSharpWorkspaceEvidenceAvailable)
+            {
+                csharpWorkspaceEvidenceUnavailable = true;
+            }
+
+            return true;
+        }
+
+        bool TryApplyProjectedCSharpPurgeEvidence()
+        {
+            foreach (var projectedPurgePath in projectedPurgePaths)
+            {
+                if (!evaluatedProjectedCSharpPurgePaths.Add(projectedPurgePath)
+                    || !dbSnapshot.Files.TryGetValue(
+                        projectedPurgePath,
+                        out var purgedCandidate)
+                    || purgedCandidate.Language != "csharp")
+                {
+                    continue;
+                }
+
+                if (!TryApplyPersistedCSharpExpansionEvidence(projectedPurgePath))
+                    return false;
+            }
+
+            return true;
+        }
+
+        foreach (var relativePath in dryDeleteCandidateList)
+        {
+            var dbRelativePath = FileIndexer.NormalizeIndexPath(relativePath);
+            if (dbSnapshot.Files.TryGetValue(
+                    dbRelativePath,
+                    out var deletedCandidate)
+                && deletedCandidate.Language == "csharp"
+                && !TryApplyPersistedCSharpExpansionEvidence(dbRelativePath))
+            {
+                return WriteDryRunInterrupted(options, jsonOptions);
+            }
+        }
+
+        if (!authoritativeFullScan
+            && options.ChangedBetweenSpecified
+            && dbSnapshot.CSharpStaticInterfaceSourceEvidence != false)
+        {
+            try
+            {
+                var skipWorktreePaths = GitHelper.TryGetSkipWorktreePaths(
+                    projectPath,
+                    cancellationToken);
+                foreach (var (relativePath, existing) in dbSnapshot.Files)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (existing.Language != "csharp"
+                        || skipWorktreePaths?.Contains(relativePath) == true)
+                    {
+                        continue;
+                    }
+
+                    var absolutePath = Path.Combine(
+                        projectPath,
+                        relativePath.Replace('/', Path.DirectorySeparatorChar));
+                    if (!File.Exists(LongPath.EnsureWindowsPrefix(absolutePath)))
+                        projectedPurgePaths.Add(relativePath);
+                }
+            }
+            catch (OperationCanceledException) when (
+                cancellationToken.IsCancellationRequested)
+            {
+                return WriteDryRunInterrupted(options, jsonOptions);
+            }
+
+            if (!TryApplyProjectedCSharpPurgeEvidence())
+                return WriteDryRunInterrupted(options, jsonOptions);
+        }
+
         var currentHotspotFamilyMarkerFingerprints = authoritativeFullScan
             ? dryScanMetadata.ProjectMarkerFingerprints
             : GetHotspotFamilyMarkerFingerprints(dryIndexer, cancellationToken);
@@ -223,8 +394,11 @@ public static partial class IndexCommandRunner
         }
 
         var dryIndexingTargetIndex = 0;
-        foreach (var f in dryCandidates)
+        for (var dryCandidateIndex = 0;
+             dryCandidateIndex < dryCandidateList.Count;
+             dryCandidateIndex++)
         {
+            var f = dryCandidateList[dryCandidateIndex];
             if (candidatePathsProcessed >= dryRunPathLimit)
             {
                 candidatePathsTruncated = true;
@@ -252,6 +426,15 @@ public static partial class IndexCommandRunner
                     FileIndexer.GetRelativePathFromDirectory(projectPath, f));
             var dbRelativePath = capturedTarget?.IndexPath
                 ?? FileIndexer.NormalizeIndexPath(displayRelativePath);
+            if (!authoritativeFullScan
+                && dbSnapshot.Files.TryGetValue(
+                    dbRelativePath,
+                    out var existingCandidate)
+                && existingCandidate.Language == "csharp"
+                && !TryApplyPersistedCSharpExpansionEvidence(dbRelativePath))
+            {
+                return WriteDryRunInterrupted(options, jsonOptions);
+            }
             if (capturedTarget == null)
             {
                 var pathFilter = dryIndexer.EvaluatePathFilter(f);
@@ -274,6 +457,19 @@ public static partial class IndexCommandRunner
                 displayRelativePath,
                 knownLanguage,
                 cancellationToken);
+            if (expandedCSharpCandidatePaths.Contains(f)
+                && probe.Error != null)
+            {
+                MarkCSharpWorkspaceExpansionUnavailable(
+                    "csharp_workspace_preflight_unavailable");
+            }
+            if (!authoritativeFullScan
+                && probe.Supported
+                && probe.Language == "csharp"
+                && !TryApplyPersistedCSharpExpansionEvidence(dbRelativePath))
+            {
+                return WriteDryRunInterrupted(options, jsonOptions);
+            }
             if (probe.PolicySkipped)
             {
                 dryFileCount++;
@@ -356,6 +552,9 @@ public static partial class IndexCommandRunner
                         dbRelativePath);
                 }
 
+                if (!TryApplyProjectedCSharpPurgeEvidence())
+                    return WriteDryRunInterrupted(options, jsonOptions);
+
                 if (probe.Error != null)
                 {
                     RecordDryRunError(displayRelativePath, probe.Error);
@@ -395,6 +594,8 @@ public static partial class IndexCommandRunner
                         projectPath,
                         dbRelativePath);
                 }
+                if (!TryApplyProjectedCSharpPurgeEvidence())
+                    return WriteDryRunInterrupted(options, jsonOptions);
             }
             var projectedSkip = IsDryRunLoadedFileReusable(
                 options,
@@ -456,7 +657,20 @@ public static partial class IndexCommandRunner
                         if (parsedEstimate.ReferenceCapHit)
                             projectedReferenceCapHits++;
                         csharpWorkspaceContractDetected |=
-                            parsedEstimate.CSharpStaticInterfaceContract;
+                            parsedEstimate.CSharpStaticInterfaceContract
+                            || parsedEstimate.CSharpMemberReadTarget;
+                        if (!authoritativeFullScan
+                            && (parsedEstimate.CSharpStaticInterfaceContract
+                                || parsedEstimate.CSharpMemberReadTarget)
+                            && !TryExpandDryRunCSharpWorkspace(
+                                parsedEstimate.CSharpStaticInterfaceContract
+                                    ? "source_static_interface_contract"
+                                    : "source_csharp_member_read_target"))
+                        {
+                            return WriteDryRunInterrupted(
+                                options,
+                                jsonOptions);
+                        }
                     }
                     catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                     {
@@ -478,10 +692,23 @@ public static partial class IndexCommandRunner
             langCounts[probe.Language] = langCounts.GetValueOrDefault(probe.Language) + 1;
         }
 
-        if (authoritativeFullScan
-            && projectedCSharpSkips.Count > 0
-            && (csharpWorkspaceContractDetected
-                || csharpWorkspaceEstimateUnavailable))
+        if (!authoritativeFullScan
+            && csharpTargetAffected
+            && (csharpWorkspaceEstimateUnavailable
+                || csharpWorkspaceEvidenceUnavailable))
+        {
+            if (csharpWorkspaceExpansionStatus != "unavailable")
+            {
+                MarkCSharpWorkspaceExpansionUnavailable(
+                    "csharp_workspace_preflight_unavailable");
+            }
+        }
+
+        if (projectedCSharpSkips.Count > 0
+            && (csharpWorkspaceExpansionStatus == "applied"
+                || (authoritativeFullScan
+                    && (csharpWorkspaceContractDetected
+                        || csharpWorkspaceEstimateUnavailable))))
         {
             projectedFileSkips -= projectedCSharpSkips.Count;
             projectedFileUpdates += projectedCSharpSkips.Count;
@@ -499,8 +726,13 @@ public static partial class IndexCommandRunner
                     ? "csharp_workspace_augmentation_required"
                     : "csharp_workspace_preflight_unavailable");
         }
+        else if (csharpWorkspaceExpansionStatus == "applied")
+        {
+            mutationEstimates.MarkParseUnknown(
+                "csharp_workspace_augmentation_required");
+        }
 
-        foreach (var relativePath in dryDeleteCandidates)
+        foreach (var relativePath in dryDeleteCandidateList)
         {
             if (candidatePathsProcessed >= dryRunPathLimit)
             {
@@ -535,6 +767,22 @@ public static partial class IndexCommandRunner
 
         if (candidatePathsTruncated)
             mutationEstimates.MarkAllUnknown("candidate_path_limit_reached");
+
+        var projectionUnavailableReasons = new List<string>();
+        if (candidatePathsTruncated)
+            projectionUnavailableReasons.Add("candidate_path_limit_reached");
+        if (dbSnapshot.ReadFailed)
+            projectionUnavailableReasons.Add("index_snapshot_unavailable");
+        if (authoritativeFullScan && dryScanMetadata.HadErrors)
+            projectionUnavailableReasons.Add("workspace_scan_incomplete");
+        if (csharpWorkspaceExpansionStatus == "unavailable"
+            && csharpWorkspaceExpansionReason != null)
+        {
+            projectionUnavailableReasons.Add(
+                csharpWorkspaceExpansionReason);
+        }
+        var projectionAuthoritative =
+            projectionUnavailableReasons.Count == 0;
 
         var estimatedTableMutations = mutationEstimates.BuildValues();
         var estimatedTableMutationDetails = mutationEstimates.BuildDetails();
@@ -595,7 +843,13 @@ public static partial class IndexCommandRunner
                 CandidatePathLimit = dryRunPathLimit,
                 CandidatePathsProcessed = candidatePathsProcessed,
                 CandidatePathsTruncated = candidatePathsTruncated,
-                TotalsLowerBound = candidatePathsTruncated,
+                TotalsLowerBound = !projectionAuthoritative,
+                ProjectionAuthoritative = projectionAuthoritative,
+                ProjectionUnavailableReasons = projectionUnavailableReasons,
+                CSharpWorkspaceExpansionStatus =
+                    csharpWorkspaceExpansionStatus,
+                CSharpWorkspaceExpansionReason =
+                    csharpWorkspaceExpansionReason,
                 ParseEstimateFileLimit = DryRunParseEstimateFileLimit,
                 ParseEstimateFilesProcessed = parseEstimateFilesProcessed,
                 ParseEstimateFilesTruncated = parseEstimateFilesTruncated,
@@ -624,8 +878,17 @@ public static partial class IndexCommandRunner
         }
         else
         {
-            var lowerBound = candidatePathsTruncated ? " (truncated; totals are lower bounds)" : string.Empty;
+            var lowerBound = !projectionAuthoritative
+                ? " (projection is not authoritative; totals are lower bounds)"
+                : string.Empty;
             CommandOutputWriter.WriteLine($"Dry run: {dryFileCount} indexable files inspected{lowerBound}");
+            CommandOutputWriter.WriteLine(
+                $"  projection authoritative {(projectionAuthoritative ? "yes" : "no")}");
+            CommandOutputWriter.WriteLine(
+                $"  C# workspace expansion {csharpWorkspaceExpansionStatus}"
+                + (csharpWorkspaceExpansionReason == null
+                    ? string.Empty
+                    : $" ({csharpWorkspaceExpansionReason})"));
             if (unknownExtensionTotal > 0)
             {
                 CommandOutputWriter.WriteLine($"  unknown extensions {unknownExtensionTotal,6}{(unknownExtensionFileCountLowerBound ? " (lower bound)" : string.Empty)}");
@@ -1053,6 +1316,9 @@ public static partial class IndexCommandRunner
         try
         {
             DryRunFileIndexabilityValidatedForTesting?.Invoke(absolutePath);
+            var injectedFailure = DryRunFileProbeFailureForTesting?.Invoke(relativePath);
+            if (injectedFailure != null)
+                throw injectedFailure;
             var isAmbiguousExtension = FileIndexer.TryGetAmbiguousLanguageDescriptor(
                 Path.GetExtension(absolutePath),
                 out _);
@@ -1208,6 +1474,10 @@ public static partial class IndexCommandRunner
             record.Lang == "csharp"
             && CSharpStaticInterfacePrepass
                 .HasCSharpStaticInterfaceContractSymbol(symbols);
+        var csharpMemberReadTarget =
+            record.Lang == "csharp"
+            && symbols.Any(
+                ReferenceExtractor.IsCSharpQualifiedMemberReadTargetSymbol);
         if (symbols.Count > options.MaxSymbolsPerFile)
         {
             var issueCount = symbolExtraction.RegexTimeoutIssue == null ? 1 : 2;
@@ -1220,7 +1490,8 @@ public static partial class IndexCommandRunner
                 0,
                 SymbolCapHit: true,
                 ReferenceCapHit: false,
-                csharpStaticInterfaceContract);
+                csharpStaticInterfaceContract,
+                csharpMemberReadTarget);
         }
 
         SymbolExtractor.ApplyFamilyScope(
@@ -1240,7 +1511,8 @@ public static partial class IndexCommandRunner
                 symbolsDroppedByKindFilter,
                 SymbolCapHit: true,
                 ReferenceCapHit: false,
-                csharpStaticInterfaceContract);
+                csharpStaticInterfaceContract,
+                csharpMemberReadTarget);
         }
 
         FileIndexer.ValidateSymbolLineRanges(record, symbols);
@@ -1319,7 +1591,8 @@ public static partial class IndexCommandRunner
             symbolsDroppedByKindFilter,
             SymbolCapHit: false,
             ReferenceCapHit: referenceCapHit,
-            csharpStaticInterfaceContract);
+            csharpStaticInterfaceContract,
+            csharpMemberReadTarget);
     }
 
     private static bool IsDryRunLoadedFileReusable(
@@ -1642,6 +1915,35 @@ public static partial class IndexCommandRunner
                 "files",
                 "modified");
             var hasLines = DryRunColumnExists(connection, "files", "lines");
+            var csharpWorkspaceSymbolColumns = new[]
+            {
+                "file_id",
+                "kind",
+                "name",
+                "line",
+                "start_line",
+                "start_column",
+                "end_line",
+                "body_start_line",
+                "body_end_line",
+                "signature",
+                "container_kind",
+                "container_name",
+                "container_qualified_name",
+                "family_key",
+                "visibility",
+                "return_type",
+                "is_metadata_target",
+            };
+            var hasCSharpWorkspaceEvidence = hasLanguage
+                && hasSymbols
+                && csharpWorkspaceSymbolColumns.All(
+                    column => DryRunColumnExists(
+                        connection,
+                        "symbols",
+                        column))
+                && DryRunIndexExists(connection, "idx_files_lang")
+                && DryRunIndexExists(connection, "idx_symbols_file_kind");
             var hasIssueKind = hasFileIssues
                 && DryRunColumnExists(
                     connection,
@@ -1693,6 +1995,11 @@ public static partial class IndexCommandRunner
                     )
                     """
                 : "0";
+            var csharpMemberReadTargetPaths = hasCSharpWorkspaceEvidence
+                ? DryRunReadCSharpMemberReadTargetPaths(
+                    connection,
+                    cancellationToken)
+                : [];
 
             using var command = connection.CreateCommand();
             command.CommandText = $"""
@@ -1779,7 +2086,8 @@ public static partial class IndexCommandRunner
                     reader.GetInt64(10),
                     generatedSuppressed,
                     contentReuseEligible,
-                    statReuseEligible);
+                    statReuseEligible,
+                    csharpMemberReadTargetPaths.Contains(reader.GetString(0)));
             }
 
             return new DryRunDbSnapshot(
@@ -1792,6 +2100,7 @@ public static partial class IndexCommandRunner
                 hasReferenceLines,
                 hasFileIssues,
                 userVersion,
+                hasCSharpWorkspaceEvidence,
                 ReadFailed: false);
         }
         catch (SqliteException)
@@ -1824,11 +2133,38 @@ public static partial class IndexCommandRunner
         }
     }
 
+    private static HashSet<string> DryRunReadCSharpMemberReadTargetPaths(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        var paths = new HashSet<string>(StringComparer.Ordinal);
+        using var command = connection.CreateCommand();
+        command.CommandText = DbWriter.CSharpMemberReadTargetWorkspaceSql;
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var symbol = DbWriter.ReadCSharpContractWorkspaceSymbol(reader);
+            if (ReferenceExtractor.IsCSharpQualifiedMemberReadTargetSymbol(symbol))
+                paths.Add(reader.GetString(0));
+        }
+
+        return paths;
+    }
+
     private static bool DryRunTableExists(SqliteConnection connection, string tableName)
     {
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = @name LIMIT 1";
         SqliteCommandPolicy.Add(command, "@name", tableName);
+        return command.ExecuteScalar() != null;
+    }
+
+    private static bool DryRunIndexExists(SqliteConnection connection, string indexName)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = @name LIMIT 1";
+        SqliteCommandPolicy.Add(command, "@name", indexName);
         return command.ExecuteScalar() != null;
     }
 
@@ -1902,7 +2238,8 @@ public static partial class IndexCommandRunner
         long SymbolsDroppedByKindFilter,
         bool SymbolCapHit,
         bool ReferenceCapHit,
-        bool CSharpStaticInterfaceContract = false);
+        bool CSharpStaticInterfaceContract = false,
+        bool CSharpMemberReadTarget = false);
 
     private readonly record struct DryRunProjectedCSharpSkip(
         string RelativePath,
@@ -2010,6 +2347,7 @@ public static partial class IndexCommandRunner
         bool ReferenceLinesAvailable,
         bool FileIssuesAvailable,
         int UserVersion,
+        bool CSharpWorkspaceEvidenceAvailable,
         bool ReadFailed)
     {
         internal string? SymbolKindFilterSignature
@@ -2047,6 +2385,7 @@ public static partial class IndexCommandRunner
             false,
             false,
             0,
+            false,
             ReadFailed: false);
 
         public static DryRunDbSnapshot ReadFailure { get; } = Empty with
@@ -2068,7 +2407,8 @@ public static partial class IndexCommandRunner
         long FileIssues,
         bool GeneratedExtractionSuppressed,
         bool ContentReuseEligible,
-        bool StatReuseEligible);
+        bool StatReuseEligible,
+        bool HasCSharpMemberReadTarget);
 
     private readonly record struct DryRunScanMetadata(
         bool HadErrors,

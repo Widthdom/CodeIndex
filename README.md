@@ -165,6 +165,15 @@ table-mutation estimates without changing the source tree or index. See the
 [User Guide indexing workflow](USER_GUIDE.md#index-a-project) for usage and the
 [Developer Guide](DEVELOPER_GUIDE.md#build--test) for implementation limits.
 
+Scoped `--files`, `--commits`, and `--changed-between` previews include the
+same read-only C# workspace expansion that execution requires for static
+interface contracts and qualified member-read refreshes. JSON reports
+`projection_authoritative`, `projection_unavailable_reasons`, and
+`csharp_workspace_expansion_status` / `csharp_workspace_expansion_reason`.
+Expanded paths count toward candidate and sample limits. If a cap, scan error,
+or unavailable preflight prevents an exact projection, `totals_lower_bound` is
+true and the stable reason explains why the preview is non-authoritative.
+
 ## Status JSON Contract
 
 `cdidx status --json` exposes trust, freshness, compatibility, and remediation
@@ -402,6 +411,14 @@ precedence を維持します。`#compdef` は他言語の source に対する�
 file action と上限付き table mutation estimate を preview します。使い方は
 [プロジェクトをインデックス](USER_GUIDE.md#プロジェクトをインデックス)、実装上の制限は
 [開発者ガイド](DEVELOPER_GUIDE.md#ビルドテスト)を参照してください。
+
+`--files`、`--commits`、`--changed-between` の scoped preview では、static
+interface contract と修飾 member-read refresh のために実行時に必要となるものと同じ
+read-only C# workspace 展開を反映します。JSON は `projection_authoritative`、
+`projection_unavailable_reasons`、`csharp_workspace_expansion_status` /
+`csharp_workspace_expansion_reason` を返します。展開された path も candidate / sample
+上限に含まれます。cap、scan error、利用不能な preflight によって正確な予測を作れない場合は
+`totals_lower_bound` が true となり、安定した reason が非 authoritative である理由を示します。
 
 ## Status JSON 契約
 
