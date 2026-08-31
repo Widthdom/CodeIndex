@@ -13,6 +13,13 @@ public partial class DbReader
     // 収束する場合に JSON 膨張を抑える役割があり、超過時は PathsTruncated で通知する。
     private const int DefaultImpactPathsPerResult = 10;
     internal const int DefaultImpactGraphStateEntryBudget = 10_000;
+    // Count-only traversal uses a dedicated result budget instead of the presentation limit.
+    // count-only traversal は表示用 limit ではなく専用の result budget を使う。
+    internal const int DefaultImpactCountTraversalLimit = 10_000;
+    // Keep count traversal SQL pages bounded independently of the overall count budget.
+    // count traversal の SQL page size は全体の count budget と分離して小さく保つ。
+    internal const int ImpactCountCallerPageSize = 64;
+    internal const int ImpactCountCallerTargetBatchSize = 128;
     internal const int DefaultImpactPartialFamilyMemberBudget = 10_000;
     internal int ImpactPartialFamilyMemberBudget { get; set; } = DefaultImpactPartialFamilyMemberBudget;
     internal const int ImpactBoundaryCallerProbeBudget = 512;
@@ -20,6 +27,7 @@ public partial class DbReader
 
     internal int? ImpactGraphStateEntryBudgetForTesting { get; set; }
     internal int? ImpactBoundaryCallerProbeBudgetForTesting { get; set; }
+    internal int? ImpactCountTraversalLimitForTesting { get; set; }
 
     private sealed record ImpactTraversalRequest(
         string SymbolName,
@@ -33,7 +41,21 @@ public partial class DbReader
         int MaxPathsPerResult,
         int ResultOffset,
         bool IncludeMemberReads,
-        DefinitionResult? SelectedDefinition);
+        DefinitionResult? SelectedDefinition,
+        bool CountOnly);
+
+    private sealed record ImpactTraversalExecutionResult(
+        List<ImpactResult> Results,
+        int Count,
+        IReadOnlyDictionary<string, int> FileCounts,
+        int ActualDepth,
+        bool Truncated,
+        string? TruncatedReason,
+        string TerminationReason,
+        List<ImpactCycleResult> Cycles)
+    {
+        internal int FileCount => FileCounts.Count;
+    }
 
     private sealed record ImpactTraversalRoot(
         string ResolvedName,
@@ -109,12 +131,15 @@ public partial class DbReader
             maxPathsPerResult,
             resultOffset,
             includeMemberReads,
-            SelectedDefinition: null);
-        var root = ResolveImpactTraversalRoot(request);
-        if (root == null)
-            return ([], false, null, ImpactTerminationReasons.Completed, []);
-
-        return new ImpactTraversalEngine(this, request, root).Run();
+            SelectedDefinition: null,
+            CountOnly: false);
+        var execution = RunImpactTraversal(request);
+        return (
+            execution.Results,
+            execution.Truncated,
+            execution.TruncatedReason,
+            execution.TerminationReason,
+            execution.Cycles);
     }
 
     internal (List<ImpactResult> Results, bool Truncated, string? TruncatedReason, string TerminationReason, List<ImpactCycleResult> Cycles) GetTransitiveCallersForCandidate(
@@ -141,12 +166,66 @@ public partial class DbReader
             DefaultImpactPathsPerResult,
             resultOffset,
             includeMemberReads,
-            definition);
+            definition,
+            CountOnly: false);
+        var execution = RunImpactTraversal(request);
+        return (
+            execution.Results,
+            execution.Truncated,
+            execution.TruncatedReason,
+            execution.TerminationReason,
+            execution.Cycles);
+    }
+
+    private ImpactTraversalExecutionResult AnalyzeTransitiveCallers(
+        string symbolName,
+        int maxDepth,
+        int limit,
+        string? lang,
+        IReadOnlyList<string>? pathPatterns,
+        IReadOnlyList<string>? excludePathPatterns,
+        bool excludeTests,
+        bool withPaths,
+        int resultOffset,
+        bool includeMemberReads,
+        bool countOnly,
+        DefinitionResult? selectedDefinition)
+    {
+        var request = new ImpactTraversalRequest(
+            selectedDefinition?.Name ?? symbolName,
+            maxDepth,
+            limit,
+            selectedDefinition == null ? lang : NormalizeQueryLanguage(lang) ?? selectedDefinition.Lang,
+            pathPatterns,
+            excludePathPatterns,
+            excludeTests,
+            withPaths && !countOnly,
+            DefaultImpactPathsPerResult,
+            countOnly ? 0 : resultOffset,
+            includeMemberReads,
+            selectedDefinition,
+            countOnly);
+        return RunImpactTraversal(request);
+    }
+
+    private ImpactTraversalExecutionResult RunImpactTraversal(ImpactTraversalRequest request)
+    {
         var root = ResolveImpactTraversalRoot(request);
         return root == null
-            ? ([], false, null, ImpactTerminationReasons.Completed, [])
+            ? CreateEmptyImpactTraversalExecutionResult()
             : new ImpactTraversalEngine(this, request, root).Run();
     }
+
+    private ImpactTraversalExecutionResult CreateEmptyImpactTraversalExecutionResult()
+        => new(
+            [],
+            0,
+            new Dictionary<string, int>(GetIndexedPathComparer()),
+            0,
+            false,
+            null,
+            ImpactTerminationReasons.Completed,
+            []);
 
     private ImpactTraversalRoot? ResolveImpactTraversalRoot(ImpactTraversalRequest request)
     {
@@ -406,9 +485,47 @@ public partial class DbReader
             request.ExcludePathPatterns,
             request.ExcludeTests,
             targetIds,
+            countTargetSymbolNames: null,
             requireAuthoritativeIdentity: request.SelectedDefinition != null,
             includeAmbiguousMSource: includeAmbiguousMSource,
-            includeMemberReads: request.IncludeMemberReads);
+            includeMemberReads: request.IncludeMemberReads,
+            countOnly: request.CountOnly);
+    }
+
+    private List<CallerResult> ReadImpactCountCallerBatch(
+        IReadOnlyList<ImpactTraversalFrontierNode> nodes,
+        ImpactTraversalRequest request,
+        int pageSize,
+        int pageOffset,
+        bool includeAmbiguousMSource)
+    {
+        var targetIds = nodes
+            .SelectMany(static node => node.TargetSymbolIds is { Count: > 0 }
+                ? node.TargetSymbolIds
+                : node.SymbolId is long symbolId
+                    ? [symbolId]
+                    : Array.Empty<long>())
+            .Distinct()
+            .Order()
+            .ToArray();
+        var targetNames = nodes
+            .Select(static node => node.Symbol)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        return GetCallersExactCore(
+            targetNames[0],
+            pageSize,
+            pageOffset,
+            request.Lang,
+            request.PathPatterns,
+            request.ExcludePathPatterns,
+            request.ExcludeTests,
+            targetIds,
+            targetNames,
+            requireAuthoritativeIdentity: request.SelectedDefinition != null,
+            includeAmbiguousMSource: includeAmbiguousMSource,
+            includeMemberReads: request.IncludeMemberReads,
+            countOnly: true);
     }
 
     private int GetImpactGraphStateEntryBudget(int limit)
@@ -421,4 +538,7 @@ public partial class DbReader
 
     private int GetImpactBoundaryCallerProbeBudget()
         => ImpactBoundaryCallerProbeBudgetForTesting ?? ImpactBoundaryCallerProbeBudget;
+
+    private int GetImpactCountTraversalLimit()
+        => Math.Max(1, ImpactCountTraversalLimitForTesting ?? DefaultImpactCountTraversalLimit);
 }

@@ -727,7 +727,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunImpact_HeuristicHintsCountOnlyJsonUsesVisibleResultCount()
+    public void RunImpact_HeuristicHintsCountOnlyIgnoresPresentationLimit_Issue5226()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_impact_hint_count_only");
         try
@@ -750,10 +750,30 @@ public partial class QueryCommandRunnerTests
                     }
                 }
                 """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/App2.cs", "csharp",
+                """
+                public class App2
+                {
+                    public void Run(FolderDiffService service)
+                    {
+                        service.ExecuteFolderDiffAsync();
+                    }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/App3.cs", "csharp",
+                """
+                public class App3
+                {
+                    public void Run(FolderDiffService service)
+                    {
+                        service.ExecuteFolderDiffAsync();
+                    }
+                }
+                """);
             MarkGraphAndFoldReady(dbPath);
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
-                ["FolderDiffService", "--db", dbPath, "--json", "--count"],
+                ["FolderDiffService", "--db", dbPath, "--json", "--count", "--limit", "1"],
                 _jsonOptions));
 
             using var document = ParseJsonOutput(stdout);
@@ -762,13 +782,13 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("file_dependency_hints", json.GetProperty("impact_mode").GetString());
-            Assert.Equal(1, json.GetProperty("count").GetInt32());
-            Assert.Equal(1, json.GetProperty("files").GetInt32());
-            Assert.Equal(1, json.GetProperty("file_count").GetInt32());
+            Assert.Equal(3, json.GetProperty("count").GetInt32());
+            Assert.Equal(3, json.GetProperty("files").GetInt32());
+            Assert.Equal(3, json.GetProperty("file_count").GetInt32());
             Assert.Equal(0, json.GetProperty("confirmed_count").GetInt32());
             Assert.Equal(0, json.GetProperty("confirmed_file_count").GetInt32());
-            Assert.Equal(1, json.GetProperty("hint_count").GetInt32());
-            Assert.Equal(1, json.GetProperty("hint_file_count").GetInt32());
+            Assert.Equal(3, json.GetProperty("hint_count").GetInt32());
+            Assert.Equal(3, json.GetProperty("hint_file_count").GetInt32());
             Assert.False(json.GetProperty("degraded").GetBoolean());
             Assert.True(json.GetProperty("authoritative_count").GetBoolean());
         }
@@ -779,7 +799,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunImpact_CountOnlyJson_UserLimitTruncationIsNonAuthoritative_Issue3566()
+    public void RunImpact_CountOnlyJson_IgnoresUserLimitAndRemainsAuthoritative_Issue5226()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_impact_count_truncated_authority_3566");
         try
@@ -809,13 +829,13 @@ public partial class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal(2, json.GetProperty("count").GetInt32());
-            Assert.Equal(2, json.GetProperty("files").GetInt32());
-            Assert.Equal(2, json.GetProperty("file_count").GetInt32());
-            Assert.True(json.GetProperty("truncated").GetBoolean());
-            Assert.Equal("user_limit", json.GetProperty("truncated_reason").GetString());
-            Assert.True(json.GetProperty("degraded").GetBoolean());
-            Assert.False(json.GetProperty("authoritative_count").GetBoolean());
+            Assert.Equal(6, json.GetProperty("count").GetInt32());
+            Assert.Equal(6, json.GetProperty("files").GetInt32());
+            Assert.Equal(6, json.GetProperty("file_count").GetInt32());
+            Assert.False(json.GetProperty("truncated").GetBoolean());
+            Assert.False(json.TryGetProperty("truncated_reason", out _));
+            Assert.False(json.GetProperty("degraded").GetBoolean());
+            Assert.True(json.GetProperty("authoritative_count").GetBoolean());
         }
         finally
         {
