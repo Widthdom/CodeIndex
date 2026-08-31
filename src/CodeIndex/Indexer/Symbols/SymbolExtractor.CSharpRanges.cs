@@ -16,8 +16,12 @@ public static partial class SymbolExtractor
         + @"|namespace\s+" + CSharpNamespacePattern + @"\b)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CSharpFollowingMemberDeclarationRegex = new(
-        @"^\s*(?![?:,])(?!where\b)(?:" + CSharpRecordMemberBoundaryModifierPattern + @"\s+)*(?:"
+        @"^\s*(?![?:,])(?!where\b)(?!allows\s+ref\s+struct\b)(?:" + CSharpRecordMemberBoundaryModifierPattern + @"\s+)*(?:"
         + @"event\s+" + CSharpTypePattern + @"\s+" + CSharpIdentifierPattern + @"(?=\s*(?:[;{=]|=>))"
+        + @"|" + CSharpTypePattern + @"\s+this(?=\s*\[)"
+        + @"|~\s*" + CSharpIdentifierPattern + @"(?=\s*\()"
+        + @"|static\s+" + CSharpIdentifierPattern + @"(?=\s*\()"
+        + @"|(?:" + CSharpTypePattern + @"\s+)?(?:(?:implicit|explicit)\s+)?operator\b"
         + @"|" + CSharpTypePattern + @"\s+" + CSharpIdentifierPattern + CSharpMethodTypeParameterListPattern
             + @"(?=\s*(?:\(|[;{=]|=>))"
         + @"|(?:(?:unsafe|extern)\s+)*(?:" + CSharpVisibilityPattern + @")\s+"

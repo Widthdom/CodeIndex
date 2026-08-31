@@ -131,6 +131,9 @@ public static partial class ReferenceExtractor
         private (bool IsResolved, SymbolRecord? Container)
             ResolveCSharpRecordContainer(int column)
         {
+            if (TryResolveAfterCSharpSemicolonRecord(column, out var enclosingContainer))
+                return (true, enclosingContainer);
+
             SymbolRecord? primaryCtorOwner = null;
             foreach (var (
                          rangeStart,
@@ -168,6 +171,80 @@ public static partial class ReferenceExtractor
             return primaryCtorOwner != null
                 ? (true, primaryCtorOwner)
                 : (false, null);
+        }
+
+        private bool TryResolveAfterCSharpSemicolonRecord(
+            int column,
+            out SymbolRecord? enclosingContainer)
+        {
+            enclosingContainer = null;
+            if (_container is not { Kind: "class" or "struct" } recordOwner)
+                return false;
+            if (string.IsNullOrWhiteSpace(recordOwner.Signature)
+                || !CSharpRecordPrimaryCtorSignatureRegex.IsMatch(recordOwner.Signature))
+            {
+                return false;
+            }
+
+            var structuralLines = _loop.Preparation.StructuralLines;
+            var (endLine, endColumn, headerText) =
+                CollectCSharpRecordHeader(structuralLines, recordOwner.StartLine);
+            if (endLine != _lineNumber
+                || endColumn == int.MaxValue
+                || endLine <= 0
+                || endLine > structuralLines.Length
+                || endColumn < 0
+                || endColumn >= structuralLines[endLine - 1].Length
+                || structuralLines[endLine - 1][endColumn] != ';'
+                || column <= endColumn
+                || !CSharpRecordPrimaryCtorSignatureRegex.IsMatch(headerText))
+            {
+                return false;
+            }
+
+            enclosingContainer = FindCSharpDeclaredParentContainer(recordOwner);
+            return true;
+        }
+
+        private SymbolRecord? FindCSharpDeclaredParentContainer(SymbolRecord owner)
+        {
+            SymbolRecord? best = null;
+            var bestSpan = int.MaxValue;
+            foreach (var candidate in _loop.ContainerCandidates)
+            {
+                if (ReferenceEquals(candidate, owner)
+                    || candidate.FileId != owner.FileId
+                    || !string.Equals(candidate.Kind, owner.ContainerKind, StringComparison.Ordinal)
+                    || !string.Equals(candidate.Name, owner.ContainerName, StringComparison.Ordinal)
+                    || candidate.BodyStartLine is not int bodyStart
+                    || candidate.BodyEndLine is not int bodyEnd
+                    || bodyStart > owner.StartLine
+                    || bodyEnd < owner.EndLine)
+                {
+                    continue;
+                }
+
+                if (!string.IsNullOrWhiteSpace(owner.ContainerQualifiedName)
+                    && !string.Equals(
+                        CombineQualifiedName(candidate.ContainerQualifiedName, candidate.Name),
+                        owner.ContainerQualifiedName,
+                        StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                var span = bodyEnd - bodyStart;
+                if (best == null || span < bestSpan)
+                {
+                    best = candidate;
+                    bestSpan = span;
+                }
+            }
+
+            return best ?? _loop.ContainerCandidates.FirstOrDefault(candidate =>
+                candidate.SubKind == SyntheticSymbolIdentity.CSharpTopLevelScopeSubKind
+                && candidate.BodyStartLine <= _lineNumber
+                && candidate.BodyEndLine >= _lineNumber);
         }
 
         private SymbolRecord? ResolveSwiftPropertyContainer(int column)

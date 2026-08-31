@@ -3672,11 +3672,38 @@ public partial class SymbolExtractorTests
         Assert.Equal("Braced", current.ContainerName);
     }
 
+    [Fact]
+    public void Extract_CSharp_RecordAntiConstraintsKeepDeclarationBodies_Issue5228()
+    {
+        var content = """
+            public record Semicolon<T>
+                where T :
+                    allows ref struct;
+
+            public record Braced<T>
+                where T :
+                    allows ref struct {
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var semicolon = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Semicolon"));
+        Assert.Equal((1, 3), (semicolon.BodyStartLine, semicolon.BodyEndLine));
+
+        var braced = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Braced"));
+        Assert.Equal((7, 8), (braced.BodyStartLine, braced.BodyEndLine));
+        Assert.Equal(8, braced.EndLine);
+    }
+
     [Theory]
     [InlineData("public void Following();", "function")]
     [InlineData("public int Following;", "field")]
     [InlineData("public event Action Following;", "event")]
     [InlineData("public int Following { get; set; }", "property")]
+    [InlineData("~Outer() { }", "function")]
+    [InlineData("public int this[int index] { get => index; }", "function")]
+    [InlineData("static Outer() { }", "function")]
+    [InlineData("public static Outer operator +(Outer value) => value;", "operator")]
     public void Extract_CSharp_IncompleteRecordStopsBeforeFollowingMember_Issue5228(
         string followingDeclaration,
         string followingKind)
@@ -3696,7 +3723,9 @@ public partial class SymbolExtractorTests
         Assert.Null(broken.BodyStartLine);
         Assert.Null(broken.BodyEndLine);
 
-        var following = Assert.Single(symbols.Where(s => s.Kind == followingKind && s.Name == "Following"));
+        var following = Assert.Single(symbols.Where(s =>
+            s.Kind == followingKind
+            && (s.Name == "Following" || s.Name == "Outer" || s.Name == "Item" || s.Name == "operator +")));
         Assert.Equal("Outer", following.ContainerName);
         var next = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Next"));
         Assert.Equal("Outer", next.ContainerName);

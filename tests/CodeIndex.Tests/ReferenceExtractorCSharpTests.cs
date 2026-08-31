@@ -1038,6 +1038,27 @@ public partial class ReferenceExtractorTests
         Assert.DoesNotContain(references, r => r.SymbolName == "Red" && r.ContainerName == "Wrap" && r.ContainerKind == "class");
     }
 
+    [Theory]
+    [InlineData("public class Outer { public record R(int X); public static int Value = Target.Create(); }")]
+    [InlineData("public class Outer\n{\n    public record R(int X); public static int Value = Target.Create();\n}")]
+    public void Extract_CsharpSemicolonRecord_DoesNotCaptureFollowingSameLineReference_Issue5228(
+        string outerDeclaration)
+    {
+        var content = $$"""
+            public static class Target { public static int Create() => 1; }
+            {{outerDeclaration}}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var record = Assert.Single(symbols, symbol => symbol.Kind == "class" && symbol.Name == "R");
+        Assert.EndsWith(";", record.Signature, StringComparison.Ordinal);
+
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+        var create = Assert.Single(references, reference => reference.SymbolName == "Create");
+        Assert.Equal("class", create.ContainerKind);
+        Assert.Equal("Outer", create.ContainerName);
+    }
+
     [Fact]
     public void Extract_CsharpMultiLineTypeBody_KeepsEnumMemberReferenceOnMethod()
     {
