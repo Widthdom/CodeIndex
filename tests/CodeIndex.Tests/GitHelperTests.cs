@@ -1531,7 +1531,9 @@ exit 7
         RunGit(repoDir, "commit", "--allow-empty", "-m", "initial");
         RunGit(repoDir, "config", "status.showUntrackedFiles", "no");
 
-        File.WriteAllText(Path.Combine(repoDir, "untracked.txt"), "indexed outside git\n");
+        var untrackedDirectory = Path.Combine(repoDir, "untracked");
+        Directory.CreateDirectory(untrackedDirectory);
+        File.WriteAllText(Path.Combine(untrackedDirectory, "nested.txt"), "indexed outside git\n");
 
         Assert.True(GitHelper.TryIsWorktreeDirty(repoDir));
         Assert.True(GitHelper.TryGetWorktreeStatus(repoDir)?.IsDirty);

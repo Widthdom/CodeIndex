@@ -2077,12 +2077,15 @@ public sealed class StatusHeadFreshness
         var indexedHeadMatchesLatest = indexedHead != null
             && string.Equals(indexedHead, latestIndexHead, StringComparison.OrdinalIgnoreCase);
         var workspaceCheck = status.WorkspaceCheck;
+        var workspaceFreshness = workspaceCheck is null
+            ? (StatusFreshnessEvaluation?)null
+            : StatusFreshnessEvaluator.Evaluate(workspaceCheck, status.WorktreeHeadChanged);
 
         return new StatusHeadFreshness
         {
-            State = ResolveState(status, workspaceCheck),
+            State = ResolveState(status, workspaceCheck, workspaceFreshness),
             Scope = "workspace",
-            StateReason = ResolveStateReason(status, workspaceCheck),
+            StateReason = ResolveStateReason(status, workspaceCheck, workspaceFreshness),
             RuntimeHead = NullIfWhiteSpace(status.GitHead),
             IndexedHead = indexedHead,
             IndexedHeadSource = ResolveIndexedHeadSource(status),
@@ -2093,7 +2096,11 @@ public sealed class StatusHeadFreshness
             IndexedHeadTimestamp = indexedHeadMatchesLatest ? status.IndexedHeadTimestamp : null,
             WorkspaceCheckIndexedHeadCommit = NullIfWhiteSpace(workspaceCheck?.IndexedHeadCommit),
             WorkspaceCheckWorkspaceHeadCommit = NullIfWhiteSpace(workspaceCheck?.WorkspaceHeadCommit),
-            WorkspaceMatchesIndex = status.IndexMatchesWorkspace ?? workspaceCheck?.MatchesWorkspace,
+            WorkspaceMatchesIndex = workspaceCheck is null
+                ? status.IndexMatchesWorkspace
+                : workspaceCheck.Checked
+                    ? workspaceFreshness?.State == StatusFreshnessState.Fresh
+                    : null,
             WorktreeHeadChanged = status.WorktreeHeadChanged,
             CommitsAheadOfIndexedHead = indexedHeadMatchesLatest ? status.CommitsAheadOfIndexedHead : null,
         };
@@ -2165,16 +2172,19 @@ public sealed class StatusHeadFreshness
         || status.CommitsAheadOfIndexedHead.HasValue
         || status.IndexMatchesWorkspace.HasValue;
 
-    private static string ResolveState(StatusResult status, IndexFreshnessCheckResult? workspaceCheck)
+    private static string ResolveState(
+        StatusResult status,
+        IndexFreshnessCheckResult? workspaceCheck,
+        StatusFreshnessEvaluation? workspaceFreshness)
     {
         if (workspaceCheck is not null)
         {
-            if (!workspaceCheck.Checked)
+            if (workspaceFreshness?.State == StatusFreshnessState.Unknown)
                 return "check_unavailable";
-            if (!workspaceCheck.MatchesWorkspace)
-                return IsHeadChanged(status, workspaceCheck)
-                    ? "head_changed"
-                    : status.IndexComplete ? "stale" : "stale_and_incomplete";
+            if (workspaceFreshness?.State == StatusFreshnessState.HeadChanged)
+                return "head_changed";
+            if (workspaceFreshness?.State != StatusFreshnessState.Fresh)
+                return status.IndexComplete ? "stale" : "stale_and_incomplete";
             return status.IndexComplete ? "fresh" : "fresh_but_incomplete";
         }
 
@@ -2185,23 +2195,21 @@ public sealed class StatusHeadFreshness
         return "unchecked";
     }
 
-    private static string? ResolveStateReason(StatusResult status, IndexFreshnessCheckResult? workspaceCheck)
+    private static string? ResolveStateReason(
+        StatusResult status,
+        IndexFreshnessCheckResult? workspaceCheck,
+        StatusFreshnessEvaluation? workspaceFreshness)
     {
-        if (!status.IndexComplete && workspaceCheck?.Checked == true && workspaceCheck.MatchesWorkspace)
+        if (!status.IndexComplete && workspaceFreshness?.State == StatusFreshnessState.Fresh)
             return "index_incomplete";
         if (workspaceCheck is not null)
-            return string.IsNullOrWhiteSpace(workspaceCheck.Reason) ? null : workspaceCheck.Reason;
+            return string.IsNullOrWhiteSpace(workspaceFreshness?.Reason) ? null : workspaceFreshness?.Reason;
         if (status.WorktreeHeadChanged == true)
             return "worktree_head_changed";
         if (status.WorktreeHeadChanged == false)
             return "head_current";
         return null;
     }
-
-    private static bool IsHeadChanged(StatusResult status, IndexFreshnessCheckResult workspaceCheck) =>
-        workspaceCheck.HeadChanged
-        || status.WorktreeHeadChanged == true
-        || string.Equals(workspaceCheck.Reason, "head_changed", StringComparison.Ordinal);
 
     private static string ResolveIndexedHeadSource(StatusResult status)
     {

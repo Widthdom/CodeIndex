@@ -1117,7 +1117,7 @@ public static partial class GitHelper
             "core.quotePath=false",
             "status",
             "--porcelain",
-            "--untracked-files=all");
+            "--untracked-files=normal");
         if (output == null)
             return null;
 
@@ -1202,31 +1202,25 @@ public static partial class GitHelper
         string projectRoot,
         CancellationToken cancellationToken = default)
     {
-        var output = TryRunGit(
+        return TryRunGitMatchingOutputLine(
             projectRoot,
-            gitEnvironmentOverrides: null,
             cancellationToken,
+            HasWorktreeVisibilityLimitingIndexFlag,
             "-c",
             "core.quotePath=false",
             "ls-files",
             "-v");
-        if (output == null)
-            return null;
+    }
 
-        foreach (var rawLine in output.Split('\n'))
-        {
-            var line = rawLine.TrimEnd('\r');
-            if (line.Length < 3 || line[1] != ' ')
-                continue;
+    private static bool HasWorktreeVisibilityLimitingIndexFlag(string line)
+    {
+        if (line.Length < 3 || line[1] != ' ')
+            return false;
 
-            // `S` is skip-worktree. With `-v`, any lowercase tag means the
-            // assume-unchanged bit is set (including lowercase `s`).
-            // `S` は skip-worktree。`-v` の小文字 tag は assume-unchanged を示す。
-            if (line[0] == 'S' || char.IsLower(line[0]))
-                return true;
-        }
-
-        return false;
+        // `S` is skip-worktree. With `-v`, any lowercase tag means the
+        // assume-unchanged bit is set (including lowercase `s`).
+        // `S` は skip-worktree。`-v` の小文字 tag は assume-unchanged を示す。
+        return line[0] == 'S' || char.IsLower(line[0]);
     }
 
     internal static string? TryGetRepositoryRoot(
@@ -1276,6 +1270,37 @@ public static partial class GitHelper
 
     private static string? TryRunGit(string projectRoot, CancellationToken cancellationToken, params string[] args)
         => TryRunGit(projectRoot, gitEnvironmentOverrides: null, cancellationToken, args);
+
+    private static bool? TryRunGitMatchingOutputLine(
+        string projectRoot,
+        CancellationToken cancellationToken,
+        Func<string, bool> predicate,
+        params string[] args)
+    {
+        try
+        {
+            var psi = TryCreateGitStartInfo(projectRoot);
+            if (psi == null)
+                return null;
+
+            foreach (var arg in args)
+                psi.ArgumentList.Add(arg);
+
+            return GitProcessRunner.RunMatchingStdoutLine(
+                psi,
+                GitCommandTimeout,
+                predicate,
+                cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch
+        {
+            return null;
+        }
+    }
 
     internal readonly record struct GitCommandResult(
         int? ExitCode,

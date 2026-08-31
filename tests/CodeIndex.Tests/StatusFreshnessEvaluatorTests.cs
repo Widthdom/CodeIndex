@@ -70,6 +70,11 @@ public class StatusFreshnessEvaluatorTests
         var checkedHeadChanged = StatusFreshnessEvaluator.Evaluate(status, EvaluatedAt);
         Assert.Equal(StatusFreshnessState.HeadChanged, checkedHeadChanged.State);
         Assert.Equal("head_changed", checkedHeadChanged.Reason);
+        var headFreshness = status.HeadFreshness;
+        Assert.NotNull(headFreshness);
+        Assert.Equal("head_changed", headFreshness.State);
+        Assert.Equal("head_changed", headFreshness.StateReason);
+        Assert.False(headFreshness.WorkspaceMatchesIndex);
 
         status.WorkspaceCheck = null;
         status.WorktreeHeadChanged = false;

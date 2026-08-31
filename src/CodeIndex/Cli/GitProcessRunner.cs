@@ -44,6 +44,18 @@ internal static class GitProcessRunner
         CancellationToken cancellationToken = default)
         => RunCapturingResultAsync(psi, timeout, cancellationToken).GetAwaiter().GetResult();
 
+    // Scan stdout line-by-line without retaining the complete path listing. This is for
+    // Git queries such as `ls-files` where the answer is existential but output can exceed
+    // the bounded diagnostic capture contract in large repositories.
+    // `ls-files` のように存在判定だけが必要な Git query を、巨大 repository でも path 一覧を
+    // 全保持せず stdout の行単位で走査する。
+    internal static bool? RunMatchingStdoutLine(
+        ProcessStartInfo psi,
+        TimeSpan timeout,
+        Func<string, bool> predicate,
+        CancellationToken cancellationToken = default)
+        => RunMatchingStdoutLineAsync(psi, timeout, predicate, cancellationToken).GetAwaiter().GetResult();
+
     internal static string FormatDiagnostic(string diagnostic)
     {
         var boundedBeforeRedaction = DiagnosticRedactor.BoundDiagnosticText(
@@ -160,6 +172,64 @@ internal static class GitProcessRunner
         return new CaptureResult(exitCode, output, error, GitCommandFailureKind.None, null);
     }
 
+    private static async Task<bool?> RunMatchingStdoutLineAsync(
+        ProcessStartInfo psi,
+        TimeSpan timeout,
+        Func<string, bool> predicate,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(predicate);
+        cancellationToken.ThrowIfCancellationRequested();
+        using var process = new Process { StartInfo = psi };
+        var stderr = new StringBuilder();
+        GitCommandFailureKind failureKind = GitCommandFailureKind.None;
+        var failureLock = new object();
+
+        void MarkFailure(GitCommandFailureKind kind, string _)
+        {
+            lock (failureLock)
+            {
+                if (failureKind != GitCommandFailureKind.None)
+                    return;
+                failureKind = kind;
+            }
+            TryKillProcessTree(process);
+        }
+
+        try
+        {
+            if (!process.Start())
+                return null;
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+
+        var stdoutTask = ReadMatchingOutputLinesAsync(process.StandardOutput, predicate, MarkFailure);
+        var stderrTask = ReadCapturedStreamAsync(process.StandardError, stderr, "stderr", MarkFailure);
+        var waitResult = await WaitForGitExitAsync(process, timeout, cancellationToken).ConfigureAwait(false);
+        var cancelled = waitResult.Cancelled;
+        if (!waitResult.Exited)
+        {
+            MarkFailure(
+                cancelled ? GitCommandFailureKind.Cancelled : GitCommandFailureKind.TimedOut,
+                cancelled
+                    ? "git command cancelled."
+                    : $"git command timed out after {FormatDuration(timeout)}.");
+            _ = await WaitForGitExitAfterKillAsync(process, GitKillWaitTimeout).ConfigureAwait(false);
+        }
+
+        if (!await WaitForCaptureReadersAsync(stdoutTask, stderrTask).ConfigureAwait(false))
+            MarkFailure(GitCommandFailureKind.OutputCaptureIncomplete, "git command output scan did not finish.");
+
+        if (cancelled)
+            cancellationToken.ThrowIfCancellationRequested();
+        if (failureKind != GitCommandFailureKind.None || !process.HasExited || process.ExitCode != 0)
+            return null;
+        return await stdoutTask.ConfigureAwait(false);
+    }
+
     private readonly record struct GitExitWaitResult(bool Exited, bool Cancelled);
 
     private static async Task<GitExitWaitResult> WaitForGitExitAsync(
@@ -255,6 +325,34 @@ internal static class GitProcessRunner
         {
             // Process cleanup closed the stream after another failure path.
         }
+    }
+
+    private static async Task<bool> ReadMatchingOutputLinesAsync(
+        TextReader reader,
+        Func<string, bool> predicate,
+        Action<GitCommandFailureKind, string> markFailure)
+    {
+        var matched = false;
+        try
+        {
+            while (await reader.ReadLineAsync().ConfigureAwait(false) is { } line)
+            {
+                if (!matched && predicate(line))
+                    matched = true;
+            }
+        }
+        catch (IOException ex)
+        {
+            markFailure(
+                GitCommandFailureKind.CaptureFailed,
+                $"git command stdout scan failed: {DiagnosticRedactor.ClassifyException(ex)}");
+        }
+        catch (ObjectDisposedException)
+        {
+            // Process cleanup closed the stream after another failure path.
+        }
+
+        return matched;
     }
 
     private static bool AppendBoundedCapturedChars(
