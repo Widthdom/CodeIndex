@@ -768,6 +768,38 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_ScopedUpdateAllowsFreshDatabaseWithoutPriorSymbolKindProvenance_Issue5224()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "app.py"),
+                "class App:\n    pass\n\ndef hidden():\n    return 1\n");
+
+            var (exitCode, json) = RunAndCaptureJson(
+                [
+                    projectRoot,
+                    "--files", "app.py",
+                    "--exclude-symbol-kind", "function",
+                    "--json",
+                    "--quiet",
+                ]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.True(json.GetProperty("symbol_kind_filter_provenance_available").GetBoolean());
+            Assert.Equal(1, json.GetProperty("symbols_dropped_by_kind_filter").GetInt64());
+            Assert.Contains(
+                DbReader.SymbolKindFilterCoverageLimitedReason,
+                ReadCompletenessReasons(json, "index_incomplete_reasons"));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_ActiveSymbolKindPolicyWithZeroDropsStillLimitsPartialGeneration_Issue5224()
     {
         var projectRoot = CreateTempProject();

@@ -72,17 +72,6 @@ public static partial class IndexCommandRunner
             StringComparison.Ordinal);
         var scopedUpdateSymbolKindFilterMatchesPrior = symbolKindFilterMatchesPrior
             || (priorSymbolKindFilterSignature == null && !options.SymbolKindFilter.IsActive);
-        if (!scopedUpdateSymbolKindFilterMatchesPrior
-            || !priorSymbolKindFilterAuditCurrent)
-        {
-            return WriteCommandError(
-                options.Json,
-                jsonOptions,
-                "symbol-kind filter policy cannot change and its per-file audit generation must be current during a scoped update because untouched files would retain incompatible evidence",
-                CommandExitCodes.UsageError,
-                "Run a full index refresh without --files, --commits, or --changed-between to establish one symbol-kind policy and audit generation.",
-                CommandErrorCodes.UsageError);
-        }
         var priorFilterRetainedCSharpContractMembers =
             SymbolKindFilter.SignatureRetainsCSharpStaticInterfaceContractMembers(
                 priorSymbolKindFilterSignature);
@@ -181,6 +170,24 @@ public static partial class IndexCommandRunner
                 cancellationToken: cancellationToken,
                 forceJavaScriptTypeScriptRefresh: typeScriptJavaScriptConfigChanged,
                 forceExtractorRefresh: extractorConfigurationChanged || ambiguousLanguageProjectMarkerChanged);
+        }
+
+        // Missing provenance is safe only when there are no existing file rows to retain.
+        // Whole-workspace fallback paths above re-establish the audit for every file, while an
+        // actual scoped update of a non-empty legacy DB must fail closed.
+        // provenance 不明でも既存 file 行が無ければ保持対象はない。上の workspace 全体 fallback は
+        // 全 file の audit を再構築するが、非空 legacy DB の実 scoped update は fail closed にする。
+        if (writer.HasIndexedFiles()
+            && (!scopedUpdateSymbolKindFilterMatchesPrior
+                || !priorSymbolKindFilterAuditCurrent))
+        {
+            return WriteCommandError(
+                options.Json,
+                jsonOptions,
+                "symbol-kind filter policy cannot change and its per-file audit generation must be current during a scoped update because untouched files would retain incompatible evidence",
+                CommandExitCodes.UsageError,
+                "Run a full index refresh without --files, --commits, or --changed-between to establish one symbol-kind policy and audit generation.",
+                CommandErrorCodes.UsageError);
         }
 
         if (!options.Json && !options.Quiet)
