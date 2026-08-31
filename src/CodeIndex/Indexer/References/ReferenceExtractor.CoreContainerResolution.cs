@@ -181,7 +181,7 @@ public static partial class ReferenceExtractor
             if (_container is not { Kind: "class" or "struct" } recordOwner)
                 return false;
             if (string.IsNullOrWhiteSpace(recordOwner.Signature)
-                || !CSharpRecordPrimaryCtorSignatureRegex.IsMatch(recordOwner.Signature))
+                || !CSharpRecordDeclarationSignatureRegex.IsMatch(recordOwner.Signature))
             {
                 return false;
             }
@@ -197,7 +197,7 @@ public static partial class ReferenceExtractor
                 || endColumn >= structuralLines[endLine - 1].Length
                 || structuralLines[endLine - 1][endColumn] != ';'
                 || column <= endColumn
-                || !CSharpRecordPrimaryCtorSignatureRegex.IsMatch(headerText))
+                || !CSharpRecordDeclarationSignatureRegex.IsMatch(headerText))
             {
                 return false;
             }

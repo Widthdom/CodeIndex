@@ -1041,6 +1041,9 @@ public partial class ReferenceExtractorTests
     [Theory]
     [InlineData("public class Outer { public record R(int X); public static int Value = Target.Create(); }")]
     [InlineData("public class Outer\n{\n    public record R(int X); public static int Value = Target.Create();\n}")]
+    [InlineData("public class Outer { public record R; public static int Value = Target.Create(); }")]
+    [InlineData("public class Outer { public record class R; public static int Value = Target.Create(); }")]
+    [InlineData("public class Outer { public record struct R; public static int Value = Target.Create(); }")]
     public void Extract_CsharpSemicolonRecord_DoesNotCaptureFollowingSameLineReference_Issue5228(
         string outerDeclaration)
     {
@@ -1050,7 +1053,9 @@ public partial class ReferenceExtractorTests
             """;
 
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var record = Assert.Single(symbols, symbol => symbol.Kind == "class" && symbol.Name == "R");
+        var record = Assert.Single(symbols, symbol =>
+            (symbol.Kind is "class" or "struct")
+            && symbol.Name == "R");
         Assert.EndsWith(";", record.Signature, StringComparison.Ordinal);
 
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
