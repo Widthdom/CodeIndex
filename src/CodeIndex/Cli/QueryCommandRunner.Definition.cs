@@ -102,7 +102,8 @@ public static partial class QueryCommandRunner
                             queryOptions: options,
                             extraFields: options.GroupPartials
                                 ? payload => AddLogicalPartialCountJsonFields(payload, logicalCount: 0, physicalCount: 0, physicalFileCount: 0)
-                                : null);
+                                : null,
+                            includeIndexGenerationAuthority: true);
                         var writeExitCode = WriteJsonPayloadWithOptionalByteLimit(
                             zeroPayload,
                             options,

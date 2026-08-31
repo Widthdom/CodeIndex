@@ -139,7 +139,8 @@ public static partial class QueryCommandRunner
                             queryOptions: options,
                             extraFields: options.GroupPartials
                                 ? json => AddLogicalPartialCountJsonFields(json, logicalCount: 0, physicalCount: 0, physicalFileCount: 0)
-                                : null);
+                                : null,
+                            includeIndexGenerationAuthority: true);
                         return WriteJsonPayloadWithOptionalByteLimit(
                             payload,
                             options,
@@ -250,7 +251,10 @@ public static partial class QueryCommandRunner
             if (results.Count == 0)
             {
                 if (IsDiscoveryNdjson(options))
+                {
+                    WriteIndexGenerationAuthorityWarningIfNeeded(reader);
                     return ZeroResultExitCode(options);
+                }
                 if (ShouldWriteBoundedDiscoveryJsonPayload(options))
                 {
                     var payloadExitCode = WriteBoundedDiscoveryJsonPayload(
@@ -269,7 +273,10 @@ public static partial class QueryCommandRunner
                 if (options.OutputFormat == OutputFormatJson)
                 {
                     if (options.JsonOutputFormat == JsonOutputFormatArray)
+                    {
+                        WriteIndexGenerationAuthorityWarningIfNeeded(reader);
                         WriteDiscoveryJsonArray(results, rowFactory, rowExactSignal, jsonOptions);
+                    }
                     return ZeroResultExitCode(options);
                 }
                 if (TryWriteEmptyFormattedResult(

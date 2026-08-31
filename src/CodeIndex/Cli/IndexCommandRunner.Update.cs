@@ -73,7 +73,7 @@ public static partial class IndexCommandRunner
         var scopedUpdateSymbolKindFilterMatchesPrior = symbolKindFilterMatchesPrior
             || (priorSymbolKindFilterSignature == null && !options.SymbolKindFilter.IsActive);
         if (!scopedUpdateSymbolKindFilterMatchesPrior
-            || (options.SymbolKindFilter.IsActive && !priorSymbolKindFilterAuditCurrent))
+            || !priorSymbolKindFilterAuditCurrent)
         {
             return WriteCommandError(
                 options.Json,

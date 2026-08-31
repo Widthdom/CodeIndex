@@ -524,6 +524,57 @@ public partial class IndexCommandRunnerTests
                 lspDefinitionStderr,
                 StringComparison.Ordinal);
             Assert.Contains("not authoritative", lspDefinitionStderr, StringComparison.Ordinal);
+
+            var (arraySymbolsExitCode, arraySymbolsStdout, arraySymbolsStderr) =
+                RunSymbolsAndCaptureIssue5224(["helper", "--db", dbPath, "--json=array"]);
+            Assert.Equal(CommandExitCodes.Success, arraySymbolsExitCode);
+            Assert.Equal("[]", arraySymbolsStdout.Trim());
+            Assert.Contains(
+                DbReader.SymbolKindFilterCoverageLimitedReason,
+                arraySymbolsStderr,
+                StringComparison.Ordinal);
+
+            var (ndjsonSymbolsExitCode, ndjsonSymbolsStdout, ndjsonSymbolsStderr) =
+                RunSymbolsAndCaptureIssue5224(["helper", "--db", dbPath, "--json=ndjson"]);
+            Assert.Equal(CommandExitCodes.Success, ndjsonSymbolsExitCode);
+            Assert.Equal(string.Empty, ndjsonSymbolsStdout);
+            Assert.Contains(
+                DbReader.SymbolKindFilterCoverageLimitedReason,
+                ndjsonSymbolsStderr,
+                StringComparison.Ordinal);
+
+            var (filesExitCode, filesStdout, filesStderr) =
+                RunFilesAndCaptureIssue5224(["--db", dbPath, "--path", "missing/**", "--count", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, filesExitCode);
+            Assert.Equal(string.Empty, filesStderr);
+            using var filesDocument = JsonDocument.Parse(filesStdout);
+            var filesJson = filesDocument.RootElement;
+            Assert.Equal(0, filesJson.GetProperty("count").GetInt32());
+            Assert.True(filesJson.GetProperty("authoritative_count").GetBoolean());
+            Assert.False(filesJson.TryGetProperty("index_generation_warning", out _));
+            Assert.False(filesJson.TryGetProperty("symbol_kind_filter", out _));
+
+            var (searchExitCode, searchStdout, searchStderr) =
+                RunSearchAndCaptureIssue5224(["definitely_absent", "--db", dbPath, "--count", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, searchExitCode);
+            Assert.Equal(string.Empty, searchStderr);
+            using var searchDocument = JsonDocument.Parse(searchStdout);
+            var searchJson = searchDocument.RootElement;
+            Assert.Equal(0, searchJson.GetProperty("count").GetInt32());
+            Assert.True(searchJson.GetProperty("authoritative_count").GetBoolean());
+            Assert.False(searchJson.TryGetProperty("index_generation_warning", out _));
+
+            var (validateExitCode, validateStdout, validateStderr) =
+                RunValidateAndCaptureIssue5224(["--db", dbPath, "--format", "count", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, validateExitCode);
+            Assert.Equal(string.Empty, validateStderr);
+            using var validateDocument = JsonDocument.Parse(validateStdout);
+            var validateJson = validateDocument.RootElement;
+            Assert.Equal(0, validateJson.GetProperty("count").GetInt32());
+            Assert.False(validateJson.GetProperty("index_complete").GetBoolean());
+            Assert.False(validateJson.GetProperty("degraded").GetBoolean());
+            Assert.True(validateJson.GetProperty("authoritative_count").GetBoolean());
+            Assert.False(validateJson.TryGetProperty("index_generation_warning", out _));
         }
         finally
         {
@@ -533,6 +584,26 @@ public partial class IndexCommandRunnerTests
 
     private (int ExitCode, string Stdout, string Stderr) RunDefinitionAndCaptureIssue5224(
         string[] args)
+        => RunQueryAndCaptureIssue5224(() => QueryCommandRunner.RunDefinition(args, _jsonOptions));
+
+    private (int ExitCode, string Stdout, string Stderr) RunSymbolsAndCaptureIssue5224(
+        string[] args)
+        => RunQueryAndCaptureIssue5224(() => QueryCommandRunner.RunSymbols(args, _jsonOptions));
+
+    private (int ExitCode, string Stdout, string Stderr) RunFilesAndCaptureIssue5224(
+        string[] args)
+        => RunQueryAndCaptureIssue5224(() => QueryCommandRunner.RunFiles(args, _jsonOptions));
+
+    private (int ExitCode, string Stdout, string Stderr) RunSearchAndCaptureIssue5224(
+        string[] args)
+        => RunQueryAndCaptureIssue5224(() => QueryCommandRunner.RunSearch(args, _jsonOptions));
+
+    private (int ExitCode, string Stdout, string Stderr) RunValidateAndCaptureIssue5224(
+        string[] args)
+        => RunQueryAndCaptureIssue5224(() => QueryCommandRunner.RunValidate(args, _jsonOptions));
+
+    private static (int ExitCode, string Stdout, string Stderr) RunQueryAndCaptureIssue5224(
+        Func<int> run)
     {
         lock (TestConsoleLock.Gate)
         {
@@ -544,7 +615,7 @@ public partial class IndexCommandRunnerTests
             {
                 Console.SetOut(stdout);
                 Console.SetError(stderr);
-                var exitCode = QueryCommandRunner.RunDefinition(args, _jsonOptions);
+                var exitCode = run();
                 return (exitCode, stdout.ToString(), stderr.ToString());
             }
             finally
@@ -634,6 +705,61 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(0, rebuilt.GetProperty("symbols_dropped_by_kind_filter").GetInt64());
             Assert.Empty(rebuilt.GetProperty("symbol_kind_filter").GetProperty("include").EnumerateArray());
             Assert.Empty(rebuilt.GetProperty("symbol_kind_filter").GetProperty("exclude").EnumerateArray());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_ScopedUpdateRejectsLegacyDatabaseWithoutSymbolKindProvenance_Issue5224()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var sourceA = Path.Combine(projectRoot, "a.py");
+            File.WriteAllText(sourceA, "class A:\n    pass\n\ndef hidden_a():\n    return 1\n");
+            File.WriteAllText(
+                Path.Combine(projectRoot, "b.py"),
+                "class B:\n    pass\n\ndef hidden_b():\n    return 2\n");
+
+            var (initialExitCode, _) = RunAndCaptureJson(
+                [projectRoot, "--exclude-symbol-kind", "function", "--json", "--quiet"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            SqliteConnection.ClearAllPools();
+            using (var connection = OpenNonPoolingConnection(dbPath))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = $"""
+                    DELETE FROM codeindex_meta
+                    WHERE key IN ('{DbContext.SymbolKindFilterMetaKey}', '{DbContext.SymbolKindFilterAuditVersionMetaKey}');
+                    PRAGMA user_version = {DbContext.CurrentSchemaVersion & ~DbContext.SymbolKindFilterAuditStorageContractFlag};
+                    """;
+                command.ExecuteNonQuery();
+            }
+            SqliteConnection.ClearAllPools();
+            File.AppendAllText(sourceA, "\n# changed\n");
+
+            var (scopedExitCode, scopedJson) = RunAndCaptureJson(
+                [projectRoot, "--files", "a.py", "--json", "--quiet"]);
+
+            Assert.Equal(CommandExitCodes.UsageError, scopedExitCode);
+            Assert.Contains(
+                "per-file audit generation must be current",
+                scopedJson.GetProperty("message").GetString(),
+                StringComparison.Ordinal);
+
+            var (statusExitCode, status) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, statusExitCode);
+            Assert.False(status.GetProperty("index_complete").GetBoolean());
+            Assert.False(status.GetProperty("symbol_kind_filter_provenance_available").GetBoolean());
+            Assert.Contains(
+                DbReader.SymbolKindFilterProvenanceUnavailableReason,
+                ReadCompletenessReasons(status, "index_incomplete_reasons"));
         }
         finally
         {

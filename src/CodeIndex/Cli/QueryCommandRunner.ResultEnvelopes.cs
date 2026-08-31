@@ -495,6 +495,7 @@ public static partial class QueryCommandRunner
         FtsQueryDiagnostics? ftsQueryDiagnostics = null,
         SearchQueryHint? exactSubstringHint = null,
         Action<JsonObject>? extraFields = null,
+        bool includeIndexGenerationAuthority = false,
         bool deferAuthority = false)
     {
         var payload = new JsonObject
@@ -524,7 +525,7 @@ public static partial class QueryCommandRunner
         if (exactSubstringHint != null)
             payload["exact_substring_hint"] = BuildSearchQueryHintJson(exactSubstringHint);
         extraFields?.Invoke(payload);
-        if (count == 0)
+        if (count == 0 && includeIndexGenerationAuthority)
             AddIndexGenerationAuthorityJsonFields(payload, reader, jsonOptions);
         AddCountEnvelopeJsonFields(payload, reader, jsonOptions, queryOptions, deferAuthority);
         return payload;
