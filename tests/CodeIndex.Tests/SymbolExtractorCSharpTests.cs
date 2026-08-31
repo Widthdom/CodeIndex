@@ -3608,6 +3608,54 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_RecordHeaderAnonymousDelegateDoesNotHideDeclarationBody_Issue5228()
+    {
+        var content = """
+            using System;
+
+            public record Callback(Action Action);
+            public record Semicolon() : Callback(
+                delegate
+                {
+                    Console.WriteLine();
+                });
+
+            public record Braced() : Callback(
+                delegate
+                {
+                    Console.WriteLine();
+                })
+            {
+                public int Value => 1;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var semicolon = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Semicolon"));
+        Assert.Equal((4, 8), (semicolon.BodyStartLine, semicolon.BodyEndLine));
+
+        var braced = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Braced"));
+        Assert.Equal((15, 17), (braced.BodyStartLine, braced.BodyEndLine));
+        Assert.Equal(17, braced.EndLine);
+    }
+
+    [Fact]
+    public void Extract_CSharp_SemicolonRecordDoesNotContainSameLineSibling_Issue5228()
+    {
+        var content = """
+            public record Single(int X); public class AfterSingle { }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var single = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Single"));
+        var afterSingle = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "AfterSingle"));
+        var x = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "X"));
+
+        Assert.Null(afterSingle.ContainerName);
+        Assert.Equal(single.Name, x.ContainerName);
+    }
+
+    [Fact]
     public void Extract_CSharp_TracksRecordPrimaryComponentLineAfterAttributes()
     {
         var content = """

@@ -19,7 +19,7 @@ public static partial class SymbolExtractor
         bool isRecord)
     {
         if (isRecord
-            && TryFindCSharpSemicolonRecordDeclarationRange(
+            && TryFindCSharpRecordDeclarationRange(
                 csharpMatchLines,
                 lineIndex,
                 absoluteStartColumn,
@@ -36,7 +36,7 @@ public static partial class SymbolExtractor
         return FindCSharpBraceRange(csharpMatchLines, lineIndex, absoluteStartColumn, linesAreSanitized: true);
     }
 
-    private static bool TryFindCSharpSemicolonRecordDeclarationRange(
+    private static bool TryFindCSharpRecordDeclarationRange(
         string[] csharpMatchLines,
         int startLineIndex,
         int startColumn,
@@ -49,7 +49,10 @@ public static partial class SymbolExtractor
         for (var lineIndex = startLineIndex; lineIndex < limit; lineIndex++)
         {
             var sanitizedLine = csharpMatchLines[lineIndex];
-            if (lineIndex > startLineIndex && CSharpFollowingTypeDeclarationRegex.IsMatch(sanitizedLine))
+            if (lineIndex > startLineIndex
+                && parenDepth == 0
+                && bracketDepth == 0
+                && CSharpFollowingTypeDeclarationRegex.IsMatch(sanitizedLine))
             {
                 declarationRange = (startLineIndex + 1, null, null);
                 return true;
@@ -73,8 +76,12 @@ public static partial class SymbolExtractor
                         bracketDepth--;
                         break;
                     case '{' when parenDepth == 0 && bracketDepth == 0:
-                        declarationRange = default;
-                        return false;
+                        declarationRange = FindCSharpBraceRange(
+                            csharpMatchLines,
+                            lineIndex,
+                            column,
+                            linesAreSanitized: true);
+                        return true;
                     case ';' when parenDepth == 0 && bracketDepth == 0:
                         var declarationEndLine = lineIndex + 1;
                         declarationRange = (declarationEndLine, startLineIndex + 1, declarationEndLine);
