@@ -49,7 +49,7 @@ public class WorkspaceCommandRunnerTests
     }
 
     [Fact]
-    public void WorkspaceStatusJson_ReportsBoundedMemberIndexHealth_Issue4726()
+    public void WorkspaceStatusJson_ReportsBoundedMemberIndexHealth_Issue4726AndIssue5224()
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_workspace_status_health");
         var root = project.Root;
@@ -66,6 +66,15 @@ public class WorkspaceCommandRunnerTests
         File.WriteAllText(Path.Combine(readyRoot, "App.cs"), IndexedContent);
         var readyDb = TestProjectHelper.CreateProjectDb(readyRoot);
         TestProjectHelper.InsertIndexedFile(readyDb, "App.cs", "csharp", IndexedContent);
+        using (var db = new DbContext(DbOpenIntent.WriteIndex, readyDb))
+        {
+            var writer = new DbWriter(db.Connection);
+            writer.MarkSymbolKindFilterAuditStorageContract();
+            writer.SetMeta(DbContext.SymbolKindFilterMetaKey, "include=class;exclude=");
+            using var command = db.Connection.CreateCommand();
+            command.CommandText = $"UPDATE files SET {DbContext.SymbolsDroppedByKindFilterColumn} = 7";
+            command.ExecuteNonQuery();
+        }
 
         File.WriteAllText(Path.Combine(staleRoot, "App.cs"), IndexedContent);
         var staleDb = TestProjectHelper.CreateProjectDb(staleRoot);
@@ -140,6 +149,16 @@ public class WorkspaceCommandRunnerTests
             var graphDataCurrent = ready.GetProperty("graph_data_current").GetBoolean();
             var referenceGraphComplete = ready.GetProperty("reference_graph_complete").GetBoolean();
             var indexComplete = ready.GetProperty("index_complete").GetBoolean();
+            Assert.False(indexComplete);
+            Assert.Equal("index_incomplete", ready.GetProperty("reason").GetString());
+            Assert.Contains(
+                ready.GetProperty("index_incomplete_reasons").EnumerateArray(),
+                reason => reason.GetString() == DbReader.SymbolKindFilterCoverageLimitedReason);
+            Assert.True(ready.GetProperty("symbol_kind_filter_provenance_available").GetBoolean());
+            Assert.Equal(
+                "class",
+                ready.GetProperty("symbol_kind_filter").GetProperty("include")[0].GetString());
+            Assert.Equal(7, ready.GetProperty("symbols_dropped_by_kind_filter").GetInt64());
             Assert.Equal(
                 graphTableAvailable && graphDataCurrent && referenceGraphComplete && indexComplete,
                 ready.GetProperty("graph_ready").GetBoolean());

@@ -202,6 +202,12 @@
   "file_issues_data_current": false,
   "migration_in_progress": false,
   "index_complete": true,
+  "symbol_kind_filter_provenance_available": true,
+  "symbol_kind_filter": {
+    "include": [],
+    "exclude": []
+  },
+  "symbols_dropped_by_kind_filter": 0,
   "hotspot_family_ready": false,
   "hotspot_family_degraded_reason": "cross-file hotspot family grouping is degraded (hotspot_family_support_not_indexed=csharp); Run \u0060cdidx index \u003CprojectPath\u003E --rebuild\u0060 to rebuild and stamp authoritative hotspot families for every indexed row.",
   "language_readiness": {

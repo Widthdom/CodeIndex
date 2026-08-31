@@ -77,6 +77,7 @@ public partial class DbReader : IDisposable
     private readonly IReadOnlyList<StatusDatabasePermissionDiagnostic> _databasePermissionDiagnostics;
     private readonly DbSchemaCache? _schemaCache;
     private readonly CancellationToken _cancellation;
+    private readonly int _userVersion;
     private readonly IReadOnlySet<string> _fileColumns;
     private readonly IReadOnlySet<string> _symbolColumns;
     private readonly IReadOnlySet<string> _referenceColumns;
@@ -621,6 +622,7 @@ public partial class DbReader : IDisposable
             var raw = v.ExecuteScalar();
             userVersion = raw is long l ? (int)l : (raw is int i ? i : 0);
         }
+        _userVersion = userVersion;
         _hasChunksTable = HasTable("chunks");
         _hasReferencesTable = HasTable("symbol_references") && (userVersion & DbContext.GraphReadyFlag) != 0;
         _hasHotspotReferenceCountsTable = HasTable(HotspotReferenceAggregateSql.TableName)

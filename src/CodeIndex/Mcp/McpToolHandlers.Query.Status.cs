@@ -75,8 +75,7 @@ public partial class McpServer
                 status.IndexMatchesWorkspace = status.WorkspaceCheck.Checked
                     ? StatusFreshnessEvaluator.Evaluate(
                         status.WorkspaceCheck,
-                        status.WorktreeHeadChanged,
-                        status.GitIsDirty).State == StatusFreshnessState.Fresh
+                        status.WorktreeHeadChanged).State == StatusFreshnessState.Fresh
                     : null;
                 status.StaleAfterSeconds = staleAfterSeconds;
                 if (status.IndexedAt.HasValue)
@@ -355,8 +354,7 @@ public partial class McpServer
                 var check = status.WorkspaceCheck;
                 var freshness = StatusFreshnessEvaluator.Evaluate(
                     check,
-                    status.WorktreeHeadChanged,
-                    status.GitIsDirty);
+                    status.WorktreeHeadChanged);
                 if (freshness.State != StatusFreshnessState.Fresh)
                 {
                     failures.Add(new McpStatusCheckFailure(

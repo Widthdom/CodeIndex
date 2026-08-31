@@ -1111,6 +1111,25 @@ public partial class McpServer
         payload["graph_table_available"] = readiness.GraphTableAvailable;
         payload["graph_data_current"] = readiness.GraphDataCurrent;
         payload["index_complete"] = readiness.IndexComplete;
+        payload["symbol_kind_filter_provenance_available"] =
+            readiness.SymbolKindFilterPolicy.ProvenanceAvailable;
+        if (readiness.SymbolKindFilterPolicy.ProvenanceAvailable)
+        {
+            payload["symbol_kind_filter"] = new JsonObject
+            {
+                ["include"] = JsonSerializer.SerializeToNode(
+                    readiness.SymbolKindFilterPolicy.Include.ToList(),
+                    _jsonOptions),
+                ["exclude"] = JsonSerializer.SerializeToNode(
+                    readiness.SymbolKindFilterPolicy.Exclude.ToList(),
+                    _jsonOptions),
+            };
+        }
+        if (readiness.SymbolKindFilterPolicy.SymbolsDropped.HasValue)
+        {
+            payload["symbols_dropped_by_kind_filter"] =
+                readiness.SymbolKindFilterPolicy.SymbolsDropped.Value;
+        }
         if (!readiness.IndexComplete)
         {
             payload["index_incomplete_reasons"] = JsonSerializer.SerializeToNode(

@@ -182,7 +182,7 @@ visible here as a compact compatibility index.
 
 | Field group | Fields |
 |---|---|
-| Readiness and graph trust | `fold_ready`, `fold_ready_reason`, `graph_table_available`, `graph_data_current`, `reference_extraction_limits`, `reference_graph_complete`, `reference_graph_incomplete_reasons`, `reference_extraction_cap_hits`, `index_complete`, `index_incomplete_reasons`, `issues_table_available`, `file_issues_data_current`, `migration_in_progress`, `sql_graph_contract_ready`, `sql_graph_contract_degraded_reason`. |
+| Readiness and graph trust | `fold_ready`, `fold_ready_reason`, `graph_table_available`, `graph_data_current`, `reference_extraction_limits`, `reference_graph_complete`, `reference_graph_incomplete_reasons`, `reference_extraction_cap_hits`, `index_complete`, `index_incomplete_reasons`, `symbol_kind_filter_provenance_available`, `symbol_kind_filter`, `symbols_dropped_by_kind_filter`, `issues_table_available`, `file_issues_data_current`, `migration_in_progress`, `sql_graph_contract_ready`, `sql_graph_contract_degraded_reason`. |
 | Language readiness | `hotspot_family_ready`, `hotspot_family_degraded_reason`, `language_readiness`, `csharp_symbol_name_ready`, `csharp_metadata_target_ready`, `csharp_metadata_target_degraded_reason`. |
 | Workspace and HEAD freshness | `indexed_head_commit`, `worktree_head_changed`, `indexed_head_sha`, `indexed_head_branch`, `indexed_head_timestamp`, `commits_ahead_of_indexed_head`, `head_freshness`. |
 | Workspace-check path samples | `workspace_check.changed_files`, `workspace_check.missing_files`, `workspace_check.outside_sparse_cone_files`, `workspace_check.unindexed_files`, `workspace_check.unverifiable_files`, and `workspace_check.scan_errors`, each paired with authoritative `*_count`, `*_truncated`, `*_path_limit`, and `*_omitted_count` fields. |
@@ -204,12 +204,12 @@ clean. Git index flags that can hide worktree changes (`skip-worktree` or
 `assume-unchanged`) make this ordinary-status proof `unknown`, while the Git
 dirtiness probe always includes untracked files even when
 `status.showUntrackedFiles=no`. Missing provenance or a future timestamp also
-yields `unknown`; an actual workspace change remains `stale`. `status --check`
-performs the authoritative workspace comparison, while a dirty worktree or a
-status-level HEAD/branch transition remains conservative even when file checks
-match. Those repository-level signals also fail the checked status and
-member-health result; CLI, workspace, and MCP status surfaces therefore share the
-same classification and check outcome.
+yields `unknown`, as does a dirty worktree in ordinary status; an actual workspace
+difference remains `stale`. `status --check` performs the authoritative workspace
+comparison, so it may prove an already-indexed untracked path fresh even though
+ordinary status remains conservatively unknown. A status-level HEAD/branch
+transition still fails checked status and member health even when file checks
+match. CLI, workspace, and MCP status surfaces share these outcomes.
 
 Persisted JSON subdocuments for `last_index_run.reference_extraction_cap_hits`,
 `last_index_run.rebuild_reclaim`, and
@@ -442,7 +442,7 @@ field group を表に残します。
 
 | field group | field |
 |---|---|
-| readiness / graph trust | `fold_ready`、`fold_ready_reason`、`graph_table_available`、`graph_data_current`、`reference_extraction_limits`、`reference_graph_complete`、`reference_graph_incomplete_reasons`、`reference_extraction_cap_hits`、`index_complete`、`index_incomplete_reasons`、`issues_table_available`、`file_issues_data_current`、`migration_in_progress`、`sql_graph_contract_ready`、`sql_graph_contract_degraded_reason`。 |
+| readiness / graph trust | `fold_ready`、`fold_ready_reason`、`graph_table_available`、`graph_data_current`、`reference_extraction_limits`、`reference_graph_complete`、`reference_graph_incomplete_reasons`、`reference_extraction_cap_hits`、`index_complete`、`index_incomplete_reasons`、`symbol_kind_filter_provenance_available`、`symbol_kind_filter`、`symbols_dropped_by_kind_filter`、`issues_table_available`、`file_issues_data_current`、`migration_in_progress`、`sql_graph_contract_ready`、`sql_graph_contract_degraded_reason`。 |
 | language readiness | `hotspot_family_ready`、`hotspot_family_degraded_reason`、`language_readiness`、`csharp_symbol_name_ready`、`csharp_metadata_target_ready`、`csharp_metadata_target_degraded_reason`。 |
 | workspace / HEAD freshness | `indexed_head_commit`、`worktree_head_changed`、`indexed_head_sha`、`indexed_head_branch`、`indexed_head_timestamp`、`commits_ahead_of_indexed_head`、`head_freshness`。 |
 | workspace-check の path sample | `workspace_check.changed_files`、`workspace_check.missing_files`、`workspace_check.outside_sparse_cone_files`、`workspace_check.unindexed_files`、`workspace_check.unverifiable_files`、`workspace_check.scan_errors`。各一覧には authoritative な `*_count`、`*_truncated`、`*_path_limit`、`*_omitted_count` が対応します。 |
@@ -463,12 +463,12 @@ field group を表に残します。
 限ります。worktree 変更を隠せる Git index flag（`skip-worktree` または
 `assume-unchanged`）がある場合、この通常 status の証拠は `unknown` です。また Git の
 dirtiness probe は `status.showUntrackedFiles=no` の設定時も未追跡 file を必ず含めます。
-provenance が欠けている場合や timestamp が未来の場合も `unknown`、実際の workspace
-変更がある場合は引き続き `stale` です。`status --check` は authoritative な workspace
-比較を行いますが、file check が一致しても dirty worktree または status-level の HEAD /
-branch 遷移は保守的に扱います。これらの repository-level signal は checked status と
-member-health result も失敗させるため、CLI、workspace、MCP の status surface は分類と
-check outcome の両方を共有します。
+provenance が欠けている場合、timestamp が未来の場合、通常 status で worktree が dirty な
+場合は `unknown`、実際の workspace 差分は引き続き `stale` です。`status --check` は
+authoritative な workspace 比較を行うため、通常 status が保守的に unknown でも、index 済み
+未追跡 path を fresh と証明できます。status-level の HEAD / branch 遷移は file check が
+一致しても checked status と member health を失敗させます。CLI、workspace、MCP の status
+surface はこれらの outcome を共有します。
 
 `last_index_run.reference_extraction_cap_hits`、`last_index_run.rebuild_reclaim`、
 `last_failed_or_partial_index_run.file_errors` の永続化 JSON subdocument には、

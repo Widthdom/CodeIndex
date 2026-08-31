@@ -80,7 +80,7 @@ public class StatusFreshnessEvaluatorTests
         status.WorktreeHeadChanged = false;
         status.GitIsDirty = true;
         var dirty = StatusFreshnessEvaluator.Evaluate(status, EvaluatedAt);
-        Assert.Equal(StatusFreshnessState.Stale, dirty.State);
+        Assert.Equal(StatusFreshnessState.Unknown, dirty.State);
         Assert.Equal("worktree_dirty", dirty.Reason);
 
         status.WorkspaceCheck = new IndexFreshnessCheckResult
@@ -90,10 +90,10 @@ public class StatusFreshnessEvaluatorTests
             Reason = "matched",
         };
         var checkedDirty = StatusFreshnessEvaluator.Evaluate(status, EvaluatedAt);
-        Assert.Equal(StatusFreshnessState.Stale, checkedDirty.State);
-        Assert.Equal("worktree_dirty", checkedDirty.Reason);
-        Assert.Equal("stale", status.HeadFreshness?.State);
-        Assert.False(status.HeadFreshness?.WorkspaceMatchesIndex);
+        Assert.Equal(StatusFreshnessState.Fresh, checkedDirty.State);
+        Assert.Equal("matched", checkedDirty.Reason);
+        Assert.Equal("fresh", status.HeadFreshness?.State);
+        Assert.True(status.HeadFreshness?.WorkspaceMatchesIndex);
     }
 
     [Theory]

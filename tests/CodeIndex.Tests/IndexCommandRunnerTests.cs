@@ -3097,6 +3097,19 @@ public sealed class Caller
     }
 
     [Theory]
+    [InlineData("class;custom", "reserved ',' or ';'")]
+    [InlineData("class\nspoof", "control characters")]
+    public void ParseArgs_SymbolKindFilters_RejectNonRoundTrippableValues_Issue5224(
+        string value,
+        string expectedError)
+    {
+        var options = IndexCommandRunner.ParseArgs([".", "--include-symbol-kind", value]);
+
+        Assert.Contains(expectedError, options.SymbolKindFilter.ParseError, StringComparison.Ordinal);
+        Assert.Empty(options.SymbolKindFilter.Include);
+    }
+
+    [Theory]
     [InlineData("include=;exclude=", true)]
     [InlineData("include=class,FUNCTION,operator,property;exclude=", true)]
     [InlineData("include=interface,operator,property;exclude=", false)]
@@ -6589,7 +6602,7 @@ public sealed class Caller
                 WorkspaceMetadataEnricher.Enrich(indexedUntracked, dbPath, dbPathExplicit: true);
                 Assert.True(indexedUntracked.GitIsDirty);
                 Assert.Contains(
-                    "index stale",
+                    "index unknown",
                     QueryCommandRunner.BuildStatusSummary(indexedUntracked, clock.GetUtcNow().UtcDateTime));
 
                 indexedUntracked.WorkspaceCheck = IndexFreshnessChecker.Check(
@@ -6598,27 +6611,27 @@ public sealed class Caller
                     internalIndexDatabasePath: DbPathResolver.NormalizeDbPath(dbPath));
                 Assert.True(indexedUntracked.WorkspaceCheck.MatchesWorkspace);
                 Assert.Contains(
-                    "index stale",
+                    "index fresh",
                     QueryCommandRunner.BuildStatusSummary(indexedUntracked, clock.GetUtcNow().UtcDateTime));
             }
 
             var (indexedUntrackedStatusExitCode, indexedUntrackedStatusJson) = RunStatusAndCaptureJson(
                 ["--db", dbPath, "--check", "--json"]);
-            Assert.Equal(1, indexedUntrackedStatusExitCode);
+            Assert.Equal(CommandExitCodes.Success, indexedUntrackedStatusExitCode);
             Assert.True(indexedUntrackedStatusJson.GetProperty("workspace_check").GetProperty("matches_workspace").GetBoolean());
-            Assert.False(indexedUntrackedStatusJson.GetProperty("index_matches_workspace").GetBoolean());
-            Assert.Contains("index stale", indexedUntrackedStatusJson.GetProperty("summary").GetString());
+            Assert.True(indexedUntrackedStatusJson.GetProperty("index_matches_workspace").GetBoolean());
+            Assert.Contains("index fresh", indexedUntrackedStatusJson.GetProperty("summary").GetString());
 
             var indexedUntrackedOrdinaryMcpResponse = server.HandleMessage(JsonNode.Parse(
                 """{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!)!;
             var indexedUntrackedCheckedMcpResponse = server.HandleMessage(JsonNode.Parse(
                 """{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"status","arguments":{"check":true}}}""")!)!;
             Assert.Contains(
-                "index stale",
+                "index unknown",
                 indexedUntrackedOrdinaryMcpResponse["result"]!["structuredContent"]!["summary"]!.GetValue<string>());
             var indexedUntrackedCheckedMcpStatus = indexedUntrackedCheckedMcpResponse["result"]!["structuredContent"]!;
-            Assert.Contains("index stale", indexedUntrackedCheckedMcpStatus["summary"]!.GetValue<string>());
-            Assert.False(indexedUntrackedCheckedMcpStatus["index_matches_workspace"]!.GetValue<bool>());
+            Assert.Contains("index fresh", indexedUntrackedCheckedMcpStatus["summary"]!.GetValue<string>());
+            Assert.True(indexedUntrackedCheckedMcpStatus["index_matches_workspace"]!.GetValue<bool>());
             Assert.True(indexedUntrackedCheckedMcpStatus["workspace_check"]!["matches_workspace"]!.GetValue<bool>());
 
             File.WriteAllText(untrackedPath, "print('untracked v2')\n");
@@ -6632,7 +6645,7 @@ public sealed class Caller
                 WorkspaceMetadataEnricher.Enrich(ordinary, dbPath, dbPathExplicit: true);
                 Assert.True(ordinary.GitIsDirty);
                 Assert.Contains(
-                    "index stale",
+                    "index unknown",
                     QueryCommandRunner.BuildStatusSummary(ordinary, clock.GetUtcNow().UtcDateTime));
 
                 ordinary.WorkspaceCheck = IndexFreshnessChecker.Check(
@@ -6650,7 +6663,7 @@ public sealed class Caller
             var untrackedCheckedMcpResponse = server.HandleMessage(JsonNode.Parse(
                 """{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"status","arguments":{"check":true}}}""")!)!;
             Assert.Contains(
-                "index stale",
+                "index unknown",
                 untrackedOrdinaryMcpResponse["result"]!["structuredContent"]!["summary"]!.GetValue<string>());
             Assert.Contains(
                 "index stale",

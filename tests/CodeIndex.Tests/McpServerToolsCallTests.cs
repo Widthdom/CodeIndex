@@ -10000,6 +10000,144 @@ public partial class McpServerTests
     }
 
     [Fact]
+    public void ToolsCall_Index_SymbolKindPolicyMatchesPersistedStatusReadiness_Issue5224()
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_symbol_policy_{Guid.NewGuid():N}");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_symbol_policy");
+        try
+        {
+            Directory.CreateDirectory(fixtureDir);
+            File.WriteAllText(
+                Path.Combine(fixtureDir, "app.py"),
+                "class App:\n    pass\n\ndef helper():\n    return App()\n");
+
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var response = CallIndex(
+                server,
+                fixtureDir,
+                args => args["includeSymbolKind"] = new JsonArray("class"));
+
+            Assert.False(response["result"]?["isError"]?.GetValue<bool>() ?? false, response.ToJsonString());
+            var structured = response["result"]!["structuredContent"]!;
+            Assert.False(structured["index_complete"]!.GetValue<bool>());
+            Assert.False(structured["graph_data_current"]!.GetValue<bool>());
+            Assert.False(structured["reference_graph_complete"]!.GetValue<bool>());
+            Assert.True(structured["symbol_kind_filter_provenance_available"]!.GetValue<bool>());
+            Assert.Equal(
+                "class",
+                structured["symbol_kind_filter"]!["include"]![0]!.GetValue<string>());
+            Assert.True(structured["symbols_dropped_by_kind_filter"]!.GetValue<long>() > 0);
+            Assert.Contains(
+                DbReader.SymbolKindFilterCoverageLimitedReason,
+                structured["index_incomplete_reasons"]!.AsArray()
+                    .Select(reason => reason!.GetValue<string>()));
+
+            using var db = new DbContext(DbOpenIntent.QueryOnly, dbPath);
+            var status = new DbReader(db.Connection, db.IsReadOnly).GetStatus();
+            Assert.Equal(status.IndexComplete, structured["index_complete"]!.GetValue<bool>());
+            Assert.Equal(status.GraphDataCurrent, structured["graph_data_current"]!.GetValue<bool>());
+            Assert.Equal(
+                status.SymbolsDroppedByKindFilter,
+                structured["symbols_dropped_by_kind_filter"]!.GetValue<long>());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
+    [Theory]
+    [InlineData("class;custom", "reserved ',' or ';'")]
+    [InlineData("class\nspoof", "control characters")]
+    public void ToolsCall_Index_RejectsNonRoundTrippableSymbolKinds_Issue5224(
+        string value,
+        string expectedError)
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_symbol_policy_input_{Guid.NewGuid():N}");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_symbol_policy_input");
+        try
+        {
+            Directory.CreateDirectory(fixtureDir);
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+
+            var response = CallIndex(
+                server,
+                fixtureDir,
+                args => args["includeSymbolKind"] = new JsonArray(value));
+
+            Assert.True(response["result"]!["isError"]!.GetValue<bool>(), response.ToJsonString());
+            Assert.Equal(
+                McpErrorEnvelope.CategoryInvalidArgument,
+                response["result"]!["structuredContent"]!["category"]!.GetValue<string>());
+            var errorText = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
+            Assert.Contains(expectedError, errorText, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Index_InterruptedRebuildClearsSymbolKindProvenance_Issue5224()
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_symbol_policy_rebuild_{Guid.NewGuid():N}");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_symbol_policy_rebuild");
+        var previousContentLoadHook = McpServer.McpIndexFileContentLoadForTesting;
+        try
+        {
+            Directory.CreateDirectory(fixtureDir);
+            File.WriteAllText(
+                Path.Combine(fixtureDir, "app.py"),
+                "class App:\n    pass\n\ndef helper():\n    return App()\n");
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var initialResponse = CallIndex(
+                server,
+                fixtureDir,
+                args => args["includeSymbolKind"] = new JsonArray("class"));
+            Assert.False(
+                initialResponse["result"]?["isError"]?.GetValue<bool>() ?? false,
+                initialResponse.ToJsonString());
+
+            McpServer.McpIndexFileContentLoadForTesting = _ =>
+                throw new IOException("simulated rebuild content load failure");
+            var rebuildResponse = CallIndex(
+                server,
+                fixtureDir,
+                args =>
+                {
+                    args["rebuild"] = true;
+                    args["includeSymbolKind"] = new JsonArray("function");
+                });
+
+            Assert.False(
+                rebuildResponse["result"]?["isError"]?.GetValue<bool>() ?? false,
+                rebuildResponse.ToJsonString());
+            Assert.Equal(
+                1,
+                rebuildResponse["result"]!["structuredContent"]!["summary"]!["errors"]!.GetValue<int>());
+            using var db = new DbContext(DbOpenIntent.QueryOnly, dbPath);
+            Assert.Null(db.GetMetaString(DbContext.SymbolKindFilterMetaKey));
+            Assert.Null(db.GetMetaString(DbContext.SymbolKindFilterAuditVersionMetaKey));
+            var status = new DbReader(db.Connection, db.IsReadOnly).GetStatus();
+            Assert.False(status.SymbolKindFilterProvenanceAvailable);
+            Assert.Null(status.SymbolsDroppedByKindFilter);
+            Assert.NotNull(status.IndexIncompleteReasons);
+            Assert.Contains(
+                DbReader.SymbolKindFilterProvenanceUnavailableReason,
+                status.IndexIncompleteReasons);
+        }
+        finally
+        {
+            McpServer.McpIndexFileContentLoadForTesting = previousContentLoadHook;
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
+    [Fact]
     public void ToolsCall_Index_MaxReferencesPerFilePersistsReferenceCountExceededIssue_Issue3719()
     {
         var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_reference_cap_{Guid.NewGuid():N}");
@@ -13315,7 +13453,9 @@ public partial class McpServerTests
         Assert.False(structured["fold_ready"]!.GetValue<bool>());
 
         Assert.Equal("DEADBEEFDEADBEEF", _db.GetMetaString("fold_key_fingerprint"));
-        Assert.Equal(DbContext.CurrentSchemaVersion, _db.GetUserVersion());
+        Assert.Equal(
+            DbContext.CurrentSchemaVersion & ~DbContext.SymbolKindFilterAuditStorageContractFlag,
+            _db.GetUserVersion());
     }
 
     [Fact]

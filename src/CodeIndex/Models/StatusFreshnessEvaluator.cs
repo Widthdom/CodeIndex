@@ -32,13 +32,13 @@ internal static class StatusFreshnessEvaluator
     public static StatusFreshnessEvaluation Evaluate(StatusResult status, DateTime utcNow)
     {
         if (status.WorkspaceCheck is not null)
-            return Evaluate(status.WorkspaceCheck, status.WorktreeHeadChanged, status.GitIsDirty);
+            return Evaluate(status.WorkspaceCheck, status.WorktreeHeadChanged);
 
         if (status.WorktreeHeadChanged == true)
             return new(StatusFreshnessState.HeadChanged, "head_changed");
 
         if (status.GitIsDirty == true)
-            return new(StatusFreshnessState.Stale, "worktree_dirty");
+            return new(StatusFreshnessState.Unknown, "worktree_dirty");
 
         if (!status.IndexedAt.HasValue || !status.LatestModified.HasValue)
             return new(StatusFreshnessState.Unknown, "timestamps_unavailable");
@@ -72,22 +72,14 @@ internal static class StatusFreshnessEvaluator
     }
 
     public static StatusFreshnessEvaluation Evaluate(IndexFreshnessCheckResult check)
-        => Evaluate(check, worktreeHeadChanged: null, gitIsDirty: null);
+        => Evaluate(check, worktreeHeadChanged: null);
 
     public static StatusFreshnessEvaluation Evaluate(
         IndexFreshnessCheckResult check,
         bool? worktreeHeadChanged)
-        => Evaluate(check, worktreeHeadChanged, gitIsDirty: null);
-
-    public static StatusFreshnessEvaluation Evaluate(
-        IndexFreshnessCheckResult check,
-        bool? worktreeHeadChanged,
-        bool? gitIsDirty)
     {
         if (worktreeHeadChanged == true)
             return new(StatusFreshnessState.HeadChanged, "head_changed");
-        if (gitIsDirty == true)
-            return new(StatusFreshnessState.Stale, "worktree_dirty");
         if (!check.Checked)
             return new(StatusFreshnessState.Unknown, "freshness_check_unavailable");
         if (check.MatchesWorkspace)

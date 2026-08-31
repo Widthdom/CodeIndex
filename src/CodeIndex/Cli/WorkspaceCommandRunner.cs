@@ -422,7 +422,21 @@ internal static class WorkspaceCommandRunner
                     ReferenceGraphComplete: snapshot.ReferenceGraphComplete,
                     IndexComplete: snapshot.IndexComplete,
                     GraphReady: graphReady,
-                    IndexNewerThanReader: true);
+                    IndexNewerThanReader: true,
+                    IndexIncompleteReasons: snapshot.IndexComplete
+                        ? null
+                        : snapshot.IndexIncompleteReasons,
+                    SymbolKindFilterProvenanceAvailable:
+                        snapshot.SymbolKindFilterPolicy.ProvenanceAvailable,
+                    SymbolKindFilter: snapshot.SymbolKindFilterPolicy.ProvenanceAvailable
+                        ? new IndexSymbolKindFilterJsonResult
+                        {
+                            Include = snapshot.SymbolKindFilterPolicy.Include,
+                            Exclude = snapshot.SymbolKindFilterPolicy.Exclude,
+                        }
+                        : null,
+                    SymbolsDroppedByKindFilter:
+                        snapshot.SymbolKindFilterPolicy.SymbolsDropped);
             }
 
             var freshness = IndexFreshnessChecker.Check(
@@ -440,11 +454,9 @@ internal static class WorkspaceCommandRunner
                 snapshot.IndexedHeadCommit,
                 snapshot.IndexedHeadCommitBranch,
                 snapshot.IndexedHeadCommitBranchStampPresent);
-            var gitIsDirty = GitHelper.TryIsWorktreeDirty(projectRoot, cancellationToken);
             var freshnessEvaluation = StatusFreshnessEvaluator.Evaluate(
                 freshness,
-                worktreeHeadChanged,
-                gitIsDirty);
+                worktreeHeadChanged);
             var status = "ready";
             var reason = "ready";
             if (freshnessEvaluation.State == StatusFreshnessState.Unknown)
@@ -500,7 +512,21 @@ internal static class WorkspaceCommandRunner
                 ReferenceGraphComplete: snapshot.ReferenceGraphComplete,
                 IndexComplete: snapshot.IndexComplete,
                 GraphReady: graphReady,
-                IndexNewerThanReader: false);
+                IndexNewerThanReader: false,
+                IndexIncompleteReasons: snapshot.IndexComplete
+                    ? null
+                    : snapshot.IndexIncompleteReasons,
+                SymbolKindFilterProvenanceAvailable:
+                    snapshot.SymbolKindFilterPolicy.ProvenanceAvailable,
+                SymbolKindFilter: snapshot.SymbolKindFilterPolicy.ProvenanceAvailable
+                    ? new IndexSymbolKindFilterJsonResult
+                    {
+                        Include = snapshot.SymbolKindFilterPolicy.Include,
+                        Exclude = snapshot.SymbolKindFilterPolicy.Exclude,
+                    }
+                    : null,
+                SymbolsDroppedByKindFilter:
+                    snapshot.SymbolKindFilterPolicy.SymbolsDropped);
         }
         catch (Exception ex) when (IsMemberHealthProbeFailure(ex))
         {

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using CodeIndex.Database;
 using CodeIndex.Models;
 
 namespace CodeIndex.Cli;
@@ -72,6 +73,11 @@ public static partial class QueryCommandRunner
                 var severityFilterAvailable = reader.HasIssueSeverityColumn;
                 var requestedFiltersAvailable = options.Severity == null || severityFilterAvailable;
                 var indexCompletion = reader.GetPersistedIndexCompletion();
+                var validationCoverageComplete = indexCompletion.IndexComplete
+                    || (indexCompletion.IndexIncompleteReasons.Count > 0
+                        && indexCompletion.IndexIncompleteReasons.All(reason => reason is
+                            DbReader.SymbolKindFilterCoverageLimitedReason or
+                            DbReader.SymbolKindFilterProvenanceUnavailableReason));
                 var payload = BuildCountJsonPayload(
                     reader,
                     jsonOptions,
@@ -80,7 +86,7 @@ public static partial class QueryCommandRunner
                     degraded: !issuesTableAvailable
                         || !fileIssuesDataCurrent
                         || !requestedFiltersAvailable
-                        || !indexCompletion.IndexComplete,
+                        || !validationCoverageComplete,
                     extraFields: countPayload =>
                     {
                         // Kept for compatibility with the pre-envelope count shape (#4908).
