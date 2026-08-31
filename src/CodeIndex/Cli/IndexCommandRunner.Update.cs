@@ -70,8 +70,6 @@ public static partial class IndexCommandRunner
             priorSymbolKindFilterSignature,
             options.SymbolKindFilter.Signature,
             StringComparison.Ordinal);
-        var scopedUpdateSymbolKindFilterMatchesPrior = symbolKindFilterMatchesPrior
-            || (priorSymbolKindFilterSignature == null && !options.SymbolKindFilter.IsActive);
         var priorFilterRetainedCSharpContractMembers =
             SymbolKindFilter.SignatureRetainsCSharpStaticInterfaceContractMembers(
                 priorSymbolKindFilterSignature);
@@ -172,14 +170,15 @@ public static partial class IndexCommandRunner
                 forceExtractorRefresh: extractorConfigurationChanged || ambiguousLanguageProjectMarkerChanged);
         }
 
-        // Missing provenance is safe only when there are no existing file rows to retain.
-        // Whole-workspace fallback paths above re-establish the audit for every file, while an
-        // actual scoped update of a non-empty legacy DB must fail closed.
-        // provenance 不明でも既存 file 行が無ければ保持対象はない。上の workspace 全体 fallback は
-        // 全 file の audit を再構築するが、非空 legacy DB の実 scoped update は fail closed にする。
+        // Missing policy provenance is safe only when there are no existing file rows to retain.
+        // An explicitly unfiltered policy does not depend on per-file dropped-symbol counts, but
+        // an active filter still requires the current audit generation and downgrade guard.
+        // policy provenance 不明でも既存 file 行が無ければ保持対象はない。明示的な
+        // unfiltered policy は file ごとの drop 数に依存しないが、active filter は現 audit 世代と
+        // downgrade guard を必須とする。
         if (writer.HasIndexedFiles()
-            && (!scopedUpdateSymbolKindFilterMatchesPrior
-                || !priorSymbolKindFilterAuditCurrent))
+            && (!symbolKindFilterMatchesPrior
+                || (options.SymbolKindFilter.IsActive && !priorSymbolKindFilterAuditCurrent)))
         {
             return WriteCommandError(
                 options.Json,
