@@ -885,6 +885,7 @@ cdidx impact Run --max-hops 2 --exclude-tests
 cdidx impact Run --max-hops 0 --json
 cdidx impact FolderDiffService --with-paths --json
 cdidx impact CurrentValue --include-member-reads --json
+cdidx impact Run --count --limit 1 --json
 ```
 
 `impact` resolves a symbol and walks transitive callers through call-graph edges.
@@ -898,6 +899,16 @@ default. Use `--include-member-reads` (MCP: `includeMemberReads`) when read
 dependencies are intentionally part of the graph. Legacy indexes stored those
 reads as `call`; they remain readable and keep their historical inclusive behavior
 until re-indexed.
+
+`--count` (MCP: `countOnly`) treats `--limit` as a row-presentation setting and
+therefore ignores it while computing the total. Human, JSON, compact, and MCP
+count outputs report the same filtered, multi-hop total without materializing caller
+or file-impact rows. The traversal still has dedicated safety budgets. If one is
+reached, `truncated` and its safety-cap reason remain visible, CLI JSON reports
+`authoritative_count: false`, and MCP reports `total: null`; the returned `count` is
+a lower bound. Human count output keeps stdout numeric and writes the cap reason and
+lower-bound warning to stderr. Without `--count`, `--limit` continues to cap displayed
+rows and a `user_limit` truncation can be retried with a larger value.
 
 When the reference-identity contract is current and every matching C# declaration belongs to one logical partial family, `impact`
 uses the family's stable `partial_family_id` as one traversal root and walks the
@@ -4589,6 +4600,7 @@ cdidx impact Run --max-hops 2 --exclude-tests
 cdidx impact Run --max-hops 0 --json
 cdidx impact FolderDiffService --with-paths --json
 cdidx impact CurrentValue --include-member-reads --json
+cdidx impact Run --count --limit 1 --json
 ```
 
 `impact` は symbol を解決し、call-graph edges を通じて transitive callers を探索します。
@@ -4602,6 +4614,15 @@ member / value read を `member_read` として保存し、callers / callees / i
 （MCP は `includeMemberReads`）を明示してください。legacy index はこれらの read を
 `call` として保存しているため、引き続き読み取り可能で、再 index するまでは従来の
 inclusive な挙動を維持します。
+
+`--count`（MCP は `countOnly`）では `--limit` を row 表示用の設定として扱い、総数の
+算出時には無視します。human、JSON、compact、MCP の count 出力は caller / file-impact
+row を materialize せず、同じ filter・multi-hop 条件の総数を一致して返します。ただし
+traversal 専用の safety budget は引き続き適用されます。到達時は `truncated` と safety-cap
+理由を保持し、CLI JSON は `authoritative_count: false`、MCP は `total: null` を返すため、
+`count` は lower bound です。human count 出力は stdout を数値のみのまま維持し、cap 理由と
+lower-bound warning を stderr に出力します。`--count` がない通常表示では、従来どおり
+`--limit` が表示 row を制限し、`user_limit` なら値を増やして再試行できます。
 
 reference-identity contract が current で、一致する C# declaration がすべて 1 つの論理 partial family に属する場合、`impact` は
 安定した `partial_family_id` を 1 つの traversal root として使い、全物理 member identity

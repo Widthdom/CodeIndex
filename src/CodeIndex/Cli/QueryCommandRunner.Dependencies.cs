@@ -99,7 +99,8 @@ public static partial class QueryCommandRunner
                 JsonEnvelopeWrapper.GetBoundedResponseOffset("impact"),
                 JsonEnvelopeWrapper.GetBoundedImpactCollection(),
                 options.IncludeMemberReads,
-                selectedDefinition);
+                selectedDefinition,
+                countOnly: options.CountOnly);
             if (options.IncludeBody
                 && !options.CountOnly
                 && options.OutputFormat is (OutputFormatText or OutputFormatJson)
@@ -113,12 +114,13 @@ public static partial class QueryCommandRunner
                 DbReader.IsSqlLanguage(options.Lang)
                     || DbReader.ContainsSqlLanguage(analysis.Definitions.Select(definition => definition.Lang))
                     || DbReader.ContainsSqlLanguage(analysis.Callers.Select(caller => caller.Lang))
-                    || reader.AnyFilePathHasLanguage(analysis.FileImpacts.SelectMany(impact => new[] { impact.SourcePath, impact.TargetPath }), "sql"));
+                    || reader.AnyFilePathHasLanguage(analysis.FileImpacts.SelectMany(impact => new[] { impact.SourcePath, impact.TargetPath }), "sql")
+                    || reader.AnyFilePathHasLanguage(analysis.CountFileHistogram.Keys, "sql"));
             var hdlGraphSignal = reader.GetHdlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
-            var confirmedCount = analysis.Callers.Count;
-            var confirmedFileCount = analysis.Callers.Select(r => r.Path).Distinct().Count();
-            var hintCount = analysis.FileImpacts.Count;
-            var hintFileCount = analysis.FileImpacts.Select(r => r.SourcePath).Distinct().Count();
+            var confirmedCount = analysis.ConfirmedCount;
+            var confirmedFileCount = analysis.ConfirmedFileCount;
+            var hintCount = analysis.HintCount;
+            var hintFileCount = analysis.HintFileCount;
             var hasHeuristicHints = analysis.ImpactMode == "file_dependency_hints";
             var visibleCount = hasHeuristicHints ? hintCount : confirmedCount;
             var visibleFileCount = hasHeuristicHints ? hintFileCount : confirmedFileCount;
@@ -206,6 +208,9 @@ public static partial class QueryCommandRunner
                             ["heuristic"] = analysis.Heuristic,
                             ["hint_count"] = analysis.HintCount,
                             ["hint_file_count"] = 0,
+                            ["max_hops"] = maxDepth,
+                            ["max_depth"] = maxDepth,
+                            ["actual_depth"] = analysis.ActualDepth,
                             ["definition_count"] = analysis.DefinitionCount,
                             ["definition_file_count"] = analysis.DefinitionFileCount,
                             ["has_multiple_definitions"] = analysis.HasMultipleDefinitions,
@@ -240,7 +245,7 @@ public static partial class QueryCommandRunner
                     }
                     else
                     {
-                        Console.WriteLine("0");
+                        WriteImpactHumanCount(0, analysis);
                         if (!analysis.GraphTableAvailable)
                             CommandErrorWriter.WriteStderr("WARN: symbol_references table missing — this count result is degraded, not authoritative.");
                     }
@@ -321,6 +326,9 @@ public static partial class QueryCommandRunner
                         ["heuristic"] = analysis.Heuristic,
                         ["hint_count"] = hintCount,
                         ["hint_file_count"] = hintFileCount,
+                        ["max_hops"] = maxDepth,
+                        ["max_depth"] = maxDepth,
+                        ["actual_depth"] = analysis.ActualDepth,
                         ["truncated"] = analysis.Truncated,
                     };
                     AddImpactTraversalRootJsonFields(payload, analysis);
@@ -337,7 +345,7 @@ public static partial class QueryCommandRunner
                 }
                 else
                 {
-                    Console.WriteLine($"{visibleCount}");
+                    WriteImpactHumanCount(visibleCount, analysis);
                 }
                 return CommandExitCodes.Success;
             }
@@ -356,7 +364,7 @@ public static partial class QueryCommandRunner
                     ["hint_file_count"] = hintFileCount,
                     ["max_hops"] = maxDepth,
                     ["max_depth"] = maxDepth,
-                    ["actual_depth"] = analysis.Callers.Count > 0 ? analysis.Callers.Max(r => r.Depth) : 0,
+                    ["actual_depth"] = analysis.ActualDepth,
                     ["truncated"] = analysis.Truncated,
                     ["impact_mode"] = analysis.ImpactMode,
                     ["heuristic"] = analysis.Heuristic,
@@ -514,6 +522,17 @@ public static partial class QueryCommandRunner
         var reason = analysis.IdentityRootUnavailableReason ?? "unknown";
         CommandErrorWriter.WriteStderr(
             $"WARN: impact traversal has no identity-backed root ({reason}); confirmed counts are not authoritative.");
+    }
+
+    internal static void WriteImpactHumanCount(int count, ImpactAnalysisResult analysis)
+    {
+        Console.WriteLine(count.ToString(CultureInfo.InvariantCulture));
+        if (!analysis.Truncated)
+            return;
+
+        var reason = analysis.TruncatedReason ?? analysis.TerminationReason;
+        CommandErrorWriter.WriteStderr(
+            $"WARN: impact count truncated ({reason}); {count.ToString(CultureInfo.InvariantCulture)} is a lower bound, not authoritative.");
     }
 
     private static List<SymbolResult> BuildImpactDefinitionJsonResults(IReadOnlyList<SymbolResult> definitions)

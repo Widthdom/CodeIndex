@@ -563,6 +563,24 @@ public partial class McpServer
         return histogram;
     }
 
+    private static JsonArray BuildTopFileHistogramFromCounts(IReadOnlyDictionary<string, int> counts)
+    {
+        var histogram = new JsonArray();
+        foreach (var (path, count) in counts
+            .OrderByDescending(static pair => pair.Value)
+            .ThenBy(static pair => pair.Key, StringComparer.Ordinal)
+            .Take(5))
+        {
+            histogram.Add(new JsonObject
+            {
+                ["path"] = path,
+                ["count"] = count,
+            });
+        }
+
+        return histogram;
+    }
+
     private static bool MatchesRecipeFacetMetadata(CompactSearchResult result, SearchAuditRecipeQuery recipeQuery)
     {
         if (recipeQuery.MatchOrigins.Count > 0 &&
