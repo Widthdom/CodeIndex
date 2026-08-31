@@ -187,8 +187,8 @@ public static partial class ReferenceExtractor
             }
 
             var structuralLines = _loop.Preparation.StructuralLines;
-            var (endLine, endColumn, headerText) =
-                CollectCSharpRecordHeader(structuralLines, recordOwner.StartLine);
+            var (endLine, endColumn, isRecordDeclaration) =
+                _loop.Lookups.GetCSharpRecordHeaderBoundary(recordOwner);
             if (endLine != _lineNumber
                 || endColumn == int.MaxValue
                 || endLine <= 0
@@ -197,7 +197,7 @@ public static partial class ReferenceExtractor
                 || endColumn >= structuralLines[endLine - 1].Length
                 || structuralLines[endLine - 1][endColumn] != ';'
                 || column <= endColumn
-                || !CSharpRecordDeclarationSignatureRegex.IsMatch(headerText))
+                || !isRecordDeclaration)
             {
                 return false;
             }

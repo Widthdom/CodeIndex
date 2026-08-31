@@ -38,6 +38,8 @@ public static partial class ReferenceExtractor
         private Dictionary<string, List<SymbolRecord>>? csharpContainerCandidatesByName;
         private List<(int StartLine, int StartColumn, int EndLine, int EndColumn, SymbolRecord Container, SymbolRecord Owner)>? recordPrimaryCtorRanges;
         private bool recordPrimaryCtorRangesResolved;
+        private Dictionary<SymbolRecord, (int EndLine, int EndColumn, bool IsRecordDeclaration)>?
+            csharpRecordHeaderBoundaries;
         private (
             IReadOnlyDictionary<string, CSharpContainingTypeValueReceiverNames> ByContainingType,
             IReadOnlyDictionary<int, List<CSharpFunctionValueReceiverNameRecord>> ByFunctionStartLine)? csharpValueReceiverLookups;
@@ -263,6 +265,26 @@ public static partial class ReferenceExtractor
             }
 
             return recordPrimaryCtorRanges!;
+        }
+
+        internal (int EndLine, int EndColumn, bool IsRecordDeclaration) GetCSharpRecordHeaderBoundary(
+            SymbolRecord recordOwner)
+        {
+            if (csharpRecordHeaderBoundaries?.TryGetValue(recordOwner, out var cached) == true)
+                return cached;
+
+            // One multiline record can emit thousands of component references. Cache the
+            // collected boundary per owner so container correction remains linear.
+            // 1つの複数行 record が多数の component reference を生成しても、owner ごとに
+            // boundary を cache し、container 補正の線形性を維持する。
+            var (endLine, endColumn, headerText) =
+                CollectCSharpRecordHeader(structuralLines, recordOwner.StartLine);
+            var boundary = (
+                endLine,
+                endColumn,
+                CSharpRecordDeclarationSignatureRegex.IsMatch(headerText));
+            (csharpRecordHeaderBoundaries ??= []).Add(recordOwner, boundary);
+            return boundary;
         }
 
         internal (

@@ -3673,6 +3673,45 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_QualifiedRecordContinuationsKeepDeclarationBodies_Issue5228()
+    {
+        var content = """
+            namespace N
+            {
+                public record Base(int X);
+                public interface IMarker { }
+            }
+
+            public record Semicolon(int X)
+                :
+                    N . Base(X);
+
+            public record Constrained<T>(T Value)
+                where T :
+                    N . IMarker;
+
+            public record Braced(int X)
+                :
+                    N . Base(X) {
+                public int Nested => X;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var semicolon = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Semicolon"));
+        Assert.Equal((7, 9), (semicolon.BodyStartLine, semicolon.BodyEndLine));
+
+        var constrained = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Constrained"));
+        Assert.Equal((11, 13), (constrained.BodyStartLine, constrained.BodyEndLine));
+
+        var braced = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Braced"));
+        Assert.Equal((17, 19), (braced.BodyStartLine, braced.BodyEndLine));
+        Assert.Equal(19, braced.EndLine);
+        var nested = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Nested"));
+        Assert.Equal("Braced", nested.ContainerName);
+    }
+
+    [Fact]
     public void Extract_CSharp_RecordAntiConstraintsKeepDeclarationBodies_Issue5228()
     {
         var content = """
@@ -3697,6 +3736,7 @@ public partial class SymbolExtractorTests
 
     [Theory]
     [InlineData("public void Following();", "function")]
+    [InlineData("public N . Type Following();", "function")]
     [InlineData("public int Following;", "field")]
     [InlineData("public event Action Following;", "event")]
     [InlineData("public int Following { get; set; }", "property")]

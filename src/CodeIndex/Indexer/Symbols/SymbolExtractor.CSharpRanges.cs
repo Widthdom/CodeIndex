@@ -75,12 +75,15 @@ public static partial class SymbolExtractor
             var sanitizedLine = csharpMatchLines[lineIndex];
             if (lineIndex > startLineIndex
                 && parenDepth == 0
-                && bracketDepth == 0
-                && (CSharpFollowingTypeDeclarationRegex.IsMatch(sanitizedLine)
-                    || CSharpFollowingMemberDeclarationRegex.IsMatch(sanitizedLine)))
+                && bracketDepth == 0)
             {
-                declarationRange = (startLineIndex + 1, null, null);
-                return true;
+                var boundaryLine = NormalizeCSharpQualifiedTypeWhitespaceForRecordBoundary(sanitizedLine);
+                if (CSharpFollowingTypeDeclarationRegex.IsMatch(boundaryLine)
+                    || CSharpFollowingMemberDeclarationRegex.IsMatch(boundaryLine))
+                {
+                    declarationRange = (startLineIndex + 1, null, null);
+                    return true;
+                }
             }
 
             var fromColumn = lineIndex == startLineIndex ? Math.Min(startColumn, sanitizedLine.Length) : 0;
@@ -117,6 +120,46 @@ public static partial class SymbolExtractor
 
         declarationRange = default;
         return false;
+    }
+
+    // C# permits whitespace around `.` in qualified base and constraint types. Normalize only
+    // that whitespace before the following-member heuristic so `N . Base(X) {` is not
+    // backtracked into a return type plus member name; a real `N . Type M()` member still
+    // normalizes to `N.Type M()` and remains a boundary.
+    // C# では base / constraint の修飾型で `.` 周辺の空白を許す。後続 member 判定の前だけ
+    // その空白を正規化し、`N . Base(X) {` を return type と member name に誤分割しない。
+    // 実際の `N . Type M()` は `N.Type M()` となるため、引き続き boundary として検出する。
+    private static string NormalizeCSharpQualifiedTypeWhitespaceForRecordBoundary(string line)
+    {
+        if (!line.Contains('.', StringComparison.Ordinal))
+            return line;
+
+        var normalized = new System.Text.StringBuilder(line.Length);
+        var changed = false;
+        for (var index = 0; index < line.Length; index++)
+        {
+            if (!char.IsWhiteSpace(line[index]))
+            {
+                normalized.Append(line[index]);
+                continue;
+            }
+
+            var whitespaceStart = index;
+            while (index + 1 < line.Length && char.IsWhiteSpace(line[index + 1]))
+                index++;
+
+            var previous = whitespaceStart > 0 ? line[whitespaceStart - 1] : '\0';
+            var next = index + 1 < line.Length ? line[index + 1] : '\0';
+            if (previous == '.' || next == '.')
+            {
+                changed = true;
+                continue;
+            }
+
+            normalized.Append(line, whitespaceStart, index - whitespaceStart + 1);
+        }
+
+        return changed ? normalized.ToString() : line;
     }
 
     private static bool IsCSharpRootCodeLineStart(CSharpLexState lineStartState)
