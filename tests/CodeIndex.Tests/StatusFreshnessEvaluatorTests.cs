@@ -82,6 +82,18 @@ public class StatusFreshnessEvaluatorTests
         var dirty = StatusFreshnessEvaluator.Evaluate(status, EvaluatedAt);
         Assert.Equal(StatusFreshnessState.Stale, dirty.State);
         Assert.Equal("worktree_dirty", dirty.Reason);
+
+        status.WorkspaceCheck = new IndexFreshnessCheckResult
+        {
+            Checked = true,
+            MatchesWorkspace = true,
+            Reason = "matched",
+        };
+        var checkedDirty = StatusFreshnessEvaluator.Evaluate(status, EvaluatedAt);
+        Assert.Equal(StatusFreshnessState.Stale, checkedDirty.State);
+        Assert.Equal("worktree_dirty", checkedDirty.Reason);
+        Assert.Equal("stale", status.HeadFreshness?.State);
+        Assert.False(status.HeadFreshness?.WorkspaceMatchesIndex);
     }
 
     [Theory]

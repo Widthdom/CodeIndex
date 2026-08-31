@@ -6582,6 +6582,45 @@ public sealed class Caller
                 CommandExitCodes.Success,
                 RunAndCaptureJson([projectRoot, "--db", dbPath, "--json"]).ExitCode);
 
+            using (var indexedUntrackedDb = new DbContext(DbOpenIntent.QueryOnly, dbPath))
+            using (var indexedUntrackedReader = new DbReader(indexedUntrackedDb))
+            {
+                var indexedUntracked = indexedUntrackedReader.GetStatus();
+                WorkspaceMetadataEnricher.Enrich(indexedUntracked, dbPath, dbPathExplicit: true);
+                Assert.True(indexedUntracked.GitIsDirty);
+                Assert.Contains(
+                    "index stale",
+                    QueryCommandRunner.BuildStatusSummary(indexedUntracked, clock.GetUtcNow().UtcDateTime));
+
+                indexedUntracked.WorkspaceCheck = IndexFreshnessChecker.Check(
+                    indexedUntrackedReader,
+                    projectRoot,
+                    internalIndexDatabasePath: DbPathResolver.NormalizeDbPath(dbPath));
+                Assert.True(indexedUntracked.WorkspaceCheck.MatchesWorkspace);
+                Assert.Contains(
+                    "index stale",
+                    QueryCommandRunner.BuildStatusSummary(indexedUntracked, clock.GetUtcNow().UtcDateTime));
+            }
+
+            var (indexedUntrackedStatusExitCode, indexedUntrackedStatusJson) = RunStatusAndCaptureJson(
+                ["--db", dbPath, "--check", "--json"]);
+            Assert.Equal(1, indexedUntrackedStatusExitCode);
+            Assert.True(indexedUntrackedStatusJson.GetProperty("workspace_check").GetProperty("matches_workspace").GetBoolean());
+            Assert.False(indexedUntrackedStatusJson.GetProperty("index_matches_workspace").GetBoolean());
+            Assert.Contains("index stale", indexedUntrackedStatusJson.GetProperty("summary").GetString());
+
+            var indexedUntrackedOrdinaryMcpResponse = server.HandleMessage(JsonNode.Parse(
+                """{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!)!;
+            var indexedUntrackedCheckedMcpResponse = server.HandleMessage(JsonNode.Parse(
+                """{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"status","arguments":{"check":true}}}""")!)!;
+            Assert.Contains(
+                "index stale",
+                indexedUntrackedOrdinaryMcpResponse["result"]!["structuredContent"]!["summary"]!.GetValue<string>());
+            var indexedUntrackedCheckedMcpStatus = indexedUntrackedCheckedMcpResponse["result"]!["structuredContent"]!;
+            Assert.Contains("index stale", indexedUntrackedCheckedMcpStatus["summary"]!.GetValue<string>());
+            Assert.False(indexedUntrackedCheckedMcpStatus["index_matches_workspace"]!.GetValue<bool>());
+            Assert.True(indexedUntrackedCheckedMcpStatus["workspace_check"]!["matches_workspace"]!.GetValue<bool>());
+
             File.WriteAllText(untrackedPath, "print('untracked v2')\n");
             File.SetLastWriteTimeUtc(untrackedPath, initialNow.AddMinutes(8).UtcDateTime);
             clock.Advance(TimeSpan.FromMinutes(2));
@@ -6607,9 +6646,9 @@ public sealed class Caller
             }
 
             var untrackedOrdinaryMcpResponse = server.HandleMessage(JsonNode.Parse(
-                """{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!)!;
+                """{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!)!;
             var untrackedCheckedMcpResponse = server.HandleMessage(JsonNode.Parse(
-                """{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"status","arguments":{"check":true}}}""")!)!;
+                """{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"status","arguments":{"check":true}}}""")!)!;
             Assert.Contains(
                 "index stale",
                 untrackedOrdinaryMcpResponse["result"]!["structuredContent"]!["summary"]!.GetValue<string>());

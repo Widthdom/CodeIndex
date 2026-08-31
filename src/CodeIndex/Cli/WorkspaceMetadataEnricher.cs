@@ -15,7 +15,8 @@ public static class WorkspaceMetadataEnricher
         StatusResult status,
         string dbPath,
         bool dbPathExplicit = false,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool evaluateOrdinaryFreshness = true)
     {
         if (status.HeadMetadataSnapshotCaptured)
         {
@@ -29,10 +30,6 @@ public static class WorkspaceMetadataEnricher
             status.ProjectRoot = runtime.ProjectRoot;
             status.GitHead = runtime.RuntimeHead;
             status.GitIsDirty = runtime.IsDirty;
-            status.GitIndexMayHideWorktreeChanges = ResolveGitIndexVisibility(
-                status,
-                runtime.ProjectRoot,
-                cancellationToken);
             status.WorktreeHeadChanged = ResolveHeadChanged(
                 runtime.RuntimeHead,
                 runtime.RuntimeBranch,
@@ -43,6 +40,11 @@ public static class WorkspaceMetadataEnricher
                 status.IndexedHeadCommit,
                 status.IndexedHeadCommitBranchSnapshot,
                 status.IndexedHeadCommitBranchStampPresentSnapshot);
+            status.GitIndexMayHideWorktreeChanges = ResolveGitIndexVisibility(
+                status,
+                runtime.ProjectRoot,
+                evaluateOrdinaryFreshness,
+                cancellationToken);
             if (runtime.ProjectRoot != null && !string.IsNullOrWhiteSpace(status.IndexedHeadSha))
             {
                 status.CommitsAheadOfIndexedHead = GitHelper.TryCountCommitsAhead(
@@ -57,13 +59,14 @@ public static class WorkspaceMetadataEnricher
         status.ProjectRoot = metadata.ProjectRoot;
         status.GitHead = metadata.RuntimeHead;
         status.GitIsDirty = metadata.IsDirty;
-        status.GitIndexMayHideWorktreeChanges = ResolveGitIndexVisibility(
-            status,
-            metadata.ProjectRoot,
-            cancellationToken);
         status.IndexedHeadCommit = metadata.LegacyIndexedHead;
         status.WorkspaceVerifiedHeadSha = metadata.WorkspaceVerifiedHead;
         status.WorktreeHeadChanged = metadata.HeadChanged;
+        status.GitIndexMayHideWorktreeChanges = ResolveGitIndexVisibility(
+            status,
+            metadata.ProjectRoot,
+            evaluateOrdinaryFreshness,
+            cancellationToken);
         // Keep commit-drift diagnostics tied to the latest-write SHA. Whole-workspace
         // freshness uses the separate verification stamp above, so these two provenance
         // signals remain explicit instead of silently substituting for each other.
@@ -74,23 +77,42 @@ public static class WorkspaceMetadataEnricher
     private static bool? ResolveGitIndexVisibility(
         StatusResult status,
         string? projectRoot,
+        bool evaluateOrdinaryFreshness,
         CancellationToken cancellationToken)
     {
-        if (projectRoot == null
+        if (!ShouldProbeGitIndexVisibility(status, projectRoot, evaluateOrdinaryFreshness))
+            return null;
+
+        // Keep ordinary status cheap outside the checksum-reused no-op case. Only the
+        // fallback proof needs to rule out index flags that can mask later changes.
+        // checksum 再利用 no-op の fallback 証拠を使う場合だけ index flag を確認し、
+        // それ以外の通常 status には追加の Git 列挙を行わない。
+        return GitHelper.TryHasWorktreeVisibilityLimitingIndexFlags(projectRoot!, cancellationToken);
+    }
+
+    internal static bool ShouldProbeGitIndexVisibility(
+        StatusResult status,
+        string? projectRoot,
+        bool evaluateOrdinaryFreshness)
+    {
+        if (!evaluateOrdinaryFreshness
+            || projectRoot == null
+            || status.GitIsDirty != false
+            || status.WorktreeHeadChanged != false
             || !status.IndexedAt.HasValue
             || !status.LatestModified.HasValue
             || !status.LastWorkspaceFreshenedAt.HasValue
             || status.IndexedAt.Value >= status.LatestModified.Value
             || status.LastWorkspaceFreshenedAt.Value < status.LatestModified.Value)
         {
-            return null;
+            return false;
         }
 
-        // Keep ordinary status cheap outside the checksum-reused no-op case. Only the
-        // fallback proof needs to rule out index flags that can mask later changes.
-        // checksum 再利用 no-op の fallback 証拠を使う場合だけ index flag を確認し、
-        // それ以外の通常 status には追加の Git 列挙を行わない。
-        return GitHelper.TryHasWorktreeVisibilityLimitingIndexFlags(projectRoot, cancellationToken);
+        return !string.IsNullOrWhiteSpace(status.GitHead)
+            && !string.IsNullOrWhiteSpace(status.WorkspaceVerifiedHeadSha)
+            && !string.IsNullOrWhiteSpace(status.IndexedHeadSha)
+            && string.Equals(status.GitHead, status.WorkspaceVerifiedHeadSha, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(status.WorkspaceVerifiedHeadSha, status.IndexedHeadSha, StringComparison.OrdinalIgnoreCase);
     }
 
     public static void Enrich(

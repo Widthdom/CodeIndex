@@ -112,7 +112,12 @@ public static partial class QueryCommandRunner
             }
 
             var status = reader.GetStatus(includeDatabaseSizeAttribution: options.Json);
-            WorkspaceMetadataEnricher.Enrich(status, options.DbPath, options.DbPathExplicit, cancellationToken);
+            WorkspaceMetadataEnricher.Enrich(
+                status,
+                options.DbPath,
+                options.DbPathExplicit,
+                cancellationToken,
+                evaluateOrdinaryFreshness: !options.CheckWorkspace);
             status.DataDir = options.DataDir;
             status.DataDirSource = options.DataDirSource;
             status.DataDirMode = DataDirectorySecurity.GetUnixModeString(GetDataDirectoryPath(options.DbPath));
@@ -139,7 +144,8 @@ public static partial class QueryCommandRunner
                 status.IndexMatchesWorkspace = status.WorkspaceCheck.Checked
                     ? StatusFreshnessEvaluator.Evaluate(
                         status.WorkspaceCheck,
-                        status.WorktreeHeadChanged).State == StatusFreshnessState.Fresh
+                        status.WorktreeHeadChanged,
+                        status.GitIsDirty).State == StatusFreshnessState.Fresh
                     : null;
                 status.StaleAfterSeconds = (long)Math.Round(staleAfter.Value.TotalSeconds, MidpointRounding.AwayFromZero);
                 status.QueryContext = new StatusQueryContext
@@ -1011,7 +1017,8 @@ public static partial class QueryCommandRunner
                 var check = status.WorkspaceCheck;
                 var freshness = StatusFreshnessEvaluator.Evaluate(
                     check,
-                    status.WorktreeHeadChanged);
+                    status.WorktreeHeadChanged,
+                    status.GitIsDirty);
                 if (freshness.State != StatusFreshnessState.Fresh)
                 {
                     failures.Add(new StatusCheckFailure(

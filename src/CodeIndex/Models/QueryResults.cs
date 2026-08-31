@@ -2079,7 +2079,10 @@ public sealed class StatusHeadFreshness
         var workspaceCheck = status.WorkspaceCheck;
         var workspaceFreshness = workspaceCheck is null
             ? (StatusFreshnessEvaluation?)null
-            : StatusFreshnessEvaluator.Evaluate(workspaceCheck, status.WorktreeHeadChanged);
+            : StatusFreshnessEvaluator.Evaluate(
+                workspaceCheck,
+                status.WorktreeHeadChanged,
+                status.GitIsDirty);
 
         return new StatusHeadFreshness
         {

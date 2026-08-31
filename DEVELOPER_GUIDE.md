@@ -1520,8 +1520,8 @@ Current stable codes and triggers:
 | Newer schema protection | Writable opens reject databases whose `PRAGMA user_version` contains readiness bits outside the current binary's `CurrentSchemaVersion` mask. Read-only status/query paths may still surface `index_newer_than_reader=true` as a degraded audit signal, but write-capable paths must fail with `E003_SCHEMA_TOO_NEW` so an older cdidx cannot silently rewrite a DB stamped by a newer one. |
 
 Status freshness summaries are classified by one shared evaluator. An
-authoritative `status --check` supplies the file-level result, while status-level
-HEAD/branch drift takes precedence. Without that check,
+authoritative `status --check` supplies the file-level result, while a dirty
+worktree or status-level HEAD/branch drift takes precedence. Without that check,
 `last_workspace_freshened_at >= latest_modified` can prove a checksum-reused
 no-op update fresh only when the worktree is clean and the runtime,
 workspace-verified, and latest-index HEAD SHAs all agree, and Git reports no
@@ -1530,9 +1530,10 @@ The Git dirtiness probe explicitly requests all untracked files, overriding a
 repository-level `status.showUntrackedFiles=no` setting. Missing provenance,
 hidden index state, and future timestamps are `unknown`; a later modification,
 dirty worktree, or changed HEAD remains conservative. Status-level HEAD/branch
-drift is evaluated before an authoritative file check and is propagated into
-checked failures, exit status, and workspace member health, so a same-SHA
-detached/branch transition cannot produce contradictory outcomes. Ordinary
+repository-level dirtiness and drift are evaluated before an authoritative file
+check and are propagated into checked failures, exit status, and workspace member
+health, so an already-indexed untracked path or same-SHA detached/branch transition
+cannot produce contradictory outcomes. Ordinary
 `head_freshness=head_current` semantics remain distinct from the authoritative
 checked `fresh` value.
 
@@ -5705,17 +5706,18 @@ apply 時は `PRAGMA optimize` を実行します。
 | newer schema protection | writable open は、`PRAGMA user_version` に current binary の `CurrentSchemaVersion` mask 外の readiness bit が含まれる database も拒否します。read-only status/query path は degraded audit signal として `index_newer_than_reader=true` を表示できますが、write-capable path は古い cdidx が新しい binary で stamp された DB を黙って rewrite しないよう `E003_SCHEMA_TOO_NEW` で失敗しなければなりません。 |
 
 status freshness summary は1つの共有 evaluator で分類します。authoritative な
-`status --check` は file-level の結果を提供し、status-level の HEAD / branch drift は
-それより優先します。check がない場合、
+`status --check` は file-level の結果を提供し、dirty worktree または status-level の
+HEAD / branch drift はそれより優先します。check がない場合、
 `last_workspace_freshened_at >= latest_modified` が checksum 再利用 no-op update の
 freshness を証明できるのは、worktree が clean で、runtime、workspace 検証済み、直近
 index の HEAD SHA がすべて一致し、後続変更を隠せる `skip-worktree` / `assume-unchanged`
 entry が Git index に無い場合だけです。Git の dirtiness probe は未追跡 file を明示的に
 すべて要求し、repository の `status.showUntrackedFiles=no` 設定を上書きします。provenance
 不足、隠れた index state、未来 timestamp は `unknown` とし、後続の変更、dirty worktree、
-HEAD 変更は保守的な判定を維持します。status-level の HEAD / branch drift は authoritative
-file check より先に評価して checked failure、終了 status、workspace member health にも
-伝播するため、同一 SHA の detached / branch 遷移でも outcome は矛盾しません。通常 status
+HEAD 変更は保守的な判定を維持します。repository-level の dirtiness と drift は
+authoritative file check より先に評価して checked failure、終了 status、workspace member
+health にも伝播するため、index 済み未追跡 path や同一 SHA の detached / branch 遷移でも
+outcome は矛盾しません。通常 status
 の `head_freshness=head_current` は、authoritative check 済みの `fresh` と引き続き区別します。
 
 `vacuum --dry-run` は、`file:/absolute/path/codeindex.db`、Windows の `file:/C:/absolute/path/codeindex.db`、canonical な `file:///...` 形式を受け付けます。single-slash の path を canonicalize しつつ元の query string を維持して URI fragment を無視し、validation と metric 収集に同じ query-only URI を使うため、明示的な `immutable=1` の stale-snapshot semantics も維持されます。

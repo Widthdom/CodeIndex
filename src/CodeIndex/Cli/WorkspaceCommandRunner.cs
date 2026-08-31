@@ -440,9 +440,11 @@ internal static class WorkspaceCommandRunner
                 snapshot.IndexedHeadCommit,
                 snapshot.IndexedHeadCommitBranch,
                 snapshot.IndexedHeadCommitBranchStampPresent);
+            var gitIsDirty = GitHelper.TryIsWorktreeDirty(projectRoot, cancellationToken);
             var freshnessEvaluation = StatusFreshnessEvaluator.Evaluate(
                 freshness,
-                worktreeHeadChanged);
+                worktreeHeadChanged,
+                gitIsDirty);
             var status = "ready";
             var reason = "ready";
             if (freshnessEvaluation.State == StatusFreshnessState.Unknown)

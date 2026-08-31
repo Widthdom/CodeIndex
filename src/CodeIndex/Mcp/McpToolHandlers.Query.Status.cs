@@ -46,7 +46,12 @@ public partial class McpServer
                     || projectionFields.Contains("database_size_attribution", StringComparer.Ordinal));
             var status = reader.GetStatus(includeDatabaseSizeAttribution);
             QueryCommandRunner.ApplyStatusSymbolKindLimits(status, reader.GetSymbolKindCounts());
-            WorkspaceMetadataEnricher.Enrich(status, _dbPath, _dbPathExplicit, requestToken);
+            WorkspaceMetadataEnricher.Enrich(
+                status,
+                _dbPath,
+                _dbPathExplicit,
+                requestToken,
+                evaluateOrdinaryFreshness: !checkWorkspace);
             status.DbFileMode = DbContext.GetUnixFileModeString(
                 _dbPath,
                 status.DatabasePermissionPolicy,
@@ -70,7 +75,8 @@ public partial class McpServer
                 status.IndexMatchesWorkspace = status.WorkspaceCheck.Checked
                     ? StatusFreshnessEvaluator.Evaluate(
                         status.WorkspaceCheck,
-                        status.WorktreeHeadChanged).State == StatusFreshnessState.Fresh
+                        status.WorktreeHeadChanged,
+                        status.GitIsDirty).State == StatusFreshnessState.Fresh
                     : null;
                 status.StaleAfterSeconds = staleAfterSeconds;
                 if (status.IndexedAt.HasValue)
@@ -349,7 +355,8 @@ public partial class McpServer
                 var check = status.WorkspaceCheck;
                 var freshness = StatusFreshnessEvaluator.Evaluate(
                     check,
-                    status.WorktreeHeadChanged);
+                    status.WorktreeHeadChanged,
+                    status.GitIsDirty);
                 if (freshness.State != StatusFreshnessState.Fresh)
                 {
                     failures.Add(new McpStatusCheckFailure(
