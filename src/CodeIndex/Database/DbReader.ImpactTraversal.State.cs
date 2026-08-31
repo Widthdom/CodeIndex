@@ -41,12 +41,14 @@ public partial class DbReader
         private readonly int _resultOffset;
         private readonly int _graphStateEntryBudget;
         private readonly Dictionary<string, int>? _resultIndexByVisitedKey;
+        private readonly bool _countOnly;
 
         internal ImpactTraversalState(
             DbReader owner,
             ImpactTraversalRequest request,
             ImpactTraversalRoot root)
         {
+            _countOnly = request.CountOnly;
             _resultOffset = Math.Max(0, request.ResultOffset);
             ResultWindowEnd = checked(_resultOffset + request.Limit);
             _graphStateEntryBudget = owner.GetImpactGraphStateEntryBudget(ResultWindowEnd);
@@ -55,9 +57,10 @@ public partial class DbReader
             Visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { root.ResolvedName };
             Cycles = new ImpactCycleTracker(root);
             Paths = new ImpactPathTracker(owner, request.WithPaths, root);
-            _resultIndexByVisitedKey = root.IsLogicalPartialFamily
+            _resultIndexByVisitedKey = root.IsLogicalPartialFamily && !request.CountOnly
                 ? new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
                 : null;
+            FileCounts = new Dictionary<string, int>(owner.GetIndexedPathComparer());
             Truncated = root.InitiallyTruncated;
             TruncatedReason = root.InitiallyTruncated
                 ? ImpactTruncatedReasons.SafetyCap
@@ -69,9 +72,11 @@ public partial class DbReader
         internal ImpactCycleTracker Cycles { get; }
         internal ImpactPathTracker Paths { get; }
         internal List<ImpactResult> Results { get; } = [];
+        internal Dictionary<string, int> FileCounts { get; }
         internal int ResultWindowEnd { get; }
         internal int BoundaryProbeBudget { get; }
         internal int DiscoveredResultCount { get; private set; }
+        internal int ActualDepth { get; private set; }
         internal bool Truncated { get; private set; }
         internal string? TruncatedReason { get; private set; }
         internal bool MaxDepthReached { get; set; }
@@ -89,7 +94,7 @@ public partial class DbReader
                && !GraphStateBudgetHit
                && !BoundaryProbeBudgetHit;
 
-        internal bool IncludeNextResult => DiscoveredResultCount >= _resultOffset;
+        internal bool IncludeNextResult => !_countOnly && DiscoveredResultCount >= _resultOffset;
 
         private static Queue<ImpactTraversalFrontierNode> CreateInitialQueue(
             ImpactTraversalRoot root)
@@ -142,14 +147,20 @@ public partial class DbReader
 
         internal bool TryVisit(string key) => Visited.Add(key);
 
-        internal int AddResult(ImpactResult? result, string visitedKey)
+        internal int AddResult(ImpactResult? result, string visitedKey, string path, int depth)
         {
             var resultIndex = -1;
+            var includeInSummary = _countOnly || IncludeNextResult;
             if (IncludeNextResult)
             {
                 Results.Add(result!);
                 resultIndex = Results.Count - 1;
                 _resultIndexByVisitedKey?.Add(visitedKey, resultIndex);
+            }
+            if (includeInSummary)
+            {
+                FileCounts[path] = FileCounts.TryGetValue(path, out var count) ? count + 1 : 1;
+                ActualDepth = Math.Max(ActualDepth, depth);
             }
             DiscoveredResultCount++;
             return resultIndex;
@@ -181,8 +192,13 @@ public partial class DbReader
             TruncatedReason = ImpactTruncatedReasons.BoundaryProbeBudget;
         }
 
-        internal void MarkUserLimit()
+        internal void MarkResultWindowLimit()
         {
+            if (_countOnly)
+            {
+                MarkSafetyCap();
+                return;
+            }
             Truncated = true;
             TruncatedReason ??= ImpactTruncatedReasons.UserLimit;
         }
@@ -196,7 +212,7 @@ public partial class DbReader
         internal void CompleteTraversal()
         {
             if (Queue.Count > 0 && DiscoveredResultCount >= ResultWindowEnd)
-                MarkUserLimit();
+                MarkResultWindowLimit();
         }
 
         internal string ResolveTerminationReason()

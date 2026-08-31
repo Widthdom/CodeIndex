@@ -1231,6 +1231,17 @@ public class ImpactAnalysisResult
     [JsonIgnore]
     public int LogicalDefinitionCount { get; set; }
     public int HintCount { get; set; }
+    [JsonIgnore]
+    internal int ConfirmedCount { get; set; }
+    [JsonIgnore]
+    internal int ConfirmedFileCount { get; set; }
+    [JsonIgnore]
+    internal int HintFileCount { get; set; }
+    [JsonIgnore]
+    internal int ActualDepth { get; set; }
+    [JsonIgnore]
+    internal IReadOnlyDictionary<string, int> CountFileHistogram { get; set; }
+        = new Dictionary<string, int>(StringComparer.Ordinal);
     public bool HasClassLikeDefinitions { get; set; }
     public bool HasMultipleDefinitions { get; set; }
     public bool HasMultipleDefinitionFiles { get; set; }

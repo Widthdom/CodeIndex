@@ -36,15 +36,24 @@ public partial class McpServer
             maxDepthClampWarning = $"maxHops was clamped from {maxDepthRequested} to {maxDepth} (server cap is [0, {MaxImpactDepth}]).";
             adjustments.AddClamped("maxHops", maxDepthRequested, maxDepth, 0, MaxImpactDepth);
         }
-        var limit = ReadLimit(args, QueryCommandRunner.DefaultImpactLimit, adjustments);
+        var countOnly = ReadCountOnly(args);
+        var requestedLimit = ReadOptionalIntArgument(args, "limit");
+        var limit = countOnly
+            ? QueryCommandRunner.DefaultImpactLimit
+            : ReadLimit(args, QueryCommandRunner.DefaultImpactLimit, adjustments);
+        if (countOnly && requestedLimit is int ignoredLimit)
+        {
+            adjustments.AddIgnored(
+                "limit",
+                ignoredLimit,
+                "countOnly uses a dedicated traversal safety cap instead of a presentation limit.");
+        }
         var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
         var pathPatterns = ReadScopedPathList(args);
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
         var withPaths = args?["withPaths"]?.GetValue<bool>() ?? false;
         var includeMemberReads = args?["includeMemberReads"]?.GetValue<bool>() ?? false;
-        var countOnly = ReadCountOnly(args);
-
         return WithDbReader(id, args, reader =>
         {
             if (TryResolveMcpGraphSelector(id, reader, selectorValue, out var selectedDefinition) is JsonNode selectorError)
@@ -67,26 +76,26 @@ public partial class McpServer
                 excludeTests,
                 withPaths,
                 includeMemberReads: includeMemberReads,
-                selectedDefinition: selectedDefinition);
+                selectedDefinition: selectedDefinition,
+                countOnly: countOnly);
             var sqlGraphSignal = QueryCommandRunner.NarrowSqlGraphContractSignal(
                 reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests),
                 DbReader.IsSqlLanguage(lang)
                     || DbReader.ContainsSqlLanguage(analysis.Definitions.Select(definition => definition.Lang))
                     || DbReader.ContainsSqlLanguage(analysis.Callers.Select(caller => caller.Lang))
-                    || reader.AnyFilePathHasLanguage(analysis.FileImpacts.SelectMany(impact => new[] { impact.SourcePath, impact.TargetPath }), "sql"));
-            var confirmedCount = analysis.Callers.Count;
-            var confirmedFileCount = analysis.Callers.Select(r => r.Path).Distinct().Count();
-            var hintCount = analysis.FileImpacts.Count;
-            var hintFileCount = analysis.FileImpacts.Select(r => r.SourcePath).Distinct().Count();
+                    || reader.AnyFilePathHasLanguage(analysis.FileImpacts.SelectMany(impact => new[] { impact.SourcePath, impact.TargetPath }), "sql")
+                    || reader.AnyFilePathHasLanguage(analysis.CountFileHistogram.Keys, "sql"));
+            var confirmedCount = analysis.ConfirmedCount;
+            var confirmedFileCount = analysis.ConfirmedFileCount;
+            var hintCount = analysis.HintCount;
+            var hintFileCount = analysis.HintFileCount;
             var hasHeuristicHints = analysis.ImpactMode == "file_dependency_hints" && hintCount > 0;
             var count = hasHeuristicHints ? hintCount : confirmedCount;
             var fileCount = hasHeuristicHints ? hintFileCount : confirmedFileCount;
-            var maxActualDepth = analysis.Callers.Count > 0 ? analysis.Callers.Max(r => r.Depth) : 0;
+            var maxActualDepth = analysis.ActualDepth;
             if (countOnly)
             {
-                var topFiles = hasHeuristicHints
-                    ? BuildTopFileHistogram(analysis.FileImpacts, impact => impact.SourcePath)
-                    : BuildTopFileHistogram(analysis.Callers, caller => caller.Path);
+                var topFiles = BuildTopFileHistogramFromCounts(analysis.CountFileHistogram);
                 var countOnlyPayload = new JsonObject
                 {
                     ["query"] = query,
