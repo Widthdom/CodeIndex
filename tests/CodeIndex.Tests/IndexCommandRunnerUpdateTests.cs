@@ -991,7 +991,7 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(CommandExitCodes.Interrupted, exitCode);
             Assert.Equal(CommandErrorCodes.Interrupted, json.GetProperty("error_code").GetString());
             using var db = new DbContext(DbOpenIntent.WriteIndex, Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
-            Assert.Equal(DbContext.HotspotReferenceAggregateFlags, db.GetUserVersion());
+            Assert.Equal(DbContext.PreservedIndexStorageContractFlags, db.GetUserVersion());
             Assert.Equal(initialHead, db.GetMetaString(DbContext.WorkspaceVerifiedHeadShaMetaKey));
         }
         finally

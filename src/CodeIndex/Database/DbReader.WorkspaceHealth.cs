@@ -7,7 +7,9 @@ internal sealed record WorkspaceIndexHealthSnapshot(
     bool GraphDataCurrent,
     bool ReferenceGraphComplete,
     bool IndexComplete,
-    bool IndexNewerThanReader);
+    bool IndexNewerThanReader,
+    IReadOnlyList<string> IndexIncompleteReasons,
+    PersistedSymbolKindFilterPolicy SymbolKindFilterPolicy);
 
 public partial class DbReader
 {
@@ -34,6 +36,8 @@ public partial class DbReader
                 persistedReadiness.GraphDataCurrent,
                 persistedReadiness.ReferenceGraphComplete,
                 persistedReadiness.IndexComplete,
-                _indexNewerThanReader);
+                _indexNewerThanReader,
+                persistedReadiness.IndexIncompleteReasons,
+                persistedReadiness.SymbolKindFilterPolicy);
         });
 }

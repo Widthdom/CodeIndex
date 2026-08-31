@@ -41,7 +41,9 @@ public partial class McpServer
             symbols,
             loaded.Content,
             familyScopeKey);
-        session.SymbolsDroppedByKindFilter += context.SymbolKindFilter.Apply(symbols);
+        var symbolsDroppedByKindFilter = context.SymbolKindFilter.Apply(symbols);
+        context.Writer.SetSymbolsDroppedByKindFilter(fileId, symbolsDroppedByKindFilter);
+        session.SymbolsDroppedByKindFilter += symbolsDroppedByKindFilter;
 
         var committed = PersistMcpIndexSymbolsAndReferences(
             context,

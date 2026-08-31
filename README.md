@@ -182,7 +182,7 @@ visible here as a compact compatibility index.
 
 | Field group | Fields |
 |---|---|
-| Readiness and graph trust | `fold_ready`, `fold_ready_reason`, `graph_table_available`, `graph_data_current`, `reference_extraction_limits`, `reference_graph_complete`, `reference_graph_incomplete_reasons`, `reference_extraction_cap_hits`, `index_complete`, `index_incomplete_reasons`, `issues_table_available`, `file_issues_data_current`, `migration_in_progress`, `sql_graph_contract_ready`, `sql_graph_contract_degraded_reason`. |
+| Readiness and graph trust | `fold_ready`, `fold_ready_reason`, `graph_table_available`, `graph_data_current`, `reference_extraction_limits`, `reference_graph_complete`, `reference_graph_incomplete_reasons`, `reference_extraction_cap_hits`, `index_complete`, `index_incomplete_reasons`, `symbol_kind_filter_provenance_available`, `symbol_kind_filter`, `symbols_dropped_by_kind_filter`, `issues_table_available`, `file_issues_data_current`, `migration_in_progress`, `sql_graph_contract_ready`, `sql_graph_contract_degraded_reason`. |
 | Language readiness | `hotspot_family_ready`, `hotspot_family_degraded_reason`, `language_readiness`, `csharp_symbol_name_ready`, `csharp_metadata_target_ready`, `csharp_metadata_target_degraded_reason`. |
 | Workspace and HEAD freshness | `indexed_head_commit`, `worktree_head_changed`, `indexed_head_sha`, `indexed_head_branch`, `indexed_head_timestamp`, `commits_ahead_of_indexed_head`, `head_freshness`. |
 | Workspace-check path samples | `workspace_check.changed_files`, `workspace_check.missing_files`, `workspace_check.outside_sparse_cone_files`, `workspace_check.unindexed_files`, `workspace_check.unverifiable_files`, and `workspace_check.scan_errors`, each paired with authoritative `*_count`, `*_truncated`, `*_path_limit`, and `*_omitted_count` fields. |
@@ -428,7 +428,7 @@ field group を表に残します。
 
 | field group | field |
 |---|---|
-| readiness / graph trust | `fold_ready`、`fold_ready_reason`、`graph_table_available`、`graph_data_current`、`reference_extraction_limits`、`reference_graph_complete`、`reference_graph_incomplete_reasons`、`reference_extraction_cap_hits`、`index_complete`、`index_incomplete_reasons`、`issues_table_available`、`file_issues_data_current`、`migration_in_progress`、`sql_graph_contract_ready`、`sql_graph_contract_degraded_reason`。 |
+| readiness / graph trust | `fold_ready`、`fold_ready_reason`、`graph_table_available`、`graph_data_current`、`reference_extraction_limits`、`reference_graph_complete`、`reference_graph_incomplete_reasons`、`reference_extraction_cap_hits`、`index_complete`、`index_incomplete_reasons`、`symbol_kind_filter_provenance_available`、`symbol_kind_filter`、`symbols_dropped_by_kind_filter`、`issues_table_available`、`file_issues_data_current`、`migration_in_progress`、`sql_graph_contract_ready`、`sql_graph_contract_degraded_reason`。 |
 | language readiness | `hotspot_family_ready`、`hotspot_family_degraded_reason`、`language_readiness`、`csharp_symbol_name_ready`、`csharp_metadata_target_ready`、`csharp_metadata_target_degraded_reason`。 |
 | workspace / HEAD freshness | `indexed_head_commit`、`worktree_head_changed`、`indexed_head_sha`、`indexed_head_branch`、`indexed_head_timestamp`、`commits_ahead_of_indexed_head`、`head_freshness`。 |
 | workspace-check の path sample | `workspace_check.changed_files`、`workspace_check.missing_files`、`workspace_check.outside_sparse_cone_files`、`workspace_check.unindexed_files`、`workspace_check.unverifiable_files`、`workspace_check.scan_errors`。各一覧には authoritative な `*_count`、`*_truncated`、`*_path_limit`、`*_omitted_count` が対応します。 |

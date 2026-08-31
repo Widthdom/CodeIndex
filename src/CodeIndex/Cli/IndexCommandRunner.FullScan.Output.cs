@@ -182,6 +182,10 @@ public static partial class IndexCommandRunner
                     SymbolsDroppedByKindFilter = output.SymbolsDroppedByKindFilter,
                 },
                 SymbolKindFilter = output.Options.SymbolKindFilter.ToJsonResult(),
+                SymbolKindFilterProvenanceAvailable =
+                    persistedReadinessAfter.SymbolKindFilterPolicy.ProvenanceAvailable,
+                SymbolsDroppedByKindFilter =
+                    persistedReadinessAfter.SymbolKindFilterPolicy.SymbolsDropped,
                 GraphTableAvailable = persistedReadinessAfter.GraphTableAvailable,
                 GraphDataCurrent = persistedReadinessAfter.GraphDataCurrent,
                 IndexComplete = persistedReadinessAfter.IndexComplete,

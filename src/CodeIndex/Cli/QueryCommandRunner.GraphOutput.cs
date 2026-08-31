@@ -243,6 +243,7 @@ public static partial class QueryCommandRunner
             queryOptions: options,
             graphTableAvailable: graphAvailable,
             degraded: !graphAvailable,
+            includeIndexGenerationAuthority: true,
             deferAuthority: true);
         AddGraphSupportOverrideFields(payload, graphSupportOverride);
         if (options.Exact || options.ExactName)

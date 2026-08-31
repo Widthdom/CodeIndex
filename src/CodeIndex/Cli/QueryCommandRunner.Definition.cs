@@ -102,7 +102,8 @@ public static partial class QueryCommandRunner
                             queryOptions: options,
                             extraFields: options.GroupPartials
                                 ? payload => AddLogicalPartialCountJsonFields(payload, logicalCount: 0, physicalCount: 0, physicalFileCount: 0)
-                                : null);
+                                : null,
+                            includeIndexGenerationAuthority: true);
                         var writeExitCode = WriteJsonPayloadWithOptionalByteLimit(
                             zeroPayload,
                             options,
@@ -116,6 +117,7 @@ public static partial class QueryCommandRunner
                     else
                     {
                         Console.WriteLine("0");
+                        WriteIndexGenerationAuthorityWarningIfNeeded(reader);
                     }
                     return CommandExitCodes.Success;
                 }
@@ -181,21 +183,25 @@ public static partial class QueryCommandRunner
             WriteExactSymbolWarningIfNeeded(exact, options.Json, exactSignal, reader, options);
             if (results.Count == 0)
             {
-                if (options.Json && TryWriteEmptyFormattedResult(options, jsonOptions))
+                if (options.Json && TryWriteEmptyFormattedResult(
+                    options,
+                    jsonOptions,
+                    authorityReader: reader))
                     return ZeroResultExitCode(options);
                 if (options.Json)
                 {
                     const string hint = "Check the symbol spelling or narrow/adjust --kind, --lang, and --path filters.";
-                    var notFoundJson = JsonSerializer.Serialize(
+                    var notFoundJson = JsonSerializer.SerializeToNode(
                         new CommandErrorJsonResult(
                             "error",
                             BuildZeroResultLine("No definitions found", options),
                             hint,
                             CommandErrorCodes.QueryNotFound,
                             Category: "not_found"),
-                        CliJsonSerializerContextFactory.Create(jsonOptions).CommandErrorJsonResult);
+                        CliJsonSerializerContextFactory.Create(jsonOptions).CommandErrorJsonResult)!.AsObject();
+                    AddIndexGenerationAuthorityJsonFields(notFoundJson, reader, jsonOptions);
                     var writeExitCode = WriteJsonObjectWithOptionalByteLimit(
-                        notFoundJson,
+                        notFoundJson.ToJsonString(EnsureJsonNodeSerializerOptions(jsonOptions)),
                         options,
                         "definition not-found response",
                         "Increase --max-json-bytes to allow the structured not-found response.",
@@ -212,6 +218,7 @@ public static partial class QueryCommandRunner
                     WriteKindHint(options.Kind, reader);
                     WriteLangHint(options.Lang, reader);
                     WriteZeroResultHints(options, reader, "Try 'search' for full-text matches instead of symbol lookup.");
+                    WriteIndexGenerationAuthorityWarningIfNeeded(reader);
                 }
                 return ZeroResultExitCode(options);
             }
@@ -342,8 +349,24 @@ public static partial class QueryCommandRunner
             var results = reader.GetDefinitions(options.Query, limit, options.Kind, options.Lang, includeBody: false, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters, groupPartials: !all);
             if (results.Count == 0)
             {
+                if (options.Json)
+                {
+                    var payload = JsonSerializer.SerializeToNode(
+                        new CommandErrorJsonResult(
+                            "error",
+                            BuildZeroResultLine("No definitions found", options),
+                            "Check the symbol spelling or narrow/adjust --kind, --lang, and --path filters.",
+                            CommandErrorCodes.QueryNotFound,
+                            Category: "not_found"),
+                        CliJsonSerializerContextFactory.Create(jsonOptions).CommandErrorJsonResult)!.AsObject();
+                    AddIndexGenerationAuthorityJsonFields(payload, reader, jsonOptions);
+                    Console.WriteLine(payload.ToJsonString(EnsureJsonNodeSerializerOptions(jsonOptions)));
+                    return CommandExitCodes.NotFound;
+                }
+
+                WriteIndexGenerationAuthorityWarningIfNeeded(reader);
                 return CommandErrorWriter.WriteJsonOrHuman(
-                    options.Json,
+                    false,
                     jsonOptions,
                     BuildZeroResultLine("No definitions found", options),
                     CommandExitCodes.NotFound,

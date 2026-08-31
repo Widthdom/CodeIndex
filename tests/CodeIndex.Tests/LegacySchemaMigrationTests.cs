@@ -1443,13 +1443,14 @@ public class LegacySchemaMigrationTests : IDisposable
                 writer.MarkGraphReady();
                 writer.MarkIssuesReady();
                 writer.MarkFoldReady();
+                writer.MarkSymbolKindFilterAuditStorageContract();
                 Assert.Equal(DbContext.CurrentSchemaVersion, db.GetUserVersion());
 
                 // Simulate the start of a refresh: clear readiness. An interrupted refresh
-                // leaves only the aggregate contract bits — graph/issues trust is correctly demoted.
+                // leaves only the permanent storage-contract bits — graph/issues trust is correctly demoted.
                 // refresh 開始を模擬。中断されればここで止まり、縮退のまま残る。
                 db.ClearReadyFlags();
-                Assert.Equal(DbContext.HotspotReferenceAggregateFlags, db.GetUserVersion());
+                Assert.Equal(DbContext.PreservedIndexStorageContractFlags, db.GetUserVersion());
 
                 var reader = new DbReader(db.Connection);
                 var status = reader.GetStatus();
@@ -1803,14 +1804,15 @@ public class LegacySchemaMigrationTests : IDisposable
                 writer.MarkGraphReady();
                 writer.MarkIssuesReady();
                 writer.MarkFoldReady();
+                writer.MarkSymbolKindFilterAuditStorageContract();
                 Assert.Equal(DbContext.CurrentSchemaVersion, db.GetUserVersion());
             }
             SqliteConnection.ClearAllPools();
 
             // Simulate the production rebuild sequence: open → ClearReadyFlags → DropAll →
-            // InitializeSchema. Interrupt before any writes or MarkReady. Only the aggregate
-            // contract bits may remain.
-            // 本番の rebuild 順序を模擬し、stamp 前に中断。aggregate の contract bit 以外の
+            // InitializeSchema. Interrupt before any writes or MarkReady. Only permanent
+            // storage-contract bits may remain.
+            // 本番の rebuild 順序を模擬し、stamp 前に中断。永続 storage-contract bit 以外の
             // readiness は 0 でなければならない。
             using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
@@ -1818,7 +1820,7 @@ public class LegacySchemaMigrationTests : IDisposable
                 db.DropAll();
                 db.InitializeSchema();
                 // intentionally no writes, no MarkGraphReady / MarkIssuesReady
-                Assert.Equal(DbContext.HotspotReferenceAggregateFlags, db.GetUserVersion());
+                Assert.Equal(DbContext.PreservedIndexStorageContractFlags, db.GetUserVersion());
 
                 var reader = new DbReader(db.Connection);
                 var status = reader.GetStatus();
@@ -1851,6 +1853,7 @@ public class LegacySchemaMigrationTests : IDisposable
                 writer.MarkGraphReady();
                 writer.MarkIssuesReady();
                 writer.MarkFoldReady();
+                writer.MarkSymbolKindFilterAuditStorageContract();
                 Assert.Equal(DbContext.CurrentSchemaVersion, db.GetUserVersion());
 
                 var reader = new DbReader(db.Connection);

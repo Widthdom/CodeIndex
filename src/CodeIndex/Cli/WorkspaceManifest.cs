@@ -46,7 +46,15 @@ internal sealed record WorkspaceMemberIndexHealth(
     bool? ReferenceGraphComplete = null,
     bool? IndexComplete = null,
     bool? GraphReady = null,
-    bool? IndexNewerThanReader = null);
+    bool? IndexNewerThanReader = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    IReadOnlyList<string>? IndexIncompleteReasons = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    bool? SymbolKindFilterProvenanceAvailable = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    IndexSymbolKindFilterJsonResult? SymbolKindFilter = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    long? SymbolsDroppedByKindFilter = null);
 
 internal sealed record WorkspaceMemberHealthSummary(
     int MemberCount,

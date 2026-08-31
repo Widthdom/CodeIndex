@@ -284,6 +284,15 @@ public partial class DbReader
             IndexIncompleteReasons = persistedReadiness.IndexComplete
                 ? null
                 : persistedReadiness.IndexIncompleteReasons.ToList(),
+            SymbolKindFilterProvenanceAvailable = persistedReadiness.SymbolKindFilterPolicy.ProvenanceAvailable,
+            SymbolKindFilter = persistedReadiness.SymbolKindFilterPolicy.ProvenanceAvailable
+                ? new StatusSymbolKindFilter
+                {
+                    Include = persistedReadiness.SymbolKindFilterPolicy.Include,
+                    Exclude = persistedReadiness.SymbolKindFilterPolicy.Exclude,
+                }
+                : null,
+            SymbolsDroppedByKindFilter = persistedReadiness.SymbolKindFilterPolicy.SymbolsDropped,
             HotspotFamilyReady = hotspotFamilySignal.Ready,
             HotspotFamilyDegradedReason = hotspotFamilySignal.DegradedReason,
             LanguageReadiness = languageReadiness.Count > 0 ? languageReadiness : null,

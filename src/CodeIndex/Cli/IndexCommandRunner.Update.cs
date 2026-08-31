@@ -52,6 +52,7 @@ public static partial class IndexCommandRunner
         bool priorWorkspaceVerificationPendingPathsComplete,
         string? currentHeadCommit,
         string? priorSymbolKindFilterSignature,
+        bool priorSymbolKindFilterAuditCurrent,
         string? initialCwd,
         List<string>? indexRunDiagnostics,
         CancellationToken cancellationToken)
@@ -69,18 +70,6 @@ public static partial class IndexCommandRunner
             priorSymbolKindFilterSignature,
             options.SymbolKindFilter.Signature,
             StringComparison.Ordinal);
-        var scopedUpdateSymbolKindFilterMatchesPrior = symbolKindFilterMatchesPrior
-            || (priorSymbolKindFilterSignature == null && !options.SymbolKindFilter.IsActive);
-        if (!scopedUpdateSymbolKindFilterMatchesPrior)
-        {
-            return WriteCommandError(
-                options.Json,
-                jsonOptions,
-                "symbol-kind filter policy cannot change during a scoped update because existing files would keep symbols from the prior index policy",
-                CommandExitCodes.UsageError,
-                "Run a full index refresh without --files, --commits, or --changed-between when changing --include-symbol-kind or --exclude-symbol-kind.",
-                CommandErrorCodes.UsageError);
-        }
         var priorFilterRetainedCSharpContractMembers =
             SymbolKindFilter.SignatureRetainsCSharpStaticInterfaceContractMembers(
                 priorSymbolKindFilterSignature);
@@ -172,12 +161,32 @@ public static partial class IndexCommandRunner
                 priorIndexedHeadCommit,
                 currentHeadCommit,
                 priorSymbolKindFilterSignature,
+                priorSymbolKindFilterAuditCurrent,
                 initialCwd,
                 indexRunDiagnostics,
                 showNextSteps: false,
                 cancellationToken: cancellationToken,
                 forceJavaScriptTypeScriptRefresh: typeScriptJavaScriptConfigChanged,
                 forceExtractorRefresh: extractorConfigurationChanged || ambiguousLanguageProjectMarkerChanged);
+        }
+
+        // Missing policy provenance is safe only when there are no existing file rows to retain.
+        // An explicitly unfiltered policy does not depend on per-file dropped-symbol counts, but
+        // an active filter still requires the current audit generation and downgrade guard.
+        // policy provenance 不明でも既存 file 行が無ければ保持対象はない。明示的な
+        // unfiltered policy は file ごとの drop 数に依存しないが、active filter は現 audit 世代と
+        // downgrade guard を必須とする。
+        if (writer.HasIndexedFiles()
+            && (!symbolKindFilterMatchesPrior
+                || (options.SymbolKindFilter.IsActive && !priorSymbolKindFilterAuditCurrent)))
+        {
+            return WriteCommandError(
+                options.Json,
+                jsonOptions,
+                "symbol-kind filter policy cannot change and its per-file audit generation must be current during a scoped update because untouched files would retain incompatible evidence",
+                CommandExitCodes.UsageError,
+                "Run a full index refresh without --files, --commits, or --changed-between to establish one symbol-kind policy and audit generation.",
+                CommandErrorCodes.UsageError);
         }
 
         if (!options.Json && !options.Quiet)

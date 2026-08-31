@@ -495,6 +495,7 @@ public static partial class QueryCommandRunner
         FtsQueryDiagnostics? ftsQueryDiagnostics = null,
         SearchQueryHint? exactSubstringHint = null,
         Action<JsonObject>? extraFields = null,
+        bool includeIndexGenerationAuthority = false,
         bool deferAuthority = false)
     {
         var payload = new JsonObject
@@ -524,6 +525,8 @@ public static partial class QueryCommandRunner
         if (exactSubstringHint != null)
             payload["exact_substring_hint"] = BuildSearchQueryHintJson(exactSubstringHint);
         extraFields?.Invoke(payload);
+        if (count == 0 && includeIndexGenerationAuthority)
+            AddIndexGenerationAuthorityJsonFields(payload, reader, jsonOptions);
         AddCountEnvelopeJsonFields(payload, reader, jsonOptions, queryOptions, deferAuthority);
         return payload;
     }
@@ -612,9 +615,58 @@ public static partial class QueryCommandRunner
         if (queryOptions != null)
             payload["query_context"] = BuildQueryContextJson(queryOptions, jsonOptions);
         extraFields?.Invoke(payload);
+        AddIndexGenerationAuthorityJsonFields(payload, reader, jsonOptions);
         AddFreshnessHint(payload, reader);
 
         return payload;
+    }
+
+    private static void AddIndexGenerationAuthorityJsonFields(
+        JsonObject payload,
+        DbReader reader,
+        JsonSerializerOptions jsonOptions)
+    {
+        var completion = reader.GetPersistedIndexCompletion();
+        if (completion.IndexComplete)
+            return;
+
+        var policy = completion.SymbolKindFilterPolicy;
+        payload["index_complete"] = completion.IndexComplete;
+        payload["symbol_kind_filter_provenance_available"] = policy.ProvenanceAvailable;
+        if (policy.ProvenanceAvailable)
+        {
+            payload["symbol_kind_filter"] = new JsonObject
+            {
+                ["include"] = JsonSerializer.SerializeToNode(
+                    policy.Include.ToList(),
+                    CliJsonSerializerContextFactory.Create(jsonOptions).ListString),
+                ["exclude"] = JsonSerializer.SerializeToNode(
+                    policy.Exclude.ToList(),
+                    CliJsonSerializerContextFactory.Create(jsonOptions).ListString),
+            };
+        }
+        if (policy.SymbolsDropped.HasValue)
+            payload["symbols_dropped_by_kind_filter"] = policy.SymbolsDropped.Value;
+        payload["index_incomplete_reasons"] = JsonSerializer.SerializeToNode(
+            completion.IndexIncompleteReasons.ToList(),
+            CliJsonSerializerContextFactory.Create(jsonOptions).ListString);
+        payload["degraded"] = true;
+        payload["authoritative_count"] = false;
+        payload["index_generation_warning"] =
+            "The persisted index generation is coverage-limited; negative symbol and graph results are not authoritative.";
+    }
+
+    private static void WriteIndexGenerationAuthorityWarningIfNeeded(DbReader reader)
+    {
+        var completion = reader.GetPersistedIndexCompletion();
+        if (completion.IndexComplete)
+            return;
+
+        var reasons = completion.IndexIncompleteReasons.Count == 0
+            ? DegradationReasonCodes.IndexIncomplete
+            : string.Join(", ", completion.IndexIncompleteReasons.Take(4));
+        CommandErrorWriter.WriteStderr(
+            $"WARN: index generation is coverage-limited ({reasons}); negative symbol and graph results are not authoritative.");
     }
 
     private static JsonObject BuildSearchQueryHintJson(SearchQueryHint hint) => new()
