@@ -671,6 +671,184 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunDefinition_CSharpSemicolonRecordsReturnDeclarationBodies_Issue5228()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_definition_csharp_semicolon_record_5228");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Records.cs",
+                "csharp",
+                """
+                public record Single(string Value);
+                public sealed record class Named(string Value);
+                public readonly record struct Point(int X, int Y);
+                [Data] public record Complex<T>(
+                    [property: Data] T Value,
+                    string Name)
+                    : Base<T>(Value)
+                    where T : class;
+
+                public record Braced(string Value)
+                {
+                    public string Upper => Value.ToUpperInvariant();
+                }
+                """);
+
+            foreach (var (name, startLine, endLine) in new[]
+            {
+                ("Single", 1, 1),
+                ("Named", 2, 2),
+                ("Point", 3, 3),
+                ("Complex", 4, 8),
+            })
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
+                    [name, "--db", dbPath, "--json", "--body", "--lang", "csharp", "--exact-name"],
+                    _jsonOptions));
+                using var document = ParseJsonOutput(stdout);
+                var definition = document.RootElement;
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                Assert.Equal(startLine, definition.GetProperty("line").GetInt32());
+                Assert.Equal(endLine, definition.GetProperty("end_line").GetInt32());
+                Assert.Equal(startLine, definition.GetProperty("body_requested_start_line").GetInt32());
+                Assert.Equal(endLine, definition.GetProperty("body_requested_end_line").GetInt32());
+                Assert.Equal(startLine, definition.GetProperty("body_effective_start_line").GetInt32());
+                Assert.Equal(endLine, definition.GetProperty("body_effective_end_line").GetInt32());
+                Assert.False(
+                    definition.TryGetProperty("body_content_truncated", out var contentTruncated)
+                    && contentTruncated.GetBoolean());
+                Assert.Contains("record", definition.GetProperty("body_content").GetString(), StringComparison.Ordinal);
+                Assert.Contains(name, definition.GetProperty("body_content").GetString(), StringComparison.Ordinal);
+                Assert.True(definition.GetProperty("content_omitted").GetBoolean());
+                Assert.Equal("body_content_field", definition.GetProperty("content_omitted_reason").GetString());
+            }
+
+            var (fullExitCode, fullStdout, fullStderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
+                ["Complex", "--db", dbPath, "--json", "--body", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+            var (projectedExitCode, projectedStdout, projectedStderr) = CaptureConsole(() => ProgramRunner.Run(
+                [
+                    "definition", "Complex", "--db", dbPath, "--json", "--body", "--lang", "csharp", "--exact-name",
+                    "--fields", "name,line,end_line,body_start_line,body_end_line,body_content",
+                ],
+                _jsonOptions,
+                "1.0.0-test"));
+            using var fullDocument = ParseJsonOutput(fullStdout);
+            using var projectedDocument = ParseJsonOutput(projectedStdout);
+            var fullDefinition = fullDocument.RootElement;
+            var projectedDefinition = Assert.Single(projectedDocument.RootElement.GetProperty("results").EnumerateArray());
+
+            Assert.Equal(CommandExitCodes.Success, fullExitCode);
+            Assert.Equal(CommandExitCodes.Success, projectedExitCode);
+            Assert.Equal(string.Empty, fullStderr);
+            Assert.Equal(string.Empty, projectedStderr);
+            foreach (var field in new[]
+            {
+                "name",
+                "line",
+                "end_line",
+                "body_start_line",
+                "body_end_line",
+                "body_content",
+                "body_requested_start_line",
+                "body_requested_end_line",
+                "body_effective_start_line",
+                "body_effective_end_line",
+                "body_content_truncated",
+            })
+            {
+                var fullHasField = fullDefinition.TryGetProperty(field, out var fullValue);
+                var projectedHasField = projectedDefinition.TryGetProperty(field, out var projectedValue);
+                Assert.Equal(fullHasField, projectedHasField);
+                if (fullHasField)
+                    Assert.Equal(fullValue.GetRawText(), projectedValue.GetRawText());
+            }
+
+            var (bracedExitCode, bracedStdout, bracedStderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
+                ["Braced", "--db", dbPath, "--json", "--body", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+            using var bracedDocument = ParseJsonOutput(bracedStdout);
+            var braced = bracedDocument.RootElement;
+            Assert.Equal(CommandExitCodes.Success, bracedExitCode);
+            Assert.Equal(string.Empty, bracedStderr);
+            Assert.Equal(11, braced.GetProperty("body_requested_start_line").GetInt32());
+            Assert.Equal(13, braced.GetProperty("body_requested_end_line").GetInt32());
+            Assert.Contains("public string Upper", braced.GetProperty("body_content").GetString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunDefinition_CSharpSemicolonRecordReportsLineAndByteCaps_Issue5228()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_definition_csharp_semicolon_record_caps_5228");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var componentLines = Enumerable.Range(1, DbReader.DefinitionBodyMaxLines + 3)
+                .Select(i => $"    int Value{i:D2}{(i == DbReader.DefinitionBodyMaxLines + 3 ? string.Empty : ",")}");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/LongRecord.cs",
+                "csharp",
+                "public record LongRecord(\n" + string.Join('\n', componentLines) + "\n);\n");
+
+            var longLiteral = new string('a', DbReader.DefinitionBodyMaxBytes + 1024);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/HugeRecord.cs",
+                "csharp",
+                $"public record HugeRecord(string Value = \"{longLiteral}\");\n");
+
+            var (lineExitCode, lineStdout, lineStderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
+                ["LongRecord", "--db", dbPath, "--json", "--body", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+            using var lineDocument = ParseJsonOutput(lineStdout);
+            var lineDefinition = lineDocument.RootElement;
+            Assert.Equal(CommandExitCodes.Success, lineExitCode);
+            Assert.Equal(string.Empty, lineStderr);
+            Assert.True(lineDefinition.GetProperty("body_content_truncated").GetBoolean());
+            Assert.Equal(1, lineDefinition.GetProperty("body_requested_start_line").GetInt32());
+            Assert.Equal(DbReader.DefinitionBodyMaxLines + 5, lineDefinition.GetProperty("body_requested_end_line").GetInt32());
+            Assert.Equal(DbReader.DefinitionBodyMaxLines, lineDefinition.GetProperty("body_effective_end_line").GetInt32());
+            Assert.Contains(
+                "body_line_cap",
+                lineDefinition.GetProperty("body_content_truncation_reasons").EnumerateArray().Select(reason => reason.GetString()));
+            Assert.Equal(
+                DbReader.DefinitionBodyMaxLines + 1,
+                lineDefinition.GetProperty("body_content_recovery").GetProperty("start_line").GetInt32());
+
+            var (byteExitCode, byteStdout, byteStderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
+                ["HugeRecord", "--db", dbPath, "--json", "--body", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+            using var byteDocument = ParseJsonOutput(byteStdout);
+            var byteDefinition = byteDocument.RootElement;
+            Assert.Equal(CommandExitCodes.Success, byteExitCode);
+            Assert.Equal(string.Empty, byteStderr);
+            Assert.True(byteDefinition.GetProperty("body_content_truncated").GetBoolean());
+            Assert.Equal(1, byteDefinition.GetProperty("body_requested_start_line").GetInt32());
+            Assert.Equal(1, byteDefinition.GetProperty("body_requested_end_line").GetInt32());
+            Assert.Contains(
+                "body_byte_cap",
+                byteDefinition.GetProperty("body_content_truncation_reasons").EnumerateArray().Select(reason => reason.GetString()));
+            Assert.Equal(1, byteDefinition.GetProperty("body_content_recovery").GetProperty("start_line").GetInt32());
+            Assert.Equal(1, byteDefinition.GetProperty("body_content_recovery").GetProperty("end_line").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSymbols_ExactNameFindsPythonDottedImportPrefixes()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_python_dotted_import_prefix");

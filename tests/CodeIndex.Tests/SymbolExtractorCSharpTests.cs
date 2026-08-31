@@ -3298,6 +3298,11 @@ public partial class SymbolExtractorTests
         // Signature should contain parameters / シグネチャにパラメータが含まれるべき
         var userDto = symbols.First(s => s.Name == "UserDto");
         Assert.Contains("string Name", userDto.Signature);
+        Assert.Equal((1, 1, 1), (userDto.EndLine, userDto.BodyStartLine, userDto.BodyEndLine));
+        var config = symbols.First(s => s.Name == "Config");
+        Assert.Equal((2, 2, 2), (config.EndLine, config.BodyStartLine, config.BodyEndLine));
+        var point = symbols.First(s => s.Name == "Point");
+        Assert.Equal((3, 3, 3), (point.EndLine, point.BodyStartLine, point.BodyEndLine));
     }
 
     [Fact]
@@ -3465,6 +3470,8 @@ public partial class SymbolExtractorTests
 
         var bodyless = Assert.Single(symbols.Where(s => s.Kind == "struct" && s.Name == "Bodyless"));
         Assert.Equal(5, bodyless.EndLine);
+        Assert.Equal(3, bodyless.BodyStartLine);
+        Assert.Equal(5, bodyless.BodyEndLine);
 
         var y = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Y" && s.ContainerName == "Bodyless"));
         Assert.Equal(5, y.Line);
@@ -3491,9 +3498,13 @@ public partial class SymbolExtractorTests
 
         var dog = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Dog"));
         Assert.Equal(7, dog.EndLine);
+        Assert.Equal(5, dog.BodyStartLine);
+        Assert.Equal(7, dog.BodyEndLine);
 
         var box = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Box"));
         Assert.Equal(11, box.EndLine);
+        Assert.Equal(9, box.BodyStartLine);
+        Assert.Equal(11, box.BodyEndLine);
     }
 
     [Fact]
@@ -3549,9 +3560,51 @@ public partial class SymbolExtractorTests
 
         var empty = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Empty"));
         Assert.Equal(5, empty.EndLine);
+        Assert.Equal(3, empty.BodyStartLine);
+        Assert.Equal(5, empty.BodyEndLine);
 
         var emptyStruct = Assert.Single(symbols.Where(s => s.Kind == "struct" && s.Name == "EmptyStruct"));
         Assert.Equal(10, emptyStruct.EndLine);
+        Assert.Equal(9, emptyStruct.BodyStartLine);
+        Assert.Equal(10, emptyStruct.BodyEndLine);
+    }
+
+    [Fact]
+    public void Extract_CSharp_SemicolonRecordRangeStopsBeforeFollowingDeclaration_Issue5228()
+    {
+        var content = """
+            [Data]
+            public record Envelope<T>(
+                T Value)
+                : Base<T>(Value)
+                where T : class;
+
+            public record Broken(
+                string Value
+            public class Following
+            {
+            }
+
+            public class Ordinary
+            {
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var envelope = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Envelope"));
+        Assert.Equal((2, 5), (envelope.StartLine, envelope.EndLine));
+        Assert.Equal((2, 5), (envelope.BodyStartLine, envelope.BodyEndLine));
+
+        var broken = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Broken"));
+        Assert.Equal(7, broken.EndLine);
+        Assert.Null(broken.BodyStartLine);
+        Assert.Null(broken.BodyEndLine);
+
+        var following = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Following"));
+        Assert.Equal((10, 11), (following.BodyStartLine, following.BodyEndLine));
+
+        var ordinary = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Ordinary"));
+        Assert.Equal((14, 15), (ordinary.BodyStartLine, ordinary.BodyEndLine));
     }
 
     [Fact]
@@ -3605,6 +3658,9 @@ public partial class SymbolExtractorTests
         Assert.Equal("class", upper.ContainerKind);
         Assert.Equal("Person", upper.ContainerName);
         Assert.Equal("App.Person", upper.ContainerQualifiedName);
+
+        var person = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Person"));
+        Assert.Equal((4, 8), (person.BodyStartLine, person.BodyEndLine));
     }
 
     [Fact]
