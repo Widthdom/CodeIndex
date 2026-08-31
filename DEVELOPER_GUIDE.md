@@ -1411,12 +1411,22 @@ Index-generation completeness is computed by one persisted-readiness reader and
 reused by the successful full/update index response, immediate status and
 workspace status, and MCP indexing/status responses. Persisted omission evidence
 from symbols-only runs, `file_too_large`, `symbol_count_exceeded`,
-`reference_count_exceeded`, extractor failures, and reference safety caps makes
+`reference_count_exceeded`, extractor failures, reference safety caps, and an
+active persisted symbol-kind policy makes
 `index_complete=false` with stable `index_incomplete_reasons`.
 `reference_graph_complete` additionally requires an available, current graph
-generation and repeats graph-specific stable reasons. A legacy database without
-the completeness metadata keeps the compatibility default unless its persisted
-rows prove that work was omitted.
+generation and repeats graph-specific stable reasons. The normalized
+`index_symbol_kind_filter` metadata, the successful-generation
+`index_symbol_kind_filter_audit_version` marker, and per-file
+`files.symbols_dropped_by_kind_filter` facts are shared by CLI index/status,
+workspace health, and MCP indexing/status. An active policy always adds
+`symbol_kind_filter_coverage_limited`, including zero-drop runs. A legacy DB
+without policy provenance remains readable but adds
+`symbol_kind_filter_provenance_unavailable`; this conservative fallback differs
+from older completeness metadata, whose compatibility default remains unless
+persisted rows prove that work was omitted. An active legacy generation without
+the audit marker withholds its aggregate until a whole-workspace refresh has
+restamped every per-file fact.
 
 Reference extraction publishes its fixed safety limits through CLI
 `languages --json` / `status --json` and the corresponding MCP responses:
@@ -1478,7 +1488,9 @@ Current stable codes and triggers:
 | `graph_table_available=false` | `symbol_references` is missing or not graph-ready | `cdidx index <projectPath>` |
 | `symbols_only_graph_omitted` | the last symbols-only generation intentionally omitted reference-graph rows | run `cdidx index <projectPath>` without `--symbols-only` |
 | `reference_graph_complete=false` | the graph generation is unavailable/stale, a symbols-only run omitted it, or persisted file/extractor/cap evidence makes the index generation incomplete | address the reported stable reasons, then run `cdidx index <projectPath>` |
-| `index_complete=false` | a symbols-only run or persisted file-size, symbol-count, reference-count, extractor-failure, or safety-cap evidence proves that indexing work was omitted | address `index_incomplete_reasons`, then run `cdidx index <projectPath>` |
+| `index_complete=false` | persisted omission evidence, an active symbol-kind policy, or unavailable legacy policy provenance means full-generation absence authority is unavailable | address `index_incomplete_reasons`, then rerun indexing; rebuild unfiltered for full coverage |
+| `symbol_kind_filter_coverage_limited` | persisted include/exclude policy intentionally limits symbol coverage, including zero-drop runs | `cdidx index <projectPath> --rebuild` without the symbol-kind filter |
+| `symbol_kind_filter_provenance_unavailable` | a legacy DB has no persisted policy stamp | rebuild with a current binary; negative symbol/graph results remain non-authoritative until then |
 | `issues_table_available=false` | `file_issues` is missing or not issue-ready | `cdidx index <projectPath>` |
 | `csharp_symbol_name_ready=false` | C# canonical symbol-name stamps are stale | `cdidx index <projectPath>` |
 | `csharp_metadata_target_ready=false` | C# metadata-target stamps are stale | `cdidx index <projectPath>` |
@@ -5548,11 +5560,18 @@ index generation の completeness は単一の persisted-readiness reader で計
 成功した full/update index response、直後の status / workspace status、MCP の
 indexing/status response で再利用します。symbols-only run、`file_too_large`、
 `symbol_count_exceeded`、`reference_count_exceeded`、extractor failure、
-reference safety cap の永続化済み省略証拠がある場合は
+reference safety cap の永続化済み省略証拠、または active な永続 symbol-kind policy がある場合は
 `index_complete=false` となり、安定した `index_incomplete_reasons` を返します。
 `reference_graph_complete` はさらに利用可能かつ current な graph generation を要求し、
-graph 固有の安定した理由を返します。completeness metadata を持たない legacy database は、
-永続化済み row が処理の省略を証明しない限り compatibility default を維持します。
+graph 固有の安定した理由を返します。正規化済み `index_symbol_kind_filter` metadata、成功世代の
+`index_symbol_kind_filter_audit_version` marker、file ごとの
+`files.symbols_dropped_by_kind_filter` fact は CLI index/status、workspace health、
+MCP indexing/status で共有します。active policy は除外数0でも必ず
+`symbol_kind_filter_coverage_limited` を追加します。policy provenance を持たない legacy DB は
+読み取り可能なまま `symbol_kind_filter_provenance_unavailable` を追加します。この保守的な
+fallback は従来の completeness metadata とは別で、後者は永続 row が処理の省略を証明しない限り
+compatibility default を維持します。audit marker の無い active な legacy generation は、
+全 workspace refresh が file ごとの fact をすべて再 stamp するまで aggregate を省略します。
 
 reference extraction の固定 safety limit は lookup symbol 50,000件、lookup line
 20,000行、1行あたりの name 512件、container candidate 20,000件で、CLI の
@@ -5639,7 +5658,9 @@ alternative action を同じ場所へ追加してください。
 | `graph_table_available=false` | `symbol_references` が無い、または graph-ready ではない | `cdidx index <projectPath>` |
 | `symbols_only_graph_omitted` | 直前の symbols-only generation が reference-graph row を意図的に省略した | `--symbols-only` を付けずに `cdidx index <projectPath>` を実行 |
 | `reference_graph_complete=false` | graph generation が unavailable/stale、symbols-only run で省略、または永続化済み file/extractor/cap 証拠により index generation が incomplete | 報告された安定理由に対処してから `cdidx index <projectPath>` |
-| `index_complete=false` | symbols-only run、または永続化済みの file-size / symbol-count / reference-count / extractor-failure / safety-cap 証拠により indexing work の省略が判明 | `index_incomplete_reasons` に対処してから `cdidx index <projectPath>` |
+| `index_complete=false` | 永続化済み省略証拠、active symbol-kind policy、または legacy policy provenance 不在により generation 全体の不在 authority が利用できない | `index_incomplete_reasons` に対処して再 index。full coverage が必要なら filter なしで rebuild |
+| `symbol_kind_filter_coverage_limited` | 永続 include/exclude policy が、除外数0の場合も含めて symbol coverage を意図的に制限 | symbol-kind filter なしで `cdidx index <projectPath> --rebuild` |
+| `symbol_kind_filter_provenance_unavailable` | legacy DB に永続 policy stamp が無い | 現行 binary で rebuild。完了まで symbol/graph の否定結果は non-authoritative |
 | `issues_table_available=false` | `file_issues` が無い、または issue-ready ではない | `cdidx index <projectPath>` |
 | `csharp_symbol_name_ready=false` | C# canonical symbol-name stamp が stale | `cdidx index <projectPath>` |
 | `csharp_metadata_target_ready=false` | C# metadata-target stamp が stale | `cdidx index <projectPath>` |

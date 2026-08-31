@@ -1117,6 +1117,8 @@ internal sealed class IndexUpdateJsonResult : IVersionedJsonResult
     public string Mode { get; init; } = string.Empty;
     public IndexUpdateSummaryJsonResult Summary { get; init; } = new();
     public IndexSymbolKindFilterJsonResult SymbolKindFilter { get; init; } = new();
+    public bool SymbolKindFilterProvenanceAvailable { get; init; }
+    public long? SymbolsDroppedByKindFilter { get; init; }
     public bool GraphTableAvailable { get; init; }
     public bool GraphDataCurrent { get; init; }
     public bool IndexComplete { get; init; }
@@ -1169,6 +1171,8 @@ internal sealed class IndexFullScanJsonResult : IVersionedJsonResult
     public bool UnknownExtensionFileCountLowerBound { get; init; }
     public string? UnknownExtensionGuidance { get; init; }
     public IndexSymbolKindFilterJsonResult SymbolKindFilter { get; init; } = new();
+    public bool SymbolKindFilterProvenanceAvailable { get; init; }
+    public long? SymbolsDroppedByKindFilter { get; init; }
     public bool GraphTableAvailable { get; init; }
     public bool GraphDataCurrent { get; init; }
     public bool IndexComplete { get; init; }

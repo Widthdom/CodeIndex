@@ -3095,6 +3095,19 @@ public sealed class Caller
     }
 
     [Theory]
+    [InlineData("class;custom", "reserved ',' or ';'")]
+    [InlineData("class\nspoof", "control characters")]
+    public void ParseArgs_SymbolKindFilters_RejectNonRoundTrippableValues_Issue5224(
+        string value,
+        string expectedError)
+    {
+        var options = IndexCommandRunner.ParseArgs([".", "--include-symbol-kind", value]);
+
+        Assert.Contains(expectedError, options.SymbolKindFilter.ParseError, StringComparison.Ordinal);
+        Assert.Empty(options.SymbolKindFilter.Include);
+    }
+
+    [Theory]
     [InlineData("include=;exclude=", true)]
     [InlineData("include=class,FUNCTION,operator,property;exclude=", true)]
     [InlineData("include=interface,operator,property;exclude=", false)]

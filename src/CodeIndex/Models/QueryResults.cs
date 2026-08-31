@@ -1514,6 +1514,14 @@ public sealed class StatusDatabaseSizeAttribution
     public List<StatusDatabaseObjectSize>? TopObjects { get; set; }
 }
 
+public sealed class StatusSymbolKindFilter
+{
+    [JsonPropertyName("include")]
+    public IReadOnlyList<string> Include { get; set; } = [];
+    [JsonPropertyName("exclude")]
+    public IReadOnlyList<string> Exclude { get; set; } = [];
+}
+
 public class StatusResult
 {
     internal const string SqliteConnectionPolicyJsonFieldName = "sqlite_connection_policy";
@@ -1860,6 +1868,22 @@ public class StatusResult
     [JsonPropertyName("index_incomplete_reasons")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<string>? IndexIncompleteReasons { get; set; }
+    /// <summary>
+    /// True when the normalized include/exclude policy used for the persisted generation is
+    /// available. False is the conservative legacy fallback: negative symbol and graph results
+    /// are not authoritative until a current index pass stamps the policy.
+    /// 永続 generation に適用した正規化済み include/exclude policy が利用可能なら true。
+    /// false は旧 DB 向けの保守的 fallback で、現行 index が policy を stamp するまで
+    /// symbol / graph の否定結果を authoritative とみなさない。
+    /// </summary>
+    [JsonPropertyName("symbol_kind_filter_provenance_available")]
+    public bool SymbolKindFilterProvenanceAvailable { get; set; }
+    [JsonPropertyName("symbol_kind_filter")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public StatusSymbolKindFilter? SymbolKindFilter { get; set; }
+    [JsonPropertyName("symbols_dropped_by_kind_filter")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? SymbolsDroppedByKindFilter { get; set; }
     /// <summary>
     /// True when authoritative cross-file hotspot-family grouping metadata is current for every
     /// marker-capable language currently indexed in this DB. False means `hotspots` can still

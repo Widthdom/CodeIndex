@@ -215,6 +215,8 @@ public partial class DbContext : IDisposable
         yield return ("EnsureColumn files.checksum", () => EnsureColumn("files", "checksum", "TEXT"));
         yield return ("EnsureColumn files.modified", () => EnsureColumn("files", "modified", "DATETIME"));
         yield return ("EnsureColumn files.indexed_at", () => EnsureColumn("files", "indexed_at", "DATETIME"));
+        yield return ($"EnsureColumn files.{SymbolsDroppedByKindFilterColumn}",
+            () => EnsureColumn("files", SymbolsDroppedByKindFilterColumn, "INTEGER NOT NULL DEFAULT 0"));
         yield return ("EnsureColumn symbols.start_line", () => EnsureColumn("symbols", "start_line", "INTEGER"));
         yield return ("EnsureColumn symbols.end_line", () => EnsureColumn("symbols", "end_line", "INTEGER"));
         yield return ("EnsureColumn symbols.body_start_line", () => EnsureColumn("symbols", "body_start_line", "INTEGER"));

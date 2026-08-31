@@ -149,6 +149,7 @@ public partial class DbWriter
                 checksum = excluded.checksum,
                 modified = excluded.modified,
                 generated = excluded.generated,
+                symbols_dropped_by_kind_filter = 0,
                 indexed_at = CURRENT_TIMESTAMP
             RETURNING id",
             static c =>
@@ -193,6 +194,35 @@ public partial class DbWriter
         referenceIdentityChanged = cleanExistingData && DeleteFileDataCore(fileId, trackTypeScriptInterfaceNames: false);
 
         return fileId;
+    }
+
+    /// <summary>
+    /// Persist the number of symbols removed by the active kind policy for one indexed file.
+    /// 現在の kind policy により除外された symbol 数を index 済み file 単位で保存する。
+    /// </summary>
+    public void SetSymbolsDroppedByKindFilter(long fileId, int count)
+    {
+        if (count < 0)
+            throw new ArgumentOutOfRangeException(nameof(count));
+
+        var command = RentCommand(
+            $"UPDATE files SET {DbContext.SymbolsDroppedByKindFilterColumn} = @count WHERE id = @fileId",
+            static c =>
+            {
+                c.Parameters.Add("@count", SqliteType.Integer);
+                c.Parameters.Add("@fileId", SqliteType.Integer);
+            });
+        try
+        {
+            command.Parameters["@count"].Value = count;
+            command.Parameters["@fileId"].Value = fileId;
+            if (command.ExecuteNonQuery() != 1)
+                throw new InvalidOperationException("Could not persist the symbol-kind filter drop count for the indexed file.");
+        }
+        finally
+        {
+            ReleaseCommand(command);
+        }
     }
 
     /// <summary>
