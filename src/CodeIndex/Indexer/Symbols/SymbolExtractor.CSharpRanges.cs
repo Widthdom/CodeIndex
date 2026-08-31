@@ -5,8 +5,23 @@ namespace CodeIndex.Indexer;
 
 public static partial class SymbolExtractor
 {
+    private const string CSharpRecordBoundaryModifierPattern =
+        "(?:" + CSharpVisibilityPattern + @"|file|static|abstract|sealed|partial|readonly|ref|unsafe|new)";
+    private const string CSharpRecordMemberBoundaryModifierPattern =
+        "(?:" + CSharpVisibilityPattern + @"|static|abstract|virtual|override|sealed|partial|readonly|volatile|ref|required|unsafe|extern|async|new)";
     private static readonly Regex CSharpFollowingTypeDeclarationRegex = new(
-        @"^\s*(?:(?:public|protected|internal|private|file|static|abstract|sealed|partial|readonly|ref|unsafe|new)\s+)*(?:record(?:\s+(?:class|struct))?|class|struct|interface|enum|delegate|namespace)\b",
+        @"^\s*(?:" + CSharpRecordBoundaryModifierPattern + @"\s+)*(?:"
+        + @"(?:record(?:\s+(?:class|struct))?|class|struct|interface|enum)\s+" + CSharpIdentifierPattern + @"\b"
+        + @"|delegate\s+" + CSharpTypePattern + @"\s+" + CSharpIdentifierPattern + @"(?=\s*[\(<])"
+        + @"|namespace\s+" + CSharpNamespacePattern + @"\b)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CSharpFollowingMemberDeclarationRegex = new(
+        @"^\s*(?![?:,])(?!where\b)(?:" + CSharpRecordMemberBoundaryModifierPattern + @"\s+)*(?:"
+        + @"event\s+" + CSharpTypePattern + @"\s+" + CSharpIdentifierPattern + @"(?=\s*(?:[;{=]|=>))"
+        + @"|" + CSharpTypePattern + @"\s+" + CSharpIdentifierPattern + CSharpMethodTypeParameterListPattern
+            + @"(?=\s*(?:\(|[;{=]|=>))"
+        + @"|(?:(?:unsafe|extern)\s+)*(?:" + CSharpVisibilityPattern + @")\s+"
+            + @"(?:(?:unsafe|extern|partial)\s+)*" + CSharpIdentifierPattern + @"(?=\s*\())",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindCSharpPatternBodyRange(
@@ -44,15 +59,21 @@ public static partial class SymbolExtractor
     {
         var parenDepth = 0;
         var bracketDepth = 0;
-        var limit = Math.Min(csharpMatchLines.Length, startLineIndex + CSharpTypeHeaderLookaheadLineLimit);
 
-        for (var lineIndex = startLineIndex; lineIndex < limit; lineIndex++)
+        // Unlike the lightweight signature lookahead, definition content must remain available
+        // for legal positional records longer than 64 lines. Following-declaration checks keep an
+        // incomplete edit from walking into later declarations while this scan stays linear.
+        // 軽量な signature lookahead と異なり、definition content は 64 行を超える合法な
+        // positional record でも返す。線形走査を維持しつつ、後続宣言の検査で未完入力が
+        // 後続宣言まで取り込むことを防ぐ。
+        for (var lineIndex = startLineIndex; lineIndex < csharpMatchLines.Length; lineIndex++)
         {
             var sanitizedLine = csharpMatchLines[lineIndex];
             if (lineIndex > startLineIndex
                 && parenDepth == 0
                 && bracketDepth == 0
-                && CSharpFollowingTypeDeclarationRegex.IsMatch(sanitizedLine))
+                && (CSharpFollowingTypeDeclarationRegex.IsMatch(sanitizedLine)
+                    || CSharpFollowingMemberDeclarationRegex.IsMatch(sanitizedLine)))
             {
                 declarationRange = (startLineIndex + 1, null, null);
                 return true;

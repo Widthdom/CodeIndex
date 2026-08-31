@@ -793,8 +793,9 @@ public partial class QueryCommandRunnerTests
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            var componentLines = Enumerable.Range(1, DbReader.DefinitionBodyMaxLines + 3)
-                .Select(i => $"    int Value{i:D2}{(i == DbReader.DefinitionBodyMaxLines + 3 ? string.Empty : ",")}");
+            const int componentCount = 70;
+            var componentLines = Enumerable.Range(1, componentCount)
+                .Select(i => $"    int Value{i:D2}{(i == componentCount ? string.Empty : ",")}");
             TestProjectHelper.InsertIndexedFile(
                 dbPath,
                 "src/LongRecord.cs",
@@ -817,7 +818,7 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(string.Empty, lineStderr);
             Assert.True(lineDefinition.GetProperty("body_content_truncated").GetBoolean());
             Assert.Equal(1, lineDefinition.GetProperty("body_requested_start_line").GetInt32());
-            Assert.Equal(DbReader.DefinitionBodyMaxLines + 5, lineDefinition.GetProperty("body_requested_end_line").GetInt32());
+            Assert.Equal(componentCount + 2, lineDefinition.GetProperty("body_requested_end_line").GetInt32());
             Assert.Equal(DbReader.DefinitionBodyMaxLines, lineDefinition.GetProperty("body_effective_end_line").GetInt32());
             Assert.Contains(
                 "body_line_cap",

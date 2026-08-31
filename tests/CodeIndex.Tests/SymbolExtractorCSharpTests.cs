@@ -3640,6 +3640,69 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_WrappedRecordConstraintsKeepDeclarationBodies_Issue5228()
+    {
+        var content = """
+            public record Semicolon<T>(T Value)
+                where T :
+                    class?;
+
+            public record struct ValueRecord<T>(T Value)
+                where T :
+                    struct;
+
+            public record Braced<T>(T Value)
+                where T :
+                    class
+            {
+                public T Current => Value;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var semicolon = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Semicolon"));
+        Assert.Equal((1, 3), (semicolon.BodyStartLine, semicolon.BodyEndLine));
+
+        var valueRecord = Assert.Single(symbols.Where(s => s.Kind == "struct" && s.Name == "ValueRecord"));
+        Assert.Equal((5, 7), (valueRecord.BodyStartLine, valueRecord.BodyEndLine));
+
+        var braced = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Braced"));
+        Assert.Equal((12, 14), (braced.BodyStartLine, braced.BodyEndLine));
+        var current = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Current"));
+        Assert.Equal("Braced", current.ContainerName);
+    }
+
+    [Theory]
+    [InlineData("public void Following();", "function")]
+    [InlineData("public int Following;", "field")]
+    [InlineData("public event Action Following;", "event")]
+    [InlineData("public int Following { get; set; }", "property")]
+    public void Extract_CSharp_IncompleteRecordStopsBeforeFollowingMember_Issue5228(
+        string followingDeclaration,
+        string followingKind)
+    {
+        var content = $$"""
+            public class Outer
+            {
+                public record Broken
+                {{followingDeclaration}}
+                public class Next { }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var broken = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Broken"));
+        Assert.Equal(3, broken.EndLine);
+        Assert.Null(broken.BodyStartLine);
+        Assert.Null(broken.BodyEndLine);
+
+        var following = Assert.Single(symbols.Where(s => s.Kind == followingKind && s.Name == "Following"));
+        Assert.Equal("Outer", following.ContainerName);
+        var next = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Next"));
+        Assert.Equal("Outer", next.ContainerName);
+    }
+
+    [Fact]
     public void Extract_CSharp_SemicolonRecordDoesNotContainSameLineSibling_Issue5228()
     {
         var content = """
