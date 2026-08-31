@@ -1040,15 +1040,17 @@ public partial class ReferenceExtractorTests
     }
 
     [Theory]
-    [InlineData("public class Outer { public record R(int X); public static int Value = Target.Create(); }", true)]
-    [InlineData("public class Outer\n{\n    public record R(int X); public static int Value = Target.Create();\n}", true)]
-    [InlineData("public class Outer { public record R; public static int Value = Target.Create(); }", true)]
-    [InlineData("public class Outer { public record class R; public static int Value = Target.Create(); }", true)]
-    [InlineData("public class Outer { public record struct R; public static int Value = Target.Create(); }", true)]
-    [InlineData("public class Outer\n{\n    public record R\n    ; public static int Value = Target.Create();\n}", false)]
+    [InlineData("public class Outer { public record R(int X); public static int Value = Target.Create(); }", null)]
+    [InlineData("public class Outer\n{\n    public record R(int X); public static int Value = Target.Create();\n}", null)]
+    [InlineData("public class Outer { public record R; public static int Value = Target.Create(); }", null)]
+    [InlineData("public class Outer { public record class R; public static int Value = Target.Create(); }", null)]
+    [InlineData("public class Outer { public record struct R; public static int Value = Target.Create(); }", null)]
+    [InlineData("public class Outer\n{\n    public record R\n    ; public static int Value = Target.Create();\n}", "public record R")]
+    [InlineData("public class Outer\n{\n    public record R(int X)\n    ; public static int Value = Target.Create();\n}", "public record R(int X)")]
+    [InlineData("public class Outer\n{\n    public record R <T>\n    ; public static int Value = Target.Create();\n}", "public record R <T>")]
     public void Extract_CsharpSemicolonRecord_DoesNotCaptureFollowingSameLineReference_Issue5228(
         string outerDeclaration,
-        bool signatureIncludesTerminator)
+        string? expectedSignatureWithoutTerminator)
     {
         var content = $$"""
             public static class Target { public static int Create() => 1; }
@@ -1059,10 +1061,10 @@ public partial class ReferenceExtractorTests
         var record = Assert.Single(symbols, symbol =>
             (symbol.Kind is "class" or "struct")
             && symbol.Name == "R");
-        if (signatureIncludesTerminator)
+        if (expectedSignatureWithoutTerminator == null)
             Assert.EndsWith(";", record.Signature, StringComparison.Ordinal);
         else
-            Assert.Equal("public record R", record.Signature);
+            Assert.Equal(expectedSignatureWithoutTerminator, record.Signature);
 
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
         var create = Assert.Single(references, reference => reference.SymbolName == "Create");

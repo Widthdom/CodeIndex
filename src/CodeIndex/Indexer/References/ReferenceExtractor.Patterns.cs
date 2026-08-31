@@ -166,7 +166,7 @@ public static partial class ReferenceExtractor
     // C# record のプライマリーコンストラクタ宣言を検出し、base primary-ctor 呼び出しの
     // 参照を record の合成コンストラクタに紐付けるために使う。
     private static readonly Regex CSharpRecordPrimaryCtorSignatureRegex = new(
-        $@"\brecord\s+(?:class\s+|struct\s+)?{CSharpIdentifierPattern}(?:<[^>]+>)?\s*\(",
+        $@"\brecord\s+(?:class\s+|struct\s+)?{CSharpIdentifierPattern}(?:\s*<[^>]+>)?\s*\(",
         RegexOptions.Compiled);
     // C# record declaration prefix, including parameterless semicolon forms. End-of-signature
     // is accepted because a line-broken `;` is not stored in the signature; the collected header
@@ -174,7 +174,7 @@ public static partial class ReferenceExtractor
     // parameterless なセミコロン形式を含む C# record 宣言の先頭を検出する。改行された `;` は
     // signature に保存されないため末尾も許可し、連結 header の別検証で malformed な入力を除外する。
     private static readonly Regex CSharpRecordDeclarationSignatureRegex = new(
-        $@"\brecord\s+(?:class\s+|struct\s+)?{CSharpIdentifierPattern}(?:<[^>]+>)?(?=\s*(?:\(|:|where\b|;|$))",
+        $@"\brecord\s+(?:class\s+|struct\s+)?{CSharpIdentifierPattern}(?:\s*<[^>]+>)?(?=\s*(?:\(|:|where\b|;|$))",
         RegexOptions.Compiled);
     // Same intent as CSharpRecordPrimaryCtorSignatureRegex but applied to the joined multi-line
     // header produced by CollectCSharpRecordHeader, so split-line forms like

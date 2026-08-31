@@ -131,7 +131,10 @@ public static partial class ReferenceExtractor
         private (bool IsResolved, SymbolRecord? Container)
             ResolveCSharpRecordContainer(int column)
         {
-            if (TryResolveAfterCSharpSemicolonRecord(column, out var enclosingContainer))
+            if (TryResolveAfterCSharpSemicolonRecord(
+                    _container,
+                    column,
+                    out var enclosingContainer))
                 return (true, enclosingContainer);
 
             SymbolRecord? primaryCtorOwner = null;
@@ -168,17 +171,29 @@ public static partial class ReferenceExtractor
                 return (true, syntheticRecordCtor);
             }
 
-            return primaryCtorOwner != null
-                ? (true, primaryCtorOwner)
-                : (false, null);
+            if (primaryCtorOwner != null)
+            {
+                if (TryResolveAfterCSharpSemicolonRecord(
+                        primaryCtorOwner,
+                        column,
+                        out enclosingContainer))
+                {
+                    return (true, enclosingContainer);
+                }
+
+                return (true, primaryCtorOwner);
+            }
+
+            return (false, null);
         }
 
         private bool TryResolveAfterCSharpSemicolonRecord(
+            SymbolRecord? candidate,
             int column,
             out SymbolRecord? enclosingContainer)
         {
             enclosingContainer = null;
-            if (_container is not { Kind: "class" or "struct" } recordOwner)
+            if (candidate is not { Kind: "class" or "struct" } recordOwner)
                 return false;
             if (string.IsNullOrWhiteSpace(recordOwner.Signature)
                 || !CSharpRecordDeclarationSignatureRegex.IsMatch(recordOwner.Signature))
