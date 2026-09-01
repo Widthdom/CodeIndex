@@ -3759,6 +3759,8 @@ public partial class SymbolExtractorTests
     [InlineData("static Outer() { }", "function", "Outer")]
     [InlineData("Outer() { }", "function", null)]
     [InlineData("void IFoo.Run() { }", "function", "Run")]
+    [InlineData("int IFoo.this[int index] { get => index; }", "function", "Item")]
+    [InlineData("public unsafe fixed int Following[10];", "field", null)]
     [InlineData("public static Outer operator +(Outer value) => value;", "operator", "operator +")]
     public void Extract_CSharp_IncompleteRecordStopsBeforeFollowingMember_Issue5228(
         string followingDeclaration,

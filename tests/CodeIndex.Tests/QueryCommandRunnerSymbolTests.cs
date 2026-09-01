@@ -695,6 +695,7 @@ public partial class QueryCommandRunnerTests
                 {
                     public string Upper => Value.ToUpperInvariant();
                 }
+                public class Outer { public record Nested; public class AfterNested { } }
                 """);
 
             foreach (var (name, startLine, endLine) in new[]
@@ -779,6 +780,17 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(11, braced.GetProperty("body_requested_start_line").GetInt32());
             Assert.Equal(13, braced.GetProperty("body_requested_end_line").GetInt32());
             Assert.Contains("public string Upper", braced.GetProperty("body_content").GetString(), StringComparison.Ordinal);
+
+            var (nestedBodyExitCode, nestedBodyStdout, nestedBodyStderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
+                ["Nested", "--db", dbPath, "--json", "--body", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+            using var nestedBodyDocument = ParseJsonOutput(nestedBodyStdout);
+            var nestedBody = nestedBodyDocument.RootElement;
+            Assert.Equal(CommandExitCodes.Success, nestedBodyExitCode);
+            Assert.Equal(string.Empty, nestedBodyStderr);
+            Assert.Equal("public record Nested;", nestedBody.GetProperty("body_content").GetString());
+            Assert.DoesNotContain("Outer", nestedBody.GetProperty("body_content").GetString(), StringComparison.Ordinal);
+            Assert.DoesNotContain("AfterNested", nestedBody.GetProperty("body_content").GetString(), StringComparison.Ordinal);
         }
         finally
         {

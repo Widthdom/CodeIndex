@@ -364,6 +364,14 @@ public class SymbolResult
     public int StartLine { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? StartColumn { get; set; }
+    /// <summary>
+    /// Persisted declaration anchor before public identifier-column projection.
+    /// Definition excerpt clipping consumes it internally without changing the JSON contract.
+    /// public な識別子列への投影前に永続化された宣言 anchor。
+    /// JSON 契約を変えず、definition excerpt の列単位切り出しに内部利用する。
+    /// </summary>
+    [JsonIgnore]
+    internal int? DeclarationStartColumn { get; set; }
     public int EndLine { get; set; }
     public int? BodyStartLine { get; set; }
     public int? BodyEndLine { get; set; }

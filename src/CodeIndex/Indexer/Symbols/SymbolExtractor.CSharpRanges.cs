@@ -8,7 +8,7 @@ public static partial class SymbolExtractor
     private const string CSharpRecordBoundaryModifierPattern =
         "(?:" + CSharpVisibilityPattern + @"|file|static|abstract|sealed|partial|readonly|ref|unsafe|new)";
     private const string CSharpRecordMemberBoundaryModifierPattern =
-        "(?:" + CSharpVisibilityPattern + @"|static|abstract|virtual|override|sealed|partial|readonly|volatile|ref|required|unsafe|extern|async|new)";
+        "(?:" + CSharpVisibilityPattern + @"|static|abstract|virtual|override|sealed|partial|readonly|volatile|ref|required|unsafe|extern|async|fixed|new)";
     private static readonly Regex CSharpFollowingTypeDeclarationRegex = new(
         @"^\s*(?:" + CSharpRecordBoundaryModifierPattern + @"\s+)*(?:"
         + @"(?:record(?:\s+(?:class|struct))?|class|struct|interface|enum)\s+" + CSharpIdentifierPattern + @"\b"
@@ -26,6 +26,8 @@ public static partial class SymbolExtractor
             + @"(?=\s*(?:\(|[;{=]|=>))"
         + @"|" + CSharpTypePattern + @"\s+" + CSharpExplicitInterfaceQualifierPattern + @"\s*\.\s*"
             + CSharpIdentifierPattern + CSharpMethodTypeParameterListPattern + @"(?=\s*(?:\(|[;{=]|=>))"
+        + @"|" + CSharpTypePattern + @"\s+" + CSharpExplicitInterfaceQualifierPattern + @"\s*\.\s*this(?=\s*\[)"
+        + @"|" + CSharpTypePattern + @"\s+" + CSharpIdentifierPattern + @"(?=\s*\[)"
         + @"|(?:(?:unsafe|extern)\s+)*(?:" + CSharpVisibilityPattern + @")\s+"
             + @"(?:(?:unsafe|extern|partial)\s+)*" + CSharpIdentifierPattern + @"(?=\s*\())",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
