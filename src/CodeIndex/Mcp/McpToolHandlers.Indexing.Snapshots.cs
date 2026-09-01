@@ -21,10 +21,12 @@ public partial class McpServer
         public required Dictionary<string, string?> HotspotFamilyMarkerFingerprints { get; init; }
         public string? IndexedProjectRoot { get; init; }
         public string? SymbolKindFilterSignature { get; init; }
+        public bool SymbolKindFilterAuditCurrent { get; init; }
     }
 
     private static IndexDatabaseSnapshot CaptureIndexDatabaseSnapshot(DbContext db)
     {
+        var readiness = db.GetUserVersion();
         var csharpMetadataTargetVersionMetaKey = DbContext.GetMetadataTargetVersionMetaKey("csharp");
         var meta = db.GetMetaStrings(
         [
@@ -39,6 +41,7 @@ public partial class McpServer
             DbContext.IndexCompletenessMetaKey,
             DbContext.IndexedProjectRootMetaKey,
             IndexCommandRunner.SymbolKindFilterMetaKey,
+            IndexCommandRunner.SymbolKindFilterAuditVersionMetaKey,
         ]);
 
         return new IndexDatabaseSnapshot
@@ -63,7 +66,7 @@ public partial class McpServer
                 meta[DbContext.IndexCompletenessMetaKey],
                 "complete",
                 StringComparison.OrdinalIgnoreCase),
-            Readiness = db.GetUserVersion(),
+            Readiness = readiness,
             HotspotFamilyVersions = GetHotspotFamilyMetaSnapshot(
                 db,
                 DbContext.GetHotspotFamilyVersionMetaKey),
@@ -72,6 +75,11 @@ public partial class McpServer
                 DbContext.GetHotspotFamilyMarkerFingerprintMetaKey),
             IndexedProjectRoot = meta[DbContext.IndexedProjectRootMetaKey],
             SymbolKindFilterSignature = meta[IndexCommandRunner.SymbolKindFilterMetaKey],
+            SymbolKindFilterAuditCurrent = string.Equals(
+                    meta[IndexCommandRunner.SymbolKindFilterAuditVersionMetaKey],
+                    DbContext.SymbolKindFilterAuditVersion,
+                    StringComparison.Ordinal)
+                && (readiness & DbContext.SymbolKindFilterAuditStorageContractFlag) != 0,
         };
     }
 }

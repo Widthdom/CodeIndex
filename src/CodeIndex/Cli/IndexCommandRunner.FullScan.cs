@@ -58,6 +58,7 @@ public static partial class IndexCommandRunner
         string? priorIndexedHeadCommit,
         string? currentHeadCommit,
         string? priorSymbolKindFilterSignature,
+        bool priorSymbolKindFilterAuditCurrent,
         string? initialCwd,
         List<string>? indexRunDiagnostics,
         bool showNextSteps,
@@ -90,7 +91,8 @@ public static partial class IndexCommandRunner
         var symbolKindFilterMatchesPrior = string.Equals(
             priorSymbolKindFilterSignature,
             options.SymbolKindFilter.Signature,
-            StringComparison.Ordinal);
+            StringComparison.Ordinal)
+            && (!options.SymbolKindFilter.IsActive || priorSymbolKindFilterAuditCurrent);
         var priorFilterRetainedCSharpContractMembers =
             SymbolKindFilter.SignatureRetainsCSharpStaticInterfaceContractMembers(
                 priorSymbolKindFilterSignature);
@@ -525,6 +527,12 @@ public static partial class IndexCommandRunner
         writer.RecoverInterruptedFtsBulkLoadIfNeeded(cancellationToken);
         writer.MarkBatchInProgress();
         writer.ClearReadyFlags();
+        if (!symbolKindFilterMatchesPrior)
+        {
+            writer.SetMetaValues(
+                (SymbolKindFilterMetaKey, null),
+                (SymbolKindFilterAuditVersionMetaKey, null));
+        }
         writer.ClearHotspotFamilyReady();
         writer.ClearSqlGraphContractReady();
         writer.SetMeta(DbContext.CSharpSymbolNameContractVersionMetaKey, null);

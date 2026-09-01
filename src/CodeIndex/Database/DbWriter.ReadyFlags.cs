@@ -11,6 +11,7 @@ public partial class DbWriter
     //   bit 2 (FoldReadyFlag)   — name_folded columns populated for Unicode --exact (#86)
     //   bit 3 (HotspotReferenceAggregateStorageContractFlag) — permanent downgrade guard
     //   bit 4 (HotspotReferenceAggregateReadyFlag) — maintained aggregate synchronized
+    //   bit 5 (SymbolKindFilterAuditStorageContractFlag) — permanent per-file audit guard
     // CLI and MCP full-scan indexing set graph + fold; CLI additionally sets issues (MCP
     // now persists file_issues too after bdbb2bd, so both can stamp it). The index runner
     // ClearReadyFlags() first so partial / aborted runs demote trust until a successful
@@ -19,6 +20,8 @@ public partial class DbWriter
     // CLI / MCP 共に full-scan で graph + fold を立てる。fold は部分更新では立てない。
     public void MarkGraphReady() => SetReadyBit(DbContext.GraphReadyFlag);
     public void MarkIssuesReady() => SetReadyBit(DbContext.IssuesReadyFlag);
+    public void MarkSymbolKindFilterAuditStorageContract()
+        => SetReadyBit(DbContext.SymbolKindFilterAuditStorageContractFlag);
 
     /// <summary>
     /// Stamp FoldReadyFlag AND write the current <see cref="NameFold.Version"/> plus the
@@ -128,8 +131,8 @@ public partial class DbWriter
         read.CommandText = "PRAGMA user_version";
         var raw = read.ExecuteScalar();
         var current = raw is long l ? (int)l : (raw is int i ? i : 0);
-        var aggregateContractBits = current & DbContext.HotspotReferenceAggregateFlags;
-        Execute($"PRAGMA user_version = {aggregateContractBits}", _activeTransaction);
+        var preservedContractBits = current & DbContext.PreservedIndexStorageContractFlags;
+        Execute($"PRAGMA user_version = {preservedContractBits}", _activeTransaction);
     }
 
     private bool ClearHotspotReferenceAggregateReady()

@@ -100,6 +100,7 @@ public static partial class IndexCommandRunner
             warningCount++;
         }
 
+        var persistedSymbolKindFilterPolicy = signalReader.GetPersistedSymbolKindFilterPolicy();
         if (failure.Options.Json)
         {
             CommandOutputWriter.WriteLine(JsonSerializer.Serialize(new IndexFullScanJsonResult
@@ -132,6 +133,9 @@ public static partial class IndexCommandRunner
                     SymbolsDroppedByKindFilter = failure.SymbolsDroppedByKindFilter,
                 },
                 SymbolKindFilter = failure.Options.SymbolKindFilter.ToJsonResult(),
+                SymbolKindFilterProvenanceAvailable =
+                    persistedSymbolKindFilterPolicy.ProvenanceAvailable,
+                SymbolsDroppedByKindFilter = persistedSymbolKindFilterPolicy.SymbolsDropped,
                 GraphTableAvailable = graphTableAvailable,
                 GraphDataCurrent = false,
                 IndexComplete = false,

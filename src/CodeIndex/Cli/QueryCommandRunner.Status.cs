@@ -112,7 +112,12 @@ public static partial class QueryCommandRunner
             }
 
             var status = reader.GetStatus(includeDatabaseSizeAttribution: options.Json);
-            WorkspaceMetadataEnricher.Enrich(status, options.DbPath, options.DbPathExplicit, cancellationToken);
+            WorkspaceMetadataEnricher.Enrich(
+                status,
+                options.DbPath,
+                options.DbPathExplicit,
+                cancellationToken,
+                evaluateOrdinaryFreshness: !options.CheckWorkspace);
             status.DataDir = options.DataDir;
             status.DataDirSource = options.DataDirSource;
             status.DataDirMode = DataDirectorySecurity.GetUnixModeString(GetDataDirectoryPath(options.DbPath));
@@ -137,7 +142,9 @@ public static partial class QueryCommandRunner
                     cancellationToken,
                     internalIndexDatabasePath: DbPathResolver.NormalizeDbPath(options.DbPath));
                 status.IndexMatchesWorkspace = status.WorkspaceCheck.Checked
-                    ? status.WorkspaceCheck.MatchesWorkspace
+                    ? StatusFreshnessEvaluator.Evaluate(
+                        status.WorkspaceCheck,
+                        status.WorktreeHeadChanged).State == StatusFreshnessState.Fresh
                     : null;
                 status.StaleAfterSeconds = (long)Math.Round(staleAfter.Value.TotalSeconds, MidpointRounding.AwayFromZero);
                 status.QueryContext = new StatusQueryContext
@@ -317,6 +324,14 @@ public static partial class QueryCommandRunner
                 // #1546: case-sensitivity を診断用に明示する。
                 if (status.PathCaseSensitive != null)
                     Console.WriteLine(ConsoleUi.FormatSummaryLine("FS Case", status.PathCaseSensitive == true ? "case-sensitive" : "case-insensitive"));
+                var symbolKindPolicy = status.SymbolKindFilter;
+                var policyText = symbolKindPolicy == null
+                    ? "unavailable (legacy generation)"
+                    : ConsoleUi.FormatBoundedValue(
+                        $"include={string.Join(",", symbolKindPolicy.Include)};exclude={string.Join(",", symbolKindPolicy.Exclude)}");
+                Console.WriteLine(ConsoleUi.FormatSummaryLine("Kind policy", policyText));
+                if (status.SymbolsDroppedByKindFilter.HasValue)
+                    Console.WriteLine(ConsoleUi.FormatSummaryLine("Kind drops", $"{status.SymbolsDroppedByKindFilter.Value:N0}"));
                 WriteStatusReadinessSummary(status, options);
                 if (status.WorktreeHeadChanged == true)
                     Console.WriteLine(ConsoleUi.FormatSummaryLine("WARN", $"worktree HEAD changed since the workspace was verified ({ShortSha(verifiedHead)} -> {ShortSha(status.GitHead)}). Run `{BuildReindexRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit)}` to refresh the index for the current branch."));
@@ -893,7 +908,11 @@ public static partial class QueryCommandRunner
         if (status.MigrationInProgress)
             result.Add(BuildStatusReadinessDegradation("migration_in_progress", DegradationReasonCodes.MigrationInProgress, options, status));
         if (!status.IndexComplete)
-            result.Add(BuildStatusReadinessDegradation("index_complete", DegradationReasonCodes.IndexIncomplete, options, status));
+            result.Add(BuildStatusReadinessDegradation(
+                "index_complete",
+                GetIndexGenerationDegradationRootCause(status),
+                options,
+                status));
         if (!status.GraphTableAvailable)
             result.Add(BuildStatusReadinessDegradation("graph_table_available", DegradationReasonCodes.GraphTableMissing, options, status));
         if (!status.ReferenceGraphComplete)
@@ -917,6 +936,26 @@ public static partial class QueryCommandRunner
         if (status.IndexNewerThanReader)
             result.Add(BuildStatusReadinessDegradation("index_newer_than_reader", DegradationReasonCodes.IndexNewerThanReader, options, status));
         return result;
+    }
+
+    private static string GetIndexGenerationDegradationRootCause(StatusResult status)
+    {
+        var reasons = status.IndexIncompleteReasons ?? [];
+        if (reasons.Contains(
+                DegradationReasonCodes.SymbolKindFilterProvenanceUnavailable,
+                StringComparer.Ordinal))
+        {
+            return DegradationReasonCodes.SymbolKindFilterProvenanceUnavailable;
+        }
+
+        if (reasons.Contains(
+                DegradationReasonCodes.SymbolKindFilterCoverageLimited,
+                StringComparer.Ordinal))
+        {
+            return DegradationReasonCodes.SymbolKindFilterCoverageLimited;
+        }
+
+        return DegradationReasonCodes.IndexIncomplete;
     }
 
     private static string GetReferenceGraphDegradationRootCause(StatusResult status)
@@ -1004,13 +1043,19 @@ public static partial class QueryCommandRunner
             {
                 failures.Add(new StatusCheckFailure("workspace_unavailable", true, "[stale] workspace_check unavailable"));
             }
-            else if (!status.WorkspaceCheck.MatchesWorkspace)
+            else
             {
                 var check = status.WorkspaceCheck;
-                failures.Add(new StatusCheckFailure(
-                    "workspace_stale",
-                    true,
-                    $"[stale] workspace_check reason={check.Reason} changed={check.ChangedFileCount} missing={check.MissingFileCount} unindexed={check.UnindexedFileCount}"));
+                var freshness = StatusFreshnessEvaluator.Evaluate(
+                    check,
+                    status.WorktreeHeadChanged);
+                if (freshness.State != StatusFreshnessState.Fresh)
+                {
+                    failures.Add(new StatusCheckFailure(
+                        "workspace_stale",
+                        true,
+                        $"[stale] workspace_check reason={freshness.Reason} changed={check.ChangedFileCount} missing={check.MissingFileCount} unindexed={check.UnindexedFileCount}"));
+                }
             }
         }
 
@@ -1371,21 +1416,8 @@ public static partial class QueryCommandRunner
     private static string BuildFoldNotReadyWarning(string? foldReadyReason, string backfillCommand, string rebuildCommand)
         => $"{BuildFoldNotReadyExplanation(foldReadyReason)} Run `{backfillCommand}` to restamp folded-name columns in place, or `{rebuildCommand}` for a full rebuild.";
 
-    private static string BuildStatusFreshnessLabel(StatusResult status)
-    {
-        if (status.WorkspaceCheck != null)
-            return status.WorkspaceCheck.Checked
-                ? (status.WorkspaceCheck.MatchesWorkspace ? "fresh" : "stale")
-                : "unknown";
-
-        if (!status.IndexedAt.HasValue || !status.LatestModified.HasValue)
-            return "unknown";
-
-        if (status.GitIsDirty == true)
-            return "stale";
-
-        return status.IndexedAt.Value >= status.LatestModified.Value ? "fresh" : "stale";
-    }
+    private static string BuildStatusFreshnessLabel(StatusResult status, DateTime utcNow)
+        => StatusFreshnessEvaluator.Evaluate(status, utcNow).SummaryLabel;
 
     private static void WriteWorkspaceCheck(IndexFreshnessCheckResult check)
     {
@@ -1480,10 +1512,10 @@ public static partial class QueryCommandRunner
         status.SymbolsByLanguageKindNamesTruncated = truncatedLanguages;
     }
 
-    internal static string BuildStatusSummary(StatusResult status)
+    internal static string BuildStatusSummary(StatusResult status, DateTime? utcNow = null)
     {
         var topLangs = status.Languages.OrderByDescending(kv => kv.Value).Take(3).Select(kv => kv.Key);
-        var freshness = BuildStatusFreshnessLabel(status);
+        var freshness = BuildStatusFreshnessLabel(status, utcNow ?? GetUtcNow());
         var dirty = status.GitIsDirty == true ? ", dirty" : "";
         var degraded = IsStatusDegraded(status) ? ", DEGRADED" : "";
         var incomplete = status.IndexComplete ? "" : ", INCOMPLETE";

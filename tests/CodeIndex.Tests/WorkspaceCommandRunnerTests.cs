@@ -49,7 +49,7 @@ public class WorkspaceCommandRunnerTests
     }
 
     [Fact]
-    public void WorkspaceStatusJson_ReportsBoundedMemberIndexHealth_Issue4726()
+    public void WorkspaceStatusJson_ReportsBoundedMemberIndexHealth_Issue4726AndIssue5224()
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_workspace_status_health");
         var root = project.Root;
@@ -66,6 +66,15 @@ public class WorkspaceCommandRunnerTests
         File.WriteAllText(Path.Combine(readyRoot, "App.cs"), IndexedContent);
         var readyDb = TestProjectHelper.CreateProjectDb(readyRoot);
         TestProjectHelper.InsertIndexedFile(readyDb, "App.cs", "csharp", IndexedContent);
+        using (var db = new DbContext(DbOpenIntent.WriteIndex, readyDb))
+        {
+            var writer = new DbWriter(db.Connection);
+            writer.MarkSymbolKindFilterAuditStorageContract();
+            writer.SetMeta(DbContext.SymbolKindFilterMetaKey, "include=class;exclude=");
+            using var command = db.Connection.CreateCommand();
+            command.CommandText = $"UPDATE files SET {DbContext.SymbolsDroppedByKindFilterColumn} = 7";
+            command.ExecuteNonQuery();
+        }
 
         File.WriteAllText(Path.Combine(staleRoot, "App.cs"), IndexedContent);
         var staleDb = TestProjectHelper.CreateProjectDb(staleRoot);
@@ -140,6 +149,16 @@ public class WorkspaceCommandRunnerTests
             var graphDataCurrent = ready.GetProperty("graph_data_current").GetBoolean();
             var referenceGraphComplete = ready.GetProperty("reference_graph_complete").GetBoolean();
             var indexComplete = ready.GetProperty("index_complete").GetBoolean();
+            Assert.False(indexComplete);
+            Assert.Equal("index_incomplete", ready.GetProperty("reason").GetString());
+            Assert.Contains(
+                ready.GetProperty("index_incomplete_reasons").EnumerateArray(),
+                reason => reason.GetString() == DbReader.SymbolKindFilterCoverageLimitedReason);
+            Assert.True(ready.GetProperty("symbol_kind_filter_provenance_available").GetBoolean());
+            Assert.Equal(
+                "class",
+                ready.GetProperty("symbol_kind_filter").GetProperty("include")[0].GetString());
+            Assert.Equal(7, ready.GetProperty("symbols_dropped_by_kind_filter").GetInt64());
             Assert.Equal(
                 graphTableAvailable && graphDataCurrent && referenceGraphComplete && indexComplete,
                 ready.GetProperty("graph_ready").GetBoolean());
@@ -449,6 +468,49 @@ public class WorkspaceCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.CancelledBySignal, exitCode);
             Assert.Contains("cancelled", stderr);
+        }
+        finally
+        {
+            Environment.CurrentDirectory = previous;
+        }
+    }
+
+    [Fact]
+    public void WorkspaceStatusCheck_ReportsSameCommitBranchDriftAsStale_Issue5227()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_workspace_status_head_drift_5227");
+        var root = project.Root;
+        File.WriteAllText(Path.Combine(root, "App.cs"), "class App {}\n");
+        File.WriteAllText(
+            Path.Combine(root, "cdidx.workspace.json"),
+            """{ "members": ["."] }""");
+        TestProjectHelper.RunGit(root, "init");
+        TestProjectHelper.RunGit(root, "config", "user.email", "tests@example.com");
+        TestProjectHelper.RunGit(root, "config", "user.name", "CodeIndex Tests");
+        TestProjectHelper.RunGit(root, "checkout", "-B", "main");
+        TestProjectHelper.RunGit(root, "add", "App.cs", "cdidx.workspace.json");
+        TestProjectHelper.RunGit(root, "commit", "--no-gpg-sign", "-m", "initial");
+        IndexProject(root);
+        TestProjectHelper.RunGit(root, "checkout", "--detach", "HEAD");
+
+        var previous = Environment.CurrentDirectory;
+        try
+        {
+            Environment.CurrentDirectory = root;
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(
+                () => WorkspaceCommandRunner.Run(["status", "--check", "--json"], _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.StaleIndex, exitCode);
+            Assert.Empty(stderr);
+            using var document = JsonDocument.Parse(stdout);
+            var health = document.RootElement.GetProperty("members")[0].GetProperty("index_health");
+            Assert.Equal("stale", health.GetProperty("status").GetString());
+            Assert.Equal("head_changed", health.GetProperty("reason").GetString());
+            Assert.False(health.GetProperty("index_matches_workspace").GetBoolean());
+            Assert.Equal("head_changed", health.GetProperty("freshness_reason").GetString());
+            var summary = document.RootElement.GetProperty("member_health_summary");
+            Assert.Equal("degraded", summary.GetProperty("status").GetString());
+            Assert.Equal(CommandExitCodes.StaleIndex, summary.GetProperty("check_exit_code").GetInt32());
         }
         finally
         {

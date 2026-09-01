@@ -216,6 +216,7 @@ public static partial class IndexCommandRunner
             item.Content,
             familyScopeKey);
         symbolsDroppedByKindFilter = options.SymbolKindFilter.Apply(mutableSymbols);
+        writer.SetSymbolsDroppedByKindFilter(fileId, symbolsDroppedByKindFilter);
         symbols = (IReadOnlyList<SymbolRecord>)mutableSymbols;
         if (symbols.Count > options.MaxSymbolsPerFile)
         {

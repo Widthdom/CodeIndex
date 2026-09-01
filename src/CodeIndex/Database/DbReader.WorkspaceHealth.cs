@@ -7,7 +7,16 @@ internal sealed record WorkspaceIndexHealthSnapshot(
     bool GraphDataCurrent,
     bool ReferenceGraphComplete,
     bool IndexComplete,
-    bool IndexNewerThanReader);
+    bool IndexNewerThanReader,
+    IReadOnlyList<string> IndexIncompleteReasons,
+    PersistedSymbolKindFilterPolicy SymbolKindFilterPolicy,
+    string? IndexedHeadCommit,
+    string? IndexedHeadCommitBranch,
+    bool IndexedHeadCommitBranchStampPresent,
+    string? WorkspaceVerifiedHeadSha,
+    string? IndexedHeadSha,
+    string? IndexedHeadBranch,
+    bool IndexedHeadBranchStampPresent);
 
 public partial class DbReader
 {
@@ -34,6 +43,15 @@ public partial class DbReader
                 persistedReadiness.GraphDataCurrent,
                 persistedReadiness.ReferenceGraphComplete,
                 persistedReadiness.IndexComplete,
-                _indexNewerThanReader);
+                _indexNewerThanReader,
+                persistedReadiness.IndexIncompleteReasons,
+                persistedReadiness.SymbolKindFilterPolicy,
+                TryGetMetaStringInternal(DbContext.IndexedHeadCommitMetaKey),
+                TryGetMetaStringInternal(DbContext.IndexedHeadCommitBranchMetaKey),
+                HasMetaKeyInternal(DbContext.IndexedHeadCommitBranchMetaKey),
+                TryGetMetaStringInternal(DbContext.WorkspaceVerifiedHeadShaMetaKey),
+                TryGetMetaStringInternal(DbContext.IndexedHeadShaMetaKey),
+                TryGetMetaStringInternal(DbContext.IndexedHeadBranchMetaKey),
+                HasMetaKeyInternal(DbContext.IndexedHeadBranchMetaKey));
         });
 }

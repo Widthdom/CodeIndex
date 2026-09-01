@@ -1,3 +1,4 @@
+using CodeIndex.Cli;
 using CodeIndex.Indexer;
 using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
@@ -7,7 +8,17 @@ namespace CodeIndex.Database;
 internal sealed record PersistedIndexCompletion(
     bool IndexComplete,
     IReadOnlyList<string> IndexIncompleteReasons,
-    bool MigrationInProgress);
+    bool MigrationInProgress,
+    PersistedSymbolKindFilterPolicy SymbolKindFilterPolicy);
+
+internal sealed record PersistedSymbolKindFilterPolicy(
+    bool ProvenanceAvailable,
+    IReadOnlyList<string> Include,
+    IReadOnlyList<string> Exclude,
+    long? SymbolsDropped)
+{
+    internal bool IsActive => Include.Count > 0 || Exclude.Count > 0;
+}
 
 internal sealed record PersistedIndexGenerationReadiness(
     bool GraphTableAvailable,
@@ -17,7 +28,8 @@ internal sealed record PersistedIndexGenerationReadiness(
     bool ReferenceGraphComplete,
     IReadOnlyList<string> ReferenceGraphIncompleteReasons,
     ReferenceExtractionCapHitSummary ReferenceExtractionCapHits,
-    bool MigrationInProgress);
+    bool MigrationInProgress,
+    PersistedSymbolKindFilterPolicy SymbolKindFilterPolicy);
 
 public partial class DbReader
 {
@@ -25,6 +37,10 @@ public partial class DbReader
     internal const string SymbolsOnlyReferenceGraphIncompleteReason =
         DegradationReasonCodes.SymbolsOnlyGraphOmitted;
     internal const string BatchInProgressIncompleteReason = "batch_in_progress";
+    internal const string SymbolKindFilterCoverageLimitedReason =
+        DegradationReasonCodes.SymbolKindFilterCoverageLimited;
+    internal const string SymbolKindFilterProvenanceUnavailableReason =
+        DegradationReasonCodes.SymbolKindFilterProvenanceUnavailable;
 
     private static readonly string[] IndexOmissionIssueKinds =
     [
@@ -95,7 +111,8 @@ public partial class DbReader
             referenceGraphComplete,
             referenceGraphIncompleteReasons,
             capHits,
-            migrationInProgress);
+            migrationInProgress,
+            indexCompletion.SymbolKindFilterPolicy);
     }
 
     internal PersistedIndexCompletion GetPersistedIndexCompletion(
@@ -109,6 +126,19 @@ public partial class DbReader
                 _hasIssuesPhysicalTable,
                 ParseMetaBool(TryGetMetaStringInternal(DbContext.SymbolsOnlyGraphOmittedMetaKey)) == true,
                 transaction));
+        var symbolKindFilterPolicy = GetPersistedSymbolKindFilterPolicy(transaction);
+        if (!symbolKindFilterPolicy.ProvenanceAvailable)
+        {
+            AddDistinctReason(
+                indexIncompleteReasons,
+                SymbolKindFilterProvenanceUnavailableReason);
+        }
+        else if (symbolKindFilterPolicy.IsActive)
+        {
+            AddDistinctReason(
+                indexIncompleteReasons,
+                SymbolKindFilterCoverageLimitedReason);
+        }
         var migrationInProgress = string.Equals(
             TryGetMetaStringInternal(DbContext.BatchInProgressMetaKey),
             "true",
@@ -129,7 +159,55 @@ public partial class DbReader
         return new PersistedIndexCompletion(
             indexComplete,
             indexIncompleteReasons,
-            migrationInProgress);
+            migrationInProgress,
+            symbolKindFilterPolicy);
+    }
+
+    internal PersistedSymbolKindFilterPolicy GetPersistedSymbolKindFilterPolicy(
+        SqliteTransaction? transaction = null)
+    {
+        var signature = TryGetMetaStringInternal(DbContext.SymbolKindFilterMetaKey);
+        var provenanceAvailable = SymbolKindFilter.TryParsePersistedSignature(
+            signature,
+            out var filter);
+        var auditCurrent = string.Equals(
+                TryGetMetaStringInternal(DbContext.SymbolKindFilterAuditVersionMetaKey),
+                DbContext.SymbolKindFilterAuditVersion,
+                StringComparison.Ordinal)
+            && (_userVersion & DbContext.SymbolKindFilterAuditStorageContractFlag) != 0;
+        long? symbolsDropped = null;
+        if (provenanceAvailable
+            && (!filter.IsActive || auditCurrent)
+            && _fileColumns.Contains(DbContext.SymbolsDroppedByKindFilterColumn))
+        {
+            using var command = _conn.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = $"""
+                SELECT COALESCE(SUM(
+                    CASE
+                        WHEN {DbContext.SymbolsDroppedByKindFilterColumn} BETWEEN 0 AND 2147483647
+                            THEN {DbContext.SymbolsDroppedByKindFilterColumn}
+                        ELSE 0
+                    END), 0)
+                FROM files
+                """;
+            symbolsDropped = Convert.ToInt64(
+                command.ExecuteScalar(),
+                System.Globalization.CultureInfo.InvariantCulture);
+        }
+        else if (provenanceAvailable && !filter.IsActive)
+        {
+            // An unfiltered generation cannot have policy drops, even when the per-file
+            // audit column predates the opened DB.
+            // filter 無し generation なら、per-file audit 列が無い旧 DB でも policy drop は 0。
+            symbolsDropped = 0;
+        }
+
+        return new PersistedSymbolKindFilterPolicy(
+            provenanceAvailable,
+            provenanceAvailable ? filter.Include : [],
+            provenanceAvailable ? filter.Exclude : [],
+            symbolsDropped);
     }
 
     internal static IReadOnlyList<string> ReadPersistedIndexOmissionReasons(

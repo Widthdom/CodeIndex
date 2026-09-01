@@ -139,7 +139,8 @@ public static partial class QueryCommandRunner
                             queryOptions: options,
                             extraFields: options.GroupPartials
                                 ? json => AddLogicalPartialCountJsonFields(json, logicalCount: 0, physicalCount: 0, physicalFileCount: 0)
-                                : null);
+                                : null,
+                            includeIndexGenerationAuthority: true);
                         return WriteJsonPayloadWithOptionalByteLimit(
                             payload,
                             options,
@@ -250,7 +251,10 @@ public static partial class QueryCommandRunner
             if (results.Count == 0)
             {
                 if (IsDiscoveryNdjson(options))
+                {
+                    WriteIndexGenerationAuthorityWarningIfNeeded(reader);
                     return ZeroResultExitCode(options);
+                }
                 if (ShouldWriteBoundedDiscoveryJsonPayload(options))
                 {
                     var payloadExitCode = WriteBoundedDiscoveryJsonPayload(
@@ -269,10 +273,16 @@ public static partial class QueryCommandRunner
                 if (options.OutputFormat == OutputFormatJson)
                 {
                     if (options.JsonOutputFormat == JsonOutputFormatArray)
+                    {
+                        WriteIndexGenerationAuthorityWarningIfNeeded(reader);
                         WriteDiscoveryJsonArray(results, rowFactory, rowExactSignal, jsonOptions);
+                    }
                     return ZeroResultExitCode(options);
                 }
-                if (TryWriteEmptyFormattedResult(options, jsonOptions))
+                if (TryWriteEmptyFormattedResult(
+                    options,
+                    jsonOptions,
+                    authorityReader: reader))
                     return ZeroResultExitCode(options);
                 if (!options.Json)
                 {
@@ -282,6 +292,7 @@ public static partial class QueryCommandRunner
                     WriteLangHint(options.Lang, reader);
                     WriteSymbolExtractionCapabilityHint(options.Lang, reader);
                     WriteZeroResultHints(options, reader);
+                    WriteIndexGenerationAuthorityWarningIfNeeded(reader);
                 }
                 return ZeroResultExitCode(options);
             }
@@ -1104,6 +1115,8 @@ public static partial class QueryCommandRunner
                 reader.GeneratedFileFilterAvailable);
         }
         AddFreshnessHint(payload, reader);
+        if (totalCount == 0)
+            AddIndexGenerationAuthorityJsonFields(payload, reader, jsonOptions);
         return payload;
     }
 

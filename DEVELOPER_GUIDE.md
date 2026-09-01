@@ -1411,12 +1411,22 @@ Index-generation completeness is computed by one persisted-readiness reader and
 reused by the successful full/update index response, immediate status and
 workspace status, and MCP indexing/status responses. Persisted omission evidence
 from symbols-only runs, `file_too_large`, `symbol_count_exceeded`,
-`reference_count_exceeded`, extractor failures, and reference safety caps makes
+`reference_count_exceeded`, extractor failures, reference safety caps, and an
+active persisted symbol-kind policy makes
 `index_complete=false` with stable `index_incomplete_reasons`.
 `reference_graph_complete` additionally requires an available, current graph
-generation and repeats graph-specific stable reasons. A legacy database without
-the completeness metadata keeps the compatibility default unless its persisted
-rows prove that work was omitted.
+generation and repeats graph-specific stable reasons. The normalized
+`index_symbol_kind_filter` metadata, the successful-generation
+`index_symbol_kind_filter_audit_version` marker, and per-file
+`files.symbols_dropped_by_kind_filter` facts are shared by CLI index/status,
+workspace health, and MCP indexing/status. An active policy always adds
+`symbol_kind_filter_coverage_limited`, including zero-drop runs. A legacy DB
+without policy provenance remains readable but adds
+`symbol_kind_filter_provenance_unavailable`; this conservative fallback differs
+from older completeness metadata, whose compatibility default remains unless
+persisted rows prove that work was omitted. An active legacy generation without
+the audit marker withholds its aggregate until a whole-workspace refresh has
+restamped every per-file fact.
 
 Reference extraction publishes its fixed safety limits through CLI
 `languages --json` / `status --json` and the corresponding MCP responses:
@@ -1478,7 +1488,9 @@ Current stable codes and triggers:
 | `graph_table_available=false` | `symbol_references` is missing or not graph-ready | `cdidx index <projectPath>` |
 | `symbols_only_graph_omitted` | the last symbols-only generation intentionally omitted reference-graph rows | run `cdidx index <projectPath>` without `--symbols-only` |
 | `reference_graph_complete=false` | the graph generation is unavailable/stale, a symbols-only run omitted it, or persisted file/extractor/cap evidence makes the index generation incomplete | address the reported stable reasons, then run `cdidx index <projectPath>` |
-| `index_complete=false` | a symbols-only run or persisted file-size, symbol-count, reference-count, extractor-failure, or safety-cap evidence proves that indexing work was omitted | address `index_incomplete_reasons`, then run `cdidx index <projectPath>` |
+| `index_complete=false` | persisted omission evidence, an active symbol-kind policy, or unavailable legacy policy provenance means full-generation absence authority is unavailable | address `index_incomplete_reasons`, then rerun indexing; rebuild unfiltered for full coverage |
+| `symbol_kind_filter_coverage_limited` | persisted include/exclude policy intentionally limits symbol coverage, including zero-drop runs | `cdidx index <projectPath> --rebuild` without the symbol-kind filter |
+| `symbol_kind_filter_provenance_unavailable` | a legacy DB has no persisted policy stamp | rebuild with a current binary; negative symbol/graph results remain non-authoritative until then |
 | `issues_table_available=false` | `file_issues` is missing or not issue-ready | `cdidx index <projectPath>` |
 | `csharp_symbol_name_ready=false` | C# canonical symbol-name stamps are stale | `cdidx index <projectPath>` |
 | `csharp_metadata_target_ready=false` | C# metadata-target stamps are stale | `cdidx index <projectPath>` |
@@ -1518,6 +1530,24 @@ Current stable codes and triggers:
 | Size and process diagnostics | `status --json` also reports `db_size_bytes`, `wal_size_bytes`, capped `symbol_kinds` / `symbols_by_language` kind maps with `symbol_kind_*` and `symbols_by_language_kind_*` overflow metadata when caps apply, current `process` heap/GC/working-set metrics, `last_index_run` metadata from successful CLI and MCP index runs, and `last_workspace_freshened_at` as the latest successful index/update timestamp. `last_index_run.bytes_read_skipped_file_count` and `bytes_read_incomplete` report whether unreadable files were omitted from the `bytes_read` total, while `last_index_run.diagnostics`, `diagnostic_count`, and `diagnostics_truncated` carry bounded warnings for best-effort index metadata writes that failed after the index data itself was successfully written. `indexed_at` still comes from indexed file rows, so partial or no-op updates can freshen the workspace without moving `indexed_at`. |
 | Memory tracing | `index --json --memory-trace` adds a `memory_timeline` block to the CLI index result and persists peak working-set MB into `last_index_run`; dry-run results also emit live `start`, `snapshot`, `scan`, and `finalize` samples but never persist run metadata. `index --dry-run --rebuild` bypasses destructive confirmation because it does not delete or rewrite the index. `CDIDX_MEM_WARN_MB=<mb>` prints a warning when the sampled working set crosses that threshold. |
 | Newer schema protection | Writable opens reject databases whose `PRAGMA user_version` contains readiness bits outside the current binary's `CurrentSchemaVersion` mask. Read-only status/query paths may still surface `index_newer_than_reader=true` as a degraded audit signal, but write-capable paths must fail with `E003_SCHEMA_TOO_NEW` so an older cdidx cannot silently rewrite a DB stamped by a newer one. |
+
+Status freshness summaries are classified by one shared evaluator. An
+authoritative `status --check` supplies the file-level result. Without that check,
+`last_workspace_freshened_at >= latest_modified` can prove a checksum-reused
+no-op update fresh only when the worktree is clean and the runtime,
+workspace-verified, and latest-index HEAD SHAs all agree, and Git reports no
+`skip-worktree` or `assume-unchanged` entry that could hide a later change.
+The Git dirtiness probe explicitly requests all untracked files, overriding a
+repository-level `status.showUntrackedFiles=no` setting. Missing provenance,
+hidden index state, future timestamps, and an ordinary-status dirty worktree are
+`unknown`; a later modification is `stale`, and changed HEAD remains conservative.
+An authoritative file check may prove freshness in a dirty repository when every
+workspace path matches, so already-indexed untracked paths and dirtiness outside a
+subdirectory index do not fail check mode. Status-level HEAD/branch drift is still
+evaluated before that file check and propagated into checked failures, exit status,
+and workspace member health. Ordinary
+`head_freshness=head_current` semantics remain distinct from the authoritative
+checked `fresh` value.
 
 `vacuum --dry-run` accepts supported local SQLite URI spellings such as `file:/absolute/path/codeindex.db`, Windows `file:/C:/absolute/path/codeindex.db`, and canonical `file:///...` forms. Single-slash paths are canonicalized while retaining their original query string and ignoring URI fragments, and validation plus metric collection use that same query-only URI so an explicit `immutable=1` keeps its stale-snapshot semantics.
 
@@ -5548,11 +5578,18 @@ index generation の completeness は単一の persisted-readiness reader で計
 成功した full/update index response、直後の status / workspace status、MCP の
 indexing/status response で再利用します。symbols-only run、`file_too_large`、
 `symbol_count_exceeded`、`reference_count_exceeded`、extractor failure、
-reference safety cap の永続化済み省略証拠がある場合は
+reference safety cap の永続化済み省略証拠、または active な永続 symbol-kind policy がある場合は
 `index_complete=false` となり、安定した `index_incomplete_reasons` を返します。
 `reference_graph_complete` はさらに利用可能かつ current な graph generation を要求し、
-graph 固有の安定した理由を返します。completeness metadata を持たない legacy database は、
-永続化済み row が処理の省略を証明しない限り compatibility default を維持します。
+graph 固有の安定した理由を返します。正規化済み `index_symbol_kind_filter` metadata、成功世代の
+`index_symbol_kind_filter_audit_version` marker、file ごとの
+`files.symbols_dropped_by_kind_filter` fact は CLI index/status、workspace health、
+MCP indexing/status で共有します。active policy は除外数0でも必ず
+`symbol_kind_filter_coverage_limited` を追加します。policy provenance を持たない legacy DB は
+読み取り可能なまま `symbol_kind_filter_provenance_unavailable` を追加します。この保守的な
+fallback は従来の completeness metadata とは別で、後者は永続 row が処理の省略を証明しない限り
+compatibility default を維持します。audit marker の無い active な legacy generation は、
+全 workspace refresh が file ごとの fact をすべて再 stamp するまで aggregate を省略します。
 
 reference extraction の固定 safety limit は lookup symbol 50,000件、lookup line
 20,000行、1行あたりの name 512件、container candidate 20,000件で、CLI の
@@ -5639,7 +5676,9 @@ alternative action を同じ場所へ追加してください。
 | `graph_table_available=false` | `symbol_references` が無い、または graph-ready ではない | `cdidx index <projectPath>` |
 | `symbols_only_graph_omitted` | 直前の symbols-only generation が reference-graph row を意図的に省略した | `--symbols-only` を付けずに `cdidx index <projectPath>` を実行 |
 | `reference_graph_complete=false` | graph generation が unavailable/stale、symbols-only run で省略、または永続化済み file/extractor/cap 証拠により index generation が incomplete | 報告された安定理由に対処してから `cdidx index <projectPath>` |
-| `index_complete=false` | symbols-only run、または永続化済みの file-size / symbol-count / reference-count / extractor-failure / safety-cap 証拠により indexing work の省略が判明 | `index_incomplete_reasons` に対処してから `cdidx index <projectPath>` |
+| `index_complete=false` | 永続化済み省略証拠、active symbol-kind policy、または legacy policy provenance 不在により generation 全体の不在 authority が利用できない | `index_incomplete_reasons` に対処して再 index。full coverage が必要なら filter なしで rebuild |
+| `symbol_kind_filter_coverage_limited` | 永続 include/exclude policy が、除外数0の場合も含めて symbol coverage を意図的に制限 | symbol-kind filter なしで `cdidx index <projectPath> --rebuild` |
+| `symbol_kind_filter_provenance_unavailable` | legacy DB に永続 policy stamp が無い | 現行 binary で rebuild。完了まで symbol/graph の否定結果は non-authoritative |
 | `issues_table_available=false` | `file_issues` が無い、または issue-ready ではない | `cdidx index <projectPath>` |
 | `csharp_symbol_name_ready=false` | C# canonical symbol-name stamp が stale | `cdidx index <projectPath>` |
 | `csharp_metadata_target_ready=false` | C# metadata-target stamp が stale | `cdidx index <projectPath>` |
@@ -5686,6 +5725,21 @@ apply 時は `PRAGMA optimize` を実行します。
 | size / process diagnostics | `status --json` は `db_size_bytes`、`wal_size_bytes`、上限付きの `symbol_kinds` / `symbols_by_language` kind map と、上限適用時の `symbol_kind_*` / `symbols_by_language_kind_*` overflow metadata、現在の `process` heap / GC / working-set metrics、成功した CLI / MCP index 実行由来の `last_index_run` metadata、最新の成功 index/update 時刻を示す `last_workspace_freshened_at` も公開します。`last_index_run.bytes_read_skipped_file_count` と `bytes_read_incomplete` は、読み取り不能な file が `bytes_read` 合計から除外されたかどうかを報告します。`last_index_run.diagnostics`、`diagnostic_count`、`diagnostics_truncated` は、index data 自体の書き込みが成功した後に best-effort index metadata write が失敗した場合の上限付き warning を保持します。`indexed_at` は引き続き indexed file row 由来なので、partial / no-op update は `indexed_at` を動かさずに workspace 鮮度だけを更新することがあります。 |
 | memory tracing | `index --json --memory-trace` は CLI index 結果に `memory_timeline` block を追加し、peak working-set MB を `last_index_run` に保存します。dry-run 結果も live な `start`、`snapshot`、`scan`、`finalize` sample を返しますが、run metadata は保存しません。`index --dry-run --rebuild` は index を削除も rewrite もしないため destructive confirmation を bypass します。`CDIDX_MEM_WARN_MB=<mb>` は sampled working set がしきい値を超えたときに warning を出します。 |
 | newer schema protection | writable open は、`PRAGMA user_version` に current binary の `CurrentSchemaVersion` mask 外の readiness bit が含まれる database も拒否します。read-only status/query path は degraded audit signal として `index_newer_than_reader=true` を表示できますが、write-capable path は古い cdidx が新しい binary で stamp された DB を黙って rewrite しないよう `E003_SCHEMA_TOO_NEW` で失敗しなければなりません。 |
+
+status freshness summary は1つの共有 evaluator で分類します。authoritative な
+`status --check` は file-level の結果を提供します。check がない場合、
+`last_workspace_freshened_at >= latest_modified` が checksum 再利用 no-op update の
+freshness を証明できるのは、worktree が clean で、runtime、workspace 検証済み、直近
+index の HEAD SHA がすべて一致し、後続変更を隠せる `skip-worktree` / `assume-unchanged`
+entry が Git index に無い場合だけです。Git の dirtiness probe は未追跡 file を明示的に
+すべて要求し、repository の `status.showUntrackedFiles=no` 設定を上書きします。provenance
+不足、隠れた index state、未来 timestamp、通常 status の dirty worktree は `unknown`、
+後続の変更は `stale` とし、HEAD 変更は保守的な判定を維持します。authoritative file check
+は全 workspace path が一致する場合、dirty repository でも freshness を証明できるため、
+index 済み未追跡 path や subdirectory index の scope 外にある dirtiness は check mode を
+失敗させません。status-level の HEAD / branch drift は引き続き file check より先に評価し、
+checked failure、終了 status、workspace member health に伝播します。通常 status
+の `head_freshness=head_current` は、authoritative check 済みの `fresh` と引き続き区別します。
 
 `vacuum --dry-run` は、`file:/absolute/path/codeindex.db`、Windows の `file:/C:/absolute/path/codeindex.db`、canonical な `file:///...` 形式を受け付けます。single-slash の path を canonicalize しつつ元の query string を維持して URI fragment を無視し、validation と metric 収集に同じ query-only URI を使うため、明示的な `immutable=1` の stale-snapshot semantics も維持されます。
 

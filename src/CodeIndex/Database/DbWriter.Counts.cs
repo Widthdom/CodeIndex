@@ -16,6 +16,13 @@ public partial class DbWriter
         return (files, chunks, symbols, references);
     }
 
+    /// <summary>
+    /// Return whether a scoped update could leave existing file rows untouched.
+    /// scoped update が既存 file 行を未更新のまま残し得るかを返す。
+    /// </summary>
+    internal bool HasIndexedFiles()
+        => ExecuteScalar("SELECT EXISTS(SELECT 1 FROM files LIMIT 1)") != 0;
+
     private long ExecuteScalar(string sql)
     {
         using var cmd = _conn.CreateCommand();

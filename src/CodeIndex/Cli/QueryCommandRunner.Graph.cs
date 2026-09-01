@@ -136,7 +136,8 @@ public static partial class QueryCommandRunner
                 if (options.Json && TryWriteEmptyFormattedResult(
                     options,
                     jsonOptions,
-                    extraFields: payload => AddGraphIdentityJsonFields(payload, identityMetadata, jsonOptions)))
+                    extraFields: payload => AddGraphIdentityJsonFields(payload, identityMetadata, jsonOptions),
+                    authorityReader: reader))
                     return ZeroResultExitCode(options);
                 if (options.Json)
                     WriteGraphZeroJsonResult(reader, "references", jsonOptions, graphAvailable: reader._hasReferencesTable, exact ? exactSignal : (ExactQuerySignal?)null, exactZeroHint, queryOptions: options, extraFields: payload =>
@@ -379,7 +380,8 @@ public static partial class QueryCommandRunner
                 if (options.Json && TryWriteEmptyFormattedResult(
                     options,
                     jsonOptions,
-                    extraFields: payload => AddGraphIdentityJsonFields(payload, identityMetadata, jsonOptions)))
+                    extraFields: payload => AddGraphIdentityJsonFields(payload, identityMetadata, jsonOptions),
+                    authorityReader: reader))
                     return ZeroResultExitCode(options);
                 if (options.Json)
                     WriteGraphZeroJsonResult(reader, "callers", jsonOptions, graphAvailable: reader._hasReferencesTable, exact ? exactSignal : (ExactQuerySignal?)null, exactZeroHint, queryOptions: options, extraFields: payload =>
@@ -605,7 +607,8 @@ public static partial class QueryCommandRunner
                 if (options.Json && TryWriteEmptyFormattedResult(
                     options,
                     jsonOptions,
-                    extraFields: payload => AddGraphIdentityJsonFields(payload, identityMetadata, jsonOptions)))
+                    extraFields: payload => AddGraphIdentityJsonFields(payload, identityMetadata, jsonOptions),
+                    authorityReader: reader))
                     return ZeroResultExitCode(options);
                 if (options.Json)
                     WriteGraphZeroJsonResult(reader, "callees", jsonOptions, graphAvailable: reader._hasReferencesTable, exact ? exactSignal : (ExactQuerySignal?)null, exactZeroHint, queryOptions: options, extraFields: payload =>

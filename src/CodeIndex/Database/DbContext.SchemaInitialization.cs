@@ -76,6 +76,7 @@ public partial class DbContext : IDisposable
 
     private bool EnsureCoreSchemaTables()
     {
+        var filesTableExisted = TableExists("files");
         // Files table / ファイルテーブル
         Execute(@"
     CREATE TABLE IF NOT EXISTS files (
@@ -87,6 +88,7 @@ public partial class DbContext : IDisposable
         checksum    TEXT,
         modified    DATETIME,
         generated   INTEGER NOT NULL DEFAULT 0,
+        symbols_dropped_by_kind_filter INTEGER NOT NULL DEFAULT 0,
         indexed_at  DATETIME DEFAULT CURRENT_TIMESTAMP
     )");
 
@@ -193,6 +195,16 @@ public partial class DbContext : IDisposable
         key    TEXT PRIMARY KEY NOT NULL,
         value  TEXT
     )");
+        if (!filesTableExisted)
+        {
+            Execute($"""
+                INSERT INTO codeindex_meta(key, value)
+                VALUES
+                    ('{SymbolKindFilterMetaKey}', 'include=;exclude='),
+                    ('{SymbolKindFilterAuditVersionMetaKey}', '{SymbolKindFilterAuditVersion}')
+                ON CONFLICT(key) DO NOTHING
+                """);
+        }
         NormalizeCodeIndexMetaKeys();
         return backfillHotspotReferenceCounts;
     }
@@ -205,6 +217,7 @@ public partial class DbContext : IDisposable
         EnsureColumn("files", "modified", "DATETIME");
         EnsureColumn("files", "generated", "INTEGER NOT NULL DEFAULT 0");
         EnsureColumn("files", "indexed_at", "DATETIME");
+        EnsureColumn("files", SymbolsDroppedByKindFilterColumn, "INTEGER NOT NULL DEFAULT 0");
         EnsureColumn("symbols", "start_line", "INTEGER");
         EnsureColumn("symbols", "sub_kind", "TEXT");
         EnsureColumn("symbols", "start_column", "INTEGER");

@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using System.Runtime.Versioning;
 using System.Runtime.InteropServices;
@@ -11,6 +12,7 @@ using CodeIndex.Database;
 using CodeIndex.Indexer;
 using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Indexer.Hooks;
+using CodeIndex.Mcp;
 using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
 
@@ -3092,6 +3094,19 @@ public sealed class Caller
         Assert.Equal(["class", "function"], options.SymbolKindFilter.Include);
         Assert.Equal(["test_method"], options.SymbolKindFilter.Exclude);
         Assert.Null(options.SymbolKindFilter.ParseError);
+    }
+
+    [Theory]
+    [InlineData("class;custom", "reserved ',' or ';'")]
+    [InlineData("class\nspoof", "control characters")]
+    public void ParseArgs_SymbolKindFilters_RejectNonRoundTrippableValues_Issue5224(
+        string value,
+        string expectedError)
+    {
+        var options = IndexCommandRunner.ParseArgs([".", "--include-symbol-kind", value]);
+
+        Assert.Contains(expectedError, options.SymbolKindFilter.ParseError, StringComparison.Ordinal);
+        Assert.Empty(options.SymbolKindFilter.Include);
     }
 
     [Theory]
@@ -6394,6 +6409,270 @@ public sealed class Caller
         finally
         {
             IndexCommandRunner.TimeProvider = TimeProvider.System;
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+            DeleteFile(dbPath);
+        }
+    }
+
+    [Fact]
+    public void Run_ChecksumReusedNoOpFresheningMakesOrdinaryCheckedAndMcpStatusAgree_Issue5227()
+    {
+        var projectRoot = CreateTempProject();
+        var dbPath = CreateTempDbPath("cdidx_status_noop_freshening_5227");
+        var sourcePath = Path.Combine(projectRoot, "app.py");
+        var initialNow = new DateTimeOffset(2099, 1, 2, 3, 0, 0, TimeSpan.Zero);
+        var clock = new ManualTimeProvider(initialNow);
+        IndexCommandRunner.TimeProvider = clock;
+        QueryCommandRunner.TimeProvider = clock;
+        try
+        {
+            File.WriteAllText(sourcePath, "print('hello')\n");
+            File.SetLastWriteTimeUtc(sourcePath, initialNow.AddMinutes(-1).UtcDateTime);
+            RunGit(projectRoot, "init");
+            RunGit(projectRoot, "checkout", "-B", "main");
+            RunGit(projectRoot, "add", "app.py");
+            RunGit(projectRoot, "commit", "-m", "initial");
+
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--db", dbPath, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            DateTime initialIndexedAt;
+            using (var initialDb = new DbContext(DbOpenIntent.QueryOnly, dbPath))
+            using (var initialReader = new DbReader(initialDb))
+            {
+                initialIndexedAt = Assert.IsType<DateTime>(initialReader.GetStatus().IndexedAt);
+            }
+
+            File.SetLastWriteTimeUtc(sourcePath, initialNow.AddMinutes(1).UtcDateTime);
+            clock.Advance(TimeSpan.FromMinutes(2));
+
+            var (refreshExitCode, refreshJson) = RunAndCaptureJson([projectRoot, "--db", dbPath, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, refreshExitCode);
+            Assert.Equal(1, refreshJson.GetProperty("summary").GetProperty("files_skipped").GetInt32());
+
+            using (var queryDb = new DbContext(DbOpenIntent.QueryOnly, dbPath))
+            using (var reader = new DbReader(queryDb))
+            {
+                var ordinary = reader.GetStatus();
+                WorkspaceMetadataEnricher.Enrich(ordinary, dbPath, dbPathExplicit: true);
+                Assert.Equal(initialIndexedAt, ordinary.IndexedAt);
+                Assert.Equal(initialNow.AddMinutes(1).UtcDateTime, ordinary.LatestModified);
+                Assert.Equal(initialNow.AddMinutes(2).UtcDateTime, ordinary.LastWorkspaceFreshenedAt);
+                var ordinaryEvaluation = StatusFreshnessEvaluator.Evaluate(ordinary, clock.GetUtcNow().UtcDateTime);
+                Assert.True(
+                    ordinaryEvaluation.State == StatusFreshnessState.Fresh,
+                    $"Expected fresh ordinary status, but got {ordinaryEvaluation.State} ({ordinaryEvaluation.Reason}); "
+                    + $"gitHead={ordinary.GitHead}, indexedHead={ordinary.IndexedHeadSha}, "
+                    + $"workspaceVerifiedHead={ordinary.WorkspaceVerifiedHeadSha}, gitDirty={ordinary.GitIsDirty}, "
+                    + $"headChanged={ordinary.WorktreeHeadChanged}.");
+                Assert.Contains("index fresh", QueryCommandRunner.BuildStatusSummary(ordinary, clock.GetUtcNow().UtcDateTime));
+
+                ordinary.WorkspaceCheck = IndexFreshnessChecker.Check(
+                    reader,
+                    projectRoot,
+                    internalIndexDatabasePath: DbPathResolver.NormalizeDbPath(dbPath));
+                ordinary.IndexMatchesWorkspace = ordinary.WorkspaceCheck.MatchesWorkspace;
+                Assert.True(ordinary.WorkspaceCheck.Checked);
+                Assert.True(ordinary.WorkspaceCheck.MatchesWorkspace);
+                Assert.Contains("index fresh", QueryCommandRunner.BuildStatusSummary(ordinary, clock.GetUtcNow().UtcDateTime));
+            }
+
+            using var server = new McpServer(
+                dbPath,
+                "1.0.0-test",
+                dbPathExplicit: true,
+                serializeResponse: null,
+                authenticator: null,
+                toolFilter: null,
+                auditLog: null,
+                McpServer.DefaultMaxConcurrency,
+                clock);
+            var ordinaryMcpResponse = server.HandleMessage(JsonNode.Parse(
+                """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!)!;
+            var checkedMcpResponse = server.HandleMessage(JsonNode.Parse(
+                """{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"status","arguments":{"check":true}}}""")!)!;
+            Assert.Contains(
+                "index fresh",
+                ordinaryMcpResponse["result"]!["structuredContent"]!["summary"]!.GetValue<string>());
+            Assert.Contains(
+                "index fresh",
+                checkedMcpResponse["result"]!["structuredContent"]!["summary"]!.GetValue<string>());
+
+            RunGit(projectRoot, "update-index", "--skip-worktree", "app.py");
+            File.WriteAllText(sourcePath, "print('changed after freshening')\n");
+            clock.Advance(TimeSpan.FromMinutes(1));
+
+            using (var hiddenChangeDb = new DbContext(DbOpenIntent.QueryOnly, dbPath))
+            using (var hiddenChangeReader = new DbReader(hiddenChangeDb))
+            {
+                var hiddenChange = hiddenChangeReader.GetStatus();
+                WorkspaceMetadataEnricher.Enrich(hiddenChange, dbPath, dbPathExplicit: true);
+                Assert.False(hiddenChange.GitIsDirty);
+                Assert.True(hiddenChange.GitIndexMayHideWorktreeChanges);
+                Assert.Contains(
+                    "index unknown",
+                    QueryCommandRunner.BuildStatusSummary(hiddenChange, clock.GetUtcNow().UtcDateTime));
+
+                hiddenChange.WorkspaceCheck = IndexFreshnessChecker.Check(
+                    hiddenChangeReader,
+                    projectRoot,
+                    internalIndexDatabasePath: DbPathResolver.NormalizeDbPath(dbPath));
+                Assert.False(hiddenChange.WorkspaceCheck.MatchesWorkspace);
+                Assert.Contains(
+                    "index stale",
+                    QueryCommandRunner.BuildStatusSummary(hiddenChange, clock.GetUtcNow().UtcDateTime));
+            }
+
+            var hiddenOrdinaryMcpResponse = server.HandleMessage(JsonNode.Parse(
+                """{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!)!;
+            var hiddenCheckedMcpResponse = server.HandleMessage(JsonNode.Parse(
+                """{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"status","arguments":{"check":true}}}""")!)!;
+            Assert.Contains(
+                "index unknown",
+                hiddenOrdinaryMcpResponse["result"]!["structuredContent"]!["summary"]!.GetValue<string>());
+            Assert.Contains(
+                "index stale",
+                hiddenCheckedMcpResponse["result"]!["structuredContent"]!["summary"]!.GetValue<string>());
+
+            RunGit(projectRoot, "update-index", "--no-skip-worktree", "app.py");
+            RunGit(projectRoot, "checkout", "--", "app.py");
+            RunGit(projectRoot, "checkout", "--detach", "HEAD");
+
+            using (var detachedDb = new DbContext(DbOpenIntent.QueryOnly, dbPath))
+            using (var detachedReader = new DbReader(detachedDb))
+            {
+                var detached = detachedReader.GetStatus();
+                WorkspaceMetadataEnricher.Enrich(detached, dbPath, dbPathExplicit: true);
+                Assert.False(detached.GitIsDirty);
+                Assert.True(detached.WorktreeHeadChanged);
+                Assert.Contains(
+                    "index stale",
+                    QueryCommandRunner.BuildStatusSummary(detached, clock.GetUtcNow().UtcDateTime));
+
+                detached.WorkspaceCheck = IndexFreshnessChecker.Check(
+                    detachedReader,
+                    projectRoot,
+                    internalIndexDatabasePath: DbPathResolver.NormalizeDbPath(dbPath));
+                Assert.True(detached.WorkspaceCheck.MatchesWorkspace);
+                Assert.Contains(
+                    "index stale",
+                    QueryCommandRunner.BuildStatusSummary(detached, clock.GetUtcNow().UtcDateTime));
+            }
+
+            var (detachedStatusExitCode, detachedStatusJson) = RunStatusAndCaptureJson(
+                ["--db", dbPath, "--check", "--json"]);
+            Assert.Equal(1, detachedStatusExitCode);
+            Assert.False(detachedStatusJson.GetProperty("index_matches_workspace").GetBoolean());
+            Assert.True(detachedStatusJson.GetProperty("workspace_check").GetProperty("matches_workspace").GetBoolean());
+            Assert.Contains(
+                detachedStatusJson.GetProperty("failed_checks").EnumerateArray(),
+                failure => failure.GetString() == "workspace_stale");
+
+            var detachedCheckedMcpResponse = server.HandleMessage(JsonNode.Parse(
+                """{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"status","arguments":{"check":true}}}""")!)!;
+            var detachedMcpStatus = detachedCheckedMcpResponse["result"]!["structuredContent"]!;
+            Assert.Contains(
+                "index stale",
+                detachedMcpStatus["summary"]!.GetValue<string>());
+            Assert.False(detachedMcpStatus["index_matches_workspace"]!.GetValue<bool>());
+            Assert.Contains(
+                detachedMcpStatus["failed_checks"]!.AsArray(),
+                failure => failure!.GetValue<string>() == "workspace_stale");
+
+            RunGit(projectRoot, "checkout", "main");
+            RunGit(projectRoot, "config", "status.showUntrackedFiles", "no");
+            var untrackedPath = Path.Combine(projectRoot, "untracked.py");
+            File.WriteAllText(untrackedPath, "print('untracked v1')\n");
+            File.SetLastWriteTimeUtc(untrackedPath, initialNow.AddMinutes(3).UtcDateTime);
+            clock.Advance(TimeSpan.FromMinutes(2));
+            Assert.Equal(
+                CommandExitCodes.Success,
+                RunAndCaptureJson([projectRoot, "--db", dbPath, "--json"]).ExitCode);
+
+            File.SetLastWriteTimeUtc(untrackedPath, initialNow.AddMinutes(6).UtcDateTime);
+            clock.Advance(TimeSpan.FromMinutes(2));
+            Assert.Equal(
+                CommandExitCodes.Success,
+                RunAndCaptureJson([projectRoot, "--db", dbPath, "--json"]).ExitCode);
+
+            using (var indexedUntrackedDb = new DbContext(DbOpenIntent.QueryOnly, dbPath))
+            using (var indexedUntrackedReader = new DbReader(indexedUntrackedDb))
+            {
+                var indexedUntracked = indexedUntrackedReader.GetStatus();
+                WorkspaceMetadataEnricher.Enrich(indexedUntracked, dbPath, dbPathExplicit: true);
+                Assert.True(indexedUntracked.GitIsDirty);
+                Assert.Contains(
+                    "index unknown",
+                    QueryCommandRunner.BuildStatusSummary(indexedUntracked, clock.GetUtcNow().UtcDateTime));
+
+                indexedUntracked.WorkspaceCheck = IndexFreshnessChecker.Check(
+                    indexedUntrackedReader,
+                    projectRoot,
+                    internalIndexDatabasePath: DbPathResolver.NormalizeDbPath(dbPath));
+                Assert.True(indexedUntracked.WorkspaceCheck.MatchesWorkspace);
+                Assert.Contains(
+                    "index fresh",
+                    QueryCommandRunner.BuildStatusSummary(indexedUntracked, clock.GetUtcNow().UtcDateTime));
+            }
+
+            var (indexedUntrackedStatusExitCode, indexedUntrackedStatusJson) = RunStatusAndCaptureJson(
+                ["--db", dbPath, "--check", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, indexedUntrackedStatusExitCode);
+            Assert.True(indexedUntrackedStatusJson.GetProperty("workspace_check").GetProperty("matches_workspace").GetBoolean());
+            Assert.True(indexedUntrackedStatusJson.GetProperty("index_matches_workspace").GetBoolean());
+            Assert.Contains("index fresh", indexedUntrackedStatusJson.GetProperty("summary").GetString());
+
+            var indexedUntrackedOrdinaryMcpResponse = server.HandleMessage(JsonNode.Parse(
+                """{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!)!;
+            var indexedUntrackedCheckedMcpResponse = server.HandleMessage(JsonNode.Parse(
+                """{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"status","arguments":{"check":true}}}""")!)!;
+            Assert.Contains(
+                "index unknown",
+                indexedUntrackedOrdinaryMcpResponse["result"]!["structuredContent"]!["summary"]!.GetValue<string>());
+            var indexedUntrackedCheckedMcpStatus = indexedUntrackedCheckedMcpResponse["result"]!["structuredContent"]!;
+            Assert.Contains("index fresh", indexedUntrackedCheckedMcpStatus["summary"]!.GetValue<string>());
+            Assert.True(indexedUntrackedCheckedMcpStatus["index_matches_workspace"]!.GetValue<bool>());
+            Assert.True(indexedUntrackedCheckedMcpStatus["workspace_check"]!["matches_workspace"]!.GetValue<bool>());
+
+            File.WriteAllText(untrackedPath, "print('untracked v2')\n");
+            File.SetLastWriteTimeUtc(untrackedPath, initialNow.AddMinutes(8).UtcDateTime);
+            clock.Advance(TimeSpan.FromMinutes(2));
+
+            using (var untrackedDb = new DbContext(DbOpenIntent.QueryOnly, dbPath))
+            using (var untrackedReader = new DbReader(untrackedDb))
+            {
+                var ordinary = untrackedReader.GetStatus();
+                WorkspaceMetadataEnricher.Enrich(ordinary, dbPath, dbPathExplicit: true);
+                Assert.True(ordinary.GitIsDirty);
+                Assert.Contains(
+                    "index unknown",
+                    QueryCommandRunner.BuildStatusSummary(ordinary, clock.GetUtcNow().UtcDateTime));
+
+                ordinary.WorkspaceCheck = IndexFreshnessChecker.Check(
+                    untrackedReader,
+                    projectRoot,
+                    internalIndexDatabasePath: DbPathResolver.NormalizeDbPath(dbPath));
+                Assert.False(ordinary.WorkspaceCheck.MatchesWorkspace);
+                Assert.Contains(
+                    "index stale",
+                    QueryCommandRunner.BuildStatusSummary(ordinary, clock.GetUtcNow().UtcDateTime));
+            }
+
+            var untrackedOrdinaryMcpResponse = server.HandleMessage(JsonNode.Parse(
+                """{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!)!;
+            var untrackedCheckedMcpResponse = server.HandleMessage(JsonNode.Parse(
+                """{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"status","arguments":{"check":true}}}""")!)!;
+            Assert.Contains(
+                "index unknown",
+                untrackedOrdinaryMcpResponse["result"]!["structuredContent"]!["summary"]!.GetValue<string>());
+            Assert.Contains(
+                "index stale",
+                untrackedCheckedMcpResponse["result"]!["structuredContent"]!["summary"]!.GetValue<string>());
+        }
+        finally
+        {
+            IndexCommandRunner.TimeProvider = TimeProvider.System;
+            QueryCommandRunner.TimeProvider = TimeProvider.System;
             DeleteDirectory(projectRoot);
             SqliteConnection.ClearAllPools();
             DeleteFile(dbPath);

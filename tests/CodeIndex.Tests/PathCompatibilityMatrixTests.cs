@@ -299,6 +299,8 @@ public sealed class PathCompatibilityMatrixTests
         TestProjectHelper.RunGit(workspace.Root, "add", "src/App.cs", "generated/Skip.cs");
         TestProjectHelper.RunGit(workspace.Root, "commit", "-m", "seed");
 
+        Assert.False(GitHelper.TryHasWorktreeVisibilityLimitingIndexFlags(workspace.Root));
+
         TestProjectHelper.RunGit(workspace.Root, "update-index", "--skip-worktree", "generated/Skip.cs");
 
         var skipWorktreePaths = GitHelper.TryGetSkipWorktreePaths(workspace.Root);
@@ -306,6 +308,12 @@ public sealed class PathCompatibilityMatrixTests
         Assert.NotNull(skipWorktreePaths);
         Assert.Contains("generated/Skip.cs", skipWorktreePaths);
         Assert.DoesNotContain(skipWorktreePaths!, path => path.Contains('\\', StringComparison.Ordinal));
+        Assert.True(GitHelper.TryHasWorktreeVisibilityLimitingIndexFlags(workspace.Root));
+
+        TestProjectHelper.RunGit(workspace.Root, "update-index", "--no-skip-worktree", "generated/Skip.cs");
+        TestProjectHelper.RunGit(workspace.Root, "update-index", "--assume-unchanged", "src/App.cs");
+
+        Assert.True(GitHelper.TryHasWorktreeVisibilityLimitingIndexFlags(workspace.Root));
     }
 
     private sealed class MatrixWorkspace : IDisposable
