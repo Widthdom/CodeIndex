@@ -18,7 +18,11 @@ public static partial class SymbolExtractor
     // multiline attribute blocks is persisted for existing indexes.
     // バージョン 17 (#5192) は既存 index の C# symbol を再抽出し、複数行の
     // attribute block から得た test method taxonomy を永続化する。
-    public const int CSharpContractVersion = 17;
+    // Version 18 (#5228) re-extracts C# symbols so semicolon-form record body ranges
+    // and their reference-container boundaries are persisted for existing indexes.
+    // バージョン 18 (#5228) は既存 index の C# symbol を再抽出し、セミコロン形式 record の
+    // body range と参照 container 境界を永続化する。
+    public const int CSharpContractVersion = 18;
     public const int DockerfileContractVersion = 2;
     public const int MakefileContractVersion = 2;
     public const int StyleAndXamlContractVersion = 2;

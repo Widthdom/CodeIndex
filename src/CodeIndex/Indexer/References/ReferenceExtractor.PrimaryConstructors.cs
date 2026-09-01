@@ -233,6 +233,76 @@ public static partial class ReferenceExtractor
 
     private static bool IsCSharpIdentifierPart(char c) => char.IsLetterOrDigit(c) || c == '_';
 
+    private static int FindCSharpRecordKeywordColumn(
+        string[] structuralLines,
+        SymbolRecord recordOwner)
+    {
+        var lineIndex = Math.Max(0, recordOwner.StartLine - 1);
+        if (lineIndex >= structuralLines.Length || structuralLines[lineIndex].Length == 0)
+            return 0;
+
+        var line = structuralLines[lineIndex];
+        var searchFrom = 0;
+        while (searchFrom < line.Length)
+        {
+            var found = line.IndexOf("record", searchFrom, StringComparison.Ordinal);
+            if (found < 0)
+                break;
+
+            var before = found == 0 ? ' ' : line[found - 1];
+            var afterIndex = found + "record".Length;
+            var after = afterIndex < line.Length ? line[afterIndex] : ' ';
+            if (!IsCSharpIdentifierPart(before) && !IsCSharpIdentifierPart(after))
+            {
+                var nameStart = afterIndex;
+                while (nameStart < line.Length && char.IsWhiteSpace(line[nameStart]))
+                    nameStart++;
+                if (TrySkipCSharpRecordKindKeyword(line, ref nameStart, "class")
+                    || TrySkipCSharpRecordKindKeyword(line, ref nameStart, "struct"))
+                {
+                    while (nameStart < line.Length && char.IsWhiteSpace(line[nameStart]))
+                        nameStart++;
+                }
+
+                var escaped = nameStart < line.Length && line[nameStart] == '@';
+                if (escaped)
+                    nameStart++;
+                var nameEnd = nameStart;
+                while (nameEnd < line.Length && IsCSharpIdentifierPart(line[nameEnd]))
+                    nameEnd++;
+                if (nameEnd > nameStart
+                    && string.Equals(
+                        line[nameStart..nameEnd],
+                        recordOwner.Name.TrimStart('@'),
+                        StringComparison.Ordinal))
+                {
+                    return found;
+                }
+            }
+
+            searchFrom = found + "record".Length;
+        }
+
+        return 0;
+    }
+
+    private static bool TrySkipCSharpRecordKindKeyword(
+        string line,
+        ref int offset,
+        string keyword)
+    {
+        if (offset + keyword.Length > line.Length
+            || !line.AsSpan(offset, keyword.Length).SequenceEqual(keyword)
+            || (offset + keyword.Length < line.Length
+                && IsCSharpIdentifierPart(line[offset + keyword.Length])))
+        {
+            return false;
+        }
+
+        offset += keyword.Length;
+        return true;
+    }
+
     /// <summary>
     /// Walk structural-masked lines starting at the 1-based <paramref name="startLine"/> and collect
     /// the declaration header up to (but not including) the first `;` or `{` that sits outside a
@@ -242,7 +312,10 @@ public static partial class ReferenceExtractor
     /// structuralLines を使って、class / struct / record 宣言ヘッダーを最初の `;` / `{` まで連結する。
     /// record primary-ctor のコンテナ合成と、複数行 `: base(...)` 解決の両方で使う。
     /// </summary>
-    internal static (int EndLine, int EndColumn, string Text) CollectCSharpRecordHeader(string[] structuralLines, int startLine)
+    internal static (int EndLine, int EndColumn, string Text) CollectCSharpRecordHeader(
+        string[] structuralLines,
+        int startLine,
+        int startColumn = 0)
     {
         var startIdx = Math.Max(0, startLine - 1);
         if (structuralLines.Length == 0)
@@ -282,6 +355,7 @@ public static partial class ReferenceExtractor
         for (int i = startIdx; i < structuralLines.Length; i++)
         {
             var line = structuralLines[i];
+            var lineStartColumn = i == startIdx ? Math.Clamp(startColumn, 0, line.Length) : 0;
             char[]? masked = null;
             var terminatorIdx = -1;
             void MaskChar(int index)
@@ -297,7 +371,7 @@ public static partial class ReferenceExtractor
                     masked[k] = ' ';
             }
 
-            for (int j = 0; j < line.Length; j++)
+            for (int j = lineStartColumn; j < line.Length; j++)
             {
                 var c = line[j];
 
@@ -393,16 +467,16 @@ public static partial class ReferenceExtractor
             if (terminatorIdx >= 0)
             {
                 if (masked == null)
-                    sb.Append(line, 0, terminatorIdx);
+                    sb.Append(line, lineStartColumn, terminatorIdx - lineStartColumn);
                 else
-                    sb.Append(masked, 0, terminatorIdx);
+                    sb.Append(masked, lineStartColumn, terminatorIdx - lineStartColumn);
                 return (i + 1, terminatorIdx, sb.ToString());
             }
 
             if (masked == null)
-                sb.Append(line);
+                sb.Append(line, lineStartColumn, line.Length - lineStartColumn);
             else
-                sb.Append(masked);
+                sb.Append(masked, lineStartColumn, line.Length - lineStartColumn);
             sb.Append('\n');
         }
 

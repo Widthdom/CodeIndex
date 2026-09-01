@@ -3801,6 +3801,30 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_IncompleteRecordBaseListStopsBeforeFollowingConstructor_Issue5228()
+    {
+        var content = """
+            public class Base { }
+            public class Outer
+            {
+                public record Broken : Base
+                Outer() { }
+                public class Next { }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var broken = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Broken"));
+        Assert.Equal(4, broken.EndLine);
+        Assert.Null(broken.BodyStartLine);
+        Assert.Null(broken.BodyEndLine);
+        Assert.DoesNotContain(symbols, s => s.StartLine == 5 && s.ContainerName == "Broken");
+
+        var next = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Next"));
+        Assert.Equal("Outer", next.ContainerName);
+    }
+
+    [Fact]
     public void Extract_CSharp_SemicolonRecordDoesNotContainSameLineSibling_Issue5228()
     {
         var content = """

@@ -221,7 +221,8 @@ public static partial class ReferenceExtractor
                     _loop.Lookups.GetCSharpSameLineContainerCandidatesByLine(),
                     structuralLines[_lineIndex],
                     _lineNumber,
-                    column)
+                    column,
+                    recordOwner)
                 ?? FindCSharpDeclaredParentContainer(recordOwner);
             return true;
         }

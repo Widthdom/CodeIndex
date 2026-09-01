@@ -277,8 +277,14 @@ public static partial class ReferenceExtractor
             // collected boundary per owner so container correction remains linear.
             // 1つの複数行 record が多数の component reference を生成しても、owner ごとに
             // boundary を cache し、container 補正の線形性を維持する。
+            var recordStartColumn = FindCSharpRecordKeywordColumn(
+                structuralLines,
+                recordOwner);
             var (endLine, endColumn, headerText) =
-                CollectCSharpRecordHeader(structuralLines, recordOwner.StartLine);
+                CollectCSharpRecordHeader(
+                    structuralLines,
+                    recordOwner.StartLine,
+                    recordStartColumn);
             var boundary = (
                 endLine,
                 endColumn,

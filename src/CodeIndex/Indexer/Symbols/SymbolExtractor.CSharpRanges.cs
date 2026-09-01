@@ -73,6 +73,7 @@ public static partial class SymbolExtractor
         var bracketDepth = 0;
         var hasTopLevelBaseList = false;
         var hasTopLevelWhereClause = false;
+        var lastTopLevelHeaderCharacter = '\0';
 
         // Unlike the lightweight signature lookahead, definition content must remain available
         // for legal positional records longer than 64 lines. Following-declaration checks keep an
@@ -88,11 +89,13 @@ public static partial class SymbolExtractor
                 && bracketDepth == 0)
             {
                 var boundaryLine = NormalizeCSharpQualifiedTypeWhitespaceForRecordBoundary(sanitizedLine);
+                var unqualifiedConstructorBoundary =
+                    CSharpFollowingUnqualifiedConstructorDeclarationRegex.IsMatch(boundaryLine)
+                    && (!hasTopLevelBaseList && !hasTopLevelWhereClause
+                        || lastTopLevelHeaderCharacter is not ':' and not ',');
                 if (CSharpFollowingTypeDeclarationRegex.IsMatch(boundaryLine)
                     || CSharpFollowingMemberDeclarationRegex.IsMatch(boundaryLine)
-                    || (!hasTopLevelBaseList
-                        && !hasTopLevelWhereClause
-                        && CSharpFollowingUnqualifiedConstructorDeclarationRegex.IsMatch(boundaryLine)))
+                    || unqualifiedConstructorBoundary)
                 {
                     declarationRange = (startLineIndex + 1, null, null);
                     return true;
@@ -139,6 +142,13 @@ public static partial class SymbolExtractor
                         var declarationEndLine = lineIndex + 1;
                         declarationRange = (declarationEndLine, startLineIndex + 1, declarationEndLine);
                         return true;
+                }
+
+                if (!char.IsWhiteSpace(sanitizedLine[column])
+                    && parenDepth == 0
+                    && bracketDepth == 0)
+                {
+                    lastTopLevelHeaderCharacter = sanitizedLine[column];
                 }
             }
         }

@@ -242,7 +242,8 @@ public static partial class ReferenceExtractor
         IReadOnlyList<SymbolRecord> candidates,
         string structuralLine,
         int lineNumber,
-        int column)
+        int column,
+        SymbolRecord? excludedCandidate = null)
     {
         SymbolRecord? best = null;
         var bestStartColumn = -1;
@@ -251,7 +252,8 @@ public static partial class ReferenceExtractor
 
         foreach (var candidate in candidates)
         {
-            if (candidate.BodyStartLine == null
+            if (ReferenceEquals(candidate, excludedCandidate)
+                || candidate.BodyStartLine == null
                 || candidate.BodyEndLine == null
                 || candidate.BodyStartLine.Value > lineNumber
                 || candidate.BodyEndLine.Value < lineNumber
@@ -327,9 +329,15 @@ public static partial class ReferenceExtractor
         IReadOnlyDictionary<int, List<SymbolRecord>>? candidatesByLine,
         string structuralLine,
         int lineNumber,
-        int column)
+        int column,
+        SymbolRecord? excludedCandidate = null)
         => candidatesByLine != null && candidatesByLine.TryGetValue(lineNumber, out var candidates)
-            ? FindInnermostSameLineCSharpContainer(candidates, structuralLine, lineNumber, column)
+            ? FindInnermostSameLineCSharpContainer(
+                candidates,
+                structuralLine,
+                lineNumber,
+                column,
+                excludedCandidate)
             : null;
 
     private static SymbolRecord? FindInnermostCSharpDeclarationRangeContainer(
