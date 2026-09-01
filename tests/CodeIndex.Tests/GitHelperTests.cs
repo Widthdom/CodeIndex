@@ -1525,6 +1525,21 @@ exit 7
     }
 
     [ExternalProcessFact]
+    public void TryIsWorktreeDirty_ForcesUntrackedVisibilityDespiteGitConfig_Issue5227()
+    {
+        var repoDir = CreateGitRepo();
+        RunGit(repoDir, "commit", "--allow-empty", "-m", "initial");
+        RunGit(repoDir, "config", "status.showUntrackedFiles", "no");
+
+        var untrackedDirectory = Path.Combine(repoDir, "untracked");
+        Directory.CreateDirectory(untrackedDirectory);
+        File.WriteAllText(Path.Combine(untrackedDirectory, "nested.txt"), "indexed outside git\n");
+
+        Assert.True(GitHelper.TryIsWorktreeDirty(repoDir));
+        Assert.True(GitHelper.TryGetWorktreeStatus(repoDir)?.IsDirty);
+    }
+
+    [ExternalProcessFact]
     public void TryGetWorktreeStatus_DetectsUnresolvedMergeFiles()
     {
         var repoDir = CreateGitRepo();

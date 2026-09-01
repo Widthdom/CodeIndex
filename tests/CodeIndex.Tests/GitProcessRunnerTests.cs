@@ -49,6 +49,36 @@ public sealed class GitProcessRunnerTests : IDisposable
         Assert.DoesNotContain("/Users/example/private", value.Diagnostic!);
     }
 
+    [ExternalProcessFact]
+    public void RunMatchingStdoutLine_ScansBeyondCaptureLimitWithoutMaterializingOutput_Issue5227()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var repoDir = Path.Combine(tempDir, "streaming-repo");
+        Directory.CreateDirectory(repoDir);
+        var fakeGitDir = Path.Combine(tempDir, "streaming-fake-git");
+        Directory.CreateDirectory(fakeGitDir);
+        var fakeGit = WriteFakeGitWithLargeStdoutAndMatch(fakeGitDir);
+        var psi = new ProcessStartInfo
+        {
+            FileName = fakeGit,
+            WorkingDirectory = repoDir,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+
+        var matched = GitProcessRunner.RunMatchingStdoutLine(
+            psi,
+            TimeSpan.FromSeconds(5),
+            line => line.StartsWith("S ", StringComparison.Ordinal),
+            CancellationToken.None);
+
+        Assert.True(matched);
+    }
+
     private static string WriteFakeGitThatFailsWithLongSensitiveStderr(string directory)
     {
         var script = Path.Combine(directory, "git");
@@ -56,6 +86,18 @@ public sealed class GitProcessRunnerTests : IDisposable
 #!/bin/sh
 perl -e 'print STDERR "/Users/example/private/repo/.git/config " . ("x" x 2000)'
 exit 23
+""");
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        return script;
+    }
+
+    private static string WriteFakeGitWithLargeStdoutAndMatch(string directory)
+    {
+        var script = Path.Combine(directory, "git-streaming");
+        File.WriteAllText(script, """
+#!/bin/sh
+perl -e 'for ($i = 0; $i < 20000; $i++) { print "H tracked/path/$i/abcdefghijklmnopqrstuvwxyz0123456789.cs\n"; } print "S hidden.cs\n"'
 """);
         if (!OperatingSystem.IsWindows())
             File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);

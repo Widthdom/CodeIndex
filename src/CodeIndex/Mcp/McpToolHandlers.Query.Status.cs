@@ -46,7 +46,12 @@ public partial class McpServer
                     || projectionFields.Contains("database_size_attribution", StringComparer.Ordinal));
             var status = reader.GetStatus(includeDatabaseSizeAttribution);
             QueryCommandRunner.ApplyStatusSymbolKindLimits(status, reader.GetSymbolKindCounts());
-            WorkspaceMetadataEnricher.Enrich(status, _dbPath, _dbPathExplicit, requestToken);
+            WorkspaceMetadataEnricher.Enrich(
+                status,
+                _dbPath,
+                _dbPathExplicit,
+                requestToken,
+                evaluateOrdinaryFreshness: !checkWorkspace);
             status.DbFileMode = DbContext.GetUnixFileModeString(
                 _dbPath,
                 status.DatabasePermissionPolicy,
@@ -68,7 +73,9 @@ public partial class McpServer
                     requestToken,
                     internalIndexDatabasePath: DbPathResolver.NormalizeDbPath(_dbPath));
                 status.IndexMatchesWorkspace = status.WorkspaceCheck.Checked
-                    ? status.WorkspaceCheck.MatchesWorkspace
+                    ? StatusFreshnessEvaluator.Evaluate(
+                        status.WorkspaceCheck,
+                        status.WorktreeHeadChanged).State == StatusFreshnessState.Fresh
                     : null;
                 status.StaleAfterSeconds = staleAfterSeconds;
                 if (status.IndexedAt.HasValue)
@@ -115,7 +122,7 @@ public partial class McpServer
                 status.RecommendedAction = BuildFoldBackfillCommand(_dbPath, _dbPathExplicit);
                 status.AlternativeAction = BuildFoldRebuildRepairCommand(status.ProjectRoot, _dbPath, _dbPathExplicit);
             }
-            status.Summary = QueryCommandRunner.BuildStatusSummary(status);
+            status.Summary = QueryCommandRunner.BuildStatusSummary(status, GetUtcNow());
             var checkFailures = checkWorkspace
                 ? BuildMcpStatusCheckFailures(status, statusScopes)
                 : [];
@@ -342,13 +349,19 @@ public partial class McpServer
             {
                 failures.Add(new McpStatusCheckFailure("workspace_unavailable", true, "[stale] workspace_check unavailable"));
             }
-            else if (!status.WorkspaceCheck.MatchesWorkspace)
+            else
             {
                 var check = status.WorkspaceCheck;
-                failures.Add(new McpStatusCheckFailure(
-                    "workspace_stale",
-                    true,
-                    $"[stale] workspace_check reason={check.Reason} changed={check.ChangedFileCount} missing={check.MissingFileCount} unindexed={check.UnindexedFileCount}"));
+                var freshness = StatusFreshnessEvaluator.Evaluate(
+                    check,
+                    status.WorktreeHeadChanged);
+                if (freshness.State != StatusFreshnessState.Fresh)
+                {
+                    failures.Add(new McpStatusCheckFailure(
+                        "workspace_stale",
+                        true,
+                        $"[stale] workspace_check reason={freshness.Reason} changed={check.ChangedFileCount} missing={check.MissingFileCount} unindexed={check.UnindexedFileCount}"));
+                }
             }
         }
 

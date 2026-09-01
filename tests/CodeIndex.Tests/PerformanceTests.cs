@@ -370,11 +370,17 @@ public class PerformanceTests : IDisposable
         Assert.True(chunks >= 120, $"Expected at least one chunk per file, got {chunks}");
         Assert.True(symbols >= 240, $"Expected class and method symbols from the smoke fixture, got {symbols}");
         Assert.True(references > 0, "Expected reference rows from the smoke fixture.");
-        // Hosted Windows runners have wider filesystem and process-scheduling variance.
-        // Keep a bounded platform budget without weakening other lanes.
-        // hosted Windows runner は filesystem / process scheduling の変動幅が大きいため、
-        // 他 lane の基準は維持したまま platform 別の上限を設定する。
-        var indexBudget = OperatingSystem.IsWindows()
+        // Hosted Windows runners have wider filesystem and process-scheduling variance,
+        // while coverage instrumentation adds deterministic hot-path overhead. Keep the
+        // strict budget for every uninstrumented non-Windows run, including CI retries.
+        // hosted Windows runner は filesystem / process scheduling の変動幅が大きく、coverage
+        // instrumentation には hot path の追加 overhead がある。CI retry を含む coverage なしの
+        // 非 Windows 実行では厳しい上限を維持する。
+        var coverageInstrumentationActive = string.Equals(
+            Environment.GetEnvironmentVariable("CODEINDEX_TEST_COVERAGE"),
+            "true",
+            StringComparison.OrdinalIgnoreCase);
+        var indexBudget = OperatingSystem.IsWindows() || coverageInstrumentationActive
             ? TimeSpan.FromSeconds(45)
             : TimeSpan.FromSeconds(20);
         Assert.True(
