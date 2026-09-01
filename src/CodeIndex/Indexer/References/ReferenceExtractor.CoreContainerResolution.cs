@@ -217,7 +217,12 @@ public static partial class ReferenceExtractor
                 return false;
             }
 
-            enclosingContainer = FindCSharpDeclaredParentContainer(recordOwner);
+            enclosingContainer = FindInnermostSameLineCSharpContainer(
+                    _loop.Lookups.GetCSharpSameLineContainerCandidatesByLine(),
+                    structuralLines[_lineIndex],
+                    _lineNumber,
+                    column)
+                ?? FindCSharpDeclaredParentContainer(recordOwner);
             return true;
         }
 

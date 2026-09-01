@@ -3657,6 +3657,10 @@ public partial class SymbolExtractorTests
             {
                 public T Current => Value;
             }
+
+            public record Constructible<T>(T Value)
+                where T :
+                    new();
             """;
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
@@ -3670,6 +3674,9 @@ public partial class SymbolExtractorTests
         Assert.Equal((12, 14), (braced.BodyStartLine, braced.BodyEndLine));
         var current = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Current"));
         Assert.Equal("Braced", current.ContainerName);
+
+        var constructible = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Constructible"));
+        Assert.Equal((16, 18), (constructible.BodyStartLine, constructible.BodyEndLine));
     }
 
     [Fact]
@@ -3695,6 +3702,10 @@ public partial class SymbolExtractorTests
                     N . Base(X) {
                 public int Nested => X;
             }
+
+            public record AliasQualified(int X)
+                :
+                    Alias :: Base(X);
             """;
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
@@ -3709,6 +3720,9 @@ public partial class SymbolExtractorTests
         Assert.Equal(19, braced.EndLine);
         var nested = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Nested"));
         Assert.Equal("Braced", nested.ContainerName);
+
+        var aliasQualified = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "AliasQualified"));
+        Assert.Equal((21, 23), (aliasQualified.BodyStartLine, aliasQualified.BodyEndLine));
     }
 
     [Fact]
@@ -3735,18 +3749,21 @@ public partial class SymbolExtractorTests
     }
 
     [Theory]
-    [InlineData("public void Following();", "function")]
-    [InlineData("public N . Type Following();", "function")]
-    [InlineData("public int Following;", "field")]
-    [InlineData("public event Action Following;", "event")]
-    [InlineData("public int Following { get; set; }", "property")]
-    [InlineData("~Outer() { }", "function")]
-    [InlineData("public int this[int index] { get => index; }", "function")]
-    [InlineData("static Outer() { }", "function")]
-    [InlineData("public static Outer operator +(Outer value) => value;", "operator")]
+    [InlineData("public void Following();", "function", "Following")]
+    [InlineData("public N . Type Following();", "function", "Following")]
+    [InlineData("public int Following;", "field", "Following")]
+    [InlineData("public event Action Following;", "event", "Following")]
+    [InlineData("public int Following { get; set; }", "property", "Following")]
+    [InlineData("~Outer() { }", "function", "Outer")]
+    [InlineData("public int this[int index] { get => index; }", "function", "Item")]
+    [InlineData("static Outer() { }", "function", "Outer")]
+    [InlineData("Outer() { }", "function", null)]
+    [InlineData("void IFoo.Run() { }", "function", "Run")]
+    [InlineData("public static Outer operator +(Outer value) => value;", "operator", "operator +")]
     public void Extract_CSharp_IncompleteRecordStopsBeforeFollowingMember_Issue5228(
         string followingDeclaration,
-        string followingKind)
+        string followingKind,
+        string? expectedFollowingName)
     {
         var content = $$"""
             public class Outer
@@ -3763,10 +3780,20 @@ public partial class SymbolExtractorTests
         Assert.Null(broken.BodyStartLine);
         Assert.Null(broken.BodyEndLine);
 
-        var following = Assert.Single(symbols.Where(s =>
-            s.Kind == followingKind
-            && (s.Name == "Following" || s.Name == "Outer" || s.Name == "Item" || s.Name == "operator +")));
-        Assert.Equal("Outer", following.ContainerName);
+        if (expectedFollowingName != null)
+        {
+            var following = Assert.Single(symbols.Where(s =>
+                s.Kind == followingKind
+                && s.Name == expectedFollowingName));
+            Assert.Equal("Outer", following.ContainerName);
+        }
+        else
+        {
+            Assert.DoesNotContain(symbols, s =>
+                s.Kind == followingKind
+                && s.StartLine == 4
+                && s.ContainerName == "Broken");
+        }
         var next = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Next"));
         Assert.Equal("Outer", next.ContainerName);
     }

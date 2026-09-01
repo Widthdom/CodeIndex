@@ -1040,17 +1040,19 @@ public partial class ReferenceExtractorTests
     }
 
     [Theory]
-    [InlineData("public class Outer { public record R(int X); public static int Value = Target.Create(); }", null)]
-    [InlineData("public class Outer\n{\n    public record R(int X); public static int Value = Target.Create();\n}", null)]
-    [InlineData("public class Outer { public record R; public static int Value = Target.Create(); }", null)]
-    [InlineData("public class Outer { public record class R; public static int Value = Target.Create(); }", null)]
-    [InlineData("public class Outer { public record struct R; public static int Value = Target.Create(); }", null)]
-    [InlineData("public class Outer\n{\n    public record R\n    ; public static int Value = Target.Create();\n}", "public record R")]
-    [InlineData("public class Outer\n{\n    public record R(int X)\n    ; public static int Value = Target.Create();\n}", "public record R(int X)")]
-    [InlineData("public class Outer\n{\n    public record R <T>\n    ; public static int Value = Target.Create();\n}", "public record R <T>")]
+    [InlineData("public class Outer { public record R(int X); public static int Value = Target.Create(); }", null, "Outer")]
+    [InlineData("public class Outer\n{\n    public record R(int X); public static int Value = Target.Create();\n}", null, "Outer")]
+    [InlineData("public class Outer { public record R; public static int Value = Target.Create(); }", null, "Outer")]
+    [InlineData("public class Outer { public record class R; public static int Value = Target.Create(); }", null, "Outer")]
+    [InlineData("public class Outer { public record struct R; public static int Value = Target.Create(); }", null, "Outer")]
+    [InlineData("public class Outer\n{\n    public record R\n    ; public static int Value = Target.Create();\n}", "public record R", "Outer")]
+    [InlineData("public class Outer\n{\n    public record R(int X)\n    ; public static int Value = Target.Create();\n}", "public record R(int X)", "Outer")]
+    [InlineData("public class Outer\n{\n    public record R <T>\n    ; public static int Value = Target.Create();\n}", "public record R <T>", "Outer")]
+    [InlineData("public record R; public class Next { public static int Value = Target.Create(); }", null, "Next")]
     public void Extract_CsharpSemicolonRecord_DoesNotCaptureFollowingSameLineReference_Issue5228(
         string outerDeclaration,
-        string? expectedSignatureWithoutTerminator)
+        string? expectedSignatureWithoutTerminator,
+        string expectedContainerName)
     {
         var content = $$"""
             public static class Target { public static int Create() => 1; }
@@ -1069,7 +1071,7 @@ public partial class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
         var create = Assert.Single(references, reference => reference.SymbolName == "Create");
         Assert.Equal("class", create.ContainerKind);
-        Assert.Equal("Outer", create.ContainerName);
+        Assert.Equal(expectedContainerName, create.ContainerName);
     }
 
 #if NET8_0

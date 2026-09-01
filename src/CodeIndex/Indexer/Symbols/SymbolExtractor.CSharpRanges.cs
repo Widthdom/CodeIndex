@@ -24,8 +24,14 @@ public static partial class SymbolExtractor
         + @"|(?:" + CSharpTypePattern + @"\s+)?(?:(?:implicit|explicit)\s+)?operator\b"
         + @"|" + CSharpTypePattern + @"\s+" + CSharpIdentifierPattern + CSharpMethodTypeParameterListPattern
             + @"(?=\s*(?:\(|[;{=]|=>))"
+        + @"|" + CSharpTypePattern + @"\s+" + CSharpExplicitInterfaceQualifierPattern + @"\s*\.\s*"
+            + CSharpIdentifierPattern + CSharpMethodTypeParameterListPattern + @"(?=\s*(?:\(|[;{=]|=>))"
         + @"|(?:(?:unsafe|extern)\s+)*(?:" + CSharpVisibilityPattern + @")\s+"
             + @"(?:(?:unsafe|extern|partial)\s+)*" + CSharpIdentifierPattern + @"(?=\s*\())",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CSharpFollowingUnqualifiedConstructorDeclarationRegex = new(
+        @"^\s*(?:(?:" + CSharpVisibilityPattern + @"|static|unsafe|extern|partial)\s+)*"
+        + CSharpIdentifierPattern + @"(?=\s*\()",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindCSharpPatternBodyRange(
@@ -63,6 +69,8 @@ public static partial class SymbolExtractor
     {
         var parenDepth = 0;
         var bracketDepth = 0;
+        var hasTopLevelBaseList = false;
+        var hasTopLevelWhereClause = false;
 
         // Unlike the lightweight signature lookahead, definition content must remain available
         // for legal positional records longer than 64 lines. Following-declaration checks keep an
@@ -79,7 +87,10 @@ public static partial class SymbolExtractor
             {
                 var boundaryLine = NormalizeCSharpQualifiedTypeWhitespaceForRecordBoundary(sanitizedLine);
                 if (CSharpFollowingTypeDeclarationRegex.IsMatch(boundaryLine)
-                    || CSharpFollowingMemberDeclarationRegex.IsMatch(boundaryLine))
+                    || CSharpFollowingMemberDeclarationRegex.IsMatch(boundaryLine)
+                    || (!hasTopLevelBaseList
+                        && !hasTopLevelWhereClause
+                        && CSharpFollowingUnqualifiedConstructorDeclarationRegex.IsMatch(boundaryLine)))
                 {
                     declarationRange = (startLineIndex + 1, null, null);
                     return true;
@@ -103,6 +114,18 @@ public static partial class SymbolExtractor
                     case ']' when bracketDepth > 0:
                         bracketDepth--;
                         break;
+                    case 'w' when parenDepth == 0
+                        && bracketDepth == 0
+                        && IsCSharpRecordWhereKeywordAt(sanitizedLine, column):
+                        hasTopLevelWhereClause = true;
+                        break;
+                    case ':' when parenDepth == 0
+                        && bracketDepth == 0
+                        && !hasTopLevelWhereClause
+                        && (column == 0 || sanitizedLine[column - 1] != ':')
+                        && (column + 1 >= sanitizedLine.Length || sanitizedLine[column + 1] != ':'):
+                        hasTopLevelBaseList = true;
+                        break;
                     case '{' when parenDepth == 0 && bracketDepth == 0:
                         declarationRange = FindCSharpBraceRange(
                             csharpMatchLines,
@@ -122,16 +145,17 @@ public static partial class SymbolExtractor
         return false;
     }
 
-    // C# permits whitespace around `.` in qualified base and constraint types. Normalize only
-    // that whitespace before the following-member heuristic so `N . Base(X) {` is not
+    // C# permits whitespace around `.` and `::` in qualified base and constraint types. Normalize
+    // only that whitespace before the following-member heuristic so `N . Base(X) {` is not
     // backtracked into a return type plus member name; a real `N . Type M()` member still
     // normalizes to `N.Type M()` and remains a boundary.
-    // C# では base / constraint の修飾型で `.` 周辺の空白を許す。後続 member 判定の前だけ
+    // C# では base / constraint の修飾型で `.` と `::` 周辺の空白を許す。後続 member 判定の前だけ
     // その空白を正規化し、`N . Base(X) {` を return type と member name に誤分割しない。
     // 実際の `N . Type M()` は `N.Type M()` となるため、引き続き boundary として検出する。
     private static string NormalizeCSharpQualifiedTypeWhitespaceForRecordBoundary(string line)
     {
-        if (!line.Contains('.', StringComparison.Ordinal))
+        if (!line.Contains('.', StringComparison.Ordinal)
+            && !line.Contains(':', StringComparison.Ordinal))
             return line;
 
         var normalized = new System.Text.StringBuilder(line.Length);
@@ -150,7 +174,13 @@ public static partial class SymbolExtractor
 
             var previous = whitespaceStart > 0 ? line[whitespaceStart - 1] : '\0';
             var next = index + 1 < line.Length ? line[index + 1] : '\0';
-            if (previous == '.' || next == '.')
+            var followsAliasQualifier = previous == ':'
+                && whitespaceStart >= 2
+                && line[whitespaceStart - 2] == ':';
+            var precedesAliasQualifier = next == ':'
+                && index + 2 < line.Length
+                && line[index + 2] == ':';
+            if (previous == '.' || next == '.' || followsAliasQualifier || precedesAliasQualifier)
             {
                 changed = true;
                 continue;
@@ -160,6 +190,23 @@ public static partial class SymbolExtractor
         }
 
         return changed ? normalized.ToString() : line;
+    }
+
+    private static bool IsCSharpRecordWhereKeywordAt(string line, int column)
+    {
+        const string Keyword = "where";
+        if (column + Keyword.Length > line.Length
+            || !line.AsSpan(column, Keyword.Length).SequenceEqual(Keyword))
+        {
+            return false;
+        }
+
+        var hasIdentifierBefore = column > 0
+            && (line[column - 1] == '_' || char.IsLetterOrDigit(line[column - 1]));
+        var afterKeyword = column + Keyword.Length;
+        var hasIdentifierAfter = afterKeyword < line.Length
+            && (line[afterKeyword] == '_' || char.IsLetterOrDigit(line[afterKeyword]));
+        return !hasIdentifierBefore && !hasIdentifierAfter;
     }
 
     private static bool IsCSharpRootCodeLineStart(CSharpLexState lineStartState)
