@@ -57,6 +57,12 @@ public static partial class QueryCommandRunner
 
         var emittedRecords = records.Count;
         string? terminalLine = null;
+        var continuationCursorFactory = reader is not null && IsCursorCapableNdjson(commandName, options)
+            ? new Lazy<Func<int, string>>(() => JsonEnvelopeWrapper.BuildNdjsonResponseCursorFactory(
+                commandName,
+                options.InvocationArgs,
+                reader))
+            : null;
 
         string BuildTerminal(
             int returnedCount,
@@ -67,7 +73,19 @@ public static partial class QueryCommandRunner
             int omittedRecordCount,
             string? recoveryGuidance,
             bool includeSelectionAccounting)
-            => BuildJsonStreamDoneLine(
+        {
+            var hasMore = truncated || interrupted;
+            if (hasMore && totalCountAuthoritative)
+            {
+                var nextOffset = checked(
+                    JsonEnvelopeWrapper.GetBoundedResponseOffset(commandName) + returnedCount);
+                hasMore = nextOffset < totalCount;
+            }
+            var (nextCursor, unavailableReason) = BuildNdjsonContinuation(
+                returnedCount,
+                hasMore,
+                continuationCursorFactory);
+            return BuildJsonStreamDoneLine(
                 returnedCount,
                 totalCount,
                 jsonOptions,
@@ -89,7 +107,11 @@ public static partial class QueryCommandRunner
                 selectedTotal: includeSelectionAccounting ? selectedTotal : null,
                 selectorOmittedCount: includeSelectionAccounting ? selectorOmittedCount : null,
                 limitOmittedCount: includeSelectionAccounting ? limitOmittedCount : null,
-                selectors: includeSelectionAccounting ? selectors : null);
+                selectors: includeSelectionAccounting ? selectors : null,
+                nextCursor: nextCursor,
+                nextCursorUnavailableReason: unavailableReason,
+                hasMore: hasMore);
+        }
 
         if (options.MaxJsonBytes.HasValue)
         {
@@ -197,6 +219,28 @@ public static partial class QueryCommandRunner
             terminalLine,
             exitCode);
     }
+
+    private static (string? Cursor, string? UnavailableReason) BuildNdjsonContinuation(
+        int returnedCount,
+        bool hasMore,
+        Lazy<Func<int, string>>? cursorFactory)
+    {
+        if (!hasMore)
+            return (null, null);
+        if (returnedCount <= 0)
+            return (null, "no_result_row_emitted");
+        if (cursorFactory is null)
+            return (null, "stream_not_cursor_capable");
+
+        return (cursorFactory.Value(returnedCount), null);
+    }
+
+    private static bool IsCursorCapableNdjson(string commandName, QueryCommandOptions options)
+        => commandName is "symbols" or "files"
+           || commandName == "search"
+           && options.RecipeName is null
+           && options.NamedSearchQueries.Count == 0
+           && !options.ListRecipes;
 
     private static NdjsonStreamWriteResult WriteResultOnlyNdjson(
         IReadOnlyList<NdjsonOutputRecord> records,

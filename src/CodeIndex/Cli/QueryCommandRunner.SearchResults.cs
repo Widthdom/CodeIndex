@@ -1751,7 +1751,10 @@ public static partial class QueryCommandRunner
         int? selectedTotal = null,
         int? selectorOmittedCount = null,
         int? limitOmittedCount = null,
-        List<SearchRowSelectorJsonResult>? selectors = null)
+        List<SearchRowSelectorJsonResult>? selectors = null,
+        string? nextCursor = null,
+        string? nextCursorUnavailableReason = null,
+        bool? hasMore = null)
     {
         var includeDiagnostics = HasReadOnlyFallbackDiagnostics(reader);
         return JsonSerializer.Serialize(
@@ -1762,7 +1765,9 @@ public static partial class QueryCommandRunner
                 TotalCount: totalCount,
                 Interrupted: interrupted,
                 Truncated: truncated,
-                HasMore: truncated || interrupted,
+                HasMore: hasMore ?? (truncated || interrupted),
+                NextCursor: nextCursor,
+                NextCursorUnavailableReason: nextCursorUnavailableReason,
                 TotalCountAuthoritative: totalCountAuthoritative,
                 TotalCountLowerBound: totalCountAuthoritative ? null : totalCount,
                 SelectionReason: selectionReason,

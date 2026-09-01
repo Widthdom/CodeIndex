@@ -250,7 +250,7 @@ public static partial class QueryCommandRunner
                     resolvedDbPath = DbContext.ToReadOnlyUri(resolvedDbPath);
             }
 
-            return BuildOptions(dbResolution, resolvedDbPath);
+            return BuildOptions(dbResolution, resolvedDbPath, args);
         }
 
         private void NormalizeOutputMode()
@@ -407,10 +407,14 @@ public static partial class QueryCommandRunner
                 AddParseError(defaultMaxLineWidthError);
         }
 
-        private QueryCommandOptions BuildOptions(DbPathResolution dbResolution, string resolvedDbPath)
+        private QueryCommandOptions BuildOptions(
+            DbPathResolution dbResolution,
+            string resolvedDbPath,
+            string[] invocationArgs)
         {
             return new QueryCommandOptions
             {
+                InvocationArgs = [.. invocationArgs],
                 DbPath = resolvedDbPath,
                 DbPathExplicit = dbPathExplicit,
                 ReadOnly = readOnly,

@@ -2620,6 +2620,20 @@ internal static partial class JsonEnvelopeWrapper
             reader.GetIndexedHeadForResponse());
     }
 
+    internal static Func<int, string> BuildNdjsonResponseCursorFactory(
+        string command,
+        string[] args,
+        DbReader reader)
+    {
+        var snapshot = BuildResponseSnapshot(reader);
+        var responseOffset = GetBoundedResponseOffset(command);
+        var queryFingerprint = BuildResponseFingerprint(command, args);
+        return returnedCount => FormatResponseCursor(
+            checked(responseOffset + returnedCount),
+            queryFingerprint,
+            snapshot.GenerationFingerprint);
+    }
+
     private static ResponseSnapshot BuildFallbackResponseSnapshot(string appVersion)
         => new(BuildResponseValueFingerprint("catalog\0" + appVersion), null, null);
 

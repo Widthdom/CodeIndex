@@ -401,6 +401,17 @@ array. `languages --json` accepts `--limit` / `--top`, `--cursor`, and
 the ordinary unbounded JSON shape. Pass each `next_cursor` back to the same
 command and filters. A cursor is bound to that selection and index generation,
 so changed inputs or a refreshed index require restarting the pagination.
+The default raw NDJSON streams for `search`, `symbols`, and `files` use the same
+opaque `response:v2` continuation contract. When a terminal record has
+`has_more: true` and at least one result row was emitted, its `next_cursor`
+resumes after the last emitted row; replay it with the unchanged command,
+query, filters, ordering, and page limit. The replay is returned in the shared
+bounded envelope, whose `metadata.stream_terminal` mirrors the continuation.
+Final and zero-result pages do not advertise a cursor. If a partial stream
+cannot make safe progress—for example, a byte cap leaves room only for the
+terminal record or the stream is a recipe/named search—the terminal omits the
+cursor and reports `next_cursor_unavailable_reason`. Cursor bytes are included
+in the complete `--max-json-bytes` measurement.
 When a bounded `find --all` scan exits partially, its terminal record includes
 `next_cursor`; replaying it resumes after the last scanned line.
 The bounded-response commands `search`, `definition`, `find`, `status`,
@@ -4159,7 +4170,17 @@ row を省略した場合は、`omitted_match_count`、`truncated`、`has_more`�
 受け付け、これらを指定した場合だけ bounded envelope を選択するため、通常の上限なし
 JSON 形状は変わりません。`next_cursor` は同じ command と filter に渡してください。
 cursor はその選択条件と index generation に束縛されるため、入力変更後または index
-更新後は pagination を最初からやり直す必要があります。上限に達した
+更新後は pagination を最初からやり直す必要があります。
+`search`、`symbols`、`files` の既定 raw NDJSON stream も同じ opaque な
+`response:v2` continuation 契約を使います。terminal record が `has_more: true` で、
+result row を 1 件以上出力した場合、`next_cursor` は最後に出力した row の次から再開します。
+command、query、filter、ordering、page limit を変えずに再利用してください。再開応答は
+共有 bounded envelope となり、`metadata.stream_terminal` にも同じ continuation が
+反映されます。最終 page と 0 件 page は cursor を公開しません。byte cap により terminal
+record しか出力できない場合や recipe / named search stream のように、安全に再開できない
+partial stream では cursor を省略し、terminal の `next_cursor_unavailable_reason` で理由を
+報告します。cursor の byte 数も `--max-json-bytes` による stream 全体の計測に含まれます。
+上限に達した
 `find --all` scan が partial exit した場合、terminal record の `next_cursor` を
 再利用すると最後に scan した line の次から継続します。
 bounded-response command の `search`、`definition`、`find`、`status`、
