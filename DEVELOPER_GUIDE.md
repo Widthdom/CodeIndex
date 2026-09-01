@@ -1531,6 +1531,24 @@ Current stable codes and triggers:
 | Memory tracing | `index --json --memory-trace` adds a `memory_timeline` block to the CLI index result and persists peak working-set MB into `last_index_run`; dry-run results also emit live `start`, `snapshot`, `scan`, and `finalize` samples but never persist run metadata. `index --dry-run --rebuild` bypasses destructive confirmation because it does not delete or rewrite the index. `CDIDX_MEM_WARN_MB=<mb>` prints a warning when the sampled working set crosses that threshold. |
 | Newer schema protection | Writable opens reject databases whose `PRAGMA user_version` contains readiness bits outside the current binary's `CurrentSchemaVersion` mask. Read-only status/query paths may still surface `index_newer_than_reader=true` as a degraded audit signal, but write-capable paths must fail with `E003_SCHEMA_TOO_NEW` so an older cdidx cannot silently rewrite a DB stamped by a newer one. |
 
+Status freshness summaries are classified by one shared evaluator. An
+authoritative `status --check` supplies the file-level result. Without that check,
+`last_workspace_freshened_at >= latest_modified` can prove a checksum-reused
+no-op update fresh only when the worktree is clean and the runtime,
+workspace-verified, and latest-index HEAD SHAs all agree, and Git reports no
+`skip-worktree` or `assume-unchanged` entry that could hide a later change.
+The Git dirtiness probe explicitly requests all untracked files, overriding a
+repository-level `status.showUntrackedFiles=no` setting. Missing provenance,
+hidden index state, future timestamps, and an ordinary-status dirty worktree are
+`unknown`; a later modification is `stale`, and changed HEAD remains conservative.
+An authoritative file check may prove freshness in a dirty repository when every
+workspace path matches, so already-indexed untracked paths and dirtiness outside a
+subdirectory index do not fail check mode. Status-level HEAD/branch drift is still
+evaluated before that file check and propagated into checked failures, exit status,
+and workspace member health. Ordinary
+`head_freshness=head_current` semantics remain distinct from the authoritative
+checked `fresh` value.
+
 `vacuum --dry-run` accepts supported local SQLite URI spellings such as `file:/absolute/path/codeindex.db`, Windows `file:/C:/absolute/path/codeindex.db`, and canonical `file:///...` forms. Single-slash paths are canonicalized while retaining their original query string and ignoring URI fragments, and validation plus metric collection use that same query-only URI so an explicit `immutable=1` keeps its stale-snapshot semantics.
 
 ### Data directory resolution
@@ -5707,6 +5725,21 @@ apply 時は `PRAGMA optimize` を実行します。
 | size / process diagnostics | `status --json` は `db_size_bytes`、`wal_size_bytes`、上限付きの `symbol_kinds` / `symbols_by_language` kind map と、上限適用時の `symbol_kind_*` / `symbols_by_language_kind_*` overflow metadata、現在の `process` heap / GC / working-set metrics、成功した CLI / MCP index 実行由来の `last_index_run` metadata、最新の成功 index/update 時刻を示す `last_workspace_freshened_at` も公開します。`last_index_run.bytes_read_skipped_file_count` と `bytes_read_incomplete` は、読み取り不能な file が `bytes_read` 合計から除外されたかどうかを報告します。`last_index_run.diagnostics`、`diagnostic_count`、`diagnostics_truncated` は、index data 自体の書き込みが成功した後に best-effort index metadata write が失敗した場合の上限付き warning を保持します。`indexed_at` は引き続き indexed file row 由来なので、partial / no-op update は `indexed_at` を動かさずに workspace 鮮度だけを更新することがあります。 |
 | memory tracing | `index --json --memory-trace` は CLI index 結果に `memory_timeline` block を追加し、peak working-set MB を `last_index_run` に保存します。dry-run 結果も live な `start`、`snapshot`、`scan`、`finalize` sample を返しますが、run metadata は保存しません。`index --dry-run --rebuild` は index を削除も rewrite もしないため destructive confirmation を bypass します。`CDIDX_MEM_WARN_MB=<mb>` は sampled working set がしきい値を超えたときに warning を出します。 |
 | newer schema protection | writable open は、`PRAGMA user_version` に current binary の `CurrentSchemaVersion` mask 外の readiness bit が含まれる database も拒否します。read-only status/query path は degraded audit signal として `index_newer_than_reader=true` を表示できますが、write-capable path は古い cdidx が新しい binary で stamp された DB を黙って rewrite しないよう `E003_SCHEMA_TOO_NEW` で失敗しなければなりません。 |
+
+status freshness summary は1つの共有 evaluator で分類します。authoritative な
+`status --check` は file-level の結果を提供します。check がない場合、
+`last_workspace_freshened_at >= latest_modified` が checksum 再利用 no-op update の
+freshness を証明できるのは、worktree が clean で、runtime、workspace 検証済み、直近
+index の HEAD SHA がすべて一致し、後続変更を隠せる `skip-worktree` / `assume-unchanged`
+entry が Git index に無い場合だけです。Git の dirtiness probe は未追跡 file を明示的に
+すべて要求し、repository の `status.showUntrackedFiles=no` 設定を上書きします。provenance
+不足、隠れた index state、未来 timestamp、通常 status の dirty worktree は `unknown`、
+後続の変更は `stale` とし、HEAD 変更は保守的な判定を維持します。authoritative file check
+は全 workspace path が一致する場合、dirty repository でも freshness を証明できるため、
+index 済み未追跡 path や subdirectory index の scope 外にある dirtiness は check mode を
+失敗させません。status-level の HEAD / branch drift は引き続き file check より先に評価し、
+checked failure、終了 status、workspace member health に伝播します。通常 status
+の `head_freshness=head_current` は、authoritative check 済みの `fresh` と引き続き区別します。
 
 `vacuum --dry-run` は、`file:/absolute/path/codeindex.db`、Windows の `file:/C:/absolute/path/codeindex.db`、canonical な `file:///...` 形式を受け付けます。single-slash の path を canonicalize しつつ元の query string を維持して URI fragment を無視し、validation と metric 収集に同じ query-only URI を使うため、明示的な `immutable=1` の stale-snapshot semantics も維持されます。
 

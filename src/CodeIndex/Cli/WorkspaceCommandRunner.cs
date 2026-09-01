@@ -444,17 +444,30 @@ internal static class WorkspaceCommandRunner
                 projectRoot,
                 cancellationToken,
                 internalIndexDatabasePath: DbPathResolver.NormalizeDbPath(dbPath));
+            var worktreeHeadChanged = WorkspaceMetadataEnricher.ResolveHeadChanged(
+                GitHelper.TryGetHeadCommit(projectRoot, cancellationToken),
+                GitHelper.TryGetHeadBranch(projectRoot, cancellationToken),
+                snapshot.WorkspaceVerifiedHeadSha,
+                snapshot.IndexedHeadSha,
+                snapshot.IndexedHeadBranch,
+                snapshot.IndexedHeadBranchStampPresent,
+                snapshot.IndexedHeadCommit,
+                snapshot.IndexedHeadCommitBranch,
+                snapshot.IndexedHeadCommitBranchStampPresent);
+            var freshnessEvaluation = StatusFreshnessEvaluator.Evaluate(
+                freshness,
+                worktreeHeadChanged);
             var status = "ready";
             var reason = "ready";
-            if (!freshness.Checked)
+            if (freshnessEvaluation.State == StatusFreshnessState.Unknown)
             {
                 status = "degraded";
-                reason = "freshness_check_unavailable";
+                reason = freshnessEvaluation.Reason;
             }
-            else if (!freshness.MatchesWorkspace)
+            else if (freshnessEvaluation.State != StatusFreshnessState.Fresh)
             {
                 status = "stale";
-                reason = freshness.Reason;
+                reason = freshnessEvaluation.Reason;
             }
             else if (!snapshot.IndexComplete)
             {
@@ -488,8 +501,10 @@ internal static class WorkspaceCommandRunner
                     projectRoot,
                     dbPath),
                 SchemaCompatible: true,
-                IndexMatchesWorkspace: freshness.Checked ? freshness.MatchesWorkspace : null,
-                FreshnessReason: freshness.Reason,
+                IndexMatchesWorkspace: freshness.Checked
+                    ? freshnessEvaluation.State == StatusFreshnessState.Fresh
+                    : null,
+                FreshnessReason: freshnessEvaluation.Reason,
                 IndexedAt: snapshot.IndexedAt,
                 LatestModified: snapshot.LatestModified,
                 GraphTableAvailable: snapshot.GraphTableAvailable,

@@ -76,6 +76,10 @@ function Invoke-TestRun {
     $runArgs += @("--filter", $TestFilter)
   }
 
+  # Performance budgets must distinguish instrumented runs from ordinary retries.
+  # performance budget が coverage 計測中と通常の retry を区別できるようにする。
+  $env:CODEINDEX_TEST_COVERAGE = if ($IncludeCoverage) { "true" } else { "false" }
+
   [int]$failureLogTailLineLimit = 2000
   $retainedOutputTail = [System.Collections.Generic.Queue[string]]::new($failureLogTailLineLimit)
   [long]$totalOutputLineCount = 0

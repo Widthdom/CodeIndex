@@ -11,6 +11,41 @@ namespace CodeIndex.Tests;
 public class WorkspaceMetadataEnricherTests
 {
     [Fact]
+    public void ShouldProbeGitIndexVisibility_RequiresUsableOrdinaryFreshnessContext_Issue5227()
+    {
+        var indexedAt = new DateTime(2030, 1, 2, 3, 0, 0, DateTimeKind.Utc);
+        var status = new StatusResult
+        {
+            IndexedAt = indexedAt,
+            LatestModified = indexedAt.AddMinutes(1),
+            LastWorkspaceFreshenedAt = indexedAt.AddMinutes(2),
+            GitHead = "0123456789abcdef",
+            GitIsDirty = false,
+            WorktreeHeadChanged = false,
+            WorkspaceVerifiedHeadSha = "0123456789abcdef",
+            IndexedHeadSha = "0123456789abcdef",
+        };
+
+        Assert.True(WorkspaceMetadataEnricher.ShouldProbeGitIndexVisibility(
+            status,
+            "/repo",
+            evaluateOrdinaryFreshness: true));
+        Assert.False(WorkspaceMetadataEnricher.ShouldProbeGitIndexVisibility(
+            status,
+            "/repo",
+            evaluateOrdinaryFreshness: false));
+
+        status.GitIsDirty = true;
+        Assert.False(WorkspaceMetadataEnricher.ShouldProbeGitIndexVisibility(status, "/repo", true));
+        status.GitIsDirty = false;
+        status.WorktreeHeadChanged = true;
+        Assert.False(WorkspaceMetadataEnricher.ShouldProbeGitIndexVisibility(status, "/repo", true));
+        status.WorktreeHeadChanged = false;
+        status.WorkspaceVerifiedHeadSha = "fedcba9876543210";
+        Assert.False(WorkspaceMetadataEnricher.ShouldProbeGitIndexVisibility(status, "/repo", true));
+    }
+
+    [Fact]
     public void Enrich_ResultTypes_PopulateProjectRootHeadAndDirty()
     {
         var (projectRoot, dbPath, expectedHead) = CreateDirtyGitProject("cdidx_workspace_results");

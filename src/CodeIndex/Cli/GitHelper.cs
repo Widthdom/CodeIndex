@@ -1110,7 +1110,14 @@ public static partial class GitHelper
     /// </summary>
     public static WorktreeStatus? TryGetWorktreeStatus(string projectRoot, CancellationToken cancellationToken = default)
     {
-        var output = TryRunGit(projectRoot, cancellationToken, "-c", "core.quotePath=false", "status", "--porcelain");
+        var output = TryRunGit(
+            projectRoot,
+            cancellationToken,
+            "-c",
+            "core.quotePath=false",
+            "status",
+            "--porcelain",
+            "--untracked-files=normal");
         if (output == null)
             return null;
 
@@ -1183,6 +1190,39 @@ public static partial class GitHelper
         return paths;
     }
 
+    /// <summary>
+    /// Return whether tracked index flags can hide worktree changes from ordinary Git status.
+    /// Null means Git could not provide a trustworthy answer. Both skip-worktree and
+    /// assume-unchanged are visibility-limiting for freshness purposes (#5227).
+    /// 通常の Git status から worktree 変更を隠し得る tracked index flag の有無を返す。
+    /// Git で確認できない場合は null。freshness 判定では skip-worktree と
+    /// assume-unchanged の両方を visibility 制限として扱う (#5227)。
+    /// </summary>
+    internal static bool? TryHasWorktreeVisibilityLimitingIndexFlags(
+        string projectRoot,
+        CancellationToken cancellationToken = default)
+    {
+        return TryRunGitMatchingOutputLine(
+            projectRoot,
+            cancellationToken,
+            HasWorktreeVisibilityLimitingIndexFlag,
+            "-c",
+            "core.quotePath=false",
+            "ls-files",
+            "-v");
+    }
+
+    private static bool HasWorktreeVisibilityLimitingIndexFlag(string line)
+    {
+        if (line.Length < 3 || line[1] != ' ')
+            return false;
+
+        // `S` is skip-worktree. With `-v`, any lowercase tag means the
+        // assume-unchanged bit is set (including lowercase `s`).
+        // `S` は skip-worktree。`-v` の小文字 tag は assume-unchanged を示す。
+        return line[0] == 'S' || char.IsLower(line[0]);
+    }
+
     internal static string? TryGetRepositoryRoot(
         string projectPath,
         IReadOnlyDictionary<string, string?>? gitEnvironmentOverrides,
@@ -1230,6 +1270,37 @@ public static partial class GitHelper
 
     private static string? TryRunGit(string projectRoot, CancellationToken cancellationToken, params string[] args)
         => TryRunGit(projectRoot, gitEnvironmentOverrides: null, cancellationToken, args);
+
+    private static bool? TryRunGitMatchingOutputLine(
+        string projectRoot,
+        CancellationToken cancellationToken,
+        Func<string, bool> predicate,
+        params string[] args)
+    {
+        try
+        {
+            var psi = TryCreateGitStartInfo(projectRoot);
+            if (psi == null)
+                return null;
+
+            foreach (var arg in args)
+                psi.ArgumentList.Add(arg);
+
+            return GitProcessRunner.RunMatchingStdoutLine(
+                psi,
+                GitCommandTimeout,
+                predicate,
+                cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch
+        {
+            return null;
+        }
+    }
 
     internal readonly record struct GitCommandResult(
         int? ExitCode,

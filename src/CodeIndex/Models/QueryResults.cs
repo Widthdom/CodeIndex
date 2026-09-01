@@ -1647,6 +1647,14 @@ public class StatusResult
     public StatusSqliteConnectionPolicy SqliteConnectionPolicy { get; set; } = new();
     public string? GitHead { get; set; }
     public bool? GitIsDirty { get; set; }
+    // Ordinary status consults this internal runtime signal only when a no-op freshening
+    // stamp would otherwise prove freshness. False means Git confirmed that no tracked
+    // entry uses skip-worktree or assume-unchanged; true/null keeps that proof unverified.
+    // no-op freshening stamp を信頼する場合だけ使う runtime 内部 signal。
+    // false は skip-worktree / assume-unchanged が無いことを Git で確認済み、
+    // true/null は worktree 変更を隠せるため未検証として扱う。
+    [JsonIgnore]
+    internal bool? GitIndexMayHideWorktreeChanges { get; set; }
     /// <summary>
     /// Best-effort Linux mandatory-access-control profile for the running process, such as
     /// `apparmor:snap.cdidx.cdidx` or `selinux:user_u:user_r:user_t:s0`. Null on non-Linux
@@ -2093,12 +2101,17 @@ public sealed class StatusHeadFreshness
         var indexedHeadMatchesLatest = indexedHead != null
             && string.Equals(indexedHead, latestIndexHead, StringComparison.OrdinalIgnoreCase);
         var workspaceCheck = status.WorkspaceCheck;
+        var workspaceFreshness = workspaceCheck is null
+            ? (StatusFreshnessEvaluation?)null
+            : StatusFreshnessEvaluator.Evaluate(
+                workspaceCheck,
+                status.WorktreeHeadChanged);
 
         return new StatusHeadFreshness
         {
-            State = ResolveState(status, workspaceCheck),
+            State = ResolveState(status, workspaceCheck, workspaceFreshness),
             Scope = "workspace",
-            StateReason = ResolveStateReason(status, workspaceCheck),
+            StateReason = ResolveStateReason(status, workspaceCheck, workspaceFreshness),
             RuntimeHead = NullIfWhiteSpace(status.GitHead),
             IndexedHead = indexedHead,
             IndexedHeadSource = ResolveIndexedHeadSource(status),
@@ -2109,7 +2122,11 @@ public sealed class StatusHeadFreshness
             IndexedHeadTimestamp = indexedHeadMatchesLatest ? status.IndexedHeadTimestamp : null,
             WorkspaceCheckIndexedHeadCommit = NullIfWhiteSpace(workspaceCheck?.IndexedHeadCommit),
             WorkspaceCheckWorkspaceHeadCommit = NullIfWhiteSpace(workspaceCheck?.WorkspaceHeadCommit),
-            WorkspaceMatchesIndex = status.IndexMatchesWorkspace ?? workspaceCheck?.MatchesWorkspace,
+            WorkspaceMatchesIndex = workspaceCheck is null
+                ? status.IndexMatchesWorkspace
+                : workspaceCheck.Checked
+                    ? workspaceFreshness?.State == StatusFreshnessState.Fresh
+                    : null,
             WorktreeHeadChanged = status.WorktreeHeadChanged,
             CommitsAheadOfIndexedHead = indexedHeadMatchesLatest ? status.CommitsAheadOfIndexedHead : null,
         };
@@ -2181,16 +2198,19 @@ public sealed class StatusHeadFreshness
         || status.CommitsAheadOfIndexedHead.HasValue
         || status.IndexMatchesWorkspace.HasValue;
 
-    private static string ResolveState(StatusResult status, IndexFreshnessCheckResult? workspaceCheck)
+    private static string ResolveState(
+        StatusResult status,
+        IndexFreshnessCheckResult? workspaceCheck,
+        StatusFreshnessEvaluation? workspaceFreshness)
     {
         if (workspaceCheck is not null)
         {
-            if (!workspaceCheck.Checked)
+            if (workspaceFreshness?.State == StatusFreshnessState.Unknown)
                 return "check_unavailable";
-            if (!workspaceCheck.MatchesWorkspace)
-                return IsHeadChanged(status, workspaceCheck)
-                    ? "head_changed"
-                    : status.IndexComplete ? "stale" : "stale_and_incomplete";
+            if (workspaceFreshness?.State == StatusFreshnessState.HeadChanged)
+                return "head_changed";
+            if (workspaceFreshness?.State != StatusFreshnessState.Fresh)
+                return status.IndexComplete ? "stale" : "stale_and_incomplete";
             return status.IndexComplete ? "fresh" : "fresh_but_incomplete";
         }
 
@@ -2201,23 +2221,21 @@ public sealed class StatusHeadFreshness
         return "unchecked";
     }
 
-    private static string? ResolveStateReason(StatusResult status, IndexFreshnessCheckResult? workspaceCheck)
+    private static string? ResolveStateReason(
+        StatusResult status,
+        IndexFreshnessCheckResult? workspaceCheck,
+        StatusFreshnessEvaluation? workspaceFreshness)
     {
-        if (!status.IndexComplete && workspaceCheck?.Checked == true && workspaceCheck.MatchesWorkspace)
+        if (!status.IndexComplete && workspaceFreshness?.State == StatusFreshnessState.Fresh)
             return "index_incomplete";
         if (workspaceCheck is not null)
-            return string.IsNullOrWhiteSpace(workspaceCheck.Reason) ? null : workspaceCheck.Reason;
+            return string.IsNullOrWhiteSpace(workspaceFreshness?.Reason) ? null : workspaceFreshness?.Reason;
         if (status.WorktreeHeadChanged == true)
             return "worktree_head_changed";
         if (status.WorktreeHeadChanged == false)
             return "head_current";
         return null;
     }
-
-    private static bool IsHeadChanged(StatusResult status, IndexFreshnessCheckResult workspaceCheck) =>
-        workspaceCheck.HeadChanged
-        || status.WorktreeHeadChanged == true
-        || string.Equals(workspaceCheck.Reason, "head_changed", StringComparison.Ordinal);
 
     private static string ResolveIndexedHeadSource(StatusResult status)
     {
