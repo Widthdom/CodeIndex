@@ -2353,6 +2353,119 @@ public class LspServerTests
     }
 
     [Fact]
+    public void Run_RejectsMalformedEnvelopesAndWorkspaceSymbolQueryTypesBeforeDispatch_Issue5231()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_request_validation");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "app.cs", "csharp", "class Needle { }\n");
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            var reservedMethods = new ConcurrentQueue<string>();
+            var dispatchedMethods = new ConcurrentQueue<string>();
+            var symbolRequestCount = 0;
+            using var server = new LspServer(
+                new DbReader(db),
+                "1.2.3",
+                ProgramRunner.CreateDefaultJsonOptions(),
+                projectRoot)
+            {
+                InboundSessionDispatchReservedForTesting = reservedMethods.Enqueue,
+                BeforeSessionDispatchForTesting = dispatchedMethods.Enqueue,
+                BeforeSymbolRequestForTesting = _ => Interlocked.Increment(ref symbolRequestCount),
+            };
+            var activities = new ConcurrentQueue<Activity>();
+            using var listener = CaptureCodeIndexActivities(activities);
+            using var testActivity = new Activity("lsp-issue-5231-test").Start();
+            var expectedTraceId = testActivity.TraceId;
+
+            const string invalidInitialize =
+                """{"jsonrpc":"1.0","id":0,"method":"initialize","params":{}}""";
+            using (var input = new MemoryStream(Encoding.UTF8.GetBytes(Frame(invalidInitialize))))
+            using (var output = new MemoryStream())
+            {
+                Assert.Equal(CommandExitCodes.Success, server.Run(input, output));
+                var response = Assert.Single(ReadLspMessages(output)).Message;
+                Assert.Equal(0, response["id"]!.GetValue<int>());
+                Assert.Equal(-32600, response["error"]!["code"]!.GetValue<int>());
+                Assert.Equal("Invalid Request", response["error"]!["message"]!.GetValue<string>());
+            }
+
+            const string initialize =
+                """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}""";
+            using (var input = new MemoryStream(Encoding.UTF8.GetBytes(Frame(initialize))))
+            using (var output = new MemoryStream())
+            {
+                Assert.Equal(CommandExitCodes.Success, server.Run(input, output));
+                var response = Assert.Single(ReadLspMessages(output)).Message;
+                Assert.Equal(1, response["id"]!.GetValue<int>());
+                Assert.NotNull(response["result"]);
+            }
+
+            string[] requests =
+            [
+                """{"jsonrpc":"2.0","method":"initialized","params":{}}""",
+                """{"id":2,"method":"workspace/symbol","params":{"query":"Needle"}}""",
+                """{"jsonrpc":null,"id":3,"method":"workspace/symbol","params":{"query":"Needle"}}""",
+                """{"jsonrpc":2,"id":4,"method":"workspace/symbol","params":{"query":"Needle"}}""",
+                """{"jsonrpc":"1.0","id":5,"method":"workspace/symbol","params":{"query":"Needle"}}""",
+                """{"jsonrpc":"2.0","id":6,"method":"workspace/symbol","params":{}}""",
+                """{"jsonrpc":"2.0","id":7,"method":"workspace/symbol","params":{"query":null}}""",
+                """{"jsonrpc":"2.0","id":8,"method":"workspace/symbol","params":{"query":123}}""",
+                """{"jsonrpc":"2.0","id":9,"method":"workspace/symbol","params":{"query":"Needle"}}""",
+                """{"jsonrpc":"2.0","id":10,"method":"workspace/symbol","params":{"query":""}}""",
+                """{"jsonrpc":"2.0","id":11,"method":"shutdown"}""",
+                """{"jsonrpc":"2.0","method":"exit"}""",
+            ];
+            using (var input = new MemoryStream(Encoding.UTF8.GetBytes(string.Concat(requests.Select(Frame)))))
+            using (var output = new MemoryStream())
+            {
+                Assert.Equal(CommandExitCodes.Success, server.Run(input, output));
+                var messages = ReadLspMessages(output).Select(item => item.Message).ToList();
+                Assert.Equal(10, messages.Count);
+                var responses = messages.ToDictionary(message => message["id"]!.GetValue<int>());
+
+                foreach (var id in new[] { 2, 3, 4, 5 })
+                {
+                    Assert.Equal(id, responses[id]["id"]!.GetValue<int>());
+                    Assert.Equal(-32600, responses[id]["error"]!["code"]!.GetValue<int>());
+                    Assert.Equal("Invalid Request", responses[id]["error"]!["message"]!.GetValue<string>());
+                }
+
+                foreach (var id in new[] { 6, 7, 8 })
+                {
+                    Assert.Equal(id, responses[id]["id"]!.GetValue<int>());
+                    Assert.Equal(-32602, responses[id]["error"]!["code"]!.GetValue<int>());
+                    Assert.Equal("Invalid params", responses[id]["error"]!["message"]!.GetValue<string>());
+                }
+
+                var nonEmptySymbol = Assert.Single(responses[9]["result"]!.AsArray());
+                Assert.Equal("Needle", nonEmptySymbol!["name"]!.GetValue<string>());
+                var emptyQuerySymbol = Assert.Single(responses[10]["result"]!.AsArray());
+                Assert.Equal("Needle", emptyQuerySymbol!["name"]!.GetValue<string>());
+                Assert.Null(responses[11]["result"]);
+            }
+
+            Assert.Equal(1, reservedMethods.Count(method => method == "initialize"));
+            Assert.Equal(2, reservedMethods.Count(method => method == "workspace/symbol"));
+            Assert.Equal(1, dispatchedMethods.Count(method => method == "initialize"));
+            Assert.Equal(2, dispatchedMethods.Count(method => method == "workspace/symbol"));
+            Assert.Equal(2, symbolRequestCount);
+            var requestActivities = activities.Where(activity =>
+                activity.OperationName == "lsp.request"
+                && activity.TraceId == expectedTraceId).ToList();
+            Assert.Equal(1, requestActivities.Count(activity =>
+                Equals(activity.GetTagItem("rpc.method"), "initialize")));
+            Assert.Equal(2, requestActivities.Count(activity =>
+                Equals(activity.GetTagItem("rpc.method"), "workspace/symbol")));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void HandleMessage_WorkspaceSymbol_HonorsClientLimit_Issue3537()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_workspace_symbol_limit");

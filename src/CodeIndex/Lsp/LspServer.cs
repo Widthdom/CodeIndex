@@ -423,12 +423,17 @@ internal sealed partial class LspServer : IDisposable
                 if (hasId && !LspProtocol.TryParseRequestId(payload, idElement, out id, out var requestIdError))
                     return Error(null, -32600, requestIdError);
 
+                if (!HasValidJsonRpcEnvelope(root))
+                    return Error(id, JsonRpcInvalidRequestCode, JsonRpcInvalidRequestMessage);
+
                 if (!root.TryGetProperty("method", out var methodElement)
                     || methodElement.ValueKind != JsonValueKind.String
                     || methodElement.GetString() is not { } method)
                 {
                     return hasId ? Error(id, JsonRpcInvalidRequestCode, JsonRpcInvalidRequestMessage) : null;
                 }
+
+                ValidateMethodParameters(method, root);
 
                 var dispatchAction = reservedSessionAction ?? BeginSessionDispatch(method, hasId);
                 switch (dispatchAction)
@@ -750,6 +755,7 @@ internal sealed partial class LspServer : IDisposable
             using var document = BoundedJson.ParseDocument(payload, MaxLspFrameBytes, MaxJsonDepth);
             var root = document.RootElement;
             if (root.ValueKind != JsonValueKind.Object
+                || !HasValidJsonRpcEnvelope(root)
                 || !root.TryGetProperty("method", out var methodElement)
                 || methodElement.ValueKind != JsonValueKind.String
                 || methodElement.GetString() is not { } method)
@@ -761,11 +767,12 @@ internal sealed partial class LspServer : IDisposable
             if (hasId && !LspProtocol.TryParseRequestId(payload, idElement, out _, out _))
                 return false;
 
+            ValidateMethodParameters(method, root);
             sessionAction = BeginSessionDispatch(method, hasId);
             InboundSessionDispatchReservedForTesting?.Invoke(method);
             return true;
         }
-        catch (Exception ex) when (ex is JsonException or InvalidDataException)
+        catch (Exception ex) when (ex is ArgumentException or JsonException or InvalidDataException)
         {
             return false;
         }
@@ -778,6 +785,7 @@ internal sealed partial class LspServer : IDisposable
             using var document = BoundedJson.ParseDocument(payload, MaxLspFrameBytes, MaxJsonDepth);
             var root = document.RootElement;
             if (root.ValueKind != JsonValueKind.Object
+                || !HasValidJsonRpcEnvelope(root)
                 || !root.TryGetProperty("method", out var method)
                 || method.ValueKind != JsonValueKind.String
                 || !string.Equals(method.GetString(), "$/cancelRequest", StringComparison.Ordinal)
@@ -848,6 +856,17 @@ internal sealed partial class LspServer : IDisposable
             }
 
             var methodName = method.GetString();
+            if (!HasValidJsonRpcEnvelope(root))
+                return Error(id, JsonRpcInvalidRequestCode, JsonRpcInvalidRequestMessage);
+            try
+            {
+                ValidateMethodParameters(methodName!, root);
+            }
+            catch (ArgumentException)
+            {
+                return Error(id, JsonRpcInvalidParamsCode, JsonRpcInvalidParamsMessage);
+            }
+
             if (reservedSessionAction.HasValue)
             {
                 return reservedSessionAction.Value switch
@@ -924,16 +943,30 @@ internal sealed partial class LspServer : IDisposable
         {
             using var document = BoundedJson.ParseDocument(payload, MaxLspFrameBytes, MaxJsonDepth);
             var root = document.RootElement;
-            return root.ValueKind == JsonValueKind.Object
-                && root.TryGetProperty("method", out var method)
-                && method.ValueKind == JsonValueKind.String
-                && root.TryGetProperty("id", out var requestId)
-                && TryGetRequestKey(requestId, out requestKey);
+            if (root.ValueKind != JsonValueKind.Object
+                || !HasValidJsonRpcEnvelope(root)
+                || !root.TryGetProperty("method", out var method)
+                || method.ValueKind != JsonValueKind.String
+                || method.GetString() is not { } methodName
+                || !root.TryGetProperty("id", out var requestId)
+                || !TryGetRequestKey(requestId, out requestKey))
+            {
+                return false;
+            }
+
+            ValidateMethodParameters(methodName, root);
+            return true;
         }
-        catch (Exception ex) when (ex is JsonException or InvalidDataException)
+        catch (Exception ex) when (ex is ArgumentException or JsonException or InvalidDataException)
         {
             return false;
         }
+    }
+
+    private static void ValidateMethodParameters(string method, JsonElement root)
+    {
+        if (string.Equals(method, "workspace/symbol", StringComparison.Ordinal))
+            _ = GetWorkspaceSymbolQuery(root);
     }
 
     private static bool TryGetRequestKey(JsonElement requestId, out string requestKey)

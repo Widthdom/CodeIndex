@@ -149,12 +149,17 @@ internal sealed partial class LspServer : IDisposable
         return uri;
     }
 
-    private static string? GetString(JsonElement root, params string[] path)
+    private static string GetRequiredString(JsonElement root, params string[] path)
     {
         if (!TryGet(root, out var value, path) || value.ValueKind != JsonValueKind.String)
-            return null;
-        return value.GetString();
+            throw new ArgumentException("A required string parameter is missing or invalid.");
+        return value.GetString()!;
     }
+
+    private static bool HasValidJsonRpcEnvelope(JsonElement root) =>
+        root.TryGetProperty("jsonrpc", out var jsonRpc)
+        && jsonRpc.ValueKind == JsonValueKind.String
+        && string.Equals(jsonRpc.GetString(), "2.0", StringComparison.Ordinal);
 
     private static bool? GetBool(JsonElement root, params string[] path)
     {
