@@ -339,6 +339,7 @@ public partial class DbReader
                         signature,
                         name,
                         reader.GetString(2)),
+                    DeclarationStartColumn = GetNullableInt32(reader, 7),
                     EndLine = GetInt32OrFallback(reader, 8, 5),
                     BodyStartLine = GetNullableInt32(reader, 9),
                     BodyEndLine = GetNullableInt32(reader, 10),
