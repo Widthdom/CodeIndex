@@ -139,6 +139,8 @@ public sealed class QueryCommandOptions
     public string? SolutionFilter { get; init; }
     public List<string> ExcludePaths { get; init; } = [];
     public bool ExcludeTests { get; init; }
+    internal IReadOnlyList<string> DiscoveryBaselineIncludePaths { get; set; } = [];
+    internal IReadOnlyList<string> DiscoveryBaselineExcludePaths { get; set; } = [];
     public bool IncludeGenerated { get; init; }
     public bool CountOnly { get; init; }
     public bool GroupPartials { get; init; }

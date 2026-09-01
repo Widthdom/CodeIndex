@@ -80,7 +80,8 @@ public static partial class QueryCommandRunner
                 oversizedByteThreshold: evaluateIssueDraftCandidates ? MapIssueDraftByteThreshold : null,
                 offset: JsonEnvelopeWrapper.GetBoundedResponseOffset("map"),
                 requestedCollection: JsonEnvelopeWrapper.GetBoundedMapCollection(),
-                summaryProjection: JsonEnvelopeWrapper.IsBoundedMapScalarProjection());
+                summaryProjection: JsonEnvelopeWrapper.IsBoundedMapScalarProjection(),
+                requiredPathPatterns: filesScope.RequiredPathPatterns);
             var generatedFileCountExcluded = options.IncludeGenerated
                 ? 0
                 : !reader.GeneratedFileFilterAvailable
@@ -90,7 +91,8 @@ public static partial class QueryCommandRunner
                     pathPatterns: filesScope.PathPatterns,
                     excludePathPatterns: filesScope.ExcludePaths,
                     excludeTests: filesScope.ExcludeTests,
-                    generatedOnly: true).Count;
+                    generatedOnly: true,
+                    requiredPathPatterns: filesScope.RequiredPathPatterns).Count;
             WorkspaceMetadataEnricher.Enrich(map, options.DbPath, options.DbPathExplicit);
             var compactTruncation = options.Compact ? ApplyRepoMapCompactCaps(map, compactLimit, options) : null;
 
@@ -266,6 +268,8 @@ public static partial class QueryCommandRunner
             options,
             generatedFileCountExcluded,
             generatedFileFilterAvailable);
+        if (options.DiscoveryBaselineIncludePaths.Count > 0 || options.DiscoveryBaselineExcludePaths.Count > 0)
+            payload["query_context"] = BuildQueryContextJson(options, jsonOptions);
         if (options.MapSummaryOnly)
         {
             KeepRepoMapJsonProperties(payload, RepoMapSummaryJsonProperties);
@@ -582,6 +586,7 @@ public static partial class QueryCommandRunner
         "worktree_head_changed",
         "head_freshness",
         "graph_table_available",
+        "query_context",
     };
 
     private static readonly IReadOnlyDictionary<string, string[]> RepoMapSectionJsonProperties = new Dictionary<string, string[]>(StringComparer.Ordinal)

@@ -521,7 +521,14 @@ public static partial class QueryCommandRunner
         {
             if (options.CountOnly)
             {
-                var counts = reader.CountListFiles(options.Query, options.Lang, filesScope.PathPatterns, filesScope.ExcludePaths, filesScope.ExcludeTests, options.Since);
+                var counts = reader.CountListFiles(
+                    options.Query,
+                    options.Lang,
+                    filesScope.PathPatterns,
+                    filesScope.ExcludePaths,
+                    filesScope.ExcludeTests,
+                    options.Since,
+                    requiredPathPatterns: filesScope.RequiredPathPatterns);
                 var generatedFileCountExcluded = CountGeneratedFilesExcluded(reader, options, filesScope);
                 if (options.Json)
                 {
@@ -561,7 +568,8 @@ public static partial class QueryCommandRunner
                 filesScope.ExcludeTests,
                 options.Since,
                 orderBySize: options.RawBytes,
-                offset: JsonEnvelopeWrapper.GetBoundedResponseOffset("files"));
+                offset: JsonEnvelopeWrapper.GetBoundedResponseOffset("files"),
+                requiredPathPatterns: filesScope.RequiredPathPatterns);
             Func<FileResult, JsonNode?> rowFactory =
                 result => ToFileDiscoveryJsonNode(result, jsonOptions, options.OutputFormat == OutputFormatCompact);
             if (results.Count == 0)
@@ -599,7 +607,14 @@ public static partial class QueryCommandRunner
 
             if (IsDiscoveryNdjson(options))
             {
-                var counts = reader.CountListFiles(options.Query, options.Lang, filesScope.PathPatterns, filesScope.ExcludePaths, filesScope.ExcludeTests, options.Since);
+                var counts = reader.CountListFiles(
+                    options.Query,
+                    options.Lang,
+                    filesScope.PathPatterns,
+                    filesScope.ExcludePaths,
+                    filesScope.ExcludeTests,
+                    options.Since,
+                    requiredPathPatterns: filesScope.RequiredPathPatterns);
                 var stream = WriteDiscoveryNdjson(
                     reader,
                     options,
@@ -614,7 +629,14 @@ public static partial class QueryCommandRunner
 
             if (ShouldWriteBoundedDiscoveryJsonPayload(options))
             {
-                var counts = reader.CountListFiles(options.Query, options.Lang, filesScope.PathPatterns, filesScope.ExcludePaths, filesScope.ExcludeTests, options.Since);
+                var counts = reader.CountListFiles(
+                    options.Query,
+                    options.Lang,
+                    filesScope.PathPatterns,
+                    filesScope.ExcludePaths,
+                    filesScope.ExcludeTests,
+                    options.Since,
+                    requiredPathPatterns: filesScope.RequiredPathPatterns);
                 return WriteBoundedDiscoveryJsonPayload(
                     reader,
                     options,
@@ -682,24 +704,26 @@ public static partial class QueryCommandRunner
 
     private sealed record DiscoveryFileScopeFilters(
         IReadOnlyList<string> PathPatterns,
+        IReadOnlyList<string> RequiredPathPatterns,
         IReadOnlyList<string> ExcludePaths,
         bool ExcludeTests);
 
     private static DiscoveryFileScopeFilters BuildDiscoveryFileScopeFilters(QueryCommandOptions options)
     {
-        if (!options.ExcludeTests || options.PathPatterns.Count > 0)
+        if (!options.ExcludeTests)
         {
             return new(
                 options.PathPatterns,
+                [],
                 options.ExcludePaths,
                 options.ExcludeTests);
         }
 
-        var pathPatterns = new List<string>(options.PathPatterns);
-        AddDistinct(pathPatterns, SearchAuditRecipes.DefaultSourcePathPatterns);
         var excludePaths = new List<string>(options.ExcludePaths);
-        AddDistinct(excludePaths, SearchAuditRecipes.DefaultSourceExcludePaths);
-        return new(pathPatterns, excludePaths, ExcludeTests: true);
+        AddDistinct(excludePaths, SourceScopeDefaults.ExcludePaths);
+        options.DiscoveryBaselineIncludePaths = SourceScopeDefaults.IncludePaths;
+        options.DiscoveryBaselineExcludePaths = SourceScopeDefaults.ExcludePaths;
+        return new(options.PathPatterns, SourceScopeDefaults.IncludePaths, excludePaths, ExcludeTests: true);
     }
 
     private static int? CountGeneratedFilesExcluded(DbReader reader, QueryCommandOptions options, DiscoveryFileScopeFilters filesScope)
@@ -714,7 +738,8 @@ public static partial class QueryCommandRunner
                 filesScope.ExcludePaths,
                 filesScope.ExcludeTests,
                 options.Since,
-                generatedOnly: true).Count;
+                generatedOnly: true,
+                requiredPathPatterns: filesScope.RequiredPathPatterns).Count;
 
     private static void AddGeneratedFileFilterJsonFields(
         JsonObject payload,
