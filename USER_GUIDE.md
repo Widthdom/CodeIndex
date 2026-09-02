@@ -409,9 +409,11 @@ query, filters, ordering, and page limit. The replay is returned in the shared
 bounded envelope, whose `metadata.stream_terminal` mirrors the continuation.
 Final and zero-result pages do not advertise a cursor. If a partial stream
 cannot make safe progress—for example, a byte cap leaves room only for the
-terminal record or the stream is a recipe/named search—the terminal omits the
-cursor and reports `next_cursor_unavailable_reason`. Cursor bytes are included
-in the complete `--max-json-bytes` measurement.
+terminal record, the query uses row selectors or a recipe/named search, the
+10,000-row pagination window is exhausted, or the index generation changes
+while rows are being read—the terminal omits the cursor and reports
+`next_cursor_unavailable_reason`. Cursor bytes are included in the complete
+`--max-json-bytes` measurement.
 When a bounded `find --all` scan exits partially, its terminal record includes
 `next_cursor`; replaying it resumes after the last scanned line.
 The bounded-response commands `search`, `definition`, `find`, `status`,
@@ -4177,9 +4179,11 @@ result row を 1 件以上出力した場合、`next_cursor` は最後に出力�
 command、query、filter、ordering、page limit を変えずに再利用してください。再開応答は
 共有 bounded envelope となり、`metadata.stream_terminal` にも同じ continuation が
 反映されます。最終 page と 0 件 page は cursor を公開しません。byte cap により terminal
-record しか出力できない場合や recipe / named search stream のように、安全に再開できない
-partial stream では cursor を省略し、terminal の `next_cursor_unavailable_reason` で理由を
-報告します。cursor の byte 数も `--max-json-bytes` による stream 全体の計測に含まれます。
+record しか出力できない場合、row selector または recipe / named search を使う場合、
+10,000 row の pagination window を使い切った場合、row の読み取り中に index generation が
+変わった場合のように、安全に再開できない partial stream では cursor を省略し、terminal の
+`next_cursor_unavailable_reason` で理由を報告します。cursor の byte 数も
+`--max-json-bytes` による stream 全体の計測に含まれます。
 上限に達した
 `find --all` scan が partial exit した場合、terminal record の `next_cursor` を
 再利用すると最後に scan した line の次から継続します。

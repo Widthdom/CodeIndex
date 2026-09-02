@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 
@@ -98,6 +99,128 @@ public sealed class QueryCommandRunnerIssue5230Tests
                 ["search", "Issue5230Needle", "--db", dbPath, "--exact-substring", "--json", "--limit", "1"]);
             AssertRawCursorResumesWithoutRepeatingFirstPath(
                 ["files", "--path", "src/*.txt", "--db", dbPath, "--json", "--limit", "1"]);
+
+            var (selectorExitCode, selectorStdout, selectorStderr) = CaptureConsole(() =>
+                ProgramRunner.Run(
+                    [
+                        "search", "Issue5230Needle", "--db", dbPath, "--exact-substring",
+                        "--json", "--limit", "1", "--first-per-file",
+                    ],
+                    _jsonOptions,
+                    "1.0.0-test"));
+            Assert.Equal(CommandExitCodes.Success, selectorExitCode);
+            Assert.Equal(string.Empty, selectorStderr);
+            var selectorTerminal = ParseNdjson(selectorStdout)[^1];
+            Assert.True(selectorTerminal.GetProperty("has_more").GetBoolean());
+            Assert.False(selectorTerminal.TryGetProperty("next_cursor", out _));
+            Assert.Equal(
+                "stream_not_cursor_capable",
+                selectorTerminal.GetProperty("next_cursor_unavailable_reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Symbols_NdjsonSuppressesCursorWhenGenerationChangesDuringQuery_Issue5230()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("ndjson_cursor_generation_race_5230");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            for (var index = 1; index <= 3; index++)
+            {
+                TestProjectHelper.InsertIndexedFile(
+                    dbPath,
+                    $"src/Issue5230Race{index}.cs",
+                    "csharp",
+                    $"public sealed class Issue5230Race{index} {{ }}\n");
+            }
+
+            var generationChanged = false;
+            QueryCommandRunner.NdjsonRowsMaterializedForTesting = () =>
+            {
+                if (generationChanged)
+                    return;
+
+                generationChanged = true;
+                using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+                var writer = new DbWriter(db.Connection);
+                writer.SetMeta(
+                    DbContext.IndexedHeadTimestampMetaKey,
+                    "2026-09-01T23:59:59.0000000+00:00");
+            };
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["symbols", "Issue5230Race", "--db", dbPath, "--json", "--limit", "1"],
+                _jsonOptions,
+                "1.0.0-test"));
+
+            Assert.True(generationChanged);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            var terminal = ParseNdjson(stdout)[^1];
+            Assert.True(terminal.GetProperty("has_more").GetBoolean());
+            Assert.False(terminal.TryGetProperty("next_cursor", out _));
+            Assert.Equal(
+                "index_generation_changed_during_query",
+                terminal.GetProperty("next_cursor_unavailable_reason").GetString());
+        }
+        finally
+        {
+            QueryCommandRunner.NdjsonRowsMaterializedForTesting = null;
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Symbols_NdjsonSuppressesUnusableCursorAtPaginationWindow_Issue5230()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("ndjson_cursor_window_5230");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var source = string.Join(
+                '\n',
+                Enumerable.Range(0, 10_001)
+                    .Select(index => $"public sealed class Issue5230Window{index:D5} {{ }}"));
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Issue5230Window.cs",
+                "csharp",
+                source);
+
+            var args = new[]
+            {
+                "symbols", "Issue5230Window", "--db", dbPath, "--json", "--limit", "1",
+            };
+            var (_, firstStdout, _) = CaptureConsole(() =>
+                ProgramRunner.Run(args, _jsonOptions, "1.0.0-test"));
+            var firstCursor = Assert.IsType<string>(ParseNdjson(firstStdout)[^1]
+                .GetProperty("next_cursor")
+                .GetString());
+            var boundaryCursor = ReplaceResponseCursorOffset(firstCursor, 9_999);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                args.Concat(["--cursor", boundaryCursor]).ToArray(),
+                _jsonOptions,
+                "1.0.0-test"));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = JsonDocument.Parse(stdout);
+            var metadata = document.RootElement.GetProperty("metadata");
+            Assert.True(metadata.GetProperty("pagination_window_exhausted").GetBoolean());
+            Assert.False(metadata.GetProperty("has_more").GetBoolean());
+            Assert.Equal(JsonValueKind.Null, metadata.GetProperty("next_cursor").ValueKind);
+            var terminal = metadata.GetProperty("stream_terminal");
+            Assert.True(terminal.GetProperty("has_more").GetBoolean());
+            Assert.False(terminal.TryGetProperty("next_cursor", out _));
+            Assert.Equal(
+                "pagination_window_exhausted",
+                terminal.GetProperty("next_cursor_unavailable_reason").GetString());
         }
         finally
         {
@@ -298,6 +421,22 @@ public sealed class QueryCommandRunnerIssue5230Tests
         => stdout.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries)
             .Select(line => JsonDocument.Parse(line).RootElement.Clone())
             .ToArray();
+
+    private static string ReplaceResponseCursorOffset(string cursor, int offset)
+    {
+        const string prefix = "response:v2:";
+        Assert.StartsWith(prefix, cursor, StringComparison.Ordinal);
+        var encoded = cursor[prefix.Length..]
+            .Replace('-', '+')
+            .Replace('_', '/');
+        encoded += new string('=', (4 - (encoded.Length % 4)) % 4);
+        var payload = JsonNode.Parse(Convert.FromBase64String(encoded))!.AsObject();
+        payload["offset"] = offset;
+        return prefix + Convert.ToBase64String(Encoding.UTF8.GetBytes(payload.ToJsonString()))
+            .TrimEnd('=')
+            .Replace('+', '-')
+            .Replace('/', '_');
+    }
 
     private static (int ExitCode, string Stdout, string Stderr) CaptureConsole(Func<int> action)
         => ConsoleCapture.Capture(action);

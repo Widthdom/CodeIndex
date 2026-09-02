@@ -90,6 +90,11 @@ public static partial class QueryCommandRunner
             }
 
             reader.IncludeGenerated = options.IncludeGenerated;
+            options.InvocationGenerationFingerprint = options.Json
+                                                      && options.JsonOutputFormat == JsonOutputFormatNdjson
+                                                      && !options.ResultsOnly
+                ? JsonEnvelopeWrapper.CaptureResponseGenerationFingerprint(reader)
+                : null;
             var previousProjectRoot = s_activeQueryProjectRoot;
             var projectRootResolution = ResolveProjectFilterRoot(dbPath, options.DbPathExplicit);
             s_activeQueryProjectRoot = projectRootResolution.Root;

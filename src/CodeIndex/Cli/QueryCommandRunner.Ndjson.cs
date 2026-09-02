@@ -7,6 +7,7 @@ namespace CodeIndex.Cli;
 public static partial class QueryCommandRunner
 {
     private const int NdjsonResponseBudgetRetryHeadroomBytes = 1024;
+    internal static Action? NdjsonRowsMaterializedForTesting { get; set; }
 
     private sealed record NdjsonOutputRecord(string Line, bool CountsAsResult = true);
 
@@ -57,11 +58,14 @@ public static partial class QueryCommandRunner
 
         var emittedRecords = records.Count;
         string? terminalLine = null;
+        NdjsonRowsMaterializedForTesting?.Invoke();
         var continuationCursorFactory = reader is not null && IsCursorCapableNdjson(commandName, options)
-            ? new Lazy<Func<int, string>>(() => JsonEnvelopeWrapper.BuildNdjsonResponseCursorFactory(
+            ? new Lazy<JsonEnvelopeWrapper.NdjsonResponseCursorContext>(() =>
+                JsonEnvelopeWrapper.BuildNdjsonResponseCursorFactory(
                 commandName,
                 options.InvocationArgs,
-                reader))
+                options.DbPath,
+                options.InvocationGenerationFingerprint))
             : null;
 
         string BuildTerminal(
@@ -82,6 +86,7 @@ public static partial class QueryCommandRunner
                 hasMore = nextOffset < totalCount;
             }
             var (nextCursor, unavailableReason) = BuildNdjsonContinuation(
+                commandName,
                 returnedCount,
                 hasMore,
                 continuationCursorFactory);
@@ -221,9 +226,10 @@ public static partial class QueryCommandRunner
     }
 
     private static (string? Cursor, string? UnavailableReason) BuildNdjsonContinuation(
+        string commandName,
         int returnedCount,
         bool hasMore,
-        Lazy<Func<int, string>>? cursorFactory)
+        Lazy<JsonEnvelopeWrapper.NdjsonResponseCursorContext>? cursorFactory)
     {
         if (!hasMore)
             return (null, null);
@@ -231,8 +237,14 @@ public static partial class QueryCommandRunner
             return (null, "no_result_row_emitted");
         if (cursorFactory is null)
             return (null, "stream_not_cursor_capable");
+        if (!JsonEnvelopeWrapper.IsNdjsonResponseCursorWithinWindow(commandName, returnedCount))
+            return (null, "pagination_window_exhausted");
 
-        return (cursorFactory.Value(returnedCount), null);
+        var cursorContext = cursorFactory.Value;
+        if (cursorContext.CursorFactory is null)
+            return (null, cursorContext.UnavailableReason ?? "index_generation_unavailable");
+
+        return (cursorContext.CursorFactory(returnedCount), null);
     }
 
     private static bool IsCursorCapableNdjson(string commandName, QueryCommandOptions options)
@@ -240,7 +252,8 @@ public static partial class QueryCommandRunner
            || commandName == "search"
            && options.RecipeName is null
            && options.NamedSearchQueries.Count == 0
-           && !options.ListRecipes;
+           && !options.ListRecipes
+           && !HasSearchRowSelectors(options);
 
     private static NdjsonStreamWriteResult WriteResultOnlyNdjson(
         IReadOnlyList<NdjsonOutputRecord> records,

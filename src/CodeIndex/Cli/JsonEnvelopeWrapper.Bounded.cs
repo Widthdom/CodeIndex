@@ -2620,19 +2620,59 @@ internal static partial class JsonEnvelopeWrapper
             reader.GetIndexedHeadForResponse());
     }
 
-    internal static Func<int, string> BuildNdjsonResponseCursorFactory(
+    internal sealed record NdjsonResponseCursorContext(
+        Func<int, string>? CursorFactory,
+        string? UnavailableReason);
+
+    internal static string CaptureResponseGenerationFingerprint(DbReader reader)
+        => BuildResponseSnapshot(reader).GenerationFingerprint;
+
+    private static string? TryCaptureResponseGenerationFingerprint(string dbPath)
+    {
+        try
+        {
+            using var db = new DbContext(DbOpenIntent.QueryOnly, dbPath);
+            if (!db.TryValidateIsCodeIndexDb(out _))
+                return null;
+            return CaptureResponseGenerationFingerprint(new DbReader(db));
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    internal static NdjsonResponseCursorContext BuildNdjsonResponseCursorFactory(
         string command,
         string[] args,
-        DbReader reader)
+        string dbPath,
+        string? expectedGenerationFingerprint)
     {
-        var snapshot = BuildResponseSnapshot(reader);
+        if (expectedGenerationFingerprint is null)
+            return new(null, "index_generation_unavailable");
+        var currentGenerationFingerprint = TryCaptureResponseGenerationFingerprint(dbPath);
+        if (currentGenerationFingerprint is null)
+            return new(null, "index_generation_unavailable");
+        if (!string.Equals(
+                expectedGenerationFingerprint,
+                currentGenerationFingerprint,
+                StringComparison.Ordinal))
+        {
+            return new(null, "index_generation_changed_during_query");
+        }
+
         var responseOffset = GetBoundedResponseOffset(command);
         var queryFingerprint = BuildResponseFingerprint(command, args);
-        return returnedCount => FormatResponseCursor(
-            checked(responseOffset + returnedCount),
-            queryFingerprint,
-            snapshot.GenerationFingerprint);
+        return new(
+            returnedCount => FormatResponseCursor(
+                checked(responseOffset + returnedCount),
+                queryFingerprint,
+                expectedGenerationFingerprint),
+            null);
     }
+
+    internal static bool IsNdjsonResponseCursorWithinWindow(string command, int returnedCount)
+        => checked(GetBoundedResponseOffset(command) + returnedCount) < MaxPageWindow;
 
     private static ResponseSnapshot BuildFallbackResponseSnapshot(string appVersion)
         => new(BuildResponseValueFingerprint("catalog\0" + appVersion), null, null);
