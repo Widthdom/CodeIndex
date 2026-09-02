@@ -389,8 +389,8 @@ public static partial class QueryCommandRunner
             }
 
             if (pathPatterns.Count == 0)
-                AddDistinct(pathPatterns, SearchAuditRecipes.DefaultSourcePathPatterns);
-            AddDistinct(excludePaths, SearchAuditRecipes.DefaultSourceExcludePaths);
+                AddDistinct(pathPatterns, SourceScopeDefaults.IncludePaths);
+            AddDistinct(excludePaths, SourceScopeDefaults.ExcludePaths);
             AddSourceOnlyDefaultExcludeOrigin(excludeOrigins, matchOrigins, SearchMatchClassifier.Comment);
             AddSourceOnlyDefaultExcludeOrigin(excludeOrigins, matchOrigins, SearchMatchClassifier.HelpText);
             AddSourceOnlyDefaultExcludeOrigin(excludeOrigins, matchOrigins, SearchMatchClassifier.SchemaDescription);

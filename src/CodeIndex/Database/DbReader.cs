@@ -2058,10 +2058,11 @@ public partial class DbReader : IDisposable
     /// List indexed files, optionally filtered by name pattern and language.
     /// インデックス済みファイルを一覧（名前パターン・言語でフィルタ可能）。
     /// </summary>
-    public List<FileResult> ListFiles(string? query = null, int limit = 20, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool orderBySize = false, int offset = 0)
+    public List<FileResult> ListFiles(string? query = null, int limit = 20, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool orderBySize = false, int offset = 0, IReadOnlyList<string>? requiredPathPatterns = null)
     {
         if (offset < 0)
             throw new ArgumentOutOfRangeException(nameof(offset), offset, "Offset must be non-negative.");
+        EnsurePathFilterParameterBudget(pathPatterns, excludePathPatterns, requiredPathPatterns);
 
         lang = NormalizeQueryLanguage(lang);
         using var cmd = _conn.CreateCommand();
@@ -2085,6 +2086,7 @@ public partial class DbReader : IDisposable
         if (since != null && _fileColumns.Contains("modified"))
             sql += " AND f.modified >= @since";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
+        AppendAdditionalPathIncludeFilters(ref sql, requiredPathPatterns, "requiredPathPattern");
         sql += $" ORDER BY {orderSql} LIMIT @limit OFFSET @offset";
 
         sql += $@"
@@ -2113,6 +2115,7 @@ public partial class DbReader : IDisposable
         if (since != null && _fileColumns.Contains("modified"))
             SqliteCommandPolicy.Add(cmd, "@since", since.Value);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
+        AddPathIncludeFilterParameters(cmd, requiredPathPatterns, "requiredPathPattern");
         SqliteCommandPolicy.Add(cmd, "@limit", limit);
         SqliteCommandPolicy.Add(cmd, "@offset", offset);
 
@@ -2153,8 +2156,9 @@ public partial class DbReader : IDisposable
             yield return new IndexedFileSnapshot(reader.GetString(0), GetNullableString(reader, 1), GetNullableInt32(reader, 2));
     }
 
-    public QueryCountResult CountListFiles(string? query = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool generatedOnly = false)
+    public QueryCountResult CountListFiles(string? query = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool generatedOnly = false, IReadOnlyList<string>? requiredPathPatterns = null)
     {
+        EnsurePathFilterParameterBudget(pathPatterns, excludePathPatterns, requiredPathPatterns);
         lang = NormalizeQueryLanguage(lang);
         using var cmd = _conn.CreateCommand();
 
@@ -2173,6 +2177,7 @@ public partial class DbReader : IDisposable
         if (generatedOnly)
             sql += _fileColumns.Contains("generated") ? " AND COALESCE(f.generated, 0) = 1" : " AND 1=0";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests, applyGeneratedFilter: !generatedOnly);
+        AppendAdditionalPathIncludeFilters(ref sql, requiredPathPatterns, "requiredPathPattern");
         sql += @"
             )
             SELECT COUNT(*),
@@ -2191,6 +2196,7 @@ public partial class DbReader : IDisposable
         if (since != null && _fileColumns.Contains("modified"))
             SqliteCommandPolicy.Add(cmd, "@since", since.Value);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
+        AddPathIncludeFilterParameters(cmd, requiredPathPatterns, "requiredPathPattern");
 
         return ExecuteFileCountSummary(cmd);
     }
@@ -2265,7 +2271,7 @@ public partial class DbReader : IDisposable
             AddPathFilterParameterSet(cmd, "excludePathPattern", excludePathPatterns);
     }
 
-    private static void AppendAdditionalPathIncludeFilters(ref string sql, IReadOnlyList<string>? pathPatterns, string parameterPrefix)
+    internal static void AppendAdditionalPathIncludeFilters(ref string sql, IReadOnlyList<string>? pathPatterns, string parameterPrefix)
     {
         if (pathPatterns == null || pathPatterns.Count == 0)
             return;
@@ -2277,7 +2283,7 @@ public partial class DbReader : IDisposable
         sql += " AND (" + string.Join(" OR ", ors) + ")";
     }
 
-    private static void AddPathIncludeFilterParameters(SqliteCommand cmd, IReadOnlyList<string>? pathPatterns, string parameterPrefix)
+    internal static void AddPathIncludeFilterParameters(SqliteCommand cmd, IReadOnlyList<string>? pathPatterns, string parameterPrefix)
     {
         if (pathPatterns == null)
             return;
@@ -2335,8 +2341,15 @@ public partial class DbReader : IDisposable
         }
     }
 
-    private static void EnsurePathFilterParameterBudget(IReadOnlyCollection<string>? pathPatterns, IReadOnlyCollection<string>? excludePathPatterns)
-        => SqliteDynamicSql.EnsureParameterBudget(CountPathFilterParameters(pathPatterns) + CountPathFilterParameters(excludePathPatterns), "path filters");
+    internal static void EnsurePathFilterParameterBudget(
+        IReadOnlyCollection<string>? pathPatterns,
+        IReadOnlyCollection<string>? excludePathPatterns,
+        IReadOnlyCollection<string>? requiredPathPatterns = null)
+        => SqliteDynamicSql.EnsureParameterBudget(
+            CountPathFilterParameters(pathPatterns)
+            + CountPathFilterParameters(excludePathPatterns)
+            + CountPathFilterParameters(requiredPathPatterns),
+            "path filters");
 
     private static int CountPathFilterParameters(IReadOnlyCollection<string>? pathPatterns)
         => pathPatterns?.Count ?? 0;
