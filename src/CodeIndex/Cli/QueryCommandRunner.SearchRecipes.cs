@@ -132,8 +132,9 @@ public static partial class QueryCommandRunner
         string outputDescription,
         string hint,
         JsonSerializerOptions jsonOptions,
-        string commandName = "search")
+        string? commandName = null)
     {
+        commandName ??= options.InvocationContext.CommandName;
         json = AddActiveSqliteDiagnostics(json);
         if (options.MaxJsonBytes.HasValue)
         {

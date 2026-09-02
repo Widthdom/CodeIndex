@@ -757,6 +757,16 @@ previews are sanitized and bounded. JSON failures write the envelope to stdout
 and leave stderr empty. Human failures write the matching coded `Error`,
 `Hint`, and `Usage` lines to stderr and leave stdout empty.
 
+An ambiguous `goto` with explicit `--json` uses `E029_QUERY_AMBIGUOUS` /
+`ambiguous_query` and identifies `command: "goto"` with exit code 1. The
+envelope reports authoritative `match_count` / `total_count`, bounded structured
+`candidates`, `returned_count`, `omitted_count`, truncation state, and a
+structured `narrowing` object. Candidate materialization is capped at 20 entries
+and 16 KiB, and every candidate text field is sanitized and bounded before
+serialization. Without explicit `--json`, ambiguity retains the corresponding
+coded human diagnostic on stderr. Never auto-select a ranked candidate; callers
+must narrow the query or opt into `--all`.
+
 Response-budget preflight failures use `E028_RESPONSE_BUDGET_TOO_SMALL` /
 `response_budget` through `CommandErrorWriter.WriteResponseBudgetError`.
 They add `requested_bytes`, `effective_bytes`, `minimum_required_bytes`,
@@ -794,6 +804,7 @@ Other commands load config before those consumers run; malformed config in JSON 
 | Hook platform or filesystem failure | 9 | `E025_HOOK_OPERATION_FAILED` | `platform` |
 | Hooks outside a Git repository | 2 | `E026_NOT_GIT_REPOSITORY` | `not_found` |
 | JSON response budget too small | 1 or underlying command-specific | `E028_RESPONSE_BUDGET_TOO_SMALL` | `response_budget` |
+| Ambiguous `goto` query | 1 | `E029_QUERY_AMBIGUOUS` | `ambiguous_query` |
 | Other recoverable command failure | command-specific | `E023_COMMAND_FAILED` | stable writer classification |
 
 ### Process launch policy
@@ -2507,7 +2518,7 @@ catalog and unknown-field errors are generated from that same schema.
 |---|---|
 | Human-readable default | Query commands (`search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `excerpt`, `map`, `inspect`, `outline`, `suggestions`) default to **human-readable output**. |
 | `--json` | Emits JSON lines output, one JSON object per line, designed for easy parsing by AI agents. |
-| Delegated audit command identity | `audit` delegates recipe execution to `search` internally while retaining the public `audit` identity in human usage, recovery hints, and generated replay commands, except that compact results-only replays use the canonical results-only-capable `search --recipe` entry point. Explicit `audit --json` usage errors emit stable versioned command-error objects with `command: "audit"` and no human-readable `usage`; direct `search` errors retain `search` identity. |
+| Delegated audit command identity | `audit` delegates recipe execution to `search` internally while retaining the public `audit` identity in human usage, recovery hints, and generated replay commands, except that compact results-only replays use the canonical results-only-capable `search --recipe` entry point. Explicit `audit --json` usage errors emit stable versioned command-error objects with `command: "audit"` and no human-readable `usage`; direct `search` errors retain `search` identity. Late response-budget failures use the same invocation context, so `command`, `usage`, `retry.command`, and audit-specific recovery guidance cannot mix `audit` and `search` identities. |
 | Recipe issue-draft summary | `search --recipe ... --format issue-drafts --summary-only` and its `audit` alias use a dedicated summary DTO instead of rendering full issue bodies. Each positive recipe query contributes one compact `drafts[]` row with query/title identity, result and file counts, at most five counted evidence paths plus explicit path omission metadata, labels, severity, confidence, optional result cursor, and a full-detail replay command. The root reports `total_count`, its authority/lower bound, `returned_count`, `omitted_count`, `truncated`, and an uncapped summary `recovery_command`. `--max-json-bytes` measures the exact UTF-8 document plus its final newline and removes only complete trailing summary rows; a cap below the zero-row envelope returns typed `E028_RESPONSE_BUDGET_TOO_SMALL` guidance under the invoked `search` or `audit` identity. Full issue-draft mode retains the established recipe metadata, evidence, source, triage, and rendered body shape. |
 | `definition --json` miss | A default-format definition lookup that finds no matching symbol emits the shared versioned `E018_QUERY_NOT_FOUND` command-error object and exits `2`, with or without `--body`; it never succeeds with empty stdout. Bounded-envelope controls move the object to `metadata.error` and keep `results` empty instead of projecting it as a location row. The object is preflighted against `--max-json-bytes`; an impossible cap returns a usage error without oversized stdout. `--count` still returns its structured zero-count object, and explicit location formats retain their existing format-specific empty-result output. |
 | Raw discovery JSON shape | `symbols` and `files` build each result row through the same DTO path for array, NDJSON, and envelope output. `symbols --json=array` therefore preserves `exact_index_available` just like NDJSON. Every cardinality and `--max-json-bytes` path keeps the selected flat shape: zero-result NDJSON is an empty stream, `--json=array` is always an array, and byte-capped output omits whole trailing rows without changing the top-level type. Bounded projections keep rows in `results`, pagination facts in `metadata`, and exact-query readiness in `metadata.response_context`; they never reuse a result row as response context. Use `--format compact` or `--json-envelope` when truncation and freshness metadata must accompany the results. |
@@ -4984,6 +4995,15 @@ sanitization し、上限を適用してから merge します。JSON の失敗�
 出し、stderr を空に保ちます。human の失敗は対応する code 付き `Error`、`Hint`、
 `Usage` を stderr に出し、stdout を空に保ちます。
 
+`goto` が曖昧一致し、`--json` が明示されている場合は
+`E029_QUERY_AMBIGUOUS` / `ambiguous_query` を使い、`command: "goto"` と exit code 1
+を返します。envelope には authoritative な `match_count` / `total_count`、上限付きの
+構造化 `candidates`、`returned_count`、`omitted_count`、truncation 状態、構造化
+`narrowing` object を含めます。candidate の実体化は20件かつ16 KiBまでとし、すべての
+candidate text field を serialization 前に sanitization して上限を適用します。
+`--json` を明示しない曖昧一致では、対応する code 付き human diagnostic を stderr に
+維持します。rank 上位を自動選択せず、呼び出し側が query を絞るか `--all` を明示します。
+
 response-budget preflight failure は
 `CommandErrorWriter.WriteResponseBudgetError` を通して
 `E028_RESPONSE_BUDGET_TOO_SMALL` / `response_budget` を返します。
@@ -5021,6 +5041,7 @@ JSON mode の不正 config は共通の command-error envelope で
 | hook の platform / filesystem failure | 9 | `E025_HOOK_OPERATION_FAILED` | `platform` |
 | Git repository 外での hooks 実行 | 2 | `E026_NOT_GIT_REPOSITORY` | `not_found` |
 | JSON response budget が小さすぎる | 1 または基となる command 固有値 | `E028_RESPONSE_BUDGET_TOO_SMALL` | `response_budget` |
+| `goto` query の曖昧一致 | 1 | `E029_QUERY_AMBIGUOUS` | `ambiguous_query` |
 | その他の回復可能な command failure | command ごと | `E023_COMMAND_FAILED` | writer による安定した分類 |
 
 ### プロセス起動ポリシー
@@ -6755,7 +6776,7 @@ total / cursor / truncation、partial-family metadata、definition body の pagi
 |---|---|
 | human-readable default | query command（`search`、`definition`、`references`、`callers`、`callees`、`symbols`、`files`、`excerpt`、`map`、`inspect`、`outline`、`suggestions`）は既定で**人間向け出力**です。 |
 | `--json` | JSON lines output（1 行 1 JSON object）に切り替えます。AI agent が容易に parse できるよう設計されています。 |
-| 委譲された audit command identity | `audit` は内部で recipe 実行を `search` へ委譲しますが、人間向け usage、復旧 hint、生成する replay command では公開された `audit` identity を維持します。ただし compact results-only replay は、results-only に対応する正規の `search --recipe` entry point を使います。明示的な `audit --json` の usage error は `command: "audit"` を持つ安定した version 付き command-error object を出力し、人間向けの `usage` を含めません。直接の `search` error は `search` identity を維持します。 |
+| 委譲された audit command identity | `audit` は内部で recipe 実行を `search` へ委譲しますが、人間向け usage、復旧 hint、生成する replay command では公開された `audit` identity を維持します。ただし compact results-only replay は、results-only に対応する正規の `search --recipe` entry point を使います。明示的な `audit --json` の usage error は `command: "audit"` を持つ安定した version 付き command-error object を出力し、人間向けの `usage` を含めません。直接の `search` error は `search` identity を維持します。遅い段階で発生する response-budget failure も同じ invocation context を使うため、`command`、`usage`、`retry.command`、audit 固有の復旧 guidance に `audit` と `search` の identity が混在することはありません。 |
 | recipe issue-draft summary | `search --recipe ... --format issue-drafts --summary-only` と `audit` alias は、完全な issue body を描画せず専用 summary DTO を使います。結果がある各 recipe query は、query / title identity、result / file 件数、最大 5 件の count 付き evidence path と明示的な path 省略 metadata、label、severity、confidence、任意の result cursor、full-detail replay command を持つ compact な `drafts[]` row を 1 件生成します。root は `total_count` とその authority / lower bound、`returned_count`、`omitted_count`、`truncated`、上限なし summary 用の `recovery_command` を返します。`--max-json-bytes` は最後の改行を含む正確な UTF-8 document を計測し、末尾の完全な summary row だけを省略します。0 row envelope も収まらない上限では、呼び出された `search` または `audit` identity の型付き `E028_RESPONSE_BUDGET_TOO_SMALL` guidance を返します。full issue-draft mode は既存の recipe metadata、evidence、source、triage、描画済み body shape を維持します。 |
 | `definition --json` の未検出 | 既定 format の definition lookup で一致する symbol がない場合、`--body` の有無にかかわらず、共通の versioned `E018_QUERY_NOT_FOUND` command-error object を出力して終了コード `2` を返します。空の stdout のまま成功することはありません。bounded-envelope control の使用時は object を location row として projection せず `metadata.error` に移し、`results` は空のままにします。この object は `--max-json-bytes` に対して事前検査され、収まらない上限では oversized stdout を出さず usage error を返します。`--count` は引き続き構造化された 0 件 object を返し、明示的な location format も既存の format 固有の empty-result output を維持します。 |
 | raw discovery JSON shape | `symbols` と `files` は、array、NDJSON、envelope の各出力で同じ DTO 経路から result row を構築します。そのため `symbols --json=array` も NDJSON と同様に `exact_index_available` を保持します。結果件数や `--max-json-bytes` の有無にかかわらず選択した flat shape を維持し、0 件の NDJSON は空 stream、`--json=array` は常に array となり、byte cap 到達時は top-level type を変えずに末尾の完全な row を省略します。bounded projection は row を `results`、pagination fact を `metadata`、exact-query readiness を `metadata.response_context` に保持し、result row を response context として再利用しません。truncation / freshness metadata も結果と一緒に必要な場合は `--format compact` または `--json-envelope` を使用します。 |
