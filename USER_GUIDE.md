@@ -2185,6 +2185,18 @@ A positional value containing an unescaped `*` or `?` is treated exactly like
 for example `cdidx files '**/*.cs'`. Positionals without those glob
 metacharacters remain filename-substring queries.
 
+For `files` and `map`, `--exclude-tests` also activates the implicit production
+source baseline. Its `src/**` include group is intersected with the user's
+repeatable `--path` group; patterns within either group remain OR-combined.
+The implicit source exclusions and every explicit `--exclude-path` are then
+applied together. Therefore adding a broad or narrow `--path` cannot re-enable
+files outside the baseline or files excluded by it. Generated-file policy,
+`--since`, path matching semantics, and count/row scope remain unchanged.
+Count, compact, summary, and map JSON expose this composition under
+`query_context.effective_path_scope`: `include_groups` and `exclude_groups`
+identify `implicit_source_baseline` versus `explicit_cli` provenance, while the
+operator fields describe how the groups and their patterns are combined.
+
 Output:
 
 ```
@@ -5886,6 +5898,17 @@ cdidx files --format compact --max-json-bytes 8000
 まったく同じように扱われます。shell が pattern を変更せず `cdidx` へ渡すよう、
 `cdidx files '**/*.cs'` のように引用してください。これらの glob metacharacter を
 含まない positional 値は、従来どおり filename substring query として扱われます。
+
+`files` と `map` では、`--exclude-tests` によって暗黙の production source baseline
+も有効になります。baseline の `src/**` include group は、繰り返し指定できるユーザーの
+`--path` group と AND で交差し、各 group 内の pattern は従来どおり OR で結合されます。
+その後、暗黙の source 除外とすべての明示 `--exclude-path` が合わせて適用されます。
+したがって、広いまたは狭い `--path` を追加しても baseline 外や baseline 除外済みの file
+が再び有効になることはありません。generated-file policy、`--since`、path match semantics、
+count / row の scope は維持されます。count、compact、summary、map の JSON は、この合成を
+`query_context.effective_path_scope` に公開します。`include_groups` と `exclude_groups` は
+`implicit_source_baseline` / `explicit_cli` の由来を示し、operator field は group と pattern
+の結合方法を示します。
 
 出力:
 
