@@ -20,6 +20,8 @@ public static partial class ReferenceExtractor
 
         private Dictionary<int, List<SymbolRecord>>? csharpSameLineContainerCandidatesByLine;
         private bool csharpSameLineContainerCandidatesResolved;
+        private Dictionary<int, List<SymbolRecord>>? csharpMultilineContainerCandidatesByStartLine;
+        private bool csharpMultilineContainerCandidatesResolved;
         private IReadOnlyList<SymbolRecord>? csharpXmlDocAttachmentScopeCandidates;
         private bool csharpXmlDocAttachmentScopeCandidatesResolved;
         private IReadOnlyList<SymbolRecord>? enclosingTypeCandidates;
@@ -38,6 +40,8 @@ public static partial class ReferenceExtractor
         private Dictionary<string, List<SymbolRecord>>? csharpContainerCandidatesByName;
         private List<(int StartLine, int StartColumn, int EndLine, int EndColumn, SymbolRecord Container, SymbolRecord Owner)>? recordPrimaryCtorRanges;
         private bool recordPrimaryCtorRangesResolved;
+        private Dictionary<SymbolRecord, (int EndLine, int EndColumn, bool IsRecordDeclaration)>?
+            csharpRecordHeaderBoundaries;
         private (
             IReadOnlyDictionary<string, CSharpContainingTypeValueReceiverNames> ByContainingType,
             IReadOnlyDictionary<int, List<CSharpFunctionValueReceiverNameRecord>> ByFunctionStartLine)? csharpValueReceiverLookups;
@@ -183,6 +187,18 @@ public static partial class ReferenceExtractor
             return csharpSameLineContainerCandidatesByLine;
         }
 
+        internal Dictionary<int, List<SymbolRecord>>? GetCSharpMultilineContainerCandidatesByStartLine()
+        {
+            if (!csharpMultilineContainerCandidatesResolved)
+            {
+                csharpMultilineContainerCandidatesByStartLine =
+                    BuildCSharpMultilineContainerCandidatesByStartLine(language, containerCandidates);
+                csharpMultilineContainerCandidatesResolved = true;
+            }
+
+            return csharpMultilineContainerCandidatesByStartLine;
+        }
+
         internal IReadOnlyList<SymbolRecord>? GetCSharpXmlDocAttachmentScopeCandidates()
         {
             if (!csharpXmlDocAttachmentScopeCandidatesResolved)
@@ -263,6 +279,33 @@ public static partial class ReferenceExtractor
             }
 
             return recordPrimaryCtorRanges!;
+        }
+
+        internal (int EndLine, int EndColumn, bool IsRecordDeclaration) GetCSharpRecordHeaderBoundary(
+            SymbolRecord recordOwner)
+        {
+            if (csharpRecordHeaderBoundaries?.TryGetValue(recordOwner, out var cached) == true)
+                return cached;
+
+            // One multiline record can emit thousands of component references. Cache the
+            // collected boundary per owner so container correction remains linear.
+            // 1つの複数行 record が多数の component reference を生成しても、owner ごとに
+            // boundary を cache し、container 補正の線形性を維持する。
+            var recordStartColumn = FindCSharpRecordKeywordColumn(
+                structuralLines,
+                recordOwner);
+            var (endLine, endColumn, headerText) =
+                CollectCSharpRecordHeader(
+                    structuralLines,
+                    recordOwner.StartLine,
+                    recordStartColumn,
+                    skipCSharpPreprocessorDirectives: true);
+            var boundary = (
+                endLine,
+                endColumn,
+                IsCSharpRecordDeclarationHeader(headerText, recordOwner.Name));
+            (csharpRecordHeaderBoundaries ??= []).Add(recordOwner, boundary);
+            return boundary;
         }
 
         internal (

@@ -354,7 +354,7 @@ public sealed class JsonEnvelopeWrapperIssue4730Tests
             var baseArgs = new[]
             {
                 "find", "Needle", "--db", dbPath, "--all", "--exact",
-                "--json=ndjson", "--fields", "path,line", "--limit", "10", "--line-scan-limit", "8",
+                "--json-envelope", "--fields", "path,line", "--limit", "10", "--line-scan-limit", "8",
             };
 
             JsonDocument? firstDocument = null;

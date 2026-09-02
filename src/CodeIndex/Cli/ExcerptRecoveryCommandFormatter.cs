@@ -39,7 +39,14 @@ internal static class ExcerptRecoveryCommandFormatter
         RecoveryCommandShell shell,
         bool redactPaths = true)
     {
-        var resolvedArgv = BuildArgv(path, recovery.StartLine, recovery.EndLine, dbPath, invocationPrefix);
+        var resolvedArgv = BuildArgv(
+            path,
+            recovery.StartLine,
+            recovery.EndLine,
+            recovery.StartColumn,
+            recovery.EndColumn,
+            dbPath,
+            invocationPrefix);
         var outputArgv = redactPaths
             ? BuildSupportSafeArgv(resolvedArgv, invocationPrefix.Count, path.StartsWith("-", StringComparison.Ordinal))
             : resolvedArgv;
@@ -88,6 +95,8 @@ internal static class ExcerptRecoveryCommandFormatter
         string path,
         int startLine,
         int endLine,
+        int? startColumn,
+        int? endColumn,
         string dbPath,
         IReadOnlyList<string> invocationPrefix)
     {
@@ -106,6 +115,16 @@ internal static class ExcerptRecoveryCommandFormatter
         argv.Add(startLine.ToString(CultureInfo.InvariantCulture));
         argv.Add("--end");
         argv.Add(endLine.ToString(CultureInfo.InvariantCulture));
+        if (startColumn.HasValue)
+        {
+            argv.Add("--start-column");
+            argv.Add(startColumn.Value.ToString(CultureInfo.InvariantCulture));
+        }
+        if (endColumn.HasValue)
+        {
+            argv.Add("--end-column");
+            argv.Add(endColumn.Value.ToString(CultureInfo.InvariantCulture));
+        }
         argv.Add("--max-line-width");
         argv.Add("0");
         argv.Add("--json");

@@ -57,13 +57,14 @@ public static partial class SymbolExtractor
                 : scalaBracelessClassEndLine.HasValue
                         ? (scalaBracelessClassEndLine.Value + 1, null, null)
                         : lang == "csharp" && pattern.BodyStyle == BodyStyle.Brace && csharpMatchLines != null
-                            ? FindCSharpPatternBraceRange(
+                            ? FindCSharpPatternBodyRange(
                                 lines,
                                 csharpMatchLines,
                                 getCSharpLineStartStates,
                                 i,
                                 absoluteStartColumn,
-                                csharpGateRawStartColumn)
+                                csharpGateRawStartColumn,
+                                match.Groups["record"].Success)
                             : ResolveRange(
                                 rangeLines,
                                 i,
