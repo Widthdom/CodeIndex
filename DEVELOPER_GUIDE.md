@@ -910,6 +910,14 @@ across live-text eviction and are cleared by `didClose`, so an evicted newer
 version cannot be replaced by a stale change. Other providers return empty
 arrays or null when the database cannot answer safely instead of inventing
 language-server analysis.
+Every inbound message must first be an object whose `jsonrpc` member is exactly
+the string `"2.0"`. Missing, null, non-string, or other-version envelope values
+return `-32600` (`Invalid Request`) with a valid request ID preserved; validation
+runs before receive-time lifecycle reservation, cancellation fast paths, method
+dispatch, state mutation, or database access. `workspace/symbol` separately
+requires `params.query` to be a JSON string. Missing, null, or non-string query
+values return `-32602` (`Invalid params`) before query-snapshot refresh or symbol
+search, while the valid empty string remains a supported workspace-wide query.
 Before URI/path resolution, live-document access, or query-snapshot refresh,
 one shared coordinate validator checks every supported position/range-bearing
 method. `definition`, `declaration`, `references`, `hover`, `completion`, and
@@ -5127,6 +5135,14 @@ indexed symbol に fallback する。numeric document-version tombstone は live
 後も上限付きで保持し、`didClose` で消去するため、evict 済みの新しい version を stale change が
 置き換えることはない。それ以外の provider は database が安全に答えられない場合、
 language-server analysis を作り上げず、空配列または null を返す。
+すべての inbound message は、まず object であり、その `jsonrpc` member が文字列 `"2.0"` と
+完全一致しなければならない。欠落、null、文字列以外、または別 version の envelope 値には、
+有効な request ID を維持して `-32600`（`Invalid Request`）を返す。この検証は receive-time の
+lifecycle reservation、cancellation fast path、method dispatch、state mutation、database access
+より前に行う。`workspace/symbol` では、これとは別に `params.query` を JSON string として必須に
+する。query が欠落、null、または文字列以外なら query snapshot の refresh や symbol search より
+前に `-32602`（`Invalid params`）を返す一方、正当な空文字列は workspace-wide query として
+引き続き対応する。
 URI / path 解決、live document へのアクセス、query snapshot の refresh より前に、1つの共通
 coordinate validator ですべての対応済み position / range method を検証する。
 `definition`、`declaration`、`references`、`hover`、`completion`、

@@ -93,9 +93,7 @@ internal sealed partial class LspServer : IDisposable
         bool createPartialItems,
         CancellationToken cancellationToken)
     {
-        var query = GetString(root, "params", "query");
-        if (query != null && query.Length > QueryLimits.MaxQueryLength)
-            throw new ArgumentException(QueryLimits.FormatQueryTooLongError());
+        var query = GetWorkspaceSymbolQuery(root);
 
         var limit = GetLimit(root, DefaultLimit, MaxWorkspaceSymbols, "params", "limit")
             ?? GetLimit(root, DefaultLimit, MaxWorkspaceSymbols, "params", "maxResults")
@@ -139,6 +137,14 @@ internal sealed partial class LspServer : IDisposable
         }
 
         return new SymbolResponse(array, [], array.Count, truncated);
+    }
+
+    private static string GetWorkspaceSymbolQuery(JsonElement root)
+    {
+        var query = GetRequiredString(root, "params", "query");
+        if (query.Length > QueryLimits.MaxQueryLength)
+            throw new ArgumentException(QueryLimits.FormatQueryTooLongError());
+        return query;
     }
 
     private IEnumerable<JsonNode> EnumerateWorkspaceSymbolItems(
