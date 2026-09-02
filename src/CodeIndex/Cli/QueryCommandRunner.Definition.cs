@@ -428,7 +428,7 @@ public static partial class QueryCommandRunner
         JsonSerializerOptions jsonOptions)
     {
         var candidates = new JsonArray();
-        var candidateBytes = 2;
+        var candidateBytes = MeasureGotoAmbiguityCandidateBytes(candidates, jsonOptions);
         var nodeOptions = EnsureJsonNodeSerializerOptions(jsonOptions);
         foreach (var result in results)
         {
@@ -442,13 +442,15 @@ public static partial class QueryCommandRunner
                 ["container_name"] = BoundGotoCandidateText(result.ContainerName),
                 ["signature"] = BoundGotoCandidateText(result.Signature, maxChars: 240),
             };
-            var serializedCandidateBytes = Encoding.UTF8.GetByteCount(candidate.ToJsonString(nodeOptions));
-            var separatorBytes = candidates.Count == 0 ? 0 : 1;
-            if (candidateBytes + separatorBytes + serializedCandidateBytes > GotoAmbiguityCandidateByteLimit)
-                break;
-
             candidates.Add(candidate);
-            candidateBytes += separatorBytes + serializedCandidateBytes;
+            var measuredBytes = MeasureGotoAmbiguityCandidateBytes(candidates, nodeOptions);
+            if (measuredBytes > GotoAmbiguityCandidateByteLimit)
+            {
+                candidates.RemoveAt(candidates.Count - 1);
+                break;
+            }
+
+            candidateBytes = measuredBytes;
         }
 
         var returnedCount = candidates.Count;
@@ -470,6 +472,18 @@ public static partial class QueryCommandRunner
                 ["all_option"] = "--all",
             },
         };
+    }
+
+    private static int MeasureGotoAmbiguityCandidateBytes(
+        JsonArray candidates,
+        JsonSerializerOptions jsonOptions)
+    {
+        var measurementEnvelope = new JsonObject
+        {
+            ["candidates"] = candidates.DeepClone(),
+        };
+        using var document = JsonDocument.Parse(measurementEnvelope.ToJsonString(jsonOptions));
+        return Encoding.UTF8.GetByteCount(document.RootElement.GetProperty("candidates").GetRawText());
     }
 
     private static string? BoundGotoAmbiguityText(

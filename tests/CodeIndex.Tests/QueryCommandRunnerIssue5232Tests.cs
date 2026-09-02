@@ -35,11 +35,25 @@ public partial class QueryCommandRunnerTests
 
         Assert.True(candidates.GetArrayLength() < QueryCommandRunner.GotoAmbiguityCandidateLimit);
         Assert.True(Encoding.UTF8.GetByteCount(candidates.GetRawText()) <= QueryCommandRunner.GotoAmbiguityCandidateByteLimit);
+        Assert.Equal(Encoding.UTF8.GetByteCount(candidates.GetRawText()), root.GetProperty("candidate_bytes").GetInt32());
         Assert.Equal("<redacted>", candidates[0].GetProperty("path").GetString());
         Assert.StartsWith("relative/1/", candidates[1].GetProperty("path").GetString(), StringComparison.Ordinal);
         Assert.Equal(candidates.GetArrayLength(), root.GetProperty("returned_count").GetInt32());
         Assert.Equal(100 - candidates.GetArrayLength(), root.GetProperty("omitted_count").GetInt32());
         Assert.True(root.GetProperty("candidates_truncated").GetBoolean());
+
+        var prettyOptions = new JsonSerializerOptions(_jsonOptions) { WriteIndented = true };
+        var prettyProperties = QueryCommandRunner.BuildGotoAmbiguityJsonProperties(
+            results,
+            totalCount: 100,
+            QueryCommandRunner.GotoAmbiguityCandidateLimit,
+            prettyOptions);
+        using var prettyDocument = JsonDocument.Parse(prettyProperties.ToJsonString(prettyOptions));
+        var prettyRoot = prettyDocument.RootElement;
+        var prettyCandidates = prettyRoot.GetProperty("candidates");
+        var prettyCandidateBytes = Encoding.UTF8.GetByteCount(prettyCandidates.GetRawText());
+        Assert.True(prettyCandidateBytes <= QueryCommandRunner.GotoAmbiguityCandidateByteLimit);
+        Assert.Equal(prettyCandidateBytes, prettyRoot.GetProperty("candidate_bytes").GetInt32());
     }
 
     [Fact]
