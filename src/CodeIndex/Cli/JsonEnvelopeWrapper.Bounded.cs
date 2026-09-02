@@ -358,9 +358,13 @@ internal static partial class JsonEnvelopeWrapper
                 controls.MaxJsonBytes,
                 jsonOptions);
         }
+        var objectOutputModeSelected = controls.Compact
+                                       || HasArgument(command, args, "--summary-only")
+                                       || command == "search" && IsSearchAggregateResponseRequest(args);
         var explicitArrayProjection = controls.Fields is { Count: > 0 }
                                       && HasJsonArrayOutputSelection(command, args)
-                                      && !HasEnvelopeFlag(command, args);
+                                      && !HasEnvelopeFlag(command, args)
+                                      && !objectOutputModeSelected;
         if (explicitArrayProjection && !JsonArrayProjectionCommands.Contains(command))
         {
             return WriteProjectedOutputModeUsageError(
@@ -376,6 +380,38 @@ internal static partial class JsonEnvelopeWrapper
                 command,
                 "--json=array with --fields cannot be combined with --cursor because continuation metadata cannot be represented in a bare array.",
                 "Use --json-envelope or --format compact with the cursor so continuation metadata remains available.",
+                controls.MaxJsonBytes,
+                jsonOptions);
+        }
+        if (explicitArrayProjection && HasArgument(command, args, "--results-only"))
+        {
+            return WriteProjectedOutputModeUsageError(
+                command,
+                $"--json=array with --fields cannot be combined with --results-only because {command} results-only output requires NDJSON.",
+                "Remove --results-only to keep the projected array, or use --json=ndjson without --fields.",
+                controls.MaxJsonBytes,
+                jsonOptions);
+        }
+        if (explicitArrayProjection
+            && command == "search"
+            && (HasArgument(command, args, "--first-per-file")
+                || HasArgument(command, args, "--sample")))
+        {
+            return WriteProjectedOutputModeUsageError(
+                command,
+                "search row-selection controls cannot be combined with metadata-free --json=array output.",
+                "Use --json-envelope or --format compact to retain selector accounting, or remove --first-per-file / --sample.",
+                controls.MaxJsonBytes,
+                jsonOptions);
+        }
+        if (explicitArrayProjection
+            && (HasArgument(command, args, "--profile")
+                || HasArgument(command, args, "--verbose")))
+        {
+            return WriteProjectedOutputModeUsageError(
+                command,
+                "--json=array with --fields cannot include --profile or --verbose because diagnostic control records cannot be represented in a projected row array.",
+                "Use --json-envelope to retain diagnostic metadata, or remove --profile / --verbose.",
                 controls.MaxJsonBytes,
                 jsonOptions);
         }
@@ -503,12 +539,13 @@ internal static partial class JsonEnvelopeWrapper
         }
 
         var capturedErrorText = capturedError.ToString();
-        var commandError = TakeCommandError(rawResults, exitCode);
+        var commandError = TakeCommandError(rawResults, exitCode, out var completeCommandError);
         if (commandError is null
             && exitCode != CommandExitCodes.Success
             && !string.IsNullOrWhiteSpace(capturedErrorText))
         {
             commandError = BuildCapturedCommandError(command, capturedErrorText, exitCode);
+            completeCommandError = BuildVersionedCommandError(commandError, exitCode);
         }
         PromoteEmptyLegacyCompactPayload(command, controls, rawResults, streamControlRecords);
         var extraction = ExtractResponseItems(command, rawResults, controls);
@@ -548,7 +585,7 @@ internal static partial class JsonEnvelopeWrapper
             {
                 return WriteProjectionRegistryResponse(
                     command,
-                    commandError.ToJsonString(jsonOptions),
+                    (completeCommandError ?? BuildVersionedCommandError(commandError, exitCode)).ToJsonString(jsonOptions),
                     exitCode,
                     controls.MaxJsonBytes,
                     jsonOptions);
@@ -1125,8 +1162,12 @@ internal static partial class JsonEnvelopeWrapper
         return SerializeBoundedEnvelope(array, jsonOptions);
     }
 
-    private static JsonObject? TakeCommandError(JsonArray rawResults, int exitCode)
+    private static JsonObject? TakeCommandError(
+        JsonArray rawResults,
+        int exitCode,
+        out JsonObject? completeCommandError)
     {
+        completeCommandError = null;
         if (exitCode == CommandExitCodes.Success
             || rawResults.Count != 1
             || rawResults[0] is not JsonObject candidate
@@ -1138,11 +1179,21 @@ internal static partial class JsonEnvelopeWrapper
             return null;
         }
 
-        var error = (JsonObject)candidate.DeepClone();
+        completeCommandError = (JsonObject)candidate.DeepClone();
+        var error = (JsonObject)completeCommandError.DeepClone();
         error.Remove("status");
         error.Remove("api_version");
         rawResults.Clear();
         return error;
+    }
+
+    private static JsonObject BuildVersionedCommandError(JsonObject commandError, int exitCode)
+    {
+        var completeCommandError = (JsonObject)commandError.DeepClone();
+        completeCommandError["status"] = "error";
+        completeCommandError["api_version"] = JsonOutputContract.ApiVersion;
+        completeCommandError["exit_code"] ??= exitCode;
+        return completeCommandError;
     }
 
     private static JsonObject BuildCapturedCommandError(

@@ -314,6 +314,33 @@ public sealed class JsonEnvelopeWrapperIssue4585Tests
                 Assert.Equal(2, compactDocument.RootElement.GetProperty("files").GetArrayLength());
             }
 
+            var compactOverridesArray = CaptureConsole(() => ProgramRunner.Run(
+                [.. baseArgs, "--json=array", "--compact", "--fields", "path,lines"],
+                _jsonOptions,
+                "1.0.0-test"));
+            Assert.Equal(CommandExitCodes.Success, compactOverridesArray.ExitCode);
+            using (var compactOverridesArrayDocument = JsonDocument.Parse(compactOverridesArray.Stdout))
+            {
+                Assert.Equal(JsonValueKind.Object, compactOverridesArrayDocument.RootElement.ValueKind);
+                Assert.Equal("compact", compactOverridesArrayDocument.RootElement.GetProperty("format").GetString());
+                Assert.Equal(2, compactOverridesArrayDocument.RootElement.GetProperty("files").GetArrayLength());
+            }
+
+            var summaryOverridesArray = CaptureConsole(() => ProgramRunner.Run(
+                [.. baseArgs, "--json=array", "--summary-only", "--fields", "path"],
+                _jsonOptions,
+                "1.0.0-test"));
+            Assert.Equal(CommandExitCodes.Success, summaryOverridesArray.ExitCode);
+            using (var summaryOverridesArrayDocument = JsonDocument.Parse(summaryOverridesArray.Stdout))
+            {
+                Assert.Equal(JsonValueKind.Object, summaryOverridesArrayDocument.RootElement.ValueKind);
+                Assert.True(summaryOverridesArrayDocument.RootElement
+                    .GetProperty("metadata")
+                    .GetProperty("response_context")
+                    .GetProperty("summary_only")
+                    .GetBoolean());
+            }
+
             var unprojectedStream = CaptureConsole(() => ProgramRunner.Run(
                 [.. baseArgs, "--json=ndjson"],
                 _jsonOptions,
@@ -332,6 +359,42 @@ public sealed class JsonEnvelopeWrapperIssue4585Tests
                 Assert.Equal("error", streamErrorDocument.RootElement.GetProperty("status").GetString());
                 Assert.Equal(CommandErrorCodes.UsageError, streamErrorDocument.RootElement.GetProperty("error_code").GetString());
                 Assert.Contains("--json=ndjson", streamErrorDocument.RootElement.GetProperty("message").GetString(), StringComparison.Ordinal);
+            }
+
+            foreach (var incompatibleControlArgs in new[]
+                     {
+                         new[] { "files", "src/*.cs", "--db", dbPath, "--json=array", "--results-only", "--fields", "path" },
+                         new[] { "symbols", "Alpha", "--db", dbPath, "--json=array", "--results-only", "--fields", "path" },
+                         new[] { "search", "Alpha", "--db", dbPath, "--json=array", "--results-only", "--fields", "path" },
+                         new[] { "search", "Alpha", "--db", dbPath, "--json=array", "--first-per-file", "--fields", "path" },
+                         new[] { "search", "Alpha", "--db", dbPath, "--json=array", "--sample", "1", "--fields", "path" },
+                         new[] { "search", "Alpha", "--db", dbPath, "--json=array", "--profile", "--fields", "path" },
+                         new[] { "search", "Alpha", "--db", dbPath, "--json=array", "--verbose", "--fields", "path" },
+                     })
+            {
+                var incompatibleControl = CaptureConsole(() => ProgramRunner.Run(
+                    incompatibleControlArgs,
+                    _jsonOptions,
+                    "1.0.0-test"));
+                Assert.Equal(CommandExitCodes.UsageError, incompatibleControl.ExitCode);
+                Assert.Equal(string.Empty, incompatibleControl.Stderr);
+                using var incompatibleControlDocument = JsonDocument.Parse(incompatibleControl.Stdout);
+                Assert.Equal("error", incompatibleControlDocument.RootElement.GetProperty("status").GetString());
+                Assert.Equal(JsonOutputContract.ApiVersion, incompatibleControlDocument.RootElement.GetProperty("api_version").GetString());
+                Assert.Equal(CommandErrorCodes.UsageError, incompatibleControlDocument.RootElement.GetProperty("error_code").GetString());
+            }
+
+            var missingDatabase = CaptureConsole(() => ProgramRunner.Run(
+                ["files", "--db", Path.Combine(projectRoot, "missing.db"), "--json=array", "--fields", "path"],
+                _jsonOptions,
+                "1.0.0-test"));
+            Assert.Equal(CommandExitCodes.UsageError, missingDatabase.ExitCode);
+            Assert.Equal(string.Empty, missingDatabase.Stderr);
+            using (var missingDatabaseDocument = JsonDocument.Parse(missingDatabase.Stdout))
+            {
+                Assert.Equal("error", missingDatabaseDocument.RootElement.GetProperty("status").GetString());
+                Assert.Equal(JsonOutputContract.ApiVersion, missingDatabaseDocument.RootElement.GetProperty("api_version").GetString());
+                Assert.Equal(CommandErrorCodes.DbNotFound, missingDatabaseDocument.RootElement.GetProperty("error_code").GetString());
             }
 
             var unknownField = CaptureConsole(() => ProgramRunner.Run(
