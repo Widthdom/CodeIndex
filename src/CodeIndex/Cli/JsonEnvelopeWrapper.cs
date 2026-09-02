@@ -153,6 +153,13 @@ internal static partial class JsonEnvelopeWrapper
         Func<string[], int> runInner)
     {
         command = CanonicalizeCommandName(command);
+        var boundedResponseRequest = IsBoundedResponseRequest(command, args);
+        var explicitJsonProjection = boundedResponseRequest
+                                     && HasArgument(command, args, "--fields")
+                                     && HasJsonOutputSelection(command, args);
+        if (explicitJsonProjection)
+            return RunBoundedResponse(command, args, appVersion, jsonOptions, runInner);
+
         if (!ProgramRunner.TryValidateOutputFormatOptions(
                 [command, .. args],
                 out var outputFormatError,
@@ -162,7 +169,8 @@ internal static partial class JsonEnvelopeWrapper
             CommandErrorWriter.Write(outputFormatError, outputFormatHint, outputFormatUsage);
             return CommandExitCodes.UsageError;
         }
-        if (IsBoundedResponseRequest(command, args))
+
+        if (boundedResponseRequest)
             return RunBoundedResponse(command, args, appVersion, jsonOptions, runInner);
 
         if (HasArgument(command, args, "--max-json-bytes"))

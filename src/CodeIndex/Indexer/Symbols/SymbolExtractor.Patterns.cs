@@ -1036,14 +1036,14 @@ public static partial class SymbolExtractor
             // 構造体（record struct, ref struct, readonly struct を含む）— visibility 省略可。
             // 修飾子順序は自由で、visibility は任意位置に置いてよい（例: `readonly public struct`、
             // `ref public struct`）。Closes #355.
-            new("struct",    new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|partial|readonly|file|new|ref|unsafe)\s+)*(?:record\s+)?struct\s+(?<name>{CSharpIdentifierPattern})", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "struct"),
+            new("struct",    new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|partial|readonly|file|new|ref|unsafe)\s+)*(?:(?<record>record)\s+)?struct\s+(?<name>{CSharpIdentifierPattern})", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "struct"),
             // Class (including record, record class) — visibility optional (defaults to internal
             // for top-level); modifier order is free, so visibility may appear anywhere in the
             // modifier sequence (e.g. `abstract public class`, `sealed public class`). Closes #355.
             // クラス（record, record class を含む）— visibility は省略可能（トップレベルでは internal がデフォルト）。
             // 修飾子順序は自由で、visibility は任意位置に置いてよい（例: `abstract public class`、
             // `sealed public class`）。Closes #355.
-            new("class",     new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|partial|abstract|sealed|readonly|file|new|unsafe)\s+)*(?:record\s+class\s+|record\s+|class\s+)(?<name>{CSharpIdentifierPattern})", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("class",     new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|partial|abstract|sealed|readonly|file|new|unsafe)\s+)*(?:(?<record>record)\s+class\s+|(?<record>record)\s+|class\s+)(?<name>{CSharpIdentifierPattern})", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Implicit/explicit conversion operator — must come before general operator pattern.
             // Visibility may appear before or after `static` / `unsafe` / `extern`. Closes #355.
             // Modifier slot also accepts `abstract|virtual|sealed|override|new` so C# 11

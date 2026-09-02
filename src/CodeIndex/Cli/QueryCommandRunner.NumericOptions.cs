@@ -31,6 +31,8 @@ public static partial class QueryCommandRunner
             ["--after"] = 1_000,
             ["--start"] = 10_000_000,
             ["--end"] = 10_000_000,
+            ["--start-column"] = 10_000_000,
+            ["--end-column"] = 10_000_000,
             ["--focus-line"] = 10_000_000,
             ["--focus-column"] = 100_000,
             ["--focus-length"] = 100_000,

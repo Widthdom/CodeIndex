@@ -55,6 +55,19 @@ public partial class DbReader
         var definitionExcerpt = GetExcerpt(symbol.Path, symbol.StartLine, symbol.EndLine);
         if (definitionExcerpt == null)
             return null;
+        var definitionContent = definitionExcerpt.Content;
+        CSharpSemicolonDeclarationBounds? csharpSemicolonDeclarationBounds = null;
+        if (TryResolveCSharpSemicolonDeclarationBounds(
+                symbol,
+                definitionExcerpt,
+                out var resolvedCSharpSemicolonDeclarationBounds))
+        {
+            csharpSemicolonDeclarationBounds = resolvedCSharpSemicolonDeclarationBounds;
+            definitionContent = ClipCSharpSemicolonDeclarationContent(
+                definitionContent,
+                definitionExcerpt.StartLine,
+                resolvedCSharpSemicolonDeclarationBounds);
+        }
 
         string? bodyContent = null;
         int? bodyContentStartLine = null;
@@ -88,6 +101,13 @@ public partial class DbReader
                 bodyEffectiveStartLine = bodyExcerpt.StartLine;
                 bodyEffectiveEndLine = bodyExcerpt.EndLine;
                 bodyContent = bodyExcerpt.Content;
+                if (csharpSemicolonDeclarationBounds.HasValue)
+                {
+                    bodyContent = ClipCSharpSemicolonDeclarationContent(
+                        bodyContent,
+                        bodyExcerpt.StartLine,
+                        csharpSemicolonDeclarationBounds.Value);
+                }
                 bodyContentStartLine = bodyExcerpt.StartLine;
                 bodyContentEndLine = bodyExcerpt.EndLine;
                 bodyContentTruncationReasons.AddRange(bodyExcerpt.ContentTruncationReasons);
@@ -99,7 +119,16 @@ public partial class DbReader
                     var recoveryStartLine = cappedBodyEndLine + 1;
                     var recoveryEndLine = Math.Min(symbol.BodyEndLine.Value, recoveryStartLine + DefinitionBodyMaxLines - 1);
                     bodyContentNextStartLine = recoveryStartLine;
-                    bodyContentRecovery ??= FileExcerptResult.CreateRecoveryHint(symbol.Path, recoveryStartLine, recoveryEndLine);
+                    bodyContentRecovery ??= csharpSemicolonDeclarationBounds.HasValue
+                        ? CreateCSharpSemicolonRecoveryHint(
+                            symbol.Path,
+                            recoveryStartLine,
+                            recoveryEndLine,
+                            csharpSemicolonDeclarationBounds.Value)
+                        : FileExcerptResult.CreateRecoveryHint(
+                            symbol.Path,
+                            recoveryStartLine,
+                            recoveryEndLine);
                 }
                 bodyContentTruncated |= bodyExcerpt.ContentTruncated;
                 var byteClamp = ClampDefinitionBodyBytes(bodyContent);
@@ -124,7 +153,16 @@ public partial class DbReader
                         if (nextStartLine <= symbol.BodyEndLine.Value)
                             bodyContentNextStartLine = nextStartLine;
                     }
-                    bodyContentRecovery = FileExcerptResult.CreateRecoveryHint(symbol.Path, bodyExcerpt.StartLine, bodyExcerpt.EndLine);
+                    bodyContentRecovery = csharpSemicolonDeclarationBounds.HasValue
+                        ? CreateCSharpSemicolonRecoveryHint(
+                            symbol.Path,
+                            bodyExcerpt.StartLine,
+                            bodyExcerpt.EndLine,
+                            csharpSemicolonDeclarationBounds.Value)
+                        : FileExcerptResult.CreateRecoveryHint(
+                            symbol.Path,
+                            bodyExcerpt.StartLine,
+                            bodyExcerpt.EndLine);
                 }
             }
         }
@@ -157,7 +195,7 @@ public partial class DbReader
             FamilyMembersTruncated = symbol.FamilyMembersTruncated,
             IsGeneratedCode = symbol.IsGeneratedCode,
             Disambiguator = BuildDefinitionDisambiguator(symbol),
-            Content = definitionExcerpt.Content,
+            Content = definitionContent,
             BodyContent = bodyContent,
             BodyContentStartLine = bodyContentStartLine,
             BodyContentEndLine = bodyContentEndLine,
@@ -173,6 +211,170 @@ public partial class DbReader
                 ? SymbolExtractor.EstimateComplexity(bodyContent)
                 : null,
         };
+    }
+
+    private readonly record struct CSharpSemicolonDeclarationBounds(
+        int StartLine,
+        int StartColumn,
+        int EndLine,
+        int EndColumn);
+
+    private static bool TryResolveCSharpSemicolonDeclarationBounds(
+        SymbolResult symbol,
+        FileExcerptResult definitionExcerpt,
+        out CSharpSemicolonDeclarationBounds bounds)
+    {
+        // Semicolon records intentionally retain line-only body ranges for component and
+        // reference ownership. Recover the missing column boundary at read time so a shared
+        // source line does not expose its enclosing or following declaration.
+        // semicolon record は component / reference の帰属用に行単位 body range を維持する。
+        // 読み取り時に列境界を復元し、共有 source 行の外側宣言や後続宣言を公開しない。
+        bounds = default;
+        if (!string.Equals(symbol.Lang, "csharp", StringComparison.OrdinalIgnoreCase)
+            || symbol.Kind is not ("class" or "struct")
+            || string.IsNullOrWhiteSpace(symbol.Signature)
+            || !ContainsIdentifierToken(
+                SymbolExtractor.SanitizeCSharpDeclarationSignature(symbol.Signature),
+                "record")
+            || !symbol.DeclarationStartColumn.HasValue
+            || definitionExcerpt.StartLine != symbol.StartLine)
+        {
+            return false;
+        }
+
+        var rawLines = definitionExcerpt.Content.Split('\n');
+        if (rawLines.Length == 0)
+            return false;
+
+        var startColumn = Math.Clamp(
+            symbol.DeclarationStartColumn.Value,
+            0,
+            rawLines[0].Length);
+        var declarationContent = new StringBuilder(definitionExcerpt.Content.Length - startColumn);
+        declarationContent.Append(rawLines[0].AsSpan(startColumn));
+        for (var lineIndex = 1; lineIndex < rawLines.Length; lineIndex++)
+        {
+            declarationContent.Append('\n');
+            declarationContent.Append(rawLines[lineIndex]);
+        }
+
+        var sanitizedLines = SymbolExtractor
+            .SanitizeCSharpDeclarationSignature(declarationContent.ToString())
+            .Split('\n');
+        if (rawLines.Length != sanitizedLines.Length)
+            return false;
+
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        for (var lineIndex = 0; lineIndex < sanitizedLines.Length; lineIndex++)
+        {
+            var line = sanitizedLines[lineIndex];
+            if (SymbolExtractor.IsCSharpPreprocessorDirectiveLine(line))
+                continue;
+
+            for (var column = 0; column < line.Length; column++)
+            {
+                switch (line[column])
+                {
+                    case '(':
+                        parenDepth++;
+                        break;
+                    case ')' when parenDepth > 0:
+                        parenDepth--;
+                        break;
+                    case '[':
+                        bracketDepth++;
+                        break;
+                    case ']' when bracketDepth > 0:
+                        bracketDepth--;
+                        break;
+                    case '{' when parenDepth == 0 && bracketDepth == 0:
+                        return false;
+                    case ';' when parenDepth == 0 && bracketDepth == 0:
+                        bounds = new CSharpSemicolonDeclarationBounds(
+                            definitionExcerpt.StartLine,
+                            startColumn,
+                            definitionExcerpt.StartLine + lineIndex,
+                            Math.Min(
+                                column + (lineIndex == 0 ? startColumn : 0),
+                                rawLines[lineIndex].Length));
+                        return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static bool ContainsIdentifierToken(string content, string token)
+    {
+        var searchStart = 0;
+        while (searchStart < content.Length)
+        {
+            var index = content.IndexOf(token, searchStart, StringComparison.Ordinal);
+            if (index < 0)
+                return false;
+
+            var beforeIsIdentifier = index > 0 && IsIdentifierCharacter(content[index - 1]);
+            var afterIndex = index + token.Length;
+            var afterIsIdentifier = afterIndex < content.Length && IsIdentifierCharacter(content[afterIndex]);
+            if (!beforeIsIdentifier && !afterIsIdentifier)
+                return true;
+
+            searchStart = afterIndex;
+        }
+
+        return false;
+    }
+
+    private static bool IsIdentifierCharacter(char value) =>
+        value == '_' || char.IsLetterOrDigit(value);
+
+    private static string ClipCSharpSemicolonDeclarationContent(
+        string content,
+        int contentStartLine,
+        CSharpSemicolonDeclarationBounds bounds)
+    {
+        var lines = content.Split('\n');
+        if (lines.Length == 0)
+            return content;
+
+        var contentEndLine = contentStartLine + lines.Length - 1;
+        var firstLine = Math.Max(contentStartLine, bounds.StartLine);
+        var lastLine = Math.Min(contentEndLine, bounds.EndLine);
+        if (firstLine > lastLine)
+            return string.Empty;
+
+        var clippedLines = new List<string>(lastLine - firstLine + 1);
+        for (var absoluteLine = firstLine; absoluteLine <= lastLine; absoluteLine++)
+        {
+            var line = lines[absoluteLine - contentStartLine];
+            var startColumn = absoluteLine == bounds.StartLine
+                ? Math.Min(bounds.StartColumn, line.Length)
+                : 0;
+            var endColumnExclusive = absoluteLine == bounds.EndLine
+                ? Math.Min(bounds.EndColumn + 1, line.Length)
+                : line.Length;
+            if (endColumnExclusive < startColumn)
+                endColumnExclusive = startColumn;
+            clippedLines.Add(line[startColumn..endColumnExclusive]);
+        }
+
+        return string.Join('\n', clippedLines);
+    }
+
+    private static ExcerptRecoveryHint CreateCSharpSemicolonRecoveryHint(
+        string path,
+        int startLine,
+        int endLine,
+        CSharpSemicolonDeclarationBounds bounds)
+    {
+        var recovery = FileExcerptResult.CreateRecoveryHint(path, startLine, endLine);
+        if (startLine == bounds.StartLine)
+            recovery.StartColumn = bounds.StartColumn + 1;
+        if (endLine == bounds.EndLine)
+            recovery.EndColumn = bounds.EndColumn + 1;
+        return recovery;
     }
 
     private static void AddBodyContentTruncationReason(List<string> reasons, string reason)

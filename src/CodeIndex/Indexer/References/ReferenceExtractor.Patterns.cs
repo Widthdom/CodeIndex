@@ -166,7 +166,7 @@ public static partial class ReferenceExtractor
     // C# record のプライマリーコンストラクタ宣言を検出し、base primary-ctor 呼び出しの
     // 参照を record の合成コンストラクタに紐付けるために使う。
     private static readonly Regex CSharpRecordPrimaryCtorSignatureRegex = new(
-        $@"\brecord\s+(?:class\s+|struct\s+)?{CSharpIdentifierPattern}(?:<[^>]+>)?\s*\(",
+        $@"\brecord\s+(?:class\s+|struct\s+)?{CSharpIdentifierPattern}(?:\s*<[^>]+>)?\s*\(",
         RegexOptions.Compiled);
     // Same intent as CSharpRecordPrimaryCtorSignatureRegex but applied to the joined multi-line
     // header produced by CollectCSharpRecordHeader, so split-line forms like

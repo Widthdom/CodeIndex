@@ -426,6 +426,26 @@ against one command-specific registry. Unknown names return a typed
 catalog, including `all`, collection-qualified fields, aliases and their
 targets, and explicit deprecation metadata. The catalog does not require a
 query or index access.
+Output mode is resolved before projection. For `search`, `symbols`, and
+`files`, an explicit `--json=array` combined with `--fields` remains a bare
+array of projected rows; empty results remain `[]`, source order is preserved,
+and `--max-json-bytes` removes only complete trailing rows. A bare array has no
+metadata, so use `--json-envelope` or `--format compact` when totals,
+truncation details, or cursor continuation are required. Projected
+`--json=ndjson` is rejected with `E010_USAGE_ERROR` because the shared
+projection contract is a single JSON document, and projected array requests
+are likewise rejected for commands without a native row-array contract or
+when `--cursor`, `--results-only`, search row selection, or diagnostic controls
+require a stream or metadata. Object-producing `--compact` and `--summary-only`
+retain their object contracts even when an explicit stream selector is present;
+search aggregation rejects `--fields` because it does not produce search rows.
+Incompatible non-JSON formats fail with a versioned error before writing partial
+output. For example:
+
+```bash
+cdidx files 'src/**/*.cs' --json=array --fields path,lines
+```
+
 For AI-oriented bounded payloads, `map`, `inspect`, and `outline` accept
 `--compact`. It implies JSON output, caps list sections to 5 items by default
 (or the explicit `--limit` / `--top` value), and adds `compact`,
@@ -4216,6 +4236,25 @@ bounded-response command の `search`、`definition`、`find`、`status`、
 `cdidx <command> --fields list` を実行すると、`all`、collection 修飾 field、
 alias とその参照先、明示的な deprecation metadata を含む機械可読 catalog を取得
 できます。この catalog の取得には query も index access も不要です。
+projection より先に output mode を解決します。`search`、`symbols`、`files` では、
+明示的な `--json=array` と `--fields` を組み合わせても、投影済み row の bare array を
+維持します。0 件は `[]` のままで、source の順序を保ち、`--max-json-bytes` は末尾の
+完全な row だけを除外します。bare array には metadata がないため、総数、truncation
+詳細、cursor continuation が必要な場合は `--json-envelope` または
+`--format compact` を使ってください。共有 projection contract は単一 JSON document
+なので、投影付き `--json=ndjson` は `E010_USAGE_ERROR` で拒否します。native な row-array
+contract を持たない command の投影付き array request、および `--cursor`、
+`--results-only`、search の row selection、diagnostic control が stream または metadata を
+必要とする場合も拒否します。object を生成する `--compact` と `--summary-only` は、明示的な
+stream selector があっても object contract を維持します。search aggregation は search row を
+生成しないため `--fields` を拒否します。非互換な非 JSON format は version 付き error を返し、
+部分出力を書き込む前に失敗します。
+例:
+
+```bash
+cdidx files 'src/**/*.cs' --json=array --fields path,lines
+```
+
 AI 向けに上限付き payload が必要な場合、`map`、`inspect`、`outline` は
 `--compact` に対応しています。これは JSON 出力を暗黙に有効化し、list section を
 既定 5 件（明示した `--limit` / `--top` があればその値）に cap し、

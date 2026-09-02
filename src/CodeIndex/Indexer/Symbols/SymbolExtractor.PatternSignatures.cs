@@ -124,6 +124,34 @@ public static partial class SymbolExtractor
             csharpGateRawStartColumn,
             startLine,
             bodyEndLine);
+        var signatureBounds = bounds;
+        if (lang == "csharp"
+            && match.Groups["record"].Success
+            && bounds.CSharpSingleLineCollapsedMatch)
+        {
+            var semicolonEndColumn = FindCSharpSameLineSemicolonEndColumn(
+                patternMatchLine,
+                absoluteStartColumn);
+            if (semicolonEndColumn >= absoluteStartColumn
+                && (bounds.SameLineEndColumn < absoluteStartColumn
+                    || semicolonEndColumn < bounds.SameLineEndColumn))
+            {
+                // A semicolon-form record uses a declaration-body range for `definition --body`,
+                // but its signature must stop at `;` so later same-line references are not
+                // attributed to the record. Keep the original bounds in PatternSignatureResult:
+                // pattern progression still needs its existing brace-body behavior and must not
+                // interpret this declaration semicolon as a same-line type body.
+                // semicolon-form record は `definition --body` 用に宣言範囲を body として持つが、
+                // signature は `;` で止め、同一行の後続参照を record に帰属させない。
+                // pattern progression が宣言セミコロンを型本体と誤認しないよう、返却 bounds は
+                // 従来値のままにし、signature 構築だけに終端列を適用する。
+                signatureBounds = bounds with
+                {
+                    SameLineEndColumn = semicolonEndColumn,
+                    SameLineEndUsesRawColumns = false,
+                };
+            }
+        }
 
         string signature;
         if (csharpWrappedModifierPrefix is not null)
@@ -135,7 +163,7 @@ public static partial class SymbolExtractor
                 csharpMatchColumnToRaw,
                 csharpWrappedModifierPrefix,
                 absoluteStartColumn,
-                bounds);
+                signatureBounds);
         }
         else if (TryBuildCSharpBraceFunctionHeaderSignature(
             lang,
@@ -145,12 +173,12 @@ public static partial class SymbolExtractor
             line,
             bodyStartLine,
             bodyEndLine,
-            bounds.CSharpSignatureRawStartColumn,
+            signatureBounds.CSharpSignatureRawStartColumn,
             startLine,
             out signature))
         {
         }
-        else if (bounds.SameLineEndColumn >= absoluteStartColumn)
+        else if (signatureBounds.SameLineEndColumn >= absoluteStartColumn)
         {
             signature = BuildBoundedSameLinePatternSignature(
                 lang,
@@ -160,14 +188,14 @@ public static partial class SymbolExtractor
                 match,
                 csharpMatchColumnToRaw,
                 absoluteStartColumn,
-                bounds);
+                signatureBounds);
         }
         else if (TryBuildCSharpMultilinePatternSignature(
             lang,
             pattern,
             lines,
             lineIndex,
-            bounds.CSharpSignatureRawStartColumn,
+            signatureBounds.CSharpSignatureRawStartColumn,
             csharpGateRawStartColumn,
             csharpPropertyCandidate,
             out signature))

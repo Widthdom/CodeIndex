@@ -165,7 +165,10 @@ public static partial class ReferenceExtractor
             // 宣言の signature は 1 行目だけしか持たないので、`record` / `class` / `struct` と
             // `(` を別行に分ける書式では先頭行 regex の前段フィルタが空振りする。ここでは
             // structuralLines から `;` / `{` までヘッダーを連結し、連結後のテキストで判定する。
-            var (headerEndLine, headerEndColumn, headerText) = CollectCSharpRecordHeader(structuralLines, symbol.StartLine);
+            var (headerEndLine, headerEndColumn, headerText) = CollectCSharpRecordHeader(
+                structuralLines,
+                symbol.StartLine,
+                skipCSharpPreprocessorDirectives: true);
             if (!IsCSharpPrimaryCtorHeader(headerText))
                 continue;
             if (!HasCSharpBasePrimaryCtorCall(headerText))
@@ -231,7 +234,249 @@ public static partial class ReferenceExtractor
 
     private static readonly string[] CSharpPrimaryCtorKeywords = { "record", "class", "struct" };
 
-    private static bool IsCSharpIdentifierPart(char c) => char.IsLetterOrDigit(c) || c == '_';
+    private static bool IsCSharpIdentifierPart(char value)
+    {
+        if (char.IsSurrogate(value))
+            return true;
+
+        return char.GetUnicodeCategory(value) is
+            System.Globalization.UnicodeCategory.UppercaseLetter or
+            System.Globalization.UnicodeCategory.LowercaseLetter or
+            System.Globalization.UnicodeCategory.TitlecaseLetter or
+            System.Globalization.UnicodeCategory.ModifierLetter or
+            System.Globalization.UnicodeCategory.OtherLetter or
+            System.Globalization.UnicodeCategory.LetterNumber or
+            System.Globalization.UnicodeCategory.DecimalDigitNumber or
+            System.Globalization.UnicodeCategory.ConnectorPunctuation or
+            System.Globalization.UnicodeCategory.NonSpacingMark or
+            System.Globalization.UnicodeCategory.SpacingCombiningMark or
+            System.Globalization.UnicodeCategory.Format;
+    }
+
+    private static int FindCSharpRecordKeywordColumn(
+        string[] structuralLines,
+        SymbolRecord recordOwner)
+    {
+        var lineIndex = Math.Max(0, recordOwner.StartLine - 1);
+        if (lineIndex >= structuralLines.Length || structuralLines[lineIndex].Length == 0)
+            return 0;
+
+        var line = structuralLines[lineIndex];
+        var searchFrom = 0;
+        while (searchFrom < line.Length)
+        {
+            var found = line.IndexOf("record", searchFrom, StringComparison.Ordinal);
+            if (found < 0)
+                break;
+
+            var before = found == 0 ? ' ' : line[found - 1];
+            var afterIndex = found + "record".Length;
+            var after = afterIndex < line.Length ? line[afterIndex] : ' ';
+            if (!IsCSharpIdentifierPart(before) && !IsCSharpIdentifierPart(after))
+            {
+                var nameStart = afterIndex;
+                while (nameStart < line.Length && char.IsWhiteSpace(line[nameStart]))
+                    nameStart++;
+                if (TrySkipCSharpRecordKindKeyword(line, ref nameStart, "class")
+                    || TrySkipCSharpRecordKindKeyword(line, ref nameStart, "struct"))
+                {
+                    while (nameStart < line.Length && char.IsWhiteSpace(line[nameStart]))
+                        nameStart++;
+                }
+
+                if (nameStart < line.Length && line[nameStart] == '@')
+                    nameStart++;
+                var nameEnd = nameStart;
+                if (TryReadCSharpRecordIdentifier(line, ref nameEnd, out var normalizedName)
+                    && string.Equals(
+                        normalizedName,
+                        recordOwner.Name.TrimStart('@'),
+                        StringComparison.Ordinal))
+                {
+                    return found;
+                }
+            }
+
+            searchFrom = found + "record".Length;
+        }
+
+        return 0;
+    }
+
+    private static bool TrySkipCSharpRecordKindKeyword(
+        string line,
+        ref int offset,
+        string keyword)
+    {
+        if (offset + keyword.Length > line.Length
+            || !line.AsSpan(offset, keyword.Length).SequenceEqual(keyword)
+            || (offset + keyword.Length < line.Length
+                && IsCSharpIdentifierPart(line[offset + keyword.Length])))
+        {
+            return false;
+        }
+
+        offset += keyword.Length;
+        return true;
+    }
+
+    // Validate the declaration prefix without flattening the record's generic parameter list
+    // into a regex. Type-parameter attributes can contain nested generic types such as
+    // `[A(typeof(Dictionary<string, int>))]`; brackets are therefore treated as opaque while
+    // locating the outer `>` so the nested type's closer cannot terminate the record arity.
+    // record の generic parameter list を正規表現で平坦化せずに宣言先頭を検証する。
+    // 型パラメーター属性内の nested generic は `[]` ごと読み飛ばし、内側の `>` を
+    // record 自身の generic arity 終端と誤認しない。
+    private static bool IsCSharpRecordDeclarationHeader(
+        string headerText,
+        string recordName)
+    {
+        if (string.IsNullOrWhiteSpace(headerText)
+            || string.IsNullOrWhiteSpace(recordName))
+        {
+            return false;
+        }
+
+        var offset = 0;
+        SkipCSharpRecordHeaderWhitespace(headerText, ref offset);
+        if (!TrySkipCSharpRecordKindKeyword(headerText, ref offset, "record"))
+            return false;
+
+        var separatorStart = offset;
+        SkipCSharpRecordHeaderWhitespace(headerText, ref offset);
+        if (separatorStart == offset)
+            return false;
+
+        var kindOffset = offset;
+        if (TrySkipCSharpRecordKindKeyword(headerText, ref offset, "class")
+            || TrySkipCSharpRecordKindKeyword(headerText, ref offset, "struct"))
+        {
+            separatorStart = offset;
+            SkipCSharpRecordHeaderWhitespace(headerText, ref offset);
+            if (separatorStart == offset)
+                return false;
+        }
+        else
+        {
+            offset = kindOffset;
+        }
+
+        if (offset < headerText.Length && headerText[offset] == '@')
+            offset++;
+        if (!TryReadCSharpRecordIdentifier(headerText, ref offset, out var normalizedName)
+            || !string.Equals(
+                normalizedName,
+                recordName.TrimStart('@'),
+                StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        SkipCSharpRecordHeaderWhitespace(headerText, ref offset);
+        if (offset < headerText.Length && headerText[offset] == '<')
+        {
+            if (!TrySkipCSharpRecordTypeParameterList(headerText, ref offset))
+                return false;
+            SkipCSharpRecordHeaderWhitespace(headerText, ref offset);
+        }
+
+        if (offset >= headerText.Length || headerText[offset] is '(' or ':')
+            return true;
+
+        return TrySkipCSharpRecordKindKeyword(headerText, ref offset, "where");
+    }
+
+    private static bool TryReadCSharpRecordIdentifier(
+        string text,
+        ref int offset,
+        out string normalizedName)
+    {
+        var start = offset;
+        while (offset < text.Length)
+        {
+            if (IsCSharpIdentifierPart(text[offset]))
+            {
+                offset++;
+                continue;
+            }
+
+            if (!TrySkipCSharpIdentifierUnicodeEscape(text, ref offset))
+                break;
+        }
+
+        if (start == offset)
+        {
+            normalizedName = string.Empty;
+            return false;
+        }
+
+        normalizedName = CSharpSymbolNameNormalizer.NormalizeIdentifierSpelling(text[start..offset]);
+        return true;
+    }
+
+    private static bool TrySkipCSharpIdentifierUnicodeEscape(string text, ref int offset)
+    {
+        if (offset + 1 >= text.Length || text[offset] != '\\')
+            return false;
+
+        var digitCount = text[offset + 1] switch
+        {
+            'u' => 4,
+            'U' => 8,
+            _ => 0,
+        };
+        if (digitCount == 0 || offset + 2 + digitCount > text.Length)
+            return false;
+
+        for (var digit = offset + 2; digit < offset + 2 + digitCount; digit++)
+        {
+            if (!char.IsAsciiHexDigit(text[digit]))
+                return false;
+        }
+
+        offset += 2 + digitCount;
+        return true;
+    }
+
+    private static void SkipCSharpRecordHeaderWhitespace(string text, ref int offset)
+    {
+        while (offset < text.Length && char.IsWhiteSpace(text[offset]))
+            offset++;
+    }
+
+    private static bool TrySkipCSharpRecordTypeParameterList(string text, ref int offset)
+    {
+        if (offset >= text.Length || text[offset] != '<')
+            return false;
+
+        var angleDepth = 1;
+        var bracketDepth = 0;
+        for (offset++; offset < text.Length; offset++)
+        {
+            switch (text[offset])
+            {
+                case '[':
+                    bracketDepth++;
+                    break;
+                case ']' when bracketDepth > 0:
+                    bracketDepth--;
+                    break;
+                case '<' when bracketDepth == 0:
+                    angleDepth++;
+                    break;
+                case '>' when bracketDepth == 0:
+                    angleDepth--;
+                    if (angleDepth == 0)
+                    {
+                        offset++;
+                        return true;
+                    }
+                    break;
+            }
+        }
+
+        return false;
+    }
 
     /// <summary>
     /// Walk structural-masked lines starting at the 1-based <paramref name="startLine"/> and collect
@@ -242,7 +487,11 @@ public static partial class ReferenceExtractor
     /// structuralLines を使って、class / struct / record 宣言ヘッダーを最初の `;` / `{` まで連結する。
     /// record primary-ctor のコンテナ合成と、複数行 `: base(...)` 解決の両方で使う。
     /// </summary>
-    internal static (int EndLine, int EndColumn, string Text) CollectCSharpRecordHeader(string[] structuralLines, int startLine)
+    internal static (int EndLine, int EndColumn, string Text) CollectCSharpRecordHeader(
+        string[] structuralLines,
+        int startLine,
+        int startColumn = 0,
+        bool skipCSharpPreprocessorDirectives = false)
     {
         var startIdx = Math.Max(0, startLine - 1);
         if (structuralLines.Length == 0)
@@ -282,6 +531,18 @@ public static partial class ReferenceExtractor
         for (int i = startIdx; i < structuralLines.Length; i++)
         {
             var line = structuralLines[i];
+            var lineStartColumn = i == startIdx ? Math.Clamp(startColumn, 0, line.Length) : 0;
+            if (skipCSharpPreprocessorDirectives
+                && SymbolExtractor.IsCSharpPreprocessorDirectiveLine(line))
+            {
+                // Directive payload is declaration trivia. Preserve its line break as lexical
+                // whitespace, but never let punctuation in a #region message or #pragma payload
+                // terminate the record header.
+                // directive payload は宣言 trivia である。改行は字句上の空白として維持するが、
+                // #region message や #pragma payload 内の記号で record header を終了しない。
+                sb.Append('\n');
+                continue;
+            }
             char[]? masked = null;
             var terminatorIdx = -1;
             void MaskChar(int index)
@@ -297,7 +558,7 @@ public static partial class ReferenceExtractor
                     masked[k] = ' ';
             }
 
-            for (int j = 0; j < line.Length; j++)
+            for (int j = lineStartColumn; j < line.Length; j++)
             {
                 var c = line[j];
 
@@ -393,16 +654,16 @@ public static partial class ReferenceExtractor
             if (terminatorIdx >= 0)
             {
                 if (masked == null)
-                    sb.Append(line, 0, terminatorIdx);
+                    sb.Append(line, lineStartColumn, terminatorIdx - lineStartColumn);
                 else
-                    sb.Append(masked, 0, terminatorIdx);
+                    sb.Append(masked, lineStartColumn, terminatorIdx - lineStartColumn);
                 return (i + 1, terminatorIdx, sb.ToString());
             }
 
             if (masked == null)
-                sb.Append(line);
+                sb.Append(line, lineStartColumn, line.Length - lineStartColumn);
             else
-                sb.Append(masked);
+                sb.Append(masked, lineStartColumn, line.Length - lineStartColumn);
             sb.Append('\n');
         }
 

@@ -6355,6 +6355,75 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_FullScan_ReindexesSemicolonRecordBodiesWhenCSharpExtractorContractChanges_Issue5228()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public record Person(int Id);\n");
+            File.WriteAllText(Path.Combine(projectRoot, "lib.py"), "def untouched():\n    return 1\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var conn = OpenNonPoolingConnection(dbPath))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = """
+                    UPDATE symbols
+                    SET body_start_line = NULL,
+                        body_end_line = NULL
+                    WHERE name = 'Person'
+                      AND kind = 'class';
+                    UPDATE codeindex_meta
+                    SET value = $priorVersion
+                    WHERE key = 'symbol_extractor_version_csharp';
+                    """;
+                cmd.Parameters.AddWithValue(
+                    "$priorVersion",
+                    (SymbolExtractor.CSharpContractVersion - 1).ToString(CultureInfo.InvariantCulture));
+                cmd.ExecuteNonQuery();
+            }
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.True(json.GetProperty("summary").GetProperty("files_extracted").GetInt32() > 0);
+            Assert.True(json.GetProperty("summary").GetProperty("files_skipped").GetInt32() > 0);
+
+            using var verify = OpenNonPoolingConnection(dbPath);
+            verify.Open();
+
+            using var rangeCmd = verify.CreateCommand();
+            rangeCmd.CommandText = """
+                SELECT body_start_line, body_end_line
+                FROM symbols
+                WHERE name = 'Person'
+                  AND kind = 'class'
+                """;
+            using (var rangeReader = rangeCmd.ExecuteReader())
+            {
+                Assert.True(rangeReader.Read());
+                Assert.Equal(1, rangeReader.GetInt32(0));
+                Assert.Equal(1, rangeReader.GetInt32(1));
+            }
+
+            using var versionCmd = verify.CreateCommand();
+            versionCmd.CommandText = "SELECT value FROM codeindex_meta WHERE key = 'symbol_extractor_version_csharp'";
+            Assert.Equal(
+                SymbolExtractor.CSharpContractVersion.ToString(CultureInfo.InvariantCulture),
+                versionCmd.ExecuteScalar() as string);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_FullScan_ResolvesInheritedCSharpFieldReceiversAsFields_Issue4865()
     {
         var projectRoot = CreateTempProject();
@@ -6780,7 +6849,7 @@ public partial class IndexCommandRunnerTests
                 SymbolExtractor.CSharpContractVersion.ToString(
                     System.Globalization.CultureInfo.InvariantCulture),
                 versionCmd.ExecuteScalar() as string);
-            Assert.Equal(17, SymbolExtractor.CSharpContractVersion);
+            Assert.Equal(18, SymbolExtractor.CSharpContractVersion);
         }
         finally
         {
@@ -7046,7 +7115,7 @@ public partial class IndexCommandRunnerTests
                 SymbolExtractor.CSharpContractVersion.ToString(
                     System.Globalization.CultureInfo.InvariantCulture),
                 versionCmd.ExecuteScalar() as string);
-            Assert.Equal(17, SymbolExtractor.CSharpContractVersion);
+            Assert.Equal(18, SymbolExtractor.CSharpContractVersion);
         }
         finally
         {
