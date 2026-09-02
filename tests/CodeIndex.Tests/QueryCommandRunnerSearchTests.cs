@@ -8877,6 +8877,108 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunAudit_CompactResponseBudgetErrorsRetainPublicCommandContext_Issue5234()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_audit_compact_budget_identity_5234");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                """
+                public sealed class App
+                {
+                    public void Run(Exception ex)
+                    {
+                        Console.Error.WriteLine(ex.Message);
+                    }
+                }
+                """);
+
+            string[] CommonArgs(string maxJsonBytes) =>
+            [
+                "--db", dbPath,
+                "--format", "compact",
+                "--origin", "code",
+                "--limit", "2",
+                "--total-limit", "40",
+                "--snippet-lines", "3",
+                "--max-json-bytes", maxJsonBytes,
+            ];
+
+            static long AssertBudgetError(
+                int exitCode,
+                string stdout,
+                string stderr,
+                string expectedCommand,
+                string expectedUsagePrefix,
+                string expectedHintFragment)
+            {
+                Assert.Equal(CommandExitCodes.UsageError, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                using var document = ParseJsonOutput(stdout);
+                var error = document.RootElement;
+                Assert.Equal(CommandErrorCodes.ResponseBudgetTooSmall, error.GetProperty("error_code").GetString());
+                Assert.Equal("response_budget", error.GetProperty("category").GetString());
+                Assert.Equal(expectedCommand, error.GetProperty("command").GetString());
+                Assert.StartsWith(expectedUsagePrefix, error.GetProperty("usage").GetString(), StringComparison.Ordinal);
+                Assert.Contains(expectedHintFragment, error.GetProperty("hint").GetString(), StringComparison.Ordinal);
+                Assert.Equal(expectedCommand, error.GetProperty("retry").GetProperty("command").GetString());
+                Assert.Equal(JsonOutputContract.ApiVersion, error.GetProperty("api_version").GetString());
+                Assert.True(error.GetProperty("minimum_required_bytes_known").GetBoolean());
+                var minimumRequiredBytes = error.GetProperty("minimum_required_bytes").GetInt64();
+                Assert.True(minimumRequiredBytes > error.GetProperty("requested_bytes").GetInt64());
+                return minimumRequiredBytes;
+            }
+
+            var (auditProbeExitCode, auditProbeStdout, auditProbeStderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["audit", "risky-code/raw-diagnostic-echo", .. CommonArgs("1")],
+                _jsonOptions,
+                "test"));
+            var auditMinimumBytes = AssertBudgetError(
+                auditProbeExitCode,
+                auditProbeStdout,
+                auditProbeStderr,
+                "audit",
+                "cdidx audit ",
+                "cdidx audit <recipe>/<query>");
+
+            var (auditExitCode, auditStdout, auditStderr) = CaptureConsole(() => ProgramRunner.Run(
+                [
+                    "audit", "risky-code/raw-diagnostic-echo",
+                    .. CommonArgs((auditMinimumBytes - 1).ToString(CultureInfo.InvariantCulture)),
+                ],
+                _jsonOptions,
+                "test"));
+            AssertBudgetError(
+                auditExitCode,
+                auditStdout,
+                auditStderr,
+                "audit",
+                "cdidx audit ",
+                "cdidx audit <recipe>/<query>");
+
+            var (searchExitCode, searchStdout, searchStderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["search", "--recipe", "risky-code/raw-diagnostic-echo", .. CommonArgs("1")],
+                _jsonOptions,
+                "test"));
+            AssertBudgetError(
+                searchExitCode,
+                searchStdout,
+                searchStderr,
+                "search",
+                "cdidx search ",
+                "--recipe <recipe>/<query>");
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_RecipeResultsOnlyProjectionIncludesQueryName_Issue3957()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_recipe_projection");
