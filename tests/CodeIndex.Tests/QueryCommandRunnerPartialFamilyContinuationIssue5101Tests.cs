@@ -42,6 +42,7 @@ public partial class QueryCommandRunnerTests
                 "--lang", "csharp", "--kind", "class", "--group-partials", "--limit", "5",
             };
             var pageArgs = commonArgs.Concat([
+                "--json-envelope",
                 "--fields",
                 "path,name,partial_family_id,representative_reason,family_members,family_members_truncated,"
                 + "family_member_total_count,family_member_total_count_authoritative,"
@@ -127,6 +128,7 @@ public partial class QueryCommandRunnerTests
             }
 
             var metadataOnlyArgs = commonArgs.Concat([
+                "--json-envelope",
                 "--fields",
                 "path",
                 "--max-json-bytes", "12000",

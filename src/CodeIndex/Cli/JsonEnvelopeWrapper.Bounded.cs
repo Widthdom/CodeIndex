@@ -40,6 +40,11 @@ internal static partial class JsonEnvelopeWrapper
         "symbols", "files", "impact", "map",
     };
 
+    private static readonly HashSet<string> JsonArrayProjectionCommands = new(StringComparer.Ordinal)
+    {
+        "search", "symbols", "files",
+    };
+
     private static readonly HashSet<string> LegacyLocationCompactCommands = new(StringComparer.Ordinal)
     {
         "search", "definition", "find", "references", "callers", "callees", "symbols", "files",
@@ -208,9 +213,49 @@ internal static partial class JsonEnvelopeWrapper
         => HasArgument(command, args, "--json");
 
     private static bool HasJsonArrayOutputSelection(string command, string[] args)
-        => ClassifyArgumentTokens(command, args)
-            .Any(token => token.IsOption
-                          && string.Equals(token.Value, "--json=array", StringComparison.OrdinalIgnoreCase));
+        => string.Equals(
+            GetExplicitJsonOutputSelection(command, args),
+            "array",
+            StringComparison.OrdinalIgnoreCase);
+
+    private static bool HasJsonNdjsonOutputSelection(string command, string[] args)
+        => string.Equals(
+            GetExplicitJsonOutputSelection(command, args),
+            "ndjson",
+            StringComparison.OrdinalIgnoreCase);
+
+    private static string? GetExplicitJsonOutputSelection(string command, string[] args)
+    {
+        string? selection = null;
+        foreach (var token in ClassifyArgumentTokens(command, args))
+        {
+            if (token.IsOption && token.Value.StartsWith("--json=", StringComparison.Ordinal))
+                selection = token.Value["--json=".Length..];
+        }
+        return selection;
+    }
+
+    private static string? GetExplicitOutputFormat(string command, string[] args)
+    {
+        string? selection = null;
+        var tokens = ClassifyArgumentTokens(command, args).ToArray();
+        for (var i = 0; i < tokens.Length; i++)
+        {
+            if (!tokens[i].IsOption)
+                continue;
+            if (tokens[i].Value.StartsWith("--format=", StringComparison.Ordinal))
+            {
+                selection = tokens[i].Value["--format=".Length..];
+                continue;
+            }
+            if (string.Equals(tokens[i].Value, "--format", StringComparison.Ordinal)
+                && i + 1 < tokens.Length)
+            {
+                selection = tokens[++i].Value;
+            }
+        }
+        return selection;
+    }
 
     private static bool HasCompactOutputSelection(string command, string[] args)
     {
@@ -297,6 +342,51 @@ internal static partial class JsonEnvelopeWrapper
                 command,
                 errorJson,
                 CommandExitCodes.UsageError,
+                controls.MaxJsonBytes,
+                jsonOptions);
+        }
+        var explicitOutputFormat = GetExplicitOutputFormat(command, args);
+        if (controls.Fields is { Count: > 0 }
+            && explicitOutputFormat is not null
+            && !string.Equals(explicitOutputFormat, "json", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(explicitOutputFormat, "compact", StringComparison.OrdinalIgnoreCase))
+        {
+            return WriteProjectedOutputModeUsageError(
+                command,
+                $"--fields cannot be combined with projection-incompatible --format {explicitOutputFormat}.",
+                $"Remove --fields to keep --format {explicitOutputFormat}, or use --format json or compact for projected output.",
+                controls.MaxJsonBytes,
+                jsonOptions);
+        }
+        var explicitArrayProjection = controls.Fields is { Count: > 0 }
+                                      && HasJsonArrayOutputSelection(command, args)
+                                      && !HasEnvelopeFlag(command, args);
+        if (explicitArrayProjection && !JsonArrayProjectionCommands.Contains(command))
+        {
+            return WriteProjectedOutputModeUsageError(
+                command,
+                $"--json=array with --fields is not supported by {command} because its JSON output is not a row array.",
+                "Use --json-envelope or --format compact for projected output, or remove --fields to keep the command's documented JSON shape.",
+                controls.MaxJsonBytes,
+                jsonOptions);
+        }
+        if (explicitArrayProjection && HasArgument(command, args, "--cursor"))
+        {
+            return WriteProjectedOutputModeUsageError(
+                command,
+                "--json=array with --fields cannot be combined with --cursor because continuation metadata cannot be represented in a bare array.",
+                "Use --json-envelope or --format compact with the cursor so continuation metadata remains available.",
+                controls.MaxJsonBytes,
+                jsonOptions);
+        }
+        if (controls.Fields is { Count: > 0 }
+            && HasJsonNdjsonOutputSelection(command, args)
+            && !HasEnvelopeFlag(command, args))
+        {
+            return WriteProjectedOutputModeUsageError(
+                command,
+                "--json=ndjson cannot be combined with --fields because the shared projection contract requires a single JSON document.",
+                "Use --json=array for a metadata-free projected row array, use --json-envelope for projection metadata, or remove --fields to keep NDJSON.",
                 controls.MaxJsonBytes,
                 jsonOptions);
         }
@@ -441,6 +531,37 @@ internal static partial class JsonEnvelopeWrapper
             controls.Fields,
             availableItems,
             pageItems);
+
+        if (explicitArrayProjection)
+        {
+            var completedArraySnapshot = suppressRuntimeMetadata
+                ? snapshot
+                : SafeReadResponseSnapshot(resolvedDbPath, dbPathExplicit, appVersion);
+            if (!string.Equals(snapshot.GenerationFingerprint, completedArraySnapshot.GenerationFingerprint, StringComparison.Ordinal))
+            {
+                return WriteBoundedResponseUsageError(
+                    "The index generation changed while this projected array was being read.",
+                    "Retry the same command after the active index refresh completes.");
+            }
+            ResponseSnapshotValidatedForTesting?.Invoke();
+            if (commandError is not null)
+            {
+                return WriteProjectionRegistryResponse(
+                    command,
+                    commandError.ToJsonString(jsonOptions),
+                    exitCode,
+                    controls.MaxJsonBytes,
+                    jsonOptions);
+            }
+            if (exitCode == CommandExitCodes.Success && capturedErrorText.Length > 0)
+                Console.Error.Write(capturedErrorText);
+            return WriteProjectedJsonArrayResponse(
+                command,
+                pageItems,
+                controls.MaxJsonBytes,
+                jsonOptions,
+                exitCode);
+        }
 
         var count = exitCode == CommandExitCodes.UsageError
             ? new ResponseCount(controls.Offset + pageItems.Count, false)
@@ -916,6 +1037,92 @@ internal static partial class JsonEnvelopeWrapper
 
         Console.WriteLine(json);
         return exitCode;
+    }
+
+    private static int WriteProjectedOutputModeUsageError(
+        string command,
+        string message,
+        string hint,
+        int? maxJsonBytes,
+        JsonSerializerOptions jsonOptions)
+    {
+        var errorJson = CommandErrorWriter.BuildJsonPayload(
+            jsonOptions,
+            message,
+            CommandExitCodes.UsageError,
+            hint,
+            GetBoundedResponseUsage(command),
+            CommandErrorCodes.UsageError,
+            category: "usage",
+            command: command).ToJsonString(jsonOptions);
+        return WriteProjectionRegistryResponse(
+            command,
+            errorJson,
+            CommandExitCodes.UsageError,
+            maxJsonBytes,
+            jsonOptions);
+    }
+
+    private static int WriteProjectedJsonArrayResponse(
+        string command,
+        IReadOnlyList<JsonNode?> projectedItems,
+        int? maxJsonBytes,
+        JsonSerializerOptions jsonOptions,
+        int exitCode)
+    {
+        var json = SerializeProjectedJsonArray(projectedItems, projectedItems.Count, jsonOptions);
+        if (!maxJsonBytes.HasValue || JsonFitsResponseBudget(json, maxJsonBytes.Value))
+        {
+            Console.WriteLine(json);
+            return exitCode;
+        }
+
+        var emptyJson = SerializeProjectedJsonArray(projectedItems, 0, jsonOptions);
+        if (!JsonFitsResponseBudget(emptyJson, maxJsonBytes.Value))
+        {
+            return CommandErrorWriter.WriteResponseBudgetError(
+                json: true,
+                jsonOptions,
+                command,
+                $"--max-json-bytes {maxJsonBytes.Value} is too small for an empty projected JSON array.",
+                "Increase --max-json-bytes and retry the same projected array request.",
+                requestedBytes: maxJsonBytes.Value,
+                effectiveBytes: maxJsonBytes.Value,
+                minimumRequiredBytes: GetJsonResponseByteCount(emptyJson),
+                usage: GetBoundedResponseUsage(command));
+        }
+
+        var bestJson = emptyJson;
+        var low = 1;
+        var high = projectedItems.Count;
+        while (low <= high)
+        {
+            var mid = low + ((high - low) / 2);
+            var candidate = SerializeProjectedJsonArray(projectedItems, mid, jsonOptions);
+            if (JsonFitsResponseBudget(candidate, maxJsonBytes.Value))
+            {
+                bestJson = candidate;
+                low = mid + 1;
+            }
+            else
+            {
+                high = mid - 1;
+            }
+        }
+
+        Console.WriteLine(bestJson);
+        return exitCode;
+    }
+
+    private static string SerializeProjectedJsonArray(
+        IReadOnlyList<JsonNode?> projectedItems,
+        int count,
+        JsonSerializerOptions jsonOptions)
+    {
+        var array = new JsonArray();
+        for (var i = 0; i < count && i < projectedItems.Count; i++)
+            array.Add(projectedItems[i]?.DeepClone());
+        return SerializeBoundedEnvelope(array, jsonOptions);
     }
 
     private static JsonObject? TakeCommandError(JsonArray rawResults, int exitCode)
