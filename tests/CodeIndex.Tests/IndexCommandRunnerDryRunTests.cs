@@ -422,6 +422,70 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_DryRun_TypeScriptAugmentationRebuildMarksSymbolReferenceDimensionsUnknown_Issue5236()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var deletedPath = Path.Combine(projectRoot, "deleted.ts");
+            File.WriteAllText(deletedPath, "interface Shared { deleted: string }\n");
+            File.WriteAllText(
+                Path.Combine(projectRoot, "retained.ts"),
+                "interface Shared { retained: number }\n");
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            Assert.Equal(2, CountRows(dbPath, "symbol_references"));
+            File.Delete(deletedPath);
+            var databaseBeforePreview = ReadDatabaseFileSetFingerprint(dbPath);
+
+            var (dryRunExitCode, dryRun) = RunAndCaptureJson([
+                projectRoot,
+                "--files",
+                "deleted.ts",
+                "--dry-run",
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, dryRunExitCode);
+            Assert.Equal(1, dryRun.GetProperty("projected_file_deletes").GetInt32());
+            var referenceEstimate = GetDryRunTableRowEstimate(dryRun, "symbol_references");
+            foreach (var dimension in new[]
+                     {
+                         "rows_deleted",
+                         "rows_inserted_or_upserted",
+                         "row_operations",
+                         "projected_final_rows",
+                         "projected_row_delta",
+                     })
+            {
+                var estimate = referenceEstimate.GetProperty(dimension);
+                Assert.Equal("unknown", estimate.GetProperty("confidence").GetString());
+                Assert.Contains(
+                    "typescript_augmentation_rebuild_required",
+                    estimate.GetProperty("unknown_reasons")
+                        .EnumerateArray()
+                        .Select(static value => value.GetString()));
+            }
+            Assert.Equal(databaseBeforePreview, ReadDatabaseFileSetFingerprint(dbPath));
+
+            var (applyExitCode, _) = RunAndCaptureJson([
+                projectRoot,
+                "--files",
+                "deleted.ts",
+                "--json",
+            ]);
+            Assert.Equal(CommandExitCodes.Success, applyExitCode);
+            Assert.Equal(0, CountRows(dbPath, "symbol_references"));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_DryRun_WithChangedBetweenMissingRef_ReturnsUsageError()
     {
         var projectRoot = CreateTempProject();

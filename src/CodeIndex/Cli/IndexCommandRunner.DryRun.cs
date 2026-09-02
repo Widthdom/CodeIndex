@@ -510,7 +510,8 @@ public static partial class IndexCommandRunner
                 AddEstimatedExistingUpdateMutations(
                     mutationEstimates,
                     dbSnapshot,
-                    dbRelativePath);
+                    dbRelativePath,
+                    probe.Language);
                 mutationEstimates.AddParsedEstimate(new DryRunParsedMutationEstimate(
                     0,
                     0,
@@ -626,7 +627,8 @@ public static partial class IndexCommandRunner
                 AddEstimatedExistingUpdateMutations(
                     mutationEstimates,
                     dbSnapshot,
-                    dbRelativePath);
+                    dbRelativePath,
+                    probe.Language);
                 if (parseEstimateFilesProcessed >= DryRunParseEstimateFileLimit)
                 {
                     parseEstimateFilesTruncated = true;
@@ -1845,13 +1847,20 @@ public static partial class IndexCommandRunner
     private static void AddEstimatedExistingUpdateMutations(
         DryRunMutationEstimateAccumulator mutations,
         DryRunDbSnapshot snapshot,
-        string relativePath)
+        string relativePath,
+        string? projectedLanguage = null)
     {
         var replacesExisting = snapshot.Files.TryGetValue(relativePath, out var rows);
         mutations.AddInsertOrUpsert(
             "files",
             1,
             projectedRowAddition: replacesExisting ? 0 : 1);
+        if (string.Equals(projectedLanguage, "typescript", StringComparison.Ordinal)
+            || (replacesExisting
+                && string.Equals(rows.Language, "typescript", StringComparison.Ordinal)))
+        {
+            mutations.MarkTypeScriptAugmentationUnknown();
+        }
         if (!replacesExisting)
             return;
 
@@ -1867,6 +1876,8 @@ public static partial class IndexCommandRunner
             return;
 
         mutations.AddDelete("files", 1);
+        if (string.Equals(rows.Language, "typescript", StringComparison.Ordinal))
+            mutations.MarkTypeScriptAugmentationUnknown();
         AddExistingChildRows(mutations, snapshot, rows, rows.Symbols);
     }
 
@@ -2342,6 +2353,14 @@ public static partial class IndexCommandRunner
                     projectedRowAdditions.MarkUnknown(metric, reason);
                 }
             }
+        }
+
+        internal void MarkTypeScriptAugmentationUnknown()
+        {
+            const string reason = "typescript_augmentation_rebuild_required";
+            rowsDeleted.MarkUnknown("symbol_references", reason);
+            rowsInsertedOrUpserted.MarkUnknown("symbol_references", reason);
+            projectedRowAdditions.MarkUnknown("symbol_references", reason);
         }
 
         internal void MarkAllUnknown(string reason)
