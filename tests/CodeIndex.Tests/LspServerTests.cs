@@ -2402,6 +2402,18 @@ public class LspServerTests
                 Assert.NotNull(response["result"]);
             }
 
+            var invalidEnvelopeOverload = server.CreateOverloadResponse(
+                """{"jsonrpc":"1.0","id":12,"method":"workspace/symbol","params":{"query":"Needle"}}""");
+            Assert.Equal(12L, invalidEnvelopeOverload!["id"]!.GetValue<long>());
+            Assert.Equal(-32600, invalidEnvelopeOverload["error"]!["code"]!.GetValue<int>());
+            var invalidQueryOverload = server.CreateOverloadResponse(
+                """{"jsonrpc":"2.0","id":13,"method":"workspace/symbol","params":{"query":null}}""");
+            Assert.Equal(13L, invalidQueryOverload!["id"]!.GetValue<long>());
+            Assert.Equal(-32602, invalidQueryOverload["error"]!["code"]!.GetValue<int>());
+            var validOverload = server.CreateOverloadResponse(
+                """{"jsonrpc":"2.0","id":14,"method":"workspace/symbol","params":{"query":""}}""");
+            Assert.Equal(-32000, validOverload!["error"]!["code"]!.GetValue<int>());
+
             string[] requests =
             [
                 """{"jsonrpc":"2.0","method":"initialized","params":{}}""",
@@ -2458,6 +2470,84 @@ public class LspServerTests
                 Equals(activity.GetTagItem("rpc.method"), "initialize")));
             Assert.Equal(2, requestActivities.Count(activity =>
                 Equals(activity.GetTagItem("rpc.method"), "workspace/symbol")));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public async Task RunAsync_InvalidEnvelopeCancellationDoesNotCancelActiveRequest_Issue5231()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_invalid_cancel_envelope");
+        using var requestEntered = new ManualResetEventSlim(false);
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "app.cs", "csharp", "class Needle { }\n");
+            const string request =
+                """{"jsonrpc":"2.0","id":"active-5231","method":"workspace/symbol","params":{"query":"Needle"}}""";
+            const string invalidCancel =
+                """{"jsonrpc":"1.0","method":"$/cancelRequest","params":{"id":"active-5231"}}""";
+            const string validCancel =
+                """{"jsonrpc":"2.0","method":"$/cancelRequest","params":{"id":"active-5231"}}""";
+            using var input = new StagedReadStream(
+                Encoding.UTF8.GetBytes(Frame(request)),
+                Encoding.UTF8.GetBytes(Frame(invalidCancel)),
+                finalSuffix: Encoding.UTF8.GetBytes(Frame(validCancel)));
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            CancellationToken activeRequestCancellation = default;
+            using var server = new LspServer(
+                new DbReader(db),
+                "1.2.3",
+                ProgramRunner.CreateDefaultJsonOptions(),
+                projectRoot)
+            {
+                BeforeSymbolRequestForTesting = cancellationToken =>
+                {
+                    activeRequestCancellation = cancellationToken;
+                    requestEntered.Set();
+                    Assert.True(
+                        cancellationToken.WaitHandle.WaitOne(TimeSpan.FromSeconds(30)),
+                        "The valid cancellation notification did not cancel the active request.");
+                    cancellationToken.ThrowIfCancellationRequested();
+                },
+            };
+            InitializeSession(server);
+            using var output = new MemoryStream();
+
+            try
+            {
+                var runTask = server.RunAsync(input, output);
+                Assert.True(requestEntered.Wait(TestDeterminism.DefaultTimeout));
+
+                input.ReleaseSuffix();
+                await input.WaitForFinalSuffixReadAsync().WaitAsync(TestDeterminism.DefaultTimeout);
+                Assert.False(activeRequestCancellation.IsCancellationRequested);
+                Assert.False(runTask.IsCompleted);
+
+                input.ReleaseFinalSuffix();
+                Assert.Equal(
+                    CommandExitCodes.Success,
+                    await runTask.WaitAsync(TestDeterminism.DefaultTimeout));
+            }
+            finally
+            {
+                input.ReleaseSuffix();
+                input.ReleaseFinalSuffix();
+            }
+
+            var messages = ReadLspMessages(output);
+            var invalidEnvelope = Assert.Single(
+                messages,
+                entry => entry.Message["id"] == null
+                    && entry.Message["error"]?["code"]?.GetValue<int>() == -32600);
+            Assert.Equal("Invalid Request", invalidEnvelope.Message["error"]!["message"]!.GetValue<string>());
+            var cancelled = Assert.Single(
+                messages,
+                entry => entry.Message["id"]?.GetValue<string>() == "active-5231");
+            Assert.Equal(-32800, cancelled.Message["error"]!["code"]!.GetValue<int>());
         }
         finally
         {
@@ -6187,9 +6277,14 @@ public class LspServerTests
     private sealed class StagedReadStream(
         byte[] prefix,
         byte[] suffix,
-        bool leaveFinalReadPending = false) : Stream
+        bool leaveFinalReadPending = false,
+        byte[]? finalSuffix = null) : Stream
     {
         private readonly TaskCompletionSource suffixRelease =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource finalSuffixReadStarted =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource finalSuffixRelease =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource finalReadStarted =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -6197,10 +6292,15 @@ public class LspServerTests
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int prefixOffset;
         private int suffixOffset;
+        private int finalSuffixOffset;
 
         internal bool FinalReadStarted => finalReadStarted.Task.IsCompleted;
 
         internal void ReleaseSuffix() => suffixRelease.TrySetResult();
+
+        internal Task WaitForFinalSuffixReadAsync() => finalSuffixReadStarted.Task;
+
+        internal void ReleaseFinalSuffix() => finalSuffixRelease.TrySetResult();
 
         public override bool CanRead => true;
         public override bool CanSeek => false;
@@ -6234,6 +6334,19 @@ public class LspServerTests
             await suffixRelease.Task.WaitAsync(cancellationToken);
             if (suffixOffset >= suffix.Length)
             {
+                if (finalSuffix != null)
+                {
+                    finalSuffixReadStarted.TrySetResult();
+                    await finalSuffixRelease.Task.WaitAsync(cancellationToken);
+                    if (finalSuffixOffset < finalSuffix.Length)
+                    {
+                        var finalSuffixCount = Math.Min(buffer.Length, finalSuffix.Length - finalSuffixOffset);
+                        finalSuffix.AsMemory(finalSuffixOffset, finalSuffixCount).CopyTo(buffer);
+                        finalSuffixOffset += finalSuffixCount;
+                        return finalSuffixCount;
+                    }
+                }
+
                 if (!leaveFinalReadPending)
                     return 0;
 
@@ -6260,7 +6373,10 @@ public class LspServerTests
         protected override void Dispose(bool disposing)
         {
             if (disposing)
+            {
+                finalSuffixRelease.TrySetResult();
                 finalReadRelease.TrySetResult();
+            }
             base.Dispose(disposing);
         }
     }

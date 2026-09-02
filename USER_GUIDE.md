@@ -3297,10 +3297,16 @@ message bodies, so Ctrl-C / host cancellation can interrupt pending frame reads
 instead of waiting for another complete request.
 Unknown-method diagnostics echo at most 240 method-name characters with `...`
 when the method name is longer. Request IDs must be bounded JSON-RPC scalar
-values: strings are capped at 256
+values. Every inbound LSP message must be an object whose `jsonrpc` member is
+exactly the string `"2.0"`; missing, null, non-string, or other-version values
+return `-32600` (`Invalid Request`) before lifecycle reservation, cancellation,
+dispatch, state mutation, or database access, while preserving a valid request
+ID. Request-ID strings are capped at 256
 characters, integer IDs must fit in `Int64`, and non-scalar IDs are rejected as
-invalid requests before response IDs are cloned. `workspace/symbol` query
-strings are capped at 1000 characters before symbol search runs.
+invalid requests before response IDs are cloned. `workspace/symbol.params.query`
+is a required JSON string; missing, null, or non-string values return `-32602`
+(`Invalid params`) before symbol search, while the empty string remains valid.
+Query strings are capped at 1000 characters before symbol search runs.
 `workspace/symbol` accepts optional numeric `limit` / `maxResults` parameters
 and clamps them to 1000 results. `textDocument/documentSymbol` returns
 hierarchical `DocumentSymbol` children when container metadata is available,
@@ -6929,10 +6935,16 @@ stdio loop は header / message body 読み取り中も CLI cancellation token �
 Ctrl-C や host cancellation が次の完全な request を待たずに pending frame read を中断できます。
 method-not-found diagnostic で echo する method name は最大 240 文字に制限され、
 長い場合は `...` を付けて切り詰めます。
+すべての受信 LSP message は object であり、`jsonrpc` member が文字列 `"2.0"` と完全一致する
+必要があります。欠落、null、文字列以外、または別 version の値には、有効な request ID を
+維持して `-32600`（`Invalid Request`）を返します。この検証は lifecycle reservation、
+cancellation、dispatch、state mutation、database access より前に行います。
 request ID は bounded な JSON-RPC scalar value に限定され、string は 256 文字まで、
 integer ID は `Int64` に収まるものだけを受理し、non-scalar ID は response ID を複製する前に
 invalid request として拒否します。
-`workspace/symbol` の query string は symbol search を実行する前に 1000 文字で上限をかけます。
+`workspace/symbol.params.query` は必須の JSON string です。欠落、null、文字列以外の値には
+symbol search より前に `-32602`（`Invalid params`）を返す一方、空文字列は引き続き有効です。
+query string は symbol search を実行する前に 1000 文字で上限をかけます。
 `workspace/symbol` は任意の numeric `limit` / `maxResults` parameter を受け取り、1000 件までに
 clamp します。`textDocument/documentSymbol` は container metadata がある場合に階層化された
 `DocumentSymbol` children を返し、最後に受理した live buffer または index から最大 1000 件の
