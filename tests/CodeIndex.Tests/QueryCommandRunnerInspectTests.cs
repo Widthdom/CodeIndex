@@ -19,6 +19,55 @@ public partial class QueryCommandRunnerTests
                 StringComparison.Ordinal)));
 
     [Fact]
+    public void RunInspect_CSharpSemicolonRecordSelectorClipsSameLineDeclarationBody_Issue5228()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_semicolon_record_selector_5228");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Records.cs",
+                "csharp",
+                "public class Outer { public record Nested; public class AfterNested { } }");
+
+            var (queryExitCode, queryStdout, queryStderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["inspect", "Nested", "--db", dbPath, "--json", "--body", "--lang", "csharp", "--exact-name"],
+                _jsonOptions,
+                "1.0.0-test"));
+            using var queryDocument = ParseJsonOutput(queryStdout);
+            var selector = Assert.Single(queryDocument.RootElement
+                    .GetProperty("candidate_bundles")
+                    .EnumerateArray())
+                .GetProperty("selector")
+                .GetProperty("selector")
+                .GetString()!;
+
+            Assert.Equal(CommandExitCodes.Success, queryExitCode);
+            Assert.Equal(string.Empty, queryStderr);
+
+            var (selectorExitCode, selectorStdout, selectorStderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["inspect", "--selector", selector, "--db", dbPath, "--json", "--body"],
+                _jsonOptions,
+                "1.0.0-test"));
+            using var selectorDocument = ParseJsonOutput(selectorStdout);
+            var definition = Assert.Single(selectorDocument.RootElement
+                .GetProperty("definitions")
+                .EnumerateArray());
+
+            Assert.Equal(CommandExitCodes.Success, selectorExitCode);
+            Assert.Equal(string.Empty, selectorStderr);
+            Assert.Equal("public record Nested;", definition.GetProperty("body_content").GetString());
+            Assert.DoesNotContain("Outer", definition.GetProperty("body_content").GetString(), StringComparison.Ordinal);
+            Assert.DoesNotContain("AfterNested", definition.GetProperty("body_content").GetString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSymbolsOutlineAndDefinition_JsonArraysPreservePathsDepthAndPagination_Issue4874()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_json_array_paths_4874");

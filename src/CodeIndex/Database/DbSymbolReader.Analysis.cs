@@ -190,7 +190,8 @@ public partial class DbReader
                    {GetSymbolColumnSql("return_type")} AS return_type,
                    s.id AS symbol_id,
                    {GetSymbolColumnSql("container_qualified_name")} AS container_qualified_name,
-                   {GetSymbolColumnSql("sub_kind")} AS sub_kind
+                   {GetSymbolColumnSql("sub_kind")} AS sub_kind,
+                   {GetSymbolColumnSql("start_column")} AS declaration_start_column
             FROM symbols s
             JOIN files f ON s.file_id = f.id
             WHERE f.path = @path
@@ -236,6 +237,12 @@ public partial class DbReader
             Name = reader.GetString(3),
             Line = reader.GetInt32(4),
             StartLine = GetInt32OrFallback(reader, 5, 4),
+            StartColumn = ResolveSymbolIdentifierStartColumn(
+                GetNullableInt32(reader, 17),
+                GetNullableString(reader, 9),
+                reader.GetString(3),
+                reader.GetString(2)),
+            DeclarationStartColumn = GetNullableInt32(reader, 17),
             EndLine = GetInt32OrFallback(reader, 6, 4),
             BodyStartLine = GetNullableInt32(reader, 7),
             BodyEndLine = GetNullableInt32(reader, 8),
@@ -271,7 +278,8 @@ public partial class DbReader
                    {GetSymbolColumnSql("return_type")} AS return_type,
                    s.id AS symbol_id,
                    {GetSymbolColumnSql("container_qualified_name")} AS container_qualified_name,
-                   {GetSymbolColumnSql("sub_kind")} AS sub_kind
+                   {GetSymbolColumnSql("sub_kind")} AS sub_kind,
+                   {GetSymbolColumnSql("start_column")} AS declaration_start_column
             FROM symbols s
             JOIN files f ON s.file_id = f.id
             WHERE s.id = @symbol_id";

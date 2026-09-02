@@ -1,4 +1,5 @@
 using System.Collections;
+using System.Diagnostics;
 using System.Reflection;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -1036,6 +1037,164 @@ public partial class ReferenceExtractorTests
         var wrapRef = Assert.Single(references.Where(r => r.SymbolName == "Red" && r.ContainerName == "Wrap"));
         Assert.Equal("property", wrapRef.ContainerKind);
         Assert.DoesNotContain(references, r => r.SymbolName == "Red" && r.ContainerName == "Wrap" && r.ContainerKind == "class");
+    }
+
+    [Theory]
+    [InlineData("public class Outer { public record R(int X); public static int Value = Target.Create(); }", null, "Outer")]
+    [InlineData("public class Outer\n{\n    public record R(int X); public static int Value = Target.Create();\n}", null, "Outer")]
+    [InlineData("public class Outer { public record R; public static int Value = Target.Create(); }", null, "Outer")]
+    [InlineData("public class Outer { public record class R; public static int Value = Target.Create(); }", null, "Outer")]
+    [InlineData("public class Outer { public record struct R; public static int Value = Target.Create(); }", null, "Outer")]
+    [InlineData("public class Outer\n{\n    public event System.Action Changed; public record R; public static int Value = Target.Create();\n}", null, "Outer")]
+    [InlineData("public class Outer\n{\n    public event System.Action Changed; public record class R; public static int Value = Target.Create();\n}", null, "Outer")]
+    [InlineData("public class Outer\n{\n    public event System.Action Changed; public record struct R; public static int Value = Target.Create();\n}", null, "Outer")]
+    [InlineData("public class Outer\n{\n    public event System.Action Changed = Target.Create; public record R;\n}", null, "Outer")]
+    [InlineData("public class Outer\n{\n    public record R\n    ; public static int Value = Target.Create();\n}", "public record R", "Outer")]
+    [InlineData("public class Outer\n{\n    public record R(int X)\n    ; public static int Value = Target.Create();\n}", "public record R(int X)", "Outer")]
+    [InlineData("public class Outer\n{\n    public record R <T>\n    ; public static int Value = Target.Create();\n}", "public record R <T>", "Outer")]
+    [InlineData("public class Outer\n{\n    public record R\n#if DEBUG\n#endif\n    ; public static int Value = Target.Create();\n}", "public record R #if DEBUG #endif", "Outer")]
+    [InlineData("public class Outer\n{\n    public record R\n#region declaration ; brace {\n#endregion\n    ; public static int Value = Target.Create();\n}", "public record R #region declaration", "Outer")]
+    [InlineData("public class Outer { public record \\u0052; public static int Value = Target.Create(); }", null, "Outer")]
+    [InlineData("public class Outer { public record \\U00000052; public static int Value = Target.Create(); }", null, "Outer")]
+    [InlineData("public record R; public class Next { public static int Value = Target.Create(); }", null, "Next")]
+    public void Extract_CsharpSemicolonRecord_DoesNotCaptureFollowingSameLineReference_Issue5228(
+        string outerDeclaration,
+        string? expectedSignatureWithoutTerminator,
+        string expectedContainerName)
+    {
+        var content = $$"""
+            public static class Target { public static int Create() => 1; }
+            {{outerDeclaration}}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var record = Assert.Single(symbols, symbol =>
+            (symbol.Kind is "class" or "struct")
+            && symbol.Name == "R");
+        if (expectedSignatureWithoutTerminator == null)
+            Assert.EndsWith(";", record.Signature, StringComparison.Ordinal);
+        else
+            Assert.Equal(expectedSignatureWithoutTerminator, record.Signature);
+
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+        var create = Assert.Single(references, reference => reference.SymbolName == "Create");
+        Assert.Equal("class", create.ContainerKind);
+        Assert.Equal(expectedContainerName, create.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpSemicolonRecord_UsesFollowingSameLineMultilineContainer_Issue5228()
+    {
+        const string content = """
+            public static class Target { public static int Create() => 1; }
+            public class MethodOuter
+            {
+                public record R; public void Following() { Target.Create();
+                }
+            }
+            public class TypeOuter
+            {
+                public record S; public class FollowingType { public static int Value = Target.Create();
+                }
+            }
+            public class RecordOuter
+            {
+                public record First; public record FollowingRecord(int Value = Target.Create(),
+                    int Other = 0);
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols)
+            .Where(reference => reference.SymbolName == "Create")
+            .ToArray();
+
+        Assert.Equal(3, references.Length);
+        Assert.Contains(references, reference =>
+            reference.ContainerKind == "function"
+            && reference.ContainerName == "Following");
+        Assert.Contains(references, reference =>
+            reference.ContainerKind == "class"
+            && reference.ContainerName == "FollowingType");
+        Assert.Contains(references, reference =>
+            reference.ContainerKind == "class"
+            && reference.ContainerName == "FollowingRecord");
+    }
+
+    [Fact]
+    public void Extract_CsharpUnicodeSemicolonRecord_DoesNotCaptureFollowingSameLineReference_Issue5228()
+    {
+        const string content = """
+            public static class Target { public static int Create() => 1; }
+            public class Outer
+            {
+                public event System.Action Changed; public record Á; public static int Value = Target.Create();
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        Assert.Contains(symbols, symbol =>
+            symbol.Kind == "class"
+            && symbol.Name == "Á");
+
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+        var create = Assert.Single(references, reference => reference.SymbolName == "Create");
+        Assert.Equal("class", create.ContainerKind);
+        Assert.Equal("Outer", create.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpAttributedGenericSemicolonRecord_DoesNotCaptureFollowingSameLineReference_Issue5228()
+    {
+        const string content = """
+            using System;
+            using System.Collections.Generic;
+            public sealed class AAttribute : Attribute { public AAttribute(Type value) { } }
+            public static class Target { public static int Create() => 1; }
+            public class Outer
+            {
+                public record R<
+                    [A(typeof(Dictionary<string, int>))] T>(T Value)
+                ; public static int X = Target.Create();
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        Assert.Contains(symbols, symbol =>
+            symbol.Kind == "class"
+            && symbol.Name == "R");
+
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+        var create = Assert.Single(references, reference => reference.SymbolName == "Create");
+        Assert.Equal("class", create.ContainerKind);
+        Assert.Equal("Outer", create.ContainerName);
+    }
+
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
+    public void Extract_CsharpLongSemicolonRecordReferences_CompletesWithinPracticalBudget_Issue5228()
+    {
+        const int componentCount = 5_000;
+        _ = ExtractSymbolsAndReferences("csharp", "public record Warmup(Type Value);");
+        var components = Enumerable.Range(0, componentCount)
+            .Select(index => $"    Type{index} Value{index}{(index + 1 == componentCount ? string.Empty : ",")}");
+        var content = "public record LongRecord(\n" + string.Join('\n', components) + "\n);";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var stopwatch = Stopwatch.StartNew();
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+        stopwatch.Stop();
+
+        Assert.Equal(componentCount - 1, references.Count(reference =>
+            reference.ReferenceKind == "type_reference"
+            && reference.SymbolName.StartsWith("Type", StringComparison.Ordinal)));
+        var runawayBudget = TimeSpan.FromSeconds(2);
+        Assert.True(
+            stopwatch.Elapsed < runawayBudget,
+            $"Long C# record reference extraction took {stopwatch.Elapsed.TotalSeconds:F2}s, expected < {runawayBudget.TotalSeconds:F0}s runaway guard budget.");
     }
 
     [Fact]

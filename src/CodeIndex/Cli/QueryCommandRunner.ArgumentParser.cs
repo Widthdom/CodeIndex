@@ -49,6 +49,8 @@ public static partial class QueryCommandRunner
         private bool allowPartial;
         private int? startLine;
         private int? endLine;
+        private int? startColumn;
+        private int? endColumn;
         private bool endLineExplicit;
         private int contextBefore;
         private int contextAfter;
@@ -447,6 +449,8 @@ public static partial class QueryCommandRunner
                 BodyLines = bodyLines,
                 StartLine = startLine,
                 EndLine = endLine,
+                StartColumn = startColumn,
+                EndColumn = endColumn,
                 ContextBefore = contextBefore,
                 ContextAfter = contextAfter,
                 ContextAfterExplicit = contextAfterExplicit,

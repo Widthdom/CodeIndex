@@ -157,7 +157,8 @@ internal static partial class CSharpReferenceExtractor
                 // structuralLines から最初の `;` / `{` までを連結し直して渡す。
                 var (_, _, headerText) = ReferenceExtractor.CollectCSharpRecordHeader(
                     structuralLines,
-                    enclosingType.StartLine);
+                    enclosingType.StartLine,
+                    skipCSharpPreprocessorDirectives: true);
                 target = ReferenceExtractor.ParseCSharpBaseType(headerText);
                 if (string.IsNullOrWhiteSpace(target))
                     target = ReferenceExtractor.ParseCSharpBaseType(enclosingType.Signature);

@@ -3298,6 +3298,11 @@ public partial class SymbolExtractorTests
         // Signature should contain parameters / シグネチャにパラメータが含まれるべき
         var userDto = symbols.First(s => s.Name == "UserDto");
         Assert.Contains("string Name", userDto.Signature);
+        Assert.Equal((1, 1, 1), (userDto.EndLine, userDto.BodyStartLine, userDto.BodyEndLine));
+        var config = symbols.First(s => s.Name == "Config");
+        Assert.Equal((2, 2, 2), (config.EndLine, config.BodyStartLine, config.BodyEndLine));
+        var point = symbols.First(s => s.Name == "Point");
+        Assert.Equal((3, 3, 3), (point.EndLine, point.BodyStartLine, point.BodyEndLine));
     }
 
     [Fact]
@@ -3465,6 +3470,8 @@ public partial class SymbolExtractorTests
 
         var bodyless = Assert.Single(symbols.Where(s => s.Kind == "struct" && s.Name == "Bodyless"));
         Assert.Equal(5, bodyless.EndLine);
+        Assert.Equal(3, bodyless.BodyStartLine);
+        Assert.Equal(5, bodyless.BodyEndLine);
 
         var y = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Y" && s.ContainerName == "Bodyless"));
         Assert.Equal(5, y.Line);
@@ -3491,9 +3498,13 @@ public partial class SymbolExtractorTests
 
         var dog = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Dog"));
         Assert.Equal(7, dog.EndLine);
+        Assert.Equal(5, dog.BodyStartLine);
+        Assert.Equal(7, dog.BodyEndLine);
 
         var box = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Box"));
         Assert.Equal(11, box.EndLine);
+        Assert.Equal(9, box.BodyStartLine);
+        Assert.Equal(11, box.BodyEndLine);
     }
 
     [Fact]
@@ -3549,9 +3560,369 @@ public partial class SymbolExtractorTests
 
         var empty = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Empty"));
         Assert.Equal(5, empty.EndLine);
+        Assert.Equal(3, empty.BodyStartLine);
+        Assert.Equal(5, empty.BodyEndLine);
 
         var emptyStruct = Assert.Single(symbols.Where(s => s.Kind == "struct" && s.Name == "EmptyStruct"));
         Assert.Equal(10, emptyStruct.EndLine);
+        Assert.Equal(9, emptyStruct.BodyStartLine);
+        Assert.Equal(10, emptyStruct.BodyEndLine);
+    }
+
+    [Fact]
+    public void Extract_CSharp_SemicolonRecordRangeStopsBeforeFollowingDeclaration_Issue5228()
+    {
+        var content = """
+            [Data]
+            public record Envelope<T>(
+                T Value)
+                : Base<T>(Value)
+                where T : class;
+
+            public record Broken(
+                string Value
+            public class Following
+            {
+            }
+
+            public class Ordinary
+            {
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var envelope = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Envelope"));
+        Assert.Equal((2, 5), (envelope.StartLine, envelope.EndLine));
+        Assert.Equal((2, 5), (envelope.BodyStartLine, envelope.BodyEndLine));
+
+        var broken = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Broken"));
+        Assert.Equal(7, broken.EndLine);
+        Assert.Null(broken.BodyStartLine);
+        Assert.Null(broken.BodyEndLine);
+
+        var following = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Following"));
+        Assert.Equal((10, 11), (following.BodyStartLine, following.BodyEndLine));
+
+        var ordinary = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Ordinary"));
+        Assert.Equal((14, 15), (ordinary.BodyStartLine, ordinary.BodyEndLine));
+    }
+
+    [Fact]
+    public void Extract_CSharp_RecordHeaderAnonymousDelegateDoesNotHideDeclarationBody_Issue5228()
+    {
+        var content = """
+            using System;
+
+            public record Callback(Action Action);
+            public record Semicolon() : Callback(
+                delegate
+                {
+                    Console.WriteLine();
+                });
+
+            public record Braced() : Callback(
+                delegate
+                {
+                    Console.WriteLine();
+                })
+            {
+                public int Value => 1;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var semicolon = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Semicolon"));
+        Assert.Equal((4, 8), (semicolon.BodyStartLine, semicolon.BodyEndLine));
+
+        var braced = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Braced"));
+        Assert.Equal((15, 17), (braced.BodyStartLine, braced.BodyEndLine));
+        Assert.Equal(17, braced.EndLine);
+    }
+
+    [Fact]
+    public void Extract_CSharp_WrappedRecordConstraintsKeepDeclarationBodies_Issue5228()
+    {
+        var content = """
+            public record Semicolon<T>(T Value)
+                where T :
+                    class?;
+
+            public record struct ValueRecord<T>(T Value)
+                where T :
+                    struct;
+
+            public record Braced<T>(T Value)
+                where T :
+                    class
+            {
+                public T Current => Value;
+            }
+
+            public record Constructible<T>(T Value)
+                where T :
+                    new();
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var semicolon = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Semicolon"));
+        Assert.Equal((1, 3), (semicolon.BodyStartLine, semicolon.BodyEndLine));
+
+        var valueRecord = Assert.Single(symbols.Where(s => s.Kind == "struct" && s.Name == "ValueRecord"));
+        Assert.Equal((5, 7), (valueRecord.BodyStartLine, valueRecord.BodyEndLine));
+
+        var braced = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Braced"));
+        Assert.Equal((12, 14), (braced.BodyStartLine, braced.BodyEndLine));
+        var current = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Current"));
+        Assert.Equal("Braced", current.ContainerName);
+
+        var constructible = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Constructible"));
+        Assert.Equal((16, 18), (constructible.BodyStartLine, constructible.BodyEndLine));
+    }
+
+    [Fact]
+    public void Extract_CSharp_RecordHeaderDirectivesKeepDeclarationBody_Issue5228()
+    {
+        var content = """
+            public record Base(int Value);
+            public record Directed(int Value) :
+            #pragma warning disable CS1591
+                Base(Value);
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var directed = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Directed"));
+        Assert.Equal((2, 4), (directed.BodyStartLine, directed.BodyEndLine));
+        Assert.Equal(4, directed.EndLine);
+    }
+
+    [Fact]
+    public void Extract_CSharp_RecordHeaderDirectivePayloadDoesNotCaptureFollowingSibling_Issue5228()
+    {
+        var content = """
+            public class Outer
+            {
+                public record Directed(int Value)
+            #region declaration ; brace {
+            #endregion
+                ; public class Following { }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var directed = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Directed"));
+        Assert.Equal((3, 6), (directed.BodyStartLine, directed.BodyEndLine));
+
+        var following = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Following"));
+        Assert.Equal("Outer", following.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CSharp_QualifiedRecordContinuationsKeepDeclarationBodies_Issue5228()
+    {
+        var content = """
+            namespace N
+            {
+                public record Base(int X);
+                public interface IMarker { }
+            }
+
+            public record Semicolon(int X)
+                :
+                    N . Base(X);
+
+            public record Constrained<T>(T Value)
+                where T :
+                    N . IMarker;
+
+            public record Braced(int X)
+                :
+                    N . Base(X) {
+                public int Nested => X;
+            }
+
+            public record AliasQualified(int X)
+                :
+                    Alias :: Base(X);
+
+            public record LineBrokenSemicolon(int X)
+                :
+                    N .
+                    Base(X);
+
+            public record LineBrokenBraced(int X)
+                :
+                    N .
+                    Base(X)
+            {
+                public int LineBrokenNested => X;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var semicolon = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Semicolon"));
+        Assert.Equal((7, 9), (semicolon.BodyStartLine, semicolon.BodyEndLine));
+
+        var constrained = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Constrained"));
+        Assert.Equal((11, 13), (constrained.BodyStartLine, constrained.BodyEndLine));
+
+        var braced = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Braced"));
+        Assert.Equal((17, 19), (braced.BodyStartLine, braced.BodyEndLine));
+        Assert.Equal(19, braced.EndLine);
+        var nested = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Nested"));
+        Assert.Equal("Braced", nested.ContainerName);
+
+        var aliasQualified = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "AliasQualified"));
+        Assert.Equal((21, 23), (aliasQualified.BodyStartLine, aliasQualified.BodyEndLine));
+
+        var lineBrokenSemicolon = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "LineBrokenSemicolon"));
+        Assert.Equal((25, 28), (lineBrokenSemicolon.BodyStartLine, lineBrokenSemicolon.BodyEndLine));
+
+        var lineBrokenBraced = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "LineBrokenBraced"));
+        Assert.Equal((34, 36), (lineBrokenBraced.BodyStartLine, lineBrokenBraced.BodyEndLine));
+        Assert.Equal(36, lineBrokenBraced.EndLine);
+        var lineBrokenNested = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "LineBrokenNested"));
+        Assert.Equal("LineBrokenBraced", lineBrokenNested.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CSharp_RecordAntiConstraintsKeepDeclarationBodies_Issue5228()
+    {
+        var content = """
+            public record Semicolon<T>
+                where T :
+                    allows ref struct;
+
+            public record Braced<T>
+                where T :
+                    allows ref struct {
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var semicolon = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Semicolon"));
+        Assert.Equal((1, 3), (semicolon.BodyStartLine, semicolon.BodyEndLine));
+
+        var braced = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Braced"));
+        Assert.Equal((7, 8), (braced.BodyStartLine, braced.BodyEndLine));
+        Assert.Equal(8, braced.EndLine);
+    }
+
+    [Theory]
+    [InlineData("public void Following();", "function", "Following")]
+    [InlineData("public N . Type Following();", "function", "Following")]
+    [InlineData("public int Following;", "field", "Following")]
+    [InlineData("public event Action Following;", "event", "Following")]
+    [InlineData("public int Following { get; set; }", "property", "Following")]
+    [InlineData("~Outer() { }", "function", "Outer")]
+    [InlineData("public int this[int index] { get => index; }", "function", "Item")]
+    [InlineData("static Outer() { }", "function", "Outer")]
+    [InlineData("Outer() { }", "function", null)]
+    [InlineData("void IFoo.Run() { }", "function", "Run")]
+    [InlineData("int IFoo.this[int index] { get => index; }", "function", "Item")]
+    [InlineData("public unsafe fixed int Following[10];", "field", null)]
+    [InlineData("public static Outer operator +(Outer value) => value;", "operator", "operator +")]
+    public void Extract_CSharp_IncompleteRecordStopsBeforeFollowingMember_Issue5228(
+        string followingDeclaration,
+        string followingKind,
+        string? expectedFollowingName)
+    {
+        var content = $$"""
+            public class Outer
+            {
+                public record Broken
+                {{followingDeclaration}}
+                public class Next { }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var broken = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Broken"));
+        Assert.Equal(3, broken.EndLine);
+        Assert.Null(broken.BodyStartLine);
+        Assert.Null(broken.BodyEndLine);
+
+        if (expectedFollowingName != null)
+        {
+            var following = Assert.Single(symbols.Where(s =>
+                s.Kind == followingKind
+                && s.Name == expectedFollowingName));
+            Assert.Equal("Outer", following.ContainerName);
+        }
+        else
+        {
+            Assert.DoesNotContain(symbols, s =>
+                s.Kind == followingKind
+                && s.StartLine == 4
+                && s.ContainerName == "Broken");
+        }
+        var next = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Next"));
+        Assert.Equal("Outer", next.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CSharp_IncompleteRecordBaseListStopsBeforeFollowingConstructor_Issue5228()
+    {
+        var content = """
+            public class Base { }
+            public class Outer
+            {
+                public record Broken : Base
+                Outer() { }
+                public class Next { }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var broken = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Broken"));
+        Assert.Equal(4, broken.EndLine);
+        Assert.Null(broken.BodyStartLine);
+        Assert.Null(broken.BodyEndLine);
+        Assert.DoesNotContain(symbols, s => s.StartLine == 5 && s.ContainerName == "Broken");
+
+        var next = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Next"));
+        Assert.Equal("Outer", next.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CSharp_SemicolonRecordDoesNotContainSameLineSibling_Issue5228()
+    {
+        var content = """
+            public record Single(int X); public class AfterSingle { }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var single = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Single"));
+        var afterSingle = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "AfterSingle"));
+        var x = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "X"));
+
+        Assert.Null(afterSingle.ContainerName);
+        Assert.Equal(single.Name, x.ContainerName);
+    }
+
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
+    public void Extract_CSharp_LongSemicolonRecordContainerAssignmentCompletesWithinPracticalBudget_Issue5228()
+    {
+        const int componentCount = 5_000;
+        _ = SymbolExtractor.Extract(1, "csharp", "public record Warmup(Type Value);");
+        var components = Enumerable.Range(0, componentCount)
+            .Select(index => $"    Type{index} Value{index}{(index + 1 == componentCount ? string.Empty : ",")}");
+        var content = "public record LongRecord(\n" + string.Join('\n', components) + "\n);";
+
+        var stopwatch = Stopwatch.StartNew();
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        stopwatch.Stop();
+
+        Assert.Equal(componentCount, symbols.Count(symbol =>
+            symbol.Kind == "property"
+            && symbol.ContainerName == "LongRecord"));
+        var runawayBudget = TimeSpan.FromSeconds(8);
+        Assert.True(
+            stopwatch.Elapsed < runawayBudget,
+            $"Long C# record symbol extraction took {stopwatch.Elapsed.TotalSeconds:F2}s, expected < {runawayBudget.TotalSeconds:F0}s runaway guard budget.");
     }
 
     [Fact]
@@ -3605,6 +3976,9 @@ public partial class SymbolExtractorTests
         Assert.Equal("class", upper.ContainerKind);
         Assert.Equal("Person", upper.ContainerName);
         Assert.Equal("App.Person", upper.ContainerQualifiedName);
+
+        var person = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Person"));
+        Assert.Equal((4, 8), (person.BodyStartLine, person.BodyEndLine));
     }
 
     [Fact]

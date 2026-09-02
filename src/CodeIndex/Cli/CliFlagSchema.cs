@@ -666,6 +666,8 @@ internal static class CliFlagSchema
             new() { Name = "--body-start", ValuePlaceholder = "<line>", Description = "Inspect: start definition body slice at this 1-based source line", PrimaryCommands = Set(InspectFieldCommands) },
             new() { Name = "--body-lines", ValuePlaceholder = "<n>", Description = "Inspect: return at most this many definition body lines", PrimaryCommands = Set(InspectFieldCommands) },
             new() { Name = "--body-line-count", ValuePlaceholder = "<n>", Description = "Inspect: alias for --body-lines", PrimaryCommands = Set(InspectFieldCommands) },
+            new() { Name = "--start-column", ValuePlaceholder = "<column>", Description = "Excerpt: clip the first returned line from this 1-based inclusive source column; requires --max-line-width 0", PrimaryCommands = Set("excerpt") },
+            new() { Name = "--end-column", ValuePlaceholder = "<column>", Description = "Excerpt: clip the last returned line through this 1-based inclusive source column; requires --max-line-width 0", PrimaryCommands = Set("excerpt") },
             new() { Name = "--fields", ValuePlaceholder = "<csv>", Description = "Project bounded-response fields; inspect accepts top-level groups or collection.field and `list` prints its typed catalog", PrimaryCommands = Set(InspectFieldCommands.Concat(BoundedProjectionCommands).ToArray()) },
             new() { Name = "--body-only", Description = "Inspect: body-focused JSON shorthand for --body --fields definitions", PrimaryCommands = Set(InspectFieldCommands) },
             new() { Name = "--outline-only", Description = "Inspect: outline-first JSON shorthand for --fields file,definitions,nearby_symbols", PrimaryCommands = Set(InspectFieldCommands) },
