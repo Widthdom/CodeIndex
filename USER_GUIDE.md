@@ -1505,6 +1505,7 @@ cdidx search --recipe risky-code/raw-diagnostic-echo --format sarif --limit 20  
 cdidx search --recipe risky-code/raw-diagnostic-echo --format compact --cursor <next_cursor>
 cdidx search --recipe risky-code --results-only --search-fields path,line,query_name,recipe --json=ndjson --max-json-bytes 65536  # minimal audit rows
 cdidx search --recipe risky-code --format count --summary-only --max-json-bytes 20000  # compact recipe counts
+cdidx audit --all --format compact --total-limit 200  # bounded full-repository audit across every registered recipe
 cdidx search --named-query pack="dotnet pack" --named-query push="nuget push" --format compact  # named ad hoc batch with compact snippets
 cdidx search "catch (Exception" --group-by file --count --json    # rank broad audit hits by file
 cdidx search "JsonDocument.Parse" --group-by symbol --count --json # rank broad audit hits by enclosing symbol
@@ -1589,6 +1590,36 @@ guard filters, risk evidence, classifier metadata, and query-specific audit
 taxonomy metadata.
 Add `--query <filter>` to narrow discovery by recipe/query names, query text,
 labels, severity, path metadata, or descriptions.
+`cdidx audit --all` is the full-repository orchestration layer. It takes one
+snapshot from the same authoritative registry as `cdidx recipes --names`, sorts
+recipe names ordinally, and executes every registered entry exactly once,
+including composite recipes. It does not recursively invoke the CLI, change any
+recipe matching rule, or deduplicate overlaps across recipes. Aggregate count
+fields are therefore explicitly sums of recipe/query observations, never a
+claim about unique source matches; every emitted row keeps its `recipe` and
+`query_name` attribution.
+
+The existing search filters, including `--lang`, `--path`, `--exclude-path`,
+`--exclude-tests`, `--audit-scope`, and `--source-only`, apply uniformly to each
+selected recipe. `--limit` remains a per-query result limit. `--total-limit` is
+the global emitted-row cap; when omitted in row-producing all mode it defaults
+to 200. Count and `--summary-only` modes execute the selected queries with a
+bounded per-query observation window and emit no rows. JSON and compact
+summaries report selected, completed, failed, partial, and omitted recipe
+counts, bounded per-recipe/query status, authoritative or lower-bound count
+facts, row/byte limits, registry diagnostics, and recovery commands. NDJSON
+emits attributed rows followed by the same terminal cross-recipe summary.
+
+Accumulation is bounded to 10,000 candidate rows per query, 512 returned query
+details, 32 returned errors, five minutes, and a 4 MiB JSON response when no
+explicit `--max-json-bytes` is supplied. A requested `--total-limit` truncation
+is a successful bounded result. Query failures do not discard successful
+sibling recipes: the run continues, records bounded errors, and returns partial
+exit code 11; `--allow-partial` accepts that incomplete result with exit code 0.
+Cancellation returns exit code 8 with the completed/omitted accounting retained.
+Use an individual `cdidx audit <recipe>` for SARIF, issue drafts, child-query
+cursoring, or recipe-specific aggregation. `cdidx recipes` and `cdidx batch`
+remain the lower-level discovery and explicit orchestration tools.
 Built-in recipe queries may also include `risk_evidence`, a short set of
 positive and negative evidence facets that explain why a hit is risky or likely
 bounded/safe. Recipe run JSON repeats those facets on each matching result so
@@ -5298,6 +5329,7 @@ cdidx search --recipe risky-code/raw-diagnostic-echo --format sarif --limit 20  
 cdidx search --recipe risky-code/raw-diagnostic-echo --format compact --cursor <next_cursor>
 cdidx search --recipe risky-code --results-only --search-fields path,line,query_name,recipe --json=ndjson --max-json-bytes 65536  # 最小限の audit row
 cdidx search --recipe risky-code --format count --summary-only --max-json-bytes 20000  # compact な recipe count
+cdidx audit --all --format compact --total-limit 200  # 登録済み recipe 全体を上限付きで full-repository audit
 cdidx search --named-query pack="dotnet pack" --named-query push="nuget push" --format compact  # 名前付き ad hoc batch と compact snippet
 cdidx search "catch (Exception" --group-by file --count --json    # 広い audit hit を file 別にランク付け
 cdidx search "JsonDocument.Parse" --group-by symbol --count --json # 広い audit hit を enclosing symbol 別にランク付け
@@ -5367,6 +5399,31 @@ MCP `search` tool では同じ mode を camelCase 引数 `requireBefore`, `requi
 result level、正規化済みの repository-relative artifact URI を出力します。
 
 search audit recipe は、名前付き recipe を複数の curated search query に展開します。
+`cdidx audit --all` は full-repository audit 用の orchestration layer です。
+`cdidx recipes --names` と同じ authoritative registry の snapshot を1回取得し、recipe 名を
+ordinal 順に並べ、composite recipe を含む登録 entry をそれぞれ厳密に1回実行します。CLI を
+再帰的に呼び出したり、recipe の matching rule を変更したり、recipe 間で重複 match を
+deduplicate したりはしません。そのため aggregate count は unique source match 数ではなく、
+recipe/query ごとの observation の合計として明示され、出力 row はすべて `recipe` と
+`query_name` の帰属を保持します。
+
+`--lang`、`--path`、`--exclude-path`、`--exclude-tests`、`--audit-scope`、
+`--source-only` など既存の search filter は、選択したすべての recipe に同じように適用されます。
+`--limit` は引き続き query ごとの result 上限です。`--total-limit` は emitted row 全体の上限で、
+row を出す all mode で省略した場合は 200 です。count と `--summary-only` は row を出さず、
+選択した query を query ごとの上限付き observation window で実行します。JSON / compact summary は
+selected / completed / failed / partial / omitted recipe 数、上限付きの recipe/query status、
+authoritative count または lower bound、row/byte 上限、registry diagnostic、recovery command を
+返します。NDJSON は帰属付き row の後に同じ cross-recipe terminal summary を出力します。
+
+accumulation は query ごとに最大 10,000 candidate row、返却する query detail は 512 件、error は
+32 件、実行時間は5分、明示的な `--max-json-bytes` がない JSON response は 4 MiB に制限されます。
+指定した `--total-limit` による truncation は正常な上限付き結果です。query failure が起きても
+成功済み sibling recipe は破棄せず、実行を継続して上限付き error を記録し、partial exit code 11
+を返します。`--allow-partial` を指定すると不完全な状態を維持したまま exit code 0 を許可します。
+cancellation は completed / omitted accounting を保持し、exit code 8 を返します。SARIF、issue draft、
+child-query cursor、recipe 固有 aggregation が必要な場合は個別の `cdidx audit <recipe>` を使ってください。
+`cdidx recipes` と `cdidx batch` は lower-level の discovery / 明示的 orchestration tool として維持されます。
 組み込み recipe には `risky-code`、`json-parse-apis`、`dotnet-risk-patterns`、
 `auth-token-audit`、`string-comparison-semantics`、`dogfood-risk-patterns`、
 `sqlite-query-policy-surfaces`、`unsupported-operation-boundaries`、`xml-parser-security`、

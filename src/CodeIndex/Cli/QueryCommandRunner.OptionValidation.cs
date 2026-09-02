@@ -495,6 +495,7 @@ public static partial class QueryCommandRunner
             if (normalizedArg == "--json"
                 && !string.Equals(arg, "--json", StringComparison.Ordinal)
                 && commandName != "search"
+                && commandName != "audit"
                 && commandName != "files"
                 && commandName != "symbols")
             {

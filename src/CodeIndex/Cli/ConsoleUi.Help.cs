@@ -113,7 +113,7 @@ public static partial class ConsoleUi
         Console.WriteLine("  vacuum                     Reclaim free SQLite pages from an existing index DB");
         Console.WriteLine("  search <query>             Full-text search across indexed chunks");
         Console.WriteLine("  recipes                    List built-in search audit recipes");
-        Console.WriteLine("  audit <recipe>             Run a built-in search audit recipe");
+        Console.WriteLine("  audit <recipe>|--all       Run one recipe or every registered recipe with bounded summaries");
         Console.WriteLine("  definition <query>         Resolve symbol definitions with extracted ranges");
         Console.WriteLine("  goto <query>               Return one best LSP Location for a definition");
         Console.WriteLine("  references <query>         Find indexed references for a symbol (--kind uses reference kind)");
@@ -244,6 +244,8 @@ public static partial class ConsoleUi
         Console.WriteLine("  cdidx search authenticate --json=array         Emit search results as one JSON array");
         Console.WriteLine("  cdidx search authenticate --profile            Append SQL profile JSON for slow-query debugging");
         Console.WriteLine("  cdidx search authenticate --verbose            Emit query debug diagnostics on stderr");
+        Console.WriteLine("  cdidx audit --all --format compact --total-limit 200");
+        Console.WriteLine("                                              Audit every registered recipe in deterministic order");
         Console.WriteLine("  cdidx definition ResolveGitCommonDir --body   Show a symbol definition and body");
         Console.WriteLine("  cdidx references ResolveGitCommonDir          Find indexed references");
         Console.WriteLine("  cdidx references DbContext --kind instantiate Filter constructor sites by reference kind");

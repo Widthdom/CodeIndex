@@ -12,7 +12,8 @@ public static partial class QueryCommandRunner
         SearchAuditRecipeQuery RecipeQuery,
         bool Exact,
         int? ResultLimit,
-        bool? RawFtsOverride);
+        bool? RawFtsOverride,
+        int? FetchLimitCap = null);
 
     private readonly record struct SearchRecipeQueryMaterializationResult(
         List<SearchDisplayRow> Rows,
@@ -26,6 +27,8 @@ public static partial class QueryCommandRunner
         var fetchLimit = request.ResultLimit.HasValue
             ? GetSearchRecipeFetchLimit(request.Options, request.ResultLimit.Value, request.RecipeQuery)
             : int.MaxValue;
+        if (request.FetchLimitCap.HasValue)
+            fetchLimit = Math.Min(fetchLimit, request.FetchLimitCap.Value);
         var results = request.Reader.Search(
             request.RecipeQuery.Query,
             fetchLimit,
@@ -85,7 +88,11 @@ public static partial class QueryCommandRunner
         out int total,
         out int minimumMatchedTotal,
         out List<SearchQueryFreshnessObservation> freshnessObservations,
-        out bool hasFailures)
+        out bool hasFailures,
+        int emittedBefore = 0,
+        int? aggregateResultLimit = null,
+        int? fetchLimitCap = null,
+        IReadOnlyList<SearchAuditRecipeQuery>? auditClassificationQueries = null)
     {
         var queryResults = new List<SearchRecipeQueryResultJsonResult>();
         freshnessObservations = [];
@@ -97,7 +104,9 @@ public static partial class QueryCommandRunner
             try
             {
                 var exact = userExact || recipeQuery.ExactSubstring;
-                var resultLimit = GetSearchRecipeEffectiveResultLimit(options, total);
+                var resultLimit = aggregateResultLimit.HasValue
+                    ? Math.Max(0, Math.Min(options.Limit, aggregateResultLimit.Value - emittedBefore - total))
+                    : GetSearchRecipeEffectiveResultLimit(options, total);
                 var materializationRequest = new SearchRecipeQueryMaterializationRequest(
                     reader,
                     scope,
@@ -105,7 +114,8 @@ public static partial class QueryCommandRunner
                     recipeQuery,
                     exact,
                     resultLimit,
-                    RawFtsOverride: false);
+                    RawFtsOverride: false,
+                    FetchLimitCap: fetchLimitCap);
                 var materialization = MaterializeSearchRecipeQuery(in materializationRequest);
                 var rows = materialization.Rows;
                 var summaryEvidencePaths = BuildSearchRecipeTopFiles(rows);
@@ -121,7 +131,11 @@ public static partial class QueryCommandRunner
                     materialization.SourceTotalAuthoritative);
                 rows = outputSelection.Rows;
                 if (includeAuditClassifications)
-                    ApplySearchRecipeAuditClassifications(reader, recipeQuery, recipeQueries, rows);
+                    ApplySearchRecipeAuditClassifications(
+                        reader,
+                        recipeQuery,
+                        auditClassificationQueries ?? recipeQueries,
+                        rows);
                 var minimumOmitted = Math.Max(0, outputSelection.OriginalCount - rows.Count);
                 var selectionReason = GetSearchRecipeSelectionReason(outputSelection);
                 total += rows.Count;

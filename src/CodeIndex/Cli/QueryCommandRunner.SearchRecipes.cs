@@ -4560,12 +4560,26 @@ public static partial class QueryCommandRunner
         IReadOnlyList<SearchAuditRecipeQuery> selectedQueries,
         QueryCommandOptions options)
     {
+        var indexState = ResolveSearchQueryIndexFreshness(reader, options, out var indexReason);
+        return BuildSearchRecipeFreshnessContext(
+            recipe,
+            selectedQueries,
+            indexState,
+            indexReason);
+    }
+
+    private static SearchQueryFreshnessContext BuildSearchRecipeFreshnessContext(
+        SearchAuditRecipe recipe,
+        IReadOnlyList<SearchAuditRecipeQuery> selectedQueries,
+        string indexState,
+        string? indexReason)
+    {
         var recipeVersion = BuildSearchDefinitionVersion(
             "audit-recipe-v1",
             recipe,
             CliJsonSerializerContext.Default.SearchAuditRecipe);
         return new(
-            ResolveSearchQueryIndexFreshness(reader, options, out var indexReason),
+            indexState,
             indexReason,
             recipeVersion,
             recipeVersion,
