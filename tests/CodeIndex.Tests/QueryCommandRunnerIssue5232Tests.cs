@@ -14,7 +14,12 @@ public partial class QueryCommandRunnerTests
         var results = Enumerable.Range(0, QueryCommandRunner.GotoAmbiguityCandidateLimit)
             .Select(index => new CodeIndex.Database.DefinitionResult
             {
-                Path = index == 0 ? "/private/secret/Target.cs" : $"relative/{index}/{longValue}",
+                Path = index switch
+                {
+                    0 => "/private/secret/Target.cs",
+                    1 => "tests/CodeIndex.Tests/QueryCommandRunnerAuditSarifIssue4903Tests.cs",
+                    _ => $"relative/{index}/{longValue}",
+                },
                 Line = index + 1,
                 Lang = longValue,
                 Kind = longValue,
@@ -37,7 +42,10 @@ public partial class QueryCommandRunnerTests
         Assert.True(Encoding.UTF8.GetByteCount(candidates.GetRawText()) <= QueryCommandRunner.GotoAmbiguityCandidateByteLimit);
         Assert.Equal(Encoding.UTF8.GetByteCount(candidates.GetRawText()), root.GetProperty("candidate_bytes").GetInt32());
         Assert.Equal("<redacted>", candidates[0].GetProperty("path").GetString());
-        Assert.StartsWith("relative/1/", candidates[1].GetProperty("path").GetString(), StringComparison.Ordinal);
+        Assert.Equal(
+            "tests/CodeIndex.Tests/QueryCommandRunnerAuditSarifIssue4903Tests.cs",
+            candidates[1].GetProperty("path").GetString());
+        Assert.DoesNotContain(candidates.EnumerateArray(), candidate => candidate.TryGetProperty("signature", out _));
         Assert.Equal(candidates.GetArrayLength(), root.GetProperty("returned_count").GetInt32());
         Assert.Equal(100 - candidates.GetArrayLength(), root.GetProperty("omitted_count").GetInt32());
         Assert.True(root.GetProperty("candidates_truncated").GetBoolean());
@@ -79,8 +87,12 @@ public partial class QueryCommandRunnerTests
                     dbPath,
                     path,
                     "csharp",
-                    $"public class SharedTarget {{ public void Run() {{ }} }} // {index}\n");
+                    index == 2
+                        ? "public class SharedTarget { public void Run(string password = \"hunter2\") { } }\n"
+                        : $"public class SharedTarget {{ public void Run() {{ }} }} // {index}\n");
             }
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/CustomA.css", "css", ":root { --json: red; }\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/CustomB.css", "css", ".x { --json: blue; }\n");
 
             var (zeroExit, zeroStdout, zeroStderr) = CaptureConsole(() => QueryCommandRunner.RunGoto(
                 ["MissingTarget", "--db", dbPath, "--json", "--exact-name", "--kind", "class", "--lang", "csharp"],
@@ -116,6 +128,7 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(string.Empty, manyStderr);
             Assert.DoesNotContain("SUPERSECRETVALUE", manyStdout, StringComparison.Ordinal);
             Assert.DoesNotContain("ghp_0123456789abcdefghijkl", manyStdout, StringComparison.Ordinal);
+            Assert.DoesNotContain("hunter2", manyStdout, StringComparison.Ordinal);
             using (var manyDocument = ParseJsonOutput(manyStdout))
             {
                 var many = manyDocument.RootElement;
@@ -151,6 +164,7 @@ public partial class QueryCommandRunnerTests
                 });
                 Assert.Contains(candidates.EnumerateArray(), candidate =>
                     candidate.GetProperty("path").GetString()?.StartsWith("src/SharedTarget", StringComparison.Ordinal) is true);
+                Assert.All(candidates.EnumerateArray(), candidate => Assert.False(candidate.TryGetProperty("signature", out _)));
             }
 
             var humanArgs = ambiguityArgs.Where(arg => arg != "--json").ToArray();
@@ -163,10 +177,53 @@ public partial class QueryCommandRunnerTests
             Assert.Contains("goto found 25 matching definitions", humanStderr, StringComparison.Ordinal);
             Assert.Contains("Hint: narrow the query", humanStderr, StringComparison.OrdinalIgnoreCase);
             Assert.Contains("Usage: cdidx goto", humanStderr, StringComparison.Ordinal);
+
+            var (literalExit, literalStdout, literalStderr) = CaptureConsole(() => QueryCommandRunner.RunGoto(
+                ["--", "--json", "--db", dbPath, "--exact-name", "--kind", "property", "--lang", "css"],
+                _jsonOptions));
+            Assert.Equal(CommandExitCodes.UsageError, literalExit);
+            Assert.Equal(string.Empty, literalStdout);
+            Assert.Contains($"Error [{CommandErrorCodes.QueryAmbiguous}]", literalStderr, StringComparison.Ordinal);
         }
         finally
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
+    }
+
+    [Fact]
+    public void RunGoto_AmbiguityTotalsCountOnlyMaterializableDefinitions_Issue5232()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_goto_materializable_issue5232");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        for (var index = 0; index < 3; index++)
+        {
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                $"src/Connect{index}.cs",
+                "csharp",
+                $"public class Connect{index} {{ public void Connect() {{ }} }}\n");
+        }
+
+        using (var db = new CodeIndex.Database.DbContext(CodeIndex.Database.DbOpenIntent.WriteIndex, dbPath))
+        using (var command = db.Connection.CreateCommand())
+        {
+            command.CommandText = "DELETE FROM chunks WHERE file_id = (SELECT id FROM files WHERE path = 'src/Connect2.cs')";
+            command.ExecuteNonQuery();
+        }
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunGoto(
+            ["Connect", "--db", dbPath, "--json", "--exact-name", "--kind", "function", "--lang", "csharp"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = ParseJsonOutput(stdout);
+        var root = document.RootElement;
+        Assert.Equal(2, root.GetProperty("match_count").GetInt32());
+        Assert.Equal(2, root.GetProperty("total_count").GetInt32());
+        Assert.Equal(2, root.GetProperty("returned_count").GetInt32());
+        Assert.Equal(0, root.GetProperty("omitted_count").GetInt32());
+        Assert.False(root.GetProperty("candidates_truncated").GetBoolean());
     }
 }

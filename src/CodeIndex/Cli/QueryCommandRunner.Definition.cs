@@ -310,11 +310,9 @@ public static partial class QueryCommandRunner
     public static int RunGoto(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var all = cmdArgs.Any(arg => arg == "--all");
-        var jsonRequested = cmdArgs.Any(arg =>
-            arg.Equals("--json", StringComparison.Ordinal)
-            || arg.StartsWith("--json=", StringComparison.Ordinal));
         var filteredArgs = cmdArgs.Where(arg => arg != "--all").ToArray();
         var options = ParseArgs(filteredArgs, jsonDefault: true, allowNamedQuery: true);
+        var jsonRequested = options.JsonExplicit;
         using var exactLanguageScope = DbReader.BeginExactQueryLanguageScope(
             options.Lang);
         if (TryWriteUnsupportedOptionError("goto", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("goto"), options.Query))
@@ -382,7 +380,7 @@ public static partial class QueryCommandRunner
 
             if (results.Count > 1)
             {
-                var totalCount = reader.CountSearchSymbolsTotal(
+                var totalCount = reader.CountDefinitionsTotal(
                     options.Query,
                     options.Kind,
                     options.Lang,
@@ -440,7 +438,6 @@ public static partial class QueryCommandRunner
                 ["kind"] = BoundGotoCandidateText(result.Kind),
                 ["name"] = BoundGotoCandidateText(result.Name),
                 ["container_name"] = BoundGotoCandidateText(result.ContainerName),
-                ["signature"] = BoundGotoCandidateText(result.Signature, maxChars: 240),
             };
             candidates.Add(candidate);
             var measuredBytes = MeasureGotoAmbiguityCandidateBytes(candidates, nodeOptions);
@@ -508,8 +505,14 @@ public static partial class QueryCommandRunner
             return DiagnosticRedactor.AngleRedacted;
 
         var assignmentRedacted = RedactGotoRelativePathSecrets(value);
-        var redacted = DiagnosticRedactor.RedactSuggestionText(assignmentRedacted, out _);
-        return DiagnosticRedactor.BoundDiagnosticText(redacted);
+        var segments = assignmentRedacted.Split('/');
+        for (var index = 0; index < segments.Length; index++)
+        {
+            if (ContainsGotoStructuredSecretPrefix(segments[index]))
+                segments[index] = DiagnosticRedactor.RedactSuggestionText(segments[index], out _);
+        }
+
+        return DiagnosticRedactor.BoundDiagnosticText(string.Join('/', segments));
     }
 
     private static string? BoundGotoCandidateText(
@@ -538,6 +541,29 @@ public static partial class QueryCommandRunner
 
         return string.Join('/', segments);
     }
+
+    private static bool ContainsGotoStructuredSecretPrefix(string value) =>
+        value.Contains("ghp_", StringComparison.Ordinal)
+        || value.Contains("gho_", StringComparison.Ordinal)
+        || value.Contains("ghu_", StringComparison.Ordinal)
+        || value.Contains("ghs_", StringComparison.Ordinal)
+        || value.Contains("ghr_", StringComparison.Ordinal)
+        || value.Contains("github_pat_", StringComparison.Ordinal)
+        || value.Contains("AKIA", StringComparison.Ordinal)
+        || value.Contains("sk_live_", StringComparison.Ordinal)
+        || value.Contains("sk_test_", StringComparison.Ordinal)
+        || value.Contains("sk_proj_", StringComparison.Ordinal)
+        || value.Contains("rk_live_", StringComparison.Ordinal)
+        || value.Contains("rk_test_", StringComparison.Ordinal)
+        || value.Contains("rk_proj_", StringComparison.Ordinal)
+        || value.Contains("whsec_", StringComparison.Ordinal)
+        || value.Contains("sk-", StringComparison.Ordinal)
+        || value.Contains("glpat-", StringComparison.Ordinal)
+        || value.Contains("xoxb-", StringComparison.Ordinal)
+        || value.Contains("xoxa-", StringComparison.Ordinal)
+        || value.Contains("xoxp-", StringComparison.Ordinal)
+        || value.Contains("xoxr-", StringComparison.Ordinal)
+        || value.Contains("xoxs-", StringComparison.Ordinal);
 
     private static bool IsGotoAbsolutePath(string value) =>
         Path.IsPathRooted(value)
