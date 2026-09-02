@@ -353,6 +353,25 @@ public partial class IndexCommandRunnerTests
                 Assert.Equal(0, GetDryRunEstimateValue(estimate, "row_operations"));
                 Assert.Equal(currentCounts[tableName], GetDryRunEstimateValue(estimate, "projected_final_rows"));
                 Assert.Equal(0, GetDryRunEstimateValue(estimate, "projected_row_delta"));
+                if (tableName != "files")
+                {
+                    AssertDryRunEstimateMetadata(
+                        estimate.GetProperty("rows_inserted_or_upserted"),
+                        "filesystem_plan",
+                        "exact");
+                    foreach (var dimension in new[]
+                             {
+                                 "row_operations",
+                                 "projected_final_rows",
+                                 "projected_row_delta",
+                             })
+                    {
+                        AssertDryRunEstimateMetadata(
+                            estimate.GetProperty(dimension),
+                            "filesystem_plan_and_index_snapshot",
+                            "exact");
+                    }
+                }
             }
 
             File.Delete(sourcePath);
@@ -374,6 +393,25 @@ public partial class IndexCommandRunnerTests
                 Assert.Equal(currentCounts[tableName], GetDryRunEstimateValue(estimate, "row_operations"));
                 Assert.Equal(0, GetDryRunEstimateValue(estimate, "projected_final_rows"));
                 Assert.Equal(-currentCounts[tableName], GetDryRunEstimateValue(estimate, "projected_row_delta"));
+                if (tableName != "files")
+                {
+                    AssertDryRunEstimateMetadata(
+                        estimate.GetProperty("rows_inserted_or_upserted"),
+                        "filesystem_plan",
+                        "exact");
+                    foreach (var dimension in new[]
+                             {
+                                 "row_operations",
+                                 "projected_final_rows",
+                                 "projected_row_delta",
+                             })
+                    {
+                        AssertDryRunEstimateMetadata(
+                            estimate.GetProperty(dimension),
+                            "filesystem_plan_and_index_snapshot",
+                            "exact");
+                    }
+                }
             }
             Assert.Equal(databaseBeforeDeletePreview, ReadDatabaseFileSetFingerprint(dbPath));
         }

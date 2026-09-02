@@ -2289,6 +2289,7 @@ public static partial class IndexCommandRunner
         private readonly DryRunEstimateDimensionState rowsDeleted = new();
         private readonly DryRunEstimateDimensionState rowsInsertedOrUpserted = new();
         private readonly DryRunEstimateDimensionState projectedRowAdditions = new();
+        private bool childInsertionRequiresParseEstimate;
 
         internal DryRunMutationEstimateAccumulator(DryRunDbSnapshot snapshot)
         {
@@ -2322,6 +2323,7 @@ public static partial class IndexCommandRunner
 
         internal void AddParsedEstimate(DryRunParsedMutationEstimate estimate)
         {
+            childInsertionRequiresParseEstimate = true;
             AddInsertOrUpsert("chunks", estimate.Chunks);
             AddInsertOrUpsert("symbols", estimate.Symbols);
             AddInsertOrUpsert("symbol_references", estimate.SymbolReferences);
@@ -2331,6 +2333,7 @@ public static partial class IndexCommandRunner
 
         internal void MarkParseUnknown(string reason)
         {
+            childInsertionRequiresParseEstimate = true;
             foreach (var metric in MetricNames)
             {
                 if (metric != "files")
@@ -2343,6 +2346,7 @@ public static partial class IndexCommandRunner
 
         internal void MarkAllUnknown(string reason)
         {
+            childInsertionRequiresParseEstimate = true;
             foreach (var metric in MetricNames)
             {
                 initialRows.MarkUnknown(metric, reason);
@@ -2422,6 +2426,7 @@ public static partial class IndexCommandRunner
             string metric)
         {
             var fileMetric = string.Equals(metric, "files", StringComparison.Ordinal);
+            var parseDerived = !fileMetric && childInsertionRequiresParseEstimate;
             var deleted = BuildDirectEstimate(
                 rowsDeleted,
                 metric,
@@ -2430,36 +2435,36 @@ public static partial class IndexCommandRunner
             var insertedOrUpserted = BuildDirectEstimate(
                 rowsInsertedOrUpserted,
                 metric,
-                fileMetric ? "filesystem_plan" : "parse_only",
-                fileMetric ? "exact" : "estimate");
+                parseDerived ? "parse_only" : "filesystem_plan",
+                parseDerived ? "estimate" : "exact");
             var operations = BuildBinaryEstimate(
                 rowsDeleted,
                 rowsInsertedOrUpserted,
                 metric,
-                fileMetric
-                    ? "filesystem_plan_and_index_snapshot"
-                    : "parse_only_and_index_snapshot",
-                fileMetric ? "exact" : "estimate",
+                parseDerived
+                    ? "parse_only_and_index_snapshot"
+                    : "filesystem_plan_and_index_snapshot",
+                parseDerived ? "estimate" : "exact",
                 static (left, right) => checked(left + right));
             var projectedFinalRows = BuildTernaryEstimate(
                 initialRows,
                 rowsDeleted,
                 projectedRowAdditions,
                 metric,
-                fileMetric
-                    ? "filesystem_plan_and_index_snapshot"
-                    : "parse_only_and_index_snapshot",
-                fileMetric ? "exact" : "estimate",
+                parseDerived
+                    ? "parse_only_and_index_snapshot"
+                    : "filesystem_plan_and_index_snapshot",
+                parseDerived ? "estimate" : "exact",
                 static (initial, deletes, additions) => checked(initial - deletes + additions),
                 rejectNegative: true);
             var projectedRowDelta = BuildBinaryEstimate(
                 projectedRowAdditions,
                 rowsDeleted,
                 metric,
-                fileMetric
-                    ? "filesystem_plan_and_index_snapshot"
-                    : "parse_only_and_index_snapshot",
-                fileMetric ? "exact" : "estimate",
+                parseDerived
+                    ? "parse_only_and_index_snapshot"
+                    : "filesystem_plan_and_index_snapshot",
+                parseDerived ? "estimate" : "exact",
                 static (additions, deletes) => checked(additions - deletes));
 
             return new IndexDryRunTableRowEstimateJsonResult(
