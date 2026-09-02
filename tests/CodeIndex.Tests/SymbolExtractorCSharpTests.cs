@@ -3696,6 +3696,27 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_RecordHeaderDirectivePayloadDoesNotCaptureFollowingSibling_Issue5228()
+    {
+        var content = """
+            public class Outer
+            {
+                public record Directed(int Value)
+            #region declaration ; brace {
+            #endregion
+                ; public class Following { }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var directed = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Directed"));
+        Assert.Equal((3, 6), (directed.BodyStartLine, directed.BodyEndLine));
+
+        var following = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Following"));
+        Assert.Equal("Outer", following.ContainerName);
+    }
+
+    [Fact]
     public void Extract_CSharp_QualifiedRecordContinuationsKeepDeclarationBodies_Issue5228()
     {
         var content = """

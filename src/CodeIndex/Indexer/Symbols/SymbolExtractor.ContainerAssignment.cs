@@ -1085,6 +1085,9 @@ public static partial class SymbolExtractor
                 var sanitizedLine = LexCSharpLine(
                     rawLines[lineIndex],
                     lineStartStates[lineIndex]).SanitizedLine;
+                if (IsCSharpPreprocessorDirectiveLine(sanitizedLine))
+                    continue;
+
                 var fromColumn = lineIndex == container.StartLine - 1
                     ? Math.Clamp(container.StartColumn ?? 0, 0, sanitizedLine.Length)
                     : 0;
