@@ -828,7 +828,7 @@ public partial class McpServer
                         ["category"] = new JsonObject
                         {
                             ["type"] = "string",
-                            ["description"] = "Suggestion category: symbol_extraction, reference_extraction, search_ranking, language_support, output_format, crash_report, unexpected_error, security, performance, bug, cleanup, documentation, feature_request, or other",
+                            ["description"] = $"Suggestion category: {string.Join(", ", SuggestionRecord.ValidCategories)}",
                             ["enum"] = new JsonArray(SuggestionRecord.ValidCategories.Select(category => (JsonNode?)category).ToArray())
                         },
                         ["language"] = new JsonObject { ["type"] = "string", ["description"] = "Programming language this applies to (optional)" },
