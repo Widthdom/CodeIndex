@@ -21,6 +21,7 @@ public static partial class QueryCommandRunner
         private string? dbPath;
         private string? dataDir;
         private bool? json;
+        private bool jsonExplicit;
         private string jsonOutputFormat = JsonOutputFormatNdjson;
         private bool jsonOutputFormatExplicit;
         private int limit;
@@ -425,6 +426,7 @@ public static partial class QueryCommandRunner
                 DataDir = dbResolution.DataDir,
                 DataDirSource = dbResolution.DataDirSource,
                 Json = json ?? jsonDefault,
+                JsonExplicit = jsonExplicit,
                 JsonOutputFormat = jsonOutputFormat,
                 JsonOutputFormatExplicit = jsonOutputFormatExplicit,
                 OutputFormat = outputFormat,

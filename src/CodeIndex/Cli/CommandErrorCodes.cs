@@ -98,4 +98,7 @@ internal static class CommandErrorCodes
 
     /// <summary>A requested JSON response byte budget cannot fit the minimum complete payload or envelope.</summary>
     public const string ResponseBudgetTooSmall = "E028_RESPONSE_BUDGET_TOO_SMALL";
+
+    /// <summary>A query matched multiple entities and requires explicit narrowing or an all-results option.</summary>
+    public const string QueryAmbiguous = "E029_QUERY_AMBIGUOUS";
 }
