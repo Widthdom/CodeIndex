@@ -4567,53 +4567,122 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunFilesAndMap_ExcludeTestsApplyTheSameSourceScope_Issues3918_4754()
+    public void RunFilesAndMap_ExcludeTestsKeepExplicitPathsInsideSourceBaseline_Issues3918_4754_5229()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_files_exclude_tests_source_3918");
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             TestProjectHelper.InsertIndexedFile(dbPath, ".agent_harness/command_guard_core.py", "python", "def guard_harness():\n    pass\n");
-            TestProjectHelper.InsertIndexedFile(dbPath, ".claude/hooks/bash-guard.py", "python", "def bash_guard():\n    pass\n");
             TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp", "class App {}\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Feature/Other.cs", "csharp", "class Other {}\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Nested/Worker.cs", "csharp", "class Worker {}\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Generated.g.cs", "csharp", "class Generated {}\n", isGenerated: true);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/CodeIndex/Cli/SearchAuditRecipes.cs", "csharp", "class AuditRecipes {}\n");
             TestProjectHelper.InsertIndexedFile(dbPath, "tests/AppTests.cs", "csharp", "class AppTests {}\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "tools/Tool.cs", "csharp", "class Tool {}\n");
 
-            var scopes = new[]
-            {
-                (AdditionalArgs: Array.Empty<string>(), ExpectedPath: "src/App.cs"),
-                (AdditionalArgs: new[] { "--path", ".agent_harness/**" }, ExpectedPath: ".agent_harness/command_guard_core.py")
-            };
-
-            foreach (var scope in scopes)
+            HashSet<string> RunFiles(params string[] additionalArgs)
             {
                 var filesArgs = new[] { "--db", dbPath, "--json=array", "--exclude-tests", "--limit", "10" }
-                    .Concat(scope.AdditionalArgs)
+                    .Concat(additionalArgs)
                     .ToArray();
                 var (filesExitCode, filesStdout, filesStderr) = CaptureConsole(() => QueryCommandRunner.RunFiles(
                     filesArgs,
                     _jsonOptions));
 
                 using var filesDocument = ParseJsonOutput(filesStdout);
-                var files = filesDocument.RootElement.EnumerateArray().ToArray();
-                var file = Assert.Single(files);
-
                 Assert.Equal(CommandExitCodes.Success, filesExitCode);
                 Assert.Equal(string.Empty, filesStderr);
-                Assert.Equal(scope.ExpectedPath, file.GetProperty("path").GetString());
-
-                var mapArgs = new[] { "--db", dbPath, "--json", "--sections", "summary", "--exclude-tests" }
-                    .Concat(scope.AdditionalArgs)
-                    .ToArray();
-                var (mapExitCode, mapStdout, mapStderr) = CaptureConsole(() => QueryCommandRunner.RunMap(
-                    mapArgs,
-                    _jsonOptions));
-
-                using var mapDocument = ParseJsonOutput(mapStdout);
-
-                Assert.Equal(CommandExitCodes.Success, mapExitCode);
-                Assert.Equal(string.Empty, mapStderr);
-                Assert.Equal(files.Length, mapDocument.RootElement.GetProperty("file_count").GetInt32());
+                return filesDocument.RootElement
+                    .EnumerateArray()
+                    .Select(file => file.GetProperty("path").GetString()!)
+                    .ToHashSet(StringComparer.Ordinal);
             }
+
+            JsonElement RunFilesCount(params string[] additionalArgs)
+            {
+                var countArgs = new[] { "--db", dbPath, "--json", "--count", "--exclude-tests" }
+                    .Concat(additionalArgs)
+                    .ToArray();
+                var (countExitCode, countStdout, countStderr) = CaptureConsole(() => QueryCommandRunner.RunFiles(
+                    countArgs,
+                    _jsonOptions));
+                using var countDocument = ParseJsonOutput(countStdout);
+
+                Assert.Equal(CommandExitCodes.Success, countExitCode);
+                Assert.Equal(string.Empty, countStderr);
+                return countDocument.RootElement.Clone();
+            }
+
+            var baseline = RunFiles();
+            var broad = RunFiles("--path", "**");
+            var sourceBroad = RunFiles("--path", "src/**");
+            var narrow = RunFiles("--path", "src/Nested/**");
+            var multiple = RunFiles("--path", "src/App.cs", "--path", "src/Feature/**");
+            var explicitlyExcluded = RunFiles("--path", "src/**", "--exclude-path", "src/Feature/**");
+            var caseVariant = RunFiles("--path", "SRC/NESTED/**");
+            var generatedIncluded = RunFiles("--include-generated");
+
+            Assert.Equal(
+                new[] { "src/App.cs", "src/Feature/Other.cs", "src/Nested/Worker.cs" },
+                baseline.OrderBy(path => path, StringComparer.Ordinal));
+            Assert.True(broad.IsSubsetOf(baseline));
+            Assert.True(sourceBroad.IsSubsetOf(baseline));
+            Assert.Equal(baseline, broad);
+            Assert.Equal(baseline, sourceBroad);
+            Assert.Equal(["src/Nested/Worker.cs"], narrow);
+            Assert.Equal(["src/App.cs", "src/Feature/Other.cs"], multiple);
+            Assert.Equal(["src/App.cs", "src/Nested/Worker.cs"], explicitlyExcluded);
+            Assert.Equal(narrow, caseVariant);
+            Assert.Contains("src/Generated.g.cs", generatedIncluded);
+            Assert.DoesNotContain("src/CodeIndex/Cli/SearchAuditRecipes.cs", generatedIncluded);
+            Assert.DoesNotContain("tests/AppTests.cs", generatedIncluded);
+            Assert.DoesNotContain("tools/Tool.cs", generatedIncluded);
+            Assert.DoesNotContain(".agent_harness/command_guard_core.py", generatedIncluded);
+
+            foreach (var scope in new[]
+                     {
+                         (Paths: baseline, Args: Array.Empty<string>()),
+                         (Paths: broad, Args: new[] { "--path", "**" }),
+                         (Paths: narrow, Args: new[] { "--path", "src/Nested/**" }),
+                         (Paths: multiple, Args: new[] { "--path", "src/App.cs", "--path", "src/Feature/**" }),
+                         (Paths: explicitlyExcluded, Args: new[] { "--path", "src/**", "--exclude-path", "src/Feature/**" }),
+                     })
+            {
+                Assert.Equal(scope.Paths.Count, RunFilesCount(scope.Args).GetProperty("count").GetInt32());
+            }
+
+            var explicitExcludeCount = RunFilesCount("--path", "src/**", "--exclude-path", "src/Feature/**");
+            var effectiveScope = explicitExcludeCount
+                .GetProperty("query_context")
+                .GetProperty("effective_path_scope");
+            Assert.Equal("and", effectiveScope.GetProperty("include_group_operator").GetString());
+            Assert.Equal("or", effectiveScope.GetProperty("patterns_within_include_group_operator").GetString());
+            Assert.Equal("or", effectiveScope.GetProperty("exclude_group_operator").GetString());
+            var includeGroups = effectiveScope.GetProperty("include_groups").EnumerateArray().ToArray();
+            var excludeGroups = effectiveScope.GetProperty("exclude_groups").EnumerateArray().ToArray();
+            Assert.Equal(["implicit_source_baseline", "explicit_cli"], includeGroups.Select(group => group.GetProperty("origin").GetString()));
+            Assert.Equal(["src/**"], includeGroups[0].GetProperty("patterns").EnumerateArray().Select(item => item.GetString()));
+            Assert.Equal(["src/**"], includeGroups[1].GetProperty("patterns").EnumerateArray().Select(item => item.GetString()));
+            Assert.Equal(["implicit_source_baseline", "explicit_cli"], excludeGroups.Select(group => group.GetProperty("origin").GetString()));
+            Assert.Contains("src/CodeIndex/Cli/SearchAuditRecipes.cs", excludeGroups[0].GetProperty("patterns").EnumerateArray().Select(item => item.GetString()));
+            Assert.Equal(["src/Feature/**"], excludeGroups[1].GetProperty("patterns").EnumerateArray().Select(item => item.GetString()));
+
+            var (mapExitCode, mapStdout, mapStderr) = CaptureConsole(() => QueryCommandRunner.RunMap(
+                ["--db", dbPath, "--json", "--sections", "summary", "--exclude-tests", "--path", "src/Nested/**"],
+                _jsonOptions));
+            using var mapDocument = ParseJsonOutput(mapStdout);
+            Assert.Equal(CommandExitCodes.Success, mapExitCode);
+            Assert.Equal(string.Empty, mapStderr);
+            Assert.Equal(narrow.Count, mapDocument.RootElement.GetProperty("file_count").GetInt32());
+            Assert.Equal(
+                "and",
+                mapDocument.RootElement
+                    .GetProperty("query_context")
+                    .GetProperty("effective_path_scope")
+                    .GetProperty("include_group_operator")
+                    .GetString());
         }
         finally
         {

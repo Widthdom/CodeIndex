@@ -246,6 +246,8 @@ public static partial class QueryCommandRunner
             query["sort"] = options.SymbolSortMode.ToString().ToLowerInvariant();
         if (options.ExcludeTests)
             query["exclude_tests"] = true;
+        if (options.DiscoveryBaselineIncludePaths.Count > 0 || options.DiscoveryBaselineExcludePaths.Count > 0)
+            query["effective_path_scope"] = BuildEffectiveDiscoveryPathScopeJson(options, jsonOptions);
         if (options.ExcludeComments)
             query["exclude_comments"] = true;
         if (options.ExcludeStrings)
@@ -319,6 +321,55 @@ public static partial class QueryCommandRunner
         if (options.ContextAfter > 0)
             query[options.ContextAfterExplicit ? "depth" : "after"] = options.ContextAfter;
         return query;
+    }
+
+    private static JsonObject BuildEffectiveDiscoveryPathScopeJson(
+        QueryCommandOptions options,
+        JsonSerializerOptions jsonOptions)
+    {
+        var context = CliJsonSerializerContextFactory.Create(jsonOptions);
+        var includeGroups = new JsonArray
+        {
+            new JsonObject
+            {
+                ["origin"] = "implicit_source_baseline",
+                ["patterns"] = JsonSerializer.SerializeToNode(options.DiscoveryBaselineIncludePaths.ToList(), context.ListString),
+            },
+        };
+        if (options.PathPatterns.Count > 0)
+        {
+            includeGroups.Add(new JsonObject
+            {
+                ["origin"] = "explicit_cli",
+                ["patterns"] = JsonSerializer.SerializeToNode(options.PathPatterns, context.ListString),
+            });
+        }
+
+        var excludeGroups = new JsonArray
+        {
+            new JsonObject
+            {
+                ["origin"] = "implicit_source_baseline",
+                ["patterns"] = JsonSerializer.SerializeToNode(options.DiscoveryBaselineExcludePaths.ToList(), context.ListString),
+            },
+        };
+        if (options.ExcludePaths.Count > 0)
+        {
+            excludeGroups.Add(new JsonObject
+            {
+                ["origin"] = "explicit_cli",
+                ["patterns"] = JsonSerializer.SerializeToNode(options.ExcludePaths, context.ListString),
+            });
+        }
+
+        return new JsonObject
+        {
+            ["include_group_operator"] = "and",
+            ["patterns_within_include_group_operator"] = "or",
+            ["include_groups"] = includeGroups,
+            ["exclude_group_operator"] = "or",
+            ["exclude_groups"] = excludeGroups,
+        };
     }
 
     private static void AddReferenceRankingQueryContextJson(

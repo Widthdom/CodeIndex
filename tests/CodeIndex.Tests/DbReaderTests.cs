@@ -5950,6 +5950,49 @@ public partial class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void ListFiles_RequiredPathPatternsIntersectUserIncludesForRowsCountsAndMap_Issue5229()
+    {
+        InsertIndexedFile("src/issue5229/App.cs", "csharp", "class App5229 {}\n");
+        InsertIndexedFile("src/issue5229/Nested/Worker.cs", "csharp", "class Worker5229 {}\n");
+        InsertIndexedFile("tools/issue5229/Tool.cs", "csharp", "class Tool5229 {}\n");
+
+        var userIncludes = new[] { "src/issue5229/**", "tools/issue5229/**" };
+        var requiredIncludes = new[] { "SRC/**" };
+        var excludePaths = new[] { "src/issue5229/Nested/**" };
+        var rows = _reader.ListFiles(
+            pathPatterns: userIncludes,
+            excludePathPatterns: excludePaths,
+            requiredPathPatterns: requiredIncludes);
+        var counts = _reader.CountListFiles(
+            pathPatterns: userIncludes,
+            excludePathPatterns: excludePaths,
+            requiredPathPatterns: requiredIncludes);
+        var map = _reader.GetRepoMap(
+            pathPatterns: userIncludes,
+            excludePathPatterns: excludePaths,
+            requiredPathPatterns: requiredIncludes);
+
+        Assert.Equal(["src/issue5229/App.cs"], rows.Select(result => result.Path));
+        Assert.Equal(rows.Count, counts.Count);
+        Assert.Equal(rows.Count, map.FileCount);
+
+        var largeIncludes = Enumerable.Range(0, 500).Select(i => $"src/{i}.cs").ToList();
+        var largeExcludes = Enumerable.Range(0, 499).Select(i => $"tests/{i}.cs").ToList();
+        Assert.Throws<ArgumentOutOfRangeException>(() => _reader.ListFiles(
+            pathPatterns: largeIncludes,
+            excludePathPatterns: largeExcludes,
+            requiredPathPatterns: requiredIncludes));
+        Assert.Throws<ArgumentOutOfRangeException>(() => _reader.CountListFiles(
+            pathPatterns: largeIncludes,
+            excludePathPatterns: largeExcludes,
+            requiredPathPatterns: requiredIncludes));
+        Assert.Throws<ArgumentOutOfRangeException>(() => _reader.GetRepoMap(
+            pathPatterns: largeIncludes,
+            excludePathPatterns: largeExcludes,
+            requiredPathPatterns: requiredIncludes));
+    }
+
+    [Fact]
     public void ListFiles_PathFiltersAndExcludePaths_WorkTogether()
     {
         var results = _reader.ListFiles(pathPatterns: new[] { "src/" }, excludePathPatterns: ["src/api.js"]);

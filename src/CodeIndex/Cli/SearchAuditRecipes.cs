@@ -31,24 +31,6 @@ internal static class SearchAuditRecipes
     private const int MaxRecipeDiagnosticCount = 64;
     private const int MaxRecipeDiagnosticLength = 512;
     private static readonly string[] SupportedQuerySeverities = ["info", "low", "medium", "high", "critical"];
-    private static readonly string[] DefaultSourcePathPatternsValue = ["src/**"];
-    private static readonly string[] DefaultSourceExcludePathsValue =
-    [
-        "src/CodeIndex/Cli/SearchAuditRecipes.cs",
-        "tests/**",
-        "docs/**",
-        "CHANGELOG.md",
-        "changelog.d/**",
-        "README.md",
-        "USER_GUIDE.md",
-        "DEVELOPER_GUIDE.md",
-        "TESTING_GUIDE.md",
-        "AGENT_GUIDE.md",
-        ".agent_harness/**",
-        ".claude/**",
-        ".codex/**",
-        ".github/**"
-    ];
     private static readonly string[] DefaultExecutableExcludeOriginsValue =
         [SearchMatchClassifier.HelpText, SearchMatchClassifier.SchemaDescription];
     private static readonly SearchRecipeBroadCatchTaxonomyJsonResult BroadExceptionCatchTaxonomy = new(
@@ -180,8 +162,8 @@ internal static class SearchAuditRecipes
         ],
         "Classify nullable returns by domain before changing behavior. Optional lookup and parse-miss nulls can remain when callers branch explicitly; unsupported capabilities and legacy schema absence need stable diagnostics or documented fallbacks at user-facing boundaries; invariant violations should not be nullable contracts. For null-forgiving suppressions, require nearby tests or contract evidence for reflection/serialization, delayed initialization, or false-state Try* sentinels.");
 
-    internal static IReadOnlyList<string> DefaultSourcePathPatterns => DefaultSourcePathPatternsValue;
-    internal static IReadOnlyList<string> DefaultSourceExcludePaths => DefaultSourceExcludePathsValue;
+    internal static IReadOnlyList<string> DefaultSourcePathPatterns => SourceScopeDefaults.IncludePaths;
+    internal static IReadOnlyList<string> DefaultSourceExcludePaths => SourceScopeDefaults.ExcludePaths;
 
     private static readonly SearchRecipeClassifierJsonResult SourceOriginClassifier = new(
         "source_origin",
@@ -3514,8 +3496,8 @@ internal static class SearchAuditRecipes
                     ["audit", "bug"],
                     "False positives include required event handlers, framework callbacks, and intentionally fire-and-forget boundaries.")
                 {
-                    PathPatterns = [.. DefaultSourcePathPatternsValue],
-                    ExcludePaths = [.. DefaultSourceExcludePathsValue],
+                    PathPatterns = [.. SourceScopeDefaults.IncludePaths],
+                    ExcludePaths = [.. SourceScopeDefaults.ExcludePaths],
                     MatchOrigins = ["code"],
                     RiskEvidence =
                     [
@@ -3530,8 +3512,8 @@ internal static class SearchAuditRecipes
                     ["audit", "bug"],
                     "False positives include top-level compatibility shims and temporary placeholders already tracked for typed exception cleanup.")
                 {
-                    PathPatterns = [.. DefaultSourcePathPatternsValue],
-                    ExcludePaths = [.. DefaultSourceExcludePathsValue],
+                    PathPatterns = [.. SourceScopeDefaults.IncludePaths],
+                    ExcludePaths = [.. SourceScopeDefaults.ExcludePaths],
                     MatchOrigins = ["code"],
                     RiskEvidence =
                     [
@@ -3546,8 +3528,8 @@ internal static class SearchAuditRecipes
                     ["audit", "bug"],
                     "False positives include DTO, command-result, parse-result, and search-result property access; prioritize hits whose receiver is Task or ValueTask.")
                 {
-                    PathPatterns = [.. DefaultSourcePathPatternsValue],
-                    ExcludePaths = [.. DefaultSourceExcludePathsValue],
+                    PathPatterns = [.. SourceScopeDefaults.IncludePaths],
+                    ExcludePaths = [.. SourceScopeDefaults.ExcludePaths],
                     MatchOrigins = ["code"],
                     ResultKinds = ["identifier"],
                     RiskEvidence =
@@ -3564,8 +3546,8 @@ internal static class SearchAuditRecipes
                     ["audit", "security"],
                     "False positives include comments about unsafe APIs and safe-handle names; code-origin matches should be reviewed for pointer and buffer safety.")
                 {
-                    PathPatterns = [.. DefaultSourcePathPatternsValue],
-                    ExcludePaths = [.. DefaultSourceExcludePathsValue],
+                    PathPatterns = [.. SourceScopeDefaults.IncludePaths],
+                    ExcludePaths = [.. SourceScopeDefaults.ExcludePaths],
                     MatchOrigins = ["code"],
                     ResultKinds = ["identifier"],
                     RiskEvidence =
@@ -3598,8 +3580,8 @@ internal static class SearchAuditRecipes
                     ["audit", "performance"],
                     "False positives include bounded helpers or tiny trusted files; prefer this call-site query when bare ReadAllText is noisy.")
                 {
-                    PathPatterns = [.. DefaultSourcePathPatternsValue],
-                    ExcludePaths = [.. DefaultSourceExcludePathsValue],
+                    PathPatterns = [.. SourceScopeDefaults.IncludePaths],
+                    ExcludePaths = [.. SourceScopeDefaults.ExcludePaths],
                     MatchOrigins = ["code"],
                     ResultKinds = ["call_site"],
                     RiskEvidence =
@@ -3650,8 +3632,8 @@ internal static class SearchAuditRecipes
                     "False positives include intentionally tracked follow-up markers; broad TODO inventory should be requested separately when docs and tests are in scope.")
                 {
                     Severity = "info",
-                    PathPatterns = [.. DefaultSourcePathPatternsValue],
-                    ExcludePaths = [.. DefaultSourceExcludePathsValue],
+                    PathPatterns = [.. SourceScopeDefaults.IncludePaths],
+                    ExcludePaths = [.. SourceScopeDefaults.ExcludePaths],
                     MatchOrigins = ["comment"],
                     ResultKinds = ["comment"],
                     RiskEvidence =
@@ -3667,8 +3649,8 @@ internal static class SearchAuditRecipes
                     ["audit", "bug"],
                     "False positives include compatibility shims and deliberate API lifecycle annotations; prioritize call sites or declarations that affect runtime paths.")
                 {
-                    PathPatterns = [.. DefaultSourcePathPatternsValue],
-                    ExcludePaths = [.. DefaultSourceExcludePathsValue],
+                    PathPatterns = [.. SourceScopeDefaults.IncludePaths],
+                    ExcludePaths = [.. SourceScopeDefaults.ExcludePaths],
                     MatchOrigins = ["code"],
                     ResultKinds = ["identifier"],
                     RiskEvidence =
@@ -3739,8 +3721,8 @@ internal static class SearchAuditRecipes
         List<SearchAuditRecipeQuery> queries,
         IReadOnlyList<string>? defaultExcludeOrigins = null) => new(name, description, ApplyDefaultQueryExcludeOrigins(queries, defaultExcludeOrigins))
         {
-            DefaultPathPatterns = [.. DefaultSourcePathPatternsValue],
-            DefaultExcludePaths = [.. DefaultSourceExcludePathsValue],
+            DefaultPathPatterns = [.. SourceScopeDefaults.IncludePaths],
+            DefaultExcludePaths = [.. SourceScopeDefaults.ExcludePaths],
         };
 
     private static List<SearchAuditRecipeQuery> ApplyDefaultQueryExcludeOrigins(

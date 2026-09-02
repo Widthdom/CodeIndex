@@ -45,7 +45,7 @@ public class SqliteDynamicSqlTests
     }
 
     [Fact]
-    public void PathFilterParameters_RejectCombinedIncludeExcludeOverBudget_Issue3702()
+    public void PathFilterParameters_RejectCombinedGroupsOverBudget_Issues3702_5229()
     {
         var includePatterns = Enumerable.Range(0, 500).Select(i => $"src/{i}.cs").ToList();
         var excludePatterns = Enumerable.Range(0, 500).Select(i => $"tests/{i}.cs").ToList();
@@ -55,6 +55,11 @@ public class SqliteDynamicSqlTests
             () => DbReader.AppendPathFilters(ref sql, includePatterns, excludePatterns, excludeTests: false));
 
         Assert.Contains("path filters", ex.Message);
+        var requiredPatterns = new[] { "src/**" };
+        var requiredEx = Assert.Throws<ArgumentOutOfRangeException>(
+            () => DbReader.EnsurePathFilterParameterBudget(includePatterns, excludePatterns.Take(499).ToList(), requiredPatterns));
+
+        Assert.Contains("path filters", requiredEx.Message);
     }
 
     [Fact]
