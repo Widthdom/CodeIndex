@@ -668,7 +668,7 @@ internal static partial class JsonEnvelopeWrapper
             metadata["cursor_offset"] = controls.Offset;
             metadata["page_limit"] = controls.PageLimit;
             metadata["has_more"] = hasMore;
-            metadata["next_cursor"] = selectedScanCursor
+            var nextCursor = selectedScanCursor
                 ?? (hasMore && count > 0
                     ? FormatResponseCursor(
                         nextOffset,
@@ -680,6 +680,15 @@ internal static partial class JsonEnvelopeWrapper
                         controls.ResumeMatchOrdinal,
                         controls.ResumeByteOffset)
                     : null);
+            metadata["next_cursor"] = nextCursor;
+            if (scanCursor is not null
+                && metadata["stream_terminal"] is JsonObject adjustedTerminal)
+            {
+                if (nextCursor is null)
+                    adjustedTerminal.Remove("next_cursor");
+                else
+                    adjustedTerminal["next_cursor"] = nextCursor;
+            }
             metadata["truncated"] = scanCursor is not null || totalCount > count || byteLimitOmittedPathCount > 0;
             metadata["pagination_window_limit"] = MaxPageWindow;
             metadata["pagination_window_exhausted"] = paginationWindowExhausted;
@@ -2618,6 +2627,67 @@ internal static partial class JsonEnvelopeWrapper
             BuildResponseValueFingerprint(generation.Identity),
             generation.StableAt,
             reader.GetIndexedHeadForResponse());
+    }
+
+    internal sealed record NdjsonResponseCursorContext(
+        Func<int, string>? CursorFactory,
+        string? UnavailableReason);
+
+    internal static string CaptureResponseGenerationFingerprint(DbReader reader)
+        => BuildResponseSnapshot(reader).GenerationFingerprint;
+
+    private static string? TryCaptureResponseGenerationFingerprint(string dbPath)
+    {
+        try
+        {
+            using var db = new DbContext(DbOpenIntent.QueryOnly, dbPath);
+            if (!db.TryValidateIsCodeIndexDb(out _))
+                return null;
+            return CaptureResponseGenerationFingerprint(new DbReader(db));
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    internal static NdjsonResponseCursorContext BuildNdjsonResponseCursorFactory(
+        string command,
+        string[] args,
+        string dbPath,
+        string? expectedGenerationFingerprint)
+    {
+        if (expectedGenerationFingerprint is null)
+            return new(null, "index_generation_unavailable");
+        var currentGenerationFingerprint = TryCaptureResponseGenerationFingerprint(dbPath);
+        if (currentGenerationFingerprint is null)
+            return new(null, "index_generation_unavailable");
+        if (!string.Equals(
+                expectedGenerationFingerprint,
+                currentGenerationFingerprint,
+                StringComparison.Ordinal))
+        {
+            return new(null, "index_generation_changed_during_query");
+        }
+
+        var responseOffset = GetBoundedResponseOffset(command);
+        var queryFingerprint = BuildResponseFingerprint(command, args);
+        return new(
+            returnedCount => FormatResponseCursor(
+                checked(responseOffset + returnedCount),
+                queryFingerprint,
+                expectedGenerationFingerprint),
+            null);
+    }
+
+    internal static bool IsNdjsonResponseCursorWithinWindow(
+        string command,
+        int returnedCount,
+        int replayPageLimit)
+    {
+        var nextOffset = checked(GetBoundedResponseOffset(command) + returnedCount);
+        return nextOffset < MaxPageWindow
+               && checked(nextOffset + replayPageLimit) <= MaxPageWindow;
     }
 
     private static ResponseSnapshot BuildFallbackResponseSnapshot(string appVersion)

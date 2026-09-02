@@ -7,6 +7,7 @@ namespace CodeIndex.Cli;
 public static partial class QueryCommandRunner
 {
     private const int NdjsonResponseBudgetRetryHeadroomBytes = 1024;
+    internal static Action? NdjsonRowsMaterializedForTesting { get; set; }
 
     private sealed record NdjsonOutputRecord(string Line, bool CountsAsResult = true);
 
@@ -57,6 +58,15 @@ public static partial class QueryCommandRunner
 
         var emittedRecords = records.Count;
         string? terminalLine = null;
+        NdjsonRowsMaterializedForTesting?.Invoke();
+        var continuationCursorFactory = reader is not null && IsCursorCapableNdjson(commandName, options)
+            ? new Lazy<JsonEnvelopeWrapper.NdjsonResponseCursorContext>(() =>
+                JsonEnvelopeWrapper.BuildNdjsonResponseCursorFactory(
+                commandName,
+                options.InvocationArgs,
+                options.DbPath,
+                options.InvocationGenerationFingerprint))
+            : null;
 
         string BuildTerminal(
             int returnedCount,
@@ -67,7 +77,21 @@ public static partial class QueryCommandRunner
             int omittedRecordCount,
             string? recoveryGuidance,
             bool includeSelectionAccounting)
-            => BuildJsonStreamDoneLine(
+        {
+            var hasMore = truncated || interrupted;
+            if (hasMore && totalCountAuthoritative)
+            {
+                var nextOffset = checked(
+                    JsonEnvelopeWrapper.GetBoundedResponseOffset(commandName) + returnedCount);
+                hasMore = nextOffset < totalCount;
+            }
+            var (nextCursor, unavailableReason) = BuildNdjsonContinuation(
+                commandName,
+                returnedCount,
+                options.Limit,
+                hasMore,
+                continuationCursorFactory);
+            return BuildJsonStreamDoneLine(
                 returnedCount,
                 totalCount,
                 jsonOptions,
@@ -89,7 +113,11 @@ public static partial class QueryCommandRunner
                 selectedTotal: includeSelectionAccounting ? selectedTotal : null,
                 selectorOmittedCount: includeSelectionAccounting ? selectorOmittedCount : null,
                 limitOmittedCount: includeSelectionAccounting ? limitOmittedCount : null,
-                selectors: includeSelectionAccounting ? selectors : null);
+                selectors: includeSelectionAccounting ? selectors : null,
+                nextCursor: nextCursor,
+                nextCursorUnavailableReason: unavailableReason,
+                hasMore: hasMore);
+        }
 
         if (options.MaxJsonBytes.HasValue)
         {
@@ -197,6 +225,40 @@ public static partial class QueryCommandRunner
             terminalLine,
             exitCode);
     }
+
+    private static (string? Cursor, string? UnavailableReason) BuildNdjsonContinuation(
+        string commandName,
+        int returnedCount,
+        int replayPageLimit,
+        bool hasMore,
+        Lazy<JsonEnvelopeWrapper.NdjsonResponseCursorContext>? cursorFactory)
+    {
+        if (!hasMore)
+            return (null, null);
+        if (returnedCount <= 0)
+            return (null, "no_result_row_emitted");
+        if (cursorFactory is null)
+            return (null, "stream_not_cursor_capable");
+        if (!JsonEnvelopeWrapper.IsNdjsonResponseCursorWithinWindow(
+                commandName,
+                returnedCount,
+                replayPageLimit))
+            return (null, "pagination_window_exhausted");
+
+        var cursorContext = cursorFactory.Value;
+        if (cursorContext.CursorFactory is null)
+            return (null, cursorContext.UnavailableReason ?? "index_generation_unavailable");
+
+        return (cursorContext.CursorFactory(returnedCount), null);
+    }
+
+    private static bool IsCursorCapableNdjson(string commandName, QueryCommandOptions options)
+        => commandName is "symbols" or "files"
+           || commandName == "search"
+           && options.RecipeName is null
+           && options.NamedSearchQueries.Count == 0
+           && !options.ListRecipes
+           && !HasSearchRowSelectors(options);
 
     private static NdjsonStreamWriteResult WriteResultOnlyNdjson(
         IReadOnlyList<NdjsonOutputRecord> records,

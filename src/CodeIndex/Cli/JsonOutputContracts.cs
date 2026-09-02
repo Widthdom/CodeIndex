@@ -829,6 +829,10 @@ internal sealed record JsonStreamDoneResult(
     [property: JsonPropertyName("truncated")] bool Truncated,
     [property: JsonPropertyName("has_more")] bool HasMore,
     [property: JsonPropertyName("total_count_authoritative")] bool TotalCountAuthoritative,
+    [property: JsonPropertyName("next_cursor")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? NextCursor = null,
+    [property: JsonPropertyName("next_cursor_unavailable_reason")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? NextCursorUnavailableReason = null,
     [property: JsonPropertyName("total_count_lower_bound")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? TotalCountLowerBound = null,
     [property: JsonPropertyName("selection_reason")]
