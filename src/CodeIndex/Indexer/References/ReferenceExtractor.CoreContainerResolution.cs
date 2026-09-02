@@ -11,6 +11,8 @@ public static partial class ReferenceExtractor
         private int _lineNumber;
         private SymbolRecord? _container;
         private bool _csharpLineHasWhereClause;
+        private Dictionary<(SymbolRecord Owner, int LineNumber), SymbolRecord?>?
+            _csharpDeclaredParentContainers;
         private (
             SymbolRecord Synthetic,
             int NameIndex,
@@ -239,6 +241,10 @@ public static partial class ReferenceExtractor
 
         private SymbolRecord? FindCSharpDeclaredParentContainer(SymbolRecord owner)
         {
+            var cacheKey = (owner, _lineNumber);
+            if (_csharpDeclaredParentContainers?.TryGetValue(cacheKey, out var cached) == true)
+                return cached;
+
             SymbolRecord? best = null;
             var bestSpan = int.MaxValue;
             foreach (var candidate in _loop.ContainerCandidates)
@@ -272,10 +278,12 @@ public static partial class ReferenceExtractor
                 }
             }
 
-            return best ?? _loop.ContainerCandidates.FirstOrDefault(candidate =>
+            var resolved = best ?? _loop.ContainerCandidates.FirstOrDefault(candidate =>
                 candidate.SubKind == SyntheticSymbolIdentity.CSharpTopLevelScopeSubKind
                 && candidate.BodyStartLine <= _lineNumber
                 && candidate.BodyEndLine >= _lineNumber);
+            (_csharpDeclaredParentContainers ??= []).Add(cacheKey, resolved);
+            return resolved;
         }
 
         private SymbolRecord? ResolveSwiftPropertyContainer(int column)

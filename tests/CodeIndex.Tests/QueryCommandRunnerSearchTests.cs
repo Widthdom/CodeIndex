@@ -14908,7 +14908,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunExcerpt_JsonSemanticTokensIncludesCompactHint_Issue4311()
+    public void RunExcerpt_JsonSemanticTokensIncludesCompactHintAndClippedEndToken_Issues4311_5228()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_excerpt_semantic_hint_4311");
         try
@@ -14918,7 +14918,7 @@ public partial class QueryCommandRunnerTests
                 dbPath,
                 "src/Sample.cs",
                 "csharp",
-                "namespace Demo;\npublic class Sample { }\npublic class Other { }\n");
+                "namespace Demo;\npublic static class Sample { }\npublic class Other { }\n");
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
                 ["src/Sample.cs", "--db", dbPath, "--line", "2", "--context", "1", "--json"],
@@ -14931,6 +14931,35 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(string.Empty, stderr);
             Assert.True(json.GetProperty("semantic_tokens").GetArrayLength() > 0);
             Assert.Contains("--no-semantic-tokens", json.GetProperty("semantic_tokens_hint").GetString());
+
+            var (clippedExitCode, clippedStdout, clippedStderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunExcerpt(
+                    [
+                        "src/Sample.cs",
+                        "--db", dbPath,
+                        "--line", "2",
+                        "--start-column", "1",
+                        "--end-column", "13",
+                        "--max-line-width", "0",
+                        "--json",
+                    ],
+                    _jsonOptions));
+
+            using var clippedDocument = ParseJsonOutput(clippedStdout);
+            var clippedJson = clippedDocument.RootElement;
+            var clippedSpan = Assert.Single(
+                clippedJson.GetProperty("content_line_spans").EnumerateArray().ToArray());
+            var clippedTokens = clippedJson.GetProperty("semantic_tokens").EnumerateArray().ToArray();
+
+            Assert.Equal(CommandExitCodes.Success, clippedExitCode);
+            Assert.Equal(string.Empty, clippedStderr);
+            Assert.Equal("public static", clippedJson.GetProperty("content").GetString());
+            Assert.Equal(14, clippedSpan.GetProperty("content_end_column").GetInt32());
+            Assert.Equal(14, clippedSpan.GetProperty("source_end_column").GetInt32());
+            Assert.Contains(clippedTokens, token =>
+                token.GetProperty("start_column").GetInt32() == 8
+                && token.GetProperty("end_column").GetInt32() == 14
+                && token.GetProperty("type").GetString() == "modifier");
         }
         finally
         {

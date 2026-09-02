@@ -294,20 +294,20 @@ public static partial class QueryCommandRunner
             var sourceStartColumn = lineIndex == 0 && startColumn.HasValue
                 ? startColumn.Value
                 : 1;
-            var sourceEndColumn = lineIndex == lines.Length - 1 && endColumn.HasValue
+            var sourceEndColumnInclusive = lineIndex == lines.Length - 1 && endColumn.HasValue
                 ? endColumn.Value
                 : line.Length;
             var startIndex = sourceStartColumn - 1;
-            var endIndexExclusive = sourceEndColumn;
+            var endIndexExclusive = sourceEndColumnInclusive;
             clippedLines[lineIndex] = line[startIndex..endIndexExclusive];
             spans.Add(new ExcerptContentLineSpan
             {
                 ContentLine = lineIndex + 1,
                 SourceLine = excerpt.StartLine + lineIndex,
                 ContentStartColumn = 1,
-                ContentEndColumn = clippedLines[lineIndex].Length,
+                ContentEndColumn = clippedLines[lineIndex].Length + 1,
                 SourceStartColumn = sourceStartColumn,
-                SourceEndColumn = sourceEndColumn,
+                SourceEndColumn = sourceEndColumnInclusive + 1,
             });
         }
 
