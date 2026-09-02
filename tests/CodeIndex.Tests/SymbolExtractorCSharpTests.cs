@@ -3722,6 +3722,19 @@ public partial class SymbolExtractorTests
             public record AliasQualified(int X)
                 :
                     Alias :: Base(X);
+
+            public record LineBrokenSemicolon(int X)
+                :
+                    N .
+                    Base(X);
+
+            public record LineBrokenBraced(int X)
+                :
+                    N .
+                    Base(X)
+            {
+                public int LineBrokenNested => X;
+            }
             """;
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
@@ -3739,6 +3752,15 @@ public partial class SymbolExtractorTests
 
         var aliasQualified = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "AliasQualified"));
         Assert.Equal((21, 23), (aliasQualified.BodyStartLine, aliasQualified.BodyEndLine));
+
+        var lineBrokenSemicolon = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "LineBrokenSemicolon"));
+        Assert.Equal((25, 28), (lineBrokenSemicolon.BodyStartLine, lineBrokenSemicolon.BodyEndLine));
+
+        var lineBrokenBraced = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "LineBrokenBraced"));
+        Assert.Equal((34, 36), (lineBrokenBraced.BodyStartLine, lineBrokenBraced.BodyEndLine));
+        Assert.Equal(36, lineBrokenBraced.EndLine);
+        var lineBrokenNested = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "LineBrokenNested"));
+        Assert.Equal("LineBrokenBraced", lineBrokenNested.ContainerName);
     }
 
     [Fact]

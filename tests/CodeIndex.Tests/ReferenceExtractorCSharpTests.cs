@@ -1097,6 +1097,11 @@ public partial class ReferenceExtractorTests
                 public record S; public class FollowingType { public static int Value = Target.Create();
                 }
             }
+            public class RecordOuter
+            {
+                public record First; public record FollowingRecord(int Value = Target.Create(),
+                    int Other = 0);
+            }
             """;
 
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
@@ -1104,13 +1109,16 @@ public partial class ReferenceExtractorTests
             .Where(reference => reference.SymbolName == "Create")
             .ToArray();
 
-        Assert.Equal(2, references.Length);
+        Assert.Equal(3, references.Length);
         Assert.Contains(references, reference =>
             reference.ContainerKind == "function"
             && reference.ContainerName == "Following");
         Assert.Contains(references, reference =>
             reference.ContainerKind == "class"
             && reference.ContainerName == "FollowingType");
+        Assert.Contains(references, reference =>
+            reference.ContainerKind == "class"
+            && reference.ContainerName == "FollowingRecord");
     }
 
     [Fact]

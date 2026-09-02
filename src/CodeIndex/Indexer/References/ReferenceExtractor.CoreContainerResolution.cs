@@ -235,8 +235,72 @@ public static partial class ReferenceExtractor
                     _lineNumber,
                     column,
                     recordOwner)
+                ?? FindInnermostFollowingSameLineCSharpSemicolonRecordContainer(
+                    _loop.Lookups.GetCSharpMultilineContainerCandidatesByStartLine(),
+                    structuralLines,
+                    _lineNumber,
+                    column,
+                    recordOwner)
                 ?? FindCSharpDeclaredParentContainer(recordOwner);
             return true;
+        }
+
+        private SymbolRecord? FindInnermostFollowingSameLineCSharpSemicolonRecordContainer(
+            IReadOnlyDictionary<int, List<SymbolRecord>>? candidatesByStartLine,
+            string[] structuralLines,
+            int lineNumber,
+            int column,
+            SymbolRecord excludedCandidate)
+        {
+            if (candidatesByStartLine == null
+                || !candidatesByStartLine.TryGetValue(lineNumber, out var candidates))
+            {
+                return null;
+            }
+
+            SymbolRecord? best = null;
+            var bestStartColumn = -1;
+            var bestRange = int.MaxValue;
+            foreach (var candidate in candidates)
+            {
+                if (ReferenceEquals(candidate, excludedCandidate)
+                    || candidate is not { Kind: "class" or "struct" }
+                    || candidate.BodyStartLine is not int bodyStartLine
+                    || candidate.BodyEndLine is not int bodyEndLine
+                    || bodyStartLine > lineNumber
+                    || bodyEndLine < lineNumber)
+                {
+                    continue;
+                }
+
+                var (endLine, endColumn, isRecordDeclaration) =
+                    _loop.Lookups.GetCSharpRecordHeaderBoundary(candidate);
+                if (!isRecordDeclaration
+                    || endLine <= lineNumber
+                    || endLine > structuralLines.Length
+                    || endColumn < 0
+                    || endColumn >= structuralLines[endLine - 1].Length
+                    || structuralLines[endLine - 1][endColumn] != ';')
+                {
+                    continue;
+                }
+
+                var startColumn = FindCSharpRecordKeywordColumn(structuralLines, candidate);
+                if (column < startColumn)
+                    continue;
+
+                var range = bodyEndLine - bodyStartLine;
+                if (best == null
+                    || startColumn > bestStartColumn
+                    || (startColumn == bestStartColumn && range < bestRange))
+                {
+                    best = candidate;
+                    bestStartColumn = startColumn;
+                    bestRange = range;
+                }
+            }
+
+            return best;
         }
 
         private SymbolRecord? FindCSharpDeclaredParentContainer(SymbolRecord owner)

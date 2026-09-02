@@ -95,7 +95,7 @@ public static partial class SymbolExtractor
                 var unqualifiedConstructorBoundary =
                     CSharpFollowingUnqualifiedConstructorDeclarationRegex.IsMatch(boundaryLine)
                     && (!hasTopLevelBaseList && !hasTopLevelWhereClause
-                        || lastTopLevelHeaderCharacter is not ':' and not ',');
+                        || lastTopLevelHeaderCharacter is not ':' and not ',' and not '.');
                 if (CSharpFollowingTypeDeclarationRegex.IsMatch(boundaryLine)
                     || CSharpFollowingMemberDeclarationRegex.IsMatch(boundaryLine)
                     || unqualifiedConstructorBoundary)
