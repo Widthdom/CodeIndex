@@ -401,6 +401,20 @@ array. `languages --json` accepts `--limit` / `--top`, `--cursor`, and
 the ordinary unbounded JSON shape. Pass each `next_cursor` back to the same
 command and filters. A cursor is bound to that selection and index generation,
 so changed inputs or a refreshed index require restarting the pagination.
+The default raw NDJSON streams for `search`, `symbols`, and `files` use the same
+opaque `response:v2` continuation contract. When a terminal record has
+`has_more: true` and at least one result row was emitted, its `next_cursor`
+resumes after the last emitted row; replay it with the unchanged command,
+query, filters, ordering, and page limit. The replay is returned in the shared
+bounded envelope, whose `metadata.stream_terminal` mirrors the continuation.
+Final and zero-result pages do not advertise a cursor. If a partial stream
+cannot make safe progress—for example, a byte cap leaves room only for the
+terminal record, the query uses row selectors or a recipe/named search, the
+10,000-row pagination window is exhausted or the unchanged page limit would
+cross it on replay, or the index generation changes while rows are being
+read—the terminal omits the cursor and reports
+`next_cursor_unavailable_reason`. Cursor bytes are included in the complete
+`--max-json-bytes` measurement.
 When a bounded `find --all` scan exits partially, its terminal record includes
 `next_cursor`; replaying it resumes after the last scanned line.
 The bounded-response commands `search`, `definition`, `find`, `status`,
@@ -3297,10 +3311,16 @@ message bodies, so Ctrl-C / host cancellation can interrupt pending frame reads
 instead of waiting for another complete request.
 Unknown-method diagnostics echo at most 240 method-name characters with `...`
 when the method name is longer. Request IDs must be bounded JSON-RPC scalar
-values: strings are capped at 256
+values. Every inbound LSP message must be an object whose `jsonrpc` member is
+exactly the string `"2.0"`; missing, null, non-string, or other-version values
+return `-32600` (`Invalid Request`) before lifecycle reservation, cancellation,
+dispatch, state mutation, or database access, while preserving a valid request
+ID. Request-ID strings are capped at 256
 characters, integer IDs must fit in `Int64`, and non-scalar IDs are rejected as
-invalid requests before response IDs are cloned. `workspace/symbol` query
-strings are capped at 1000 characters before symbol search runs.
+invalid requests before response IDs are cloned. `workspace/symbol.params.query`
+is a required JSON string; missing, null, or non-string values return `-32602`
+(`Invalid params`) before symbol search, while the empty string remains valid.
+Query strings are capped at 1000 characters before symbol search runs.
 `workspace/symbol` accepts optional numeric `limit` / `maxResults` parameters
 and clamps them to 1000 results. `textDocument/documentSymbol` returns
 hierarchical `DocumentSymbol` children when container metadata is available,
@@ -4159,7 +4179,20 @@ row を省略した場合は、`omitted_match_count`、`truncated`、`has_more`�
 受け付け、これらを指定した場合だけ bounded envelope を選択するため、通常の上限なし
 JSON 形状は変わりません。`next_cursor` は同じ command と filter に渡してください。
 cursor はその選択条件と index generation に束縛されるため、入力変更後または index
-更新後は pagination を最初からやり直す必要があります。上限に達した
+更新後は pagination を最初からやり直す必要があります。
+`search`、`symbols`、`files` の既定 raw NDJSON stream も同じ opaque な
+`response:v2` continuation 契約を使います。terminal record が `has_more: true` で、
+result row を 1 件以上出力した場合、`next_cursor` は最後に出力した row の次から再開します。
+command、query、filter、ordering、page limit を変えずに再利用してください。再開応答は
+共有 bounded envelope となり、`metadata.stream_terminal` にも同じ continuation が
+反映されます。最終 page と 0 件 page は cursor を公開しません。byte cap により terminal
+record しか出力できない場合、row selector または recipe / named search を使う場合、
+10,000 row の pagination window を使い切ったか、同じ page limit での再開時にその上限を
+越える場合、row の読み取り中に index generation が変わった場合のように、安全に再開できない
+partial stream では cursor を省略し、terminal の
+`next_cursor_unavailable_reason` で理由を報告します。cursor の byte 数も
+`--max-json-bytes` による stream 全体の計測に含まれます。
+上限に達した
 `find --all` scan が partial exit した場合、terminal record の `next_cursor` を
 再利用すると最後に scan した line の次から継続します。
 bounded-response command の `search`、`definition`、`find`、`status`、
@@ -6929,10 +6962,16 @@ stdio loop は header / message body 読み取り中も CLI cancellation token �
 Ctrl-C や host cancellation が次の完全な request を待たずに pending frame read を中断できます。
 method-not-found diagnostic で echo する method name は最大 240 文字に制限され、
 長い場合は `...` を付けて切り詰めます。
+すべての受信 LSP message は object であり、`jsonrpc` member が文字列 `"2.0"` と完全一致する
+必要があります。欠落、null、文字列以外、または別 version の値には、有効な request ID を
+維持して `-32600`（`Invalid Request`）を返します。この検証は lifecycle reservation、
+cancellation、dispatch、state mutation、database access より前に行います。
 request ID は bounded な JSON-RPC scalar value に限定され、string は 256 文字まで、
 integer ID は `Int64` に収まるものだけを受理し、non-scalar ID は response ID を複製する前に
 invalid request として拒否します。
-`workspace/symbol` の query string は symbol search を実行する前に 1000 文字で上限をかけます。
+`workspace/symbol.params.query` は必須の JSON string です。欠落、null、文字列以外の値には
+symbol search より前に `-32602`（`Invalid params`）を返す一方、空文字列は引き続き有効です。
+query string は symbol search を実行する前に 1000 文字で上限をかけます。
 `workspace/symbol` は任意の numeric `limit` / `maxResults` parameter を受け取り、1000 件までに
 clamp します。`textDocument/documentSymbol` は container metadata がある場合に階層化された
 `DocumentSymbol` children を返し、最後に受理した live buffer または index から最大 1000 件の
