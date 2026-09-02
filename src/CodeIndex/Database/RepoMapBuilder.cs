@@ -84,8 +84,10 @@ internal sealed class RepoMapBuilder
         IReadOnlyList<string>? excludePathPatterns, bool excludeTests, double minEntrypointConfidence,
         Func<(DateTime? IndexedAt, DateTime? LatestModified)> getFreshness,
         int? moduleDepth = null, int? oversizedLineThreshold = null, long? oversizedByteThreshold = null,
-        int offset = 0, string? requestedCollection = null, bool summaryProjection = false)
+        int offset = 0, string? requestedCollection = null, bool summaryProjection = false,
+        IReadOnlyList<string>? requiredPathPatterns = null)
     {
+        DbReader.EnsurePathFilterParameterBudget(pathPatterns, excludePathPatterns, requiredPathPatterns);
         offset = Math.Max(0, offset);
         var retainedLimit = checked(Math.Max(limit, 0) + offset);
         var includeLanguages = IncludesMapCollection(requestedCollection, summaryProjection, "languages");
@@ -116,7 +118,7 @@ internal sealed class RepoMapBuilder
         var indexedPathComparer = _getIndexedPathComparer();
         var javaModuleDescriptors = includeModules ? LoadJavaModuleDescriptors() : new Dictionary<string, string>(StringComparer.Ordinal);
         var aggregate = BuildAggregate(
-            EnumerateFileStats(lang, pathPatterns, excludePathPatterns, excludeTests),
+            EnumerateFileStats(lang, pathPatterns, excludePathPatterns, excludeTests, requiredPathPatterns),
             retainedLimit,
             javaModuleDescriptors,
             moduleDepth,
@@ -133,10 +135,10 @@ internal sealed class RepoMapBuilder
         var indexedHeadSnapshot = LoadIndexedHeadSnapshot();
         HeadMetadataCapturedForTesting.Value?.Invoke();
         var entrypointPage = includeEntrypoints
-            ? GetEntrypoints(aggregate.EntrypointFallbacks, limit, offset, lang, pathPatterns, excludePathPatterns, excludeTests, minEntrypointConfidence, indexedPathComparer)
+            ? GetEntrypoints(aggregate.EntrypointFallbacks, limit, offset, lang, pathPatterns, excludePathPatterns, excludeTests, minEntrypointConfidence, indexedPathComparer, requiredPathPatterns)
             : (Results: new List<RepoEntrypointResult>(), TotalCount: 0);
         var rankedFilePage = useRankedFilePage
-            ? GetRankedFilePage(requestedCollection!, limit, offset, lang, pathPatterns, excludePathPatterns, excludeTests)
+            ? GetRankedFilePage(requestedCollection!, limit, offset, lang, pathPatterns, excludePathPatterns, excludeTests, requiredPathPatterns)
             : null;
         var result = new RepoMapResult
         {
@@ -173,7 +175,7 @@ internal sealed class RepoMapBuilder
            && (requestedCollection is null || string.Equals(requestedCollection, collection, StringComparison.Ordinal));
 
     private IEnumerable<RepoFileStat> EnumerateFileStats(string? lang, IReadOnlyList<string>? pathPatterns,
-        IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
+        IReadOnlyList<string>? excludePathPatterns, bool excludeTests, IReadOnlyList<string>? requiredPathPatterns)
     {
         using var cmd = _conn.CreateCommand();
         var refCountExpr = _hasReferencesTable
@@ -192,12 +194,14 @@ internal sealed class RepoMapBuilder
         if (lang != null)
             sql += " AND f.lang = @lang";
         DbReader.AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
+        DbReader.AppendAdditionalPathIncludeFilters(ref sql, requiredPathPatterns, "requiredPathPattern");
         sql += " ORDER BY f.path";
 
         cmd.CommandText = sql;
         if (lang != null)
             SqliteCommandPolicy.Add(cmd, "@lang", lang);
         DbReader.AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
+        DbReader.AddPathIncludeFilterParameters(cmd, requiredPathPatterns, "requiredPathPattern");
 
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
@@ -224,7 +228,8 @@ internal sealed class RepoMapBuilder
         string? lang,
         IReadOnlyList<string>? pathPatterns,
         IReadOnlyList<string>? excludePathPatterns,
-        bool excludeTests)
+        bool excludeTests,
+        IReadOnlyList<string>? requiredPathPatterns)
     {
         using var cmd = _conn.CreateCommand();
         var refCountExpr = _hasReferencesTable
@@ -243,6 +248,7 @@ internal sealed class RepoMapBuilder
         if (lang != null)
             sql += " AND f.lang = @lang";
         DbReader.AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
+        DbReader.AppendAdditionalPathIncludeFilters(ref sql, requiredPathPatterns, "requiredPathPattern");
         sql += ") SELECT path, lang, size, lines, symbol_count, reference_count FROM ranked_files ORDER BY ";
         sql += collection switch
         {
@@ -258,6 +264,7 @@ internal sealed class RepoMapBuilder
         if (lang != null)
             SqliteCommandPolicy.Add(cmd, "@lang", lang);
         DbReader.AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
+        DbReader.AddPathIncludeFilterParameters(cmd, requiredPathPatterns, "requiredPathPattern");
         SqliteCommandPolicy.Add(cmd, "@limit", Math.Max(0, limit));
         SqliteCommandPolicy.Add(cmd, "@offset", Math.Max(0, offset));
 
@@ -556,7 +563,7 @@ internal sealed class RepoMapBuilder
 
     private (List<RepoEntrypointResult> Results, int TotalCount) GetEntrypoints(IReadOnlyList<RepoEntrypointResult> fallbackEntrypoints, int limit, int offset,
         string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests,
-        double minConfidence, StringComparer indexedPathComparer)
+        double minConfidence, StringComparer indexedPathComparer, IReadOnlyList<string>? requiredPathPatterns)
     {
         using var cmd = _conn.CreateCommand();
         var sql = @"
@@ -568,12 +575,14 @@ internal sealed class RepoMapBuilder
         if (lang != null)
             sql += " AND f.lang = @lang";
         DbReader.AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
+        DbReader.AppendAdditionalPathIncludeFilters(ref sql, requiredPathPatterns, "requiredPathPattern");
         sql += " ORDER BY f.path, s.line";
 
         cmd.CommandText = sql;
         if (lang != null)
             SqliteCommandPolicy.Add(cmd, "@lang", lang);
         DbReader.AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
+        DbReader.AddPathIncludeFilterParameters(cmd, requiredPathPatterns, "requiredPathPattern");
 
         var results = new List<RepoEntrypointResult>();
         using var reader = cmd.ExecuteTrackedReader();
