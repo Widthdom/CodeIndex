@@ -175,7 +175,7 @@ public static partial class ConsoleUi
         ("files", "Default NDJSON ends with a terminal record unless --results-only suppresses it; --max-json-bytes covers the entire stream and partial output exits 11 unless --allow-partial is set."),
         ("find", "With --all, default JSON rows end with scan metadata and capped partial scans exit 11 unless --allow-partial is set. Count JSON carries the same scan state in its single result object."),
         ("find", "--context sets both sides symmetrically; explicit --before or --after overrides only that side regardless of option order, and these explicit context controls take precedence over --snippet-lines."),
-        ("search", "Default NDJSON ends with a terminal record; --max-json-bytes covers the entire stream and partial output exits 11 unless --allow-partial is set. --json=array rejects the whole output when it does not fit."),
+        ("search", "Default NDJSON ends with a terminal record; --max-json-bytes covers the entire stream and partial output exits 11 unless --allow-partial is set. Unprojected --json=array rejects the whole output when it does not fit; --json=array with --fields removes only complete trailing rows."),
         ("inspect", "With --max-json-bytes, JSON output rejects the whole response when it does not fit."),
         ("map", "With --max-json-bytes, JSON and issue-drafts output reject the whole response when it does not fit."),
         ("references", "--json and --format json emit JSON Lines (one JSON object per result), not a single JSON array."),

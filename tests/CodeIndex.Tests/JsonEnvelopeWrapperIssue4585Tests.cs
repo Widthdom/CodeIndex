@@ -172,6 +172,294 @@ public sealed class JsonEnvelopeWrapperIssue4585Tests
         }
     }
 
+    [Fact]
+    public void Fields_PreserveExplicitArrayAndRejectIncompatibleExplicitShapes_Issue5233()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("projection_output_shapes_5233");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Alpha.cs", "csharp", "public sealed class Alpha { }\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Beta.cs", "csharp", "public sealed class Beta { }\n");
+
+            var baseArgs = new[] { "files", "src/*.cs", "--db", dbPath, "--limit", "2" };
+            var unprojectedArray = CaptureConsole(() => ProgramRunner.Run(
+                [.. baseArgs, "--json=array"],
+                _jsonOptions,
+                "1.0.0-test"));
+            var projectedArray = CaptureConsole(() => ProgramRunner.Run(
+                [.. baseArgs, "--json=array", "--fields", "path,lines"],
+                _jsonOptions,
+                "1.0.0-test"));
+
+            Assert.Equal(CommandExitCodes.Success, unprojectedArray.ExitCode);
+            Assert.Equal(CommandExitCodes.Success, projectedArray.ExitCode);
+            Assert.Equal(string.Empty, unprojectedArray.Stderr);
+            Assert.Equal(string.Empty, projectedArray.Stderr);
+            using var unprojectedDocument = JsonDocument.Parse(unprojectedArray.Stdout);
+            using var projectedDocument = JsonDocument.Parse(projectedArray.Stdout);
+            Assert.Equal(JsonValueKind.Array, unprojectedDocument.RootElement.ValueKind);
+            Assert.Equal(JsonValueKind.Array, projectedDocument.RootElement.ValueKind);
+            var unprojectedRows = unprojectedDocument.RootElement.EnumerateArray().ToArray();
+            var projectedRows = projectedDocument.RootElement.EnumerateArray().ToArray();
+            Assert.Equal(2, projectedRows.Length);
+            Assert.Equal(
+                unprojectedRows.Select(row => row.GetProperty("path").GetString()),
+                projectedRows.Select(row => row.GetProperty("path").GetString()));
+            Assert.All(
+                projectedRows,
+                row => Assert.Equal(new[] { "path", "lines" }, row.EnumerateObject().Select(property => property.Name)));
+
+            var aliasArray = CaptureConsole(() => ProgramRunner.Run(
+                [.. baseArgs, "--json=ndjson", "--json=array", "--fields", "file,lines"],
+                _jsonOptions,
+                "1.0.0-test"));
+            Assert.Equal(CommandExitCodes.Success, aliasArray.ExitCode);
+            Assert.Equal(string.Empty, aliasArray.Stderr);
+            using (var aliasDocument = JsonDocument.Parse(aliasArray.Stdout))
+            {
+                var aliasRows = aliasDocument.RootElement.EnumerateArray().ToArray();
+                Assert.Equal(2, aliasRows.Length);
+                Assert.All(
+                    aliasRows,
+                    row => Assert.Equal(new[] { "file", "lines" }, row.EnumerateObject().Select(property => property.Name)));
+            }
+
+            foreach (var (commandArgs, expectedFields) in new[]
+                     {
+                         (new[] { "search", "Alpha", "--db", dbPath, "--json=array", "--limit", "1", "--fields", "path,line" }, new[] { "path", "line" }),
+                         (new[] { "symbols", "Alpha", "--db", dbPath, "--json=array", "--limit", "1", "--fields", "name,path" }, new[] { "name", "path" }),
+                     })
+            {
+                var supportedCommandArray = CaptureConsole(() => ProgramRunner.Run(
+                    commandArgs,
+                    _jsonOptions,
+                    "1.0.0-test"));
+                Assert.Equal(CommandExitCodes.Success, supportedCommandArray.ExitCode);
+                Assert.Equal(string.Empty, supportedCommandArray.Stderr);
+                using var supportedCommandDocument = JsonDocument.Parse(supportedCommandArray.Stdout);
+                Assert.Equal(JsonValueKind.Array, supportedCommandDocument.RootElement.ValueKind);
+                var supportedCommandRow = Assert.Single(supportedCommandDocument.RootElement.EnumerateArray());
+                Assert.Equal(expectedFields, supportedCommandRow.EnumerateObject().Select(property => property.Name));
+            }
+
+            var maxResultsArray = CaptureConsole(() => ProgramRunner.Run(
+                ["search", "class", "--db", dbPath, "--json=array", "--max-results", "1", "--fields", "path"],
+                _jsonOptions,
+                "1.0.0-test"));
+            Assert.Equal(CommandExitCodes.Success, maxResultsArray.ExitCode);
+            Assert.Equal(string.Empty, maxResultsArray.Stderr);
+            using (var maxResultsDocument = JsonDocument.Parse(maxResultsArray.Stdout))
+                Assert.Single(maxResultsDocument.RootElement.EnumerateArray());
+
+            var emptyArray = CaptureConsole(() => ProgramRunner.Run(
+                ["files", "missing-5233*.cs", "--db", dbPath, "--json=array", "--fields", "path,lines"],
+                _jsonOptions,
+                "1.0.0-test"));
+            Assert.Equal(CommandExitCodes.Success, emptyArray.ExitCode);
+            Assert.Equal("[]" + Environment.NewLine, emptyArray.Stdout);
+            Assert.Equal(string.Empty, emptyArray.Stderr);
+
+            var exactOneRowBudget = Encoding.UTF8.GetByteCount(
+                $"[{projectedRows[0].GetRawText()}]{Environment.NewLine}");
+            var exactBudgetArray = CaptureConsole(() => ProgramRunner.Run(
+                [.. baseArgs, "--json=array", "--fields", "path,lines", "--max-json-bytes", exactOneRowBudget.ToString()],
+                _jsonOptions,
+                "1.0.0-test"));
+            var belowBudgetArray = CaptureConsole(() => ProgramRunner.Run(
+                [.. baseArgs, "--json=array", "--fields", "path,lines", "--max-json-bytes", (exactOneRowBudget - 1).ToString()],
+                _jsonOptions,
+                "1.0.0-test"));
+            Assert.Equal(CommandExitCodes.Success, exactBudgetArray.ExitCode);
+            Assert.True(Encoding.UTF8.GetByteCount(exactBudgetArray.Stdout) <= exactOneRowBudget);
+            using (var exactBudgetDocument = JsonDocument.Parse(exactBudgetArray.Stdout))
+                Assert.Single(exactBudgetDocument.RootElement.EnumerateArray());
+            Assert.Equal(CommandExitCodes.Success, belowBudgetArray.ExitCode);
+            Assert.Equal("[]" + Environment.NewLine, belowBudgetArray.Stdout);
+
+            var envelope = CaptureConsole(() => ProgramRunner.Run(
+                [.. baseArgs, "--json=array", "--json-envelope", "--fields", "path,lines"],
+                _jsonOptions,
+                "1.0.0-test"));
+            Assert.Equal(CommandExitCodes.Success, envelope.ExitCode);
+            using (var envelopeDocument = JsonDocument.Parse(envelope.Stdout))
+            {
+                Assert.Equal(JsonValueKind.Object, envelopeDocument.RootElement.ValueKind);
+                Assert.Equal(2, envelopeDocument.RootElement.GetProperty("results").GetArrayLength());
+                Assert.Equal("files", envelopeDocument.RootElement.GetProperty("metadata").GetProperty("command").GetString());
+            }
+
+            var cursorEnvelope = CaptureConsole(() => ProgramRunner.Run(
+                ["files", "src/*.cs", "--db", dbPath, "--limit", "1", "--json=array", "--json-envelope", "--fields", "path"],
+                _jsonOptions,
+                "1.0.0-test"));
+            Assert.Equal(CommandExitCodes.Success, cursorEnvelope.ExitCode);
+            using var cursorEnvelopeDocument = JsonDocument.Parse(cursorEnvelope.Stdout);
+            var cursor = cursorEnvelopeDocument.RootElement.GetProperty("metadata").GetProperty("next_cursor").GetString();
+            Assert.False(string.IsNullOrWhiteSpace(cursor));
+            var projectedArrayCursor = CaptureConsole(() => ProgramRunner.Run(
+                ["files", "src/*.cs", "--db", dbPath, "--limit", "1", "--json=array", "--fields", "path", "--cursor", cursor!],
+                _jsonOptions,
+                "1.0.0-test"));
+            Assert.Equal(CommandExitCodes.UsageError, projectedArrayCursor.ExitCode);
+            Assert.Equal(string.Empty, projectedArrayCursor.Stderr);
+            using (var projectedArrayCursorDocument = JsonDocument.Parse(projectedArrayCursor.Stdout))
+            {
+                Assert.Contains(
+                    "continuation metadata cannot be represented in a bare array",
+                    projectedArrayCursorDocument.RootElement.GetProperty("message").GetString(),
+                    StringComparison.Ordinal);
+            }
+
+            var compact = CaptureConsole(() => ProgramRunner.Run(
+                [.. baseArgs, "--format", "compact", "--fields", "path,lines"],
+                _jsonOptions,
+                "1.0.0-test"));
+            Assert.Equal(CommandExitCodes.Success, compact.ExitCode);
+            using (var compactDocument = JsonDocument.Parse(compact.Stdout))
+            {
+                Assert.Equal(JsonValueKind.Object, compactDocument.RootElement.ValueKind);
+                Assert.Equal("compact", compactDocument.RootElement.GetProperty("format").GetString());
+                Assert.Equal(2, compactDocument.RootElement.GetProperty("files").GetArrayLength());
+            }
+
+            var compactOverridesArray = CaptureConsole(() => ProgramRunner.Run(
+                [.. baseArgs, "--json=array", "--compact", "--fields", "path,lines"],
+                _jsonOptions,
+                "1.0.0-test"));
+            Assert.Equal(CommandExitCodes.Success, compactOverridesArray.ExitCode);
+            using (var compactOverridesArrayDocument = JsonDocument.Parse(compactOverridesArray.Stdout))
+            {
+                Assert.Equal(JsonValueKind.Object, compactOverridesArrayDocument.RootElement.ValueKind);
+                Assert.Equal("compact", compactOverridesArrayDocument.RootElement.GetProperty("format").GetString());
+                Assert.Equal(2, compactOverridesArrayDocument.RootElement.GetProperty("files").GetArrayLength());
+            }
+
+            var compactOverridesNdjson = CaptureConsole(() => ProgramRunner.Run(
+                [.. baseArgs, "--json=ndjson", "--compact", "--fields", "path,lines"],
+                _jsonOptions,
+                "1.0.0-test"));
+            Assert.Equal(CommandExitCodes.Success, compactOverridesNdjson.ExitCode);
+            Assert.Equal(string.Empty, compactOverridesNdjson.Stderr);
+            using (var compactOverridesNdjsonDocument = JsonDocument.Parse(compactOverridesNdjson.Stdout))
+            {
+                Assert.Equal(JsonValueKind.Object, compactOverridesNdjsonDocument.RootElement.ValueKind);
+                Assert.Equal("compact", compactOverridesNdjsonDocument.RootElement.GetProperty("format").GetString());
+            }
+
+            var summaryOverridesArray = CaptureConsole(() => ProgramRunner.Run(
+                [.. baseArgs, "--json=array", "--summary-only", "--fields", "path"],
+                _jsonOptions,
+                "1.0.0-test"));
+            Assert.Equal(CommandExitCodes.Success, summaryOverridesArray.ExitCode);
+            using (var summaryOverridesArrayDocument = JsonDocument.Parse(summaryOverridesArray.Stdout))
+            {
+                Assert.Equal(JsonValueKind.Object, summaryOverridesArrayDocument.RootElement.ValueKind);
+                Assert.True(summaryOverridesArrayDocument.RootElement
+                    .GetProperty("metadata")
+                    .GetProperty("response_context")
+                    .GetProperty("summary_only")
+                    .GetBoolean());
+            }
+
+            var unprojectedStream = CaptureConsole(() => ProgramRunner.Run(
+                [.. baseArgs, "--json=ndjson"],
+                _jsonOptions,
+                "1.0.0-test"));
+            Assert.Equal(CommandExitCodes.Success, unprojectedStream.ExitCode);
+            Assert.True(unprojectedStream.Stdout.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries).Length >= 3);
+
+            var projectedStream = CaptureConsole(() => ProgramRunner.Run(
+                [.. baseArgs, "--json=array", "--json=ndjson", "--fields", "path,lines"],
+                _jsonOptions,
+                "1.0.0-test"));
+            Assert.Equal(CommandExitCodes.UsageError, projectedStream.ExitCode);
+            Assert.Equal(string.Empty, projectedStream.Stderr);
+            using (var streamErrorDocument = JsonDocument.Parse(projectedStream.Stdout))
+            {
+                Assert.Equal("error", streamErrorDocument.RootElement.GetProperty("status").GetString());
+                Assert.Equal(CommandErrorCodes.UsageError, streamErrorDocument.RootElement.GetProperty("error_code").GetString());
+                Assert.Contains("--json=ndjson", streamErrorDocument.RootElement.GetProperty("message").GetString(), StringComparison.Ordinal);
+            }
+
+            foreach (var incompatibleControlArgs in new[]
+                     {
+                         new[] { "files", "src/*.cs", "--db", dbPath, "--json=array", "--results-only", "--fields", "path" },
+                         new[] { "symbols", "Alpha", "--db", dbPath, "--json=array", "--results-only", "--fields", "path" },
+                         new[] { "search", "Alpha", "--db", dbPath, "--json=array", "--results-only", "--fields", "path" },
+                         new[] { "search", "Alpha", "--db", dbPath, "--json=array", "--first-per-file", "--fields", "path" },
+                         new[] { "search", "Alpha", "--db", dbPath, "--json=array", "--sample", "1", "--fields", "path" },
+                         new[] { "search", "Alpha", "--db", dbPath, "--json=array", "--profile", "--fields", "path" },
+                         new[] { "search", "Alpha", "--db", dbPath, "--json=array", "--verbose", "--fields", "path" },
+                         new[] { "search", "Alpha", "--db", dbPath, "--json=array", "--group-by", "file", "--fields", "path" },
+                         new[] { "search", "--list-recipes", "--json=array", "--fields", "path" },
+                     })
+            {
+                var incompatibleControl = CaptureConsole(() => ProgramRunner.Run(
+                    incompatibleControlArgs,
+                    _jsonOptions,
+                    "1.0.0-test"));
+                Assert.Equal(CommandExitCodes.UsageError, incompatibleControl.ExitCode);
+                Assert.Equal(string.Empty, incompatibleControl.Stderr);
+                using var incompatibleControlDocument = JsonDocument.Parse(incompatibleControl.Stdout);
+                Assert.Equal("error", incompatibleControlDocument.RootElement.GetProperty("status").GetString());
+                Assert.Equal(JsonOutputContract.ApiVersion, incompatibleControlDocument.RootElement.GetProperty("api_version").GetString());
+                Assert.Equal(CommandErrorCodes.UsageError, incompatibleControlDocument.RootElement.GetProperty("error_code").GetString());
+            }
+
+            var missingDatabase = CaptureConsole(() => ProgramRunner.Run(
+                ["files", "--db", Path.Combine(projectRoot, "missing.db"), "--json=array", "--fields", "path"],
+                _jsonOptions,
+                "1.0.0-test"));
+            Assert.Equal(CommandExitCodes.UsageError, missingDatabase.ExitCode);
+            Assert.Equal(string.Empty, missingDatabase.Stderr);
+            using (var missingDatabaseDocument = JsonDocument.Parse(missingDatabase.Stdout))
+            {
+                Assert.Equal("error", missingDatabaseDocument.RootElement.GetProperty("status").GetString());
+                Assert.Equal(JsonOutputContract.ApiVersion, missingDatabaseDocument.RootElement.GetProperty("api_version").GetString());
+                Assert.Equal(CommandErrorCodes.DbNotFound, missingDatabaseDocument.RootElement.GetProperty("error_code").GetString());
+            }
+
+            var unknownField = CaptureConsole(() => ProgramRunner.Run(
+                [.. baseArgs, "--json=array", "--fields", "path,unknown_5233"],
+                _jsonOptions,
+                "1.0.0-test"));
+            Assert.Equal(CommandExitCodes.UsageError, unknownField.ExitCode);
+            Assert.Equal(string.Empty, unknownField.Stderr);
+            using (var unknownFieldDocument = JsonDocument.Parse(unknownField.Stdout))
+            {
+                Assert.Equal("error", unknownFieldDocument.RootElement.GetProperty("status").GetString());
+                Assert.Equal(CommandErrorCodes.UsageError, unknownFieldDocument.RootElement.GetProperty("error_code").GetString());
+            }
+
+            foreach (var incompatibleFormatArgs in new[]
+                     {
+                         new[] { "search", "Alpha", "--db", dbPath, "--json=array", "--format", "csv", "--fields", "path" },
+                         new[] { "symbols", "Alpha", "--db", dbPath, "--json=array", "--format", "lsp", "--fields", "path" },
+                     })
+            {
+                var incompatibleFormat = CaptureConsole(() => ProgramRunner.Run(
+                    incompatibleFormatArgs,
+                    _jsonOptions,
+                    "1.0.0-test"));
+                Assert.Equal(CommandExitCodes.UsageError, incompatibleFormat.ExitCode);
+                Assert.Equal(string.Empty, incompatibleFormat.Stderr);
+                using var incompatibleFormatDocument = JsonDocument.Parse(incompatibleFormat.Stdout);
+                Assert.Equal("error", incompatibleFormatDocument.RootElement.GetProperty("status").GetString());
+                Assert.Equal(JsonOutputContract.ApiVersion, incompatibleFormatDocument.RootElement.GetProperty("api_version").GetString());
+                Assert.Equal(CommandErrorCodes.UsageError, incompatibleFormatDocument.RootElement.GetProperty("error_code").GetString());
+                Assert.Contains(
+                    "projection-incompatible --format",
+                    incompatibleFormatDocument.RootElement.GetProperty("message").GetString(),
+                    StringComparison.Ordinal);
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     [Theory]
     [InlineData("reference_definition_lookup_symbol_budget_exceeded", false)]
     [InlineData(DbReader.DynamicReferenceGraphContractStaleReason, true)]
