@@ -1079,6 +1079,37 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpSemicolonRecord_UsesFollowingSameLineMultilineContainer_Issue5228()
+    {
+        const string content = """
+            public static class Target { public static int Create() => 1; }
+            public class MethodOuter
+            {
+                public record R; public void Following() { Target.Create();
+                }
+            }
+            public class TypeOuter
+            {
+                public record S; public class FollowingType { public static int Value = Target.Create();
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols)
+            .Where(reference => reference.SymbolName == "Create")
+            .ToArray();
+
+        Assert.Equal(2, references.Length);
+        Assert.Contains(references, reference =>
+            reference.ContainerKind == "function"
+            && reference.ContainerName == "Following");
+        Assert.Contains(references, reference =>
+            reference.ContainerKind == "class"
+            && reference.ContainerName == "FollowingType");
+    }
+
+    [Fact]
     public void Extract_CsharpUnicodeSemicolonRecord_DoesNotCaptureFollowingSameLineReference_Issue5228()
     {
         const string content = """

@@ -227,6 +227,12 @@ public static partial class ReferenceExtractor
                     _lineNumber,
                     column,
                     recordOwner)
+                ?? FindInnermostFollowingSameLineCSharpMultilineContainer(
+                    _loop.Lookups.GetCSharpMultilineContainerCandidatesByStartLine(),
+                    structuralLines[_lineIndex],
+                    _lineNumber,
+                    column,
+                    recordOwner)
                 ?? FindCSharpDeclaredParentContainer(recordOwner);
             return true;
         }

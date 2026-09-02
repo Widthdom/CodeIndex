@@ -325,6 +325,37 @@ public static partial class ReferenceExtractor
         return candidatesByLine;
     }
 
+    private static Dictionary<int, List<SymbolRecord>>? BuildCSharpMultilineContainerCandidatesByStartLine(
+        string language,
+        IReadOnlyList<SymbolRecord> candidates)
+    {
+        if (language != "csharp")
+            return null;
+
+        Dictionary<int, List<SymbolRecord>>? candidatesByLine = null;
+        foreach (var candidate in candidates)
+        {
+            if (candidate.BodyStartLine == null
+                || candidate.BodyEndLine == null
+                || candidate.StartLine == candidate.EndLine
+                || string.IsNullOrEmpty(candidate.Signature))
+            {
+                continue;
+            }
+
+            candidatesByLine ??= new Dictionary<int, List<SymbolRecord>>();
+            if (!candidatesByLine.TryGetValue(candidate.StartLine, out var lineCandidates))
+            {
+                lineCandidates = [];
+                candidatesByLine.Add(candidate.StartLine, lineCandidates);
+            }
+
+            lineCandidates.Add(candidate);
+        }
+
+        return candidatesByLine;
+    }
+
     private static SymbolRecord? FindInnermostSameLineCSharpContainer(
         IReadOnlyDictionary<int, List<SymbolRecord>>? candidatesByLine,
         string structuralLine,
@@ -339,6 +370,96 @@ public static partial class ReferenceExtractor
                 column,
                 excludedCandidate)
             : null;
+
+    private static SymbolRecord? FindInnermostFollowingSameLineCSharpMultilineContainer(
+        IReadOnlyDictionary<int, List<SymbolRecord>>? candidatesByStartLine,
+        string structuralLine,
+        int lineNumber,
+        int column,
+        SymbolRecord excludedCandidate)
+    {
+        if (candidatesByStartLine == null
+            || !candidatesByStartLine.TryGetValue(lineNumber, out var candidates))
+        {
+            return null;
+        }
+
+        SymbolRecord? best = null;
+        var bestBodyOpenColumn = -1;
+        var bestRange = int.MaxValue;
+        var bestKindRank = int.MaxValue;
+        foreach (var candidate in candidates)
+        {
+            if (ReferenceEquals(candidate, excludedCandidate)
+                || candidate.BodyStartLine is not int bodyStartLine
+                || candidate.BodyEndLine is not int bodyEndLine
+                || bodyStartLine > lineNumber
+                || bodyEndLine < lineNumber)
+            {
+                continue;
+            }
+
+            var searchStart = Math.Clamp(candidate.StartColumn ?? 0, 0, structuralLine.Length);
+            if (!TryFindCSharpSameLineDeclarationBodyOpenColumn(
+                    structuralLine,
+                    searchStart,
+                    out var bodyOpenColumn)
+                || column <= bodyOpenColumn)
+            {
+                continue;
+            }
+
+            var range = bodyEndLine - bodyStartLine;
+            var kindRank = GetSameLineContainerKindRank(candidate.Kind);
+            if (best == null
+                || bodyOpenColumn > bestBodyOpenColumn
+                || (bodyOpenColumn == bestBodyOpenColumn && range < bestRange)
+                || (bodyOpenColumn == bestBodyOpenColumn && range == bestRange && kindRank < bestKindRank))
+            {
+                best = candidate;
+                bestBodyOpenColumn = bodyOpenColumn;
+                bestRange = range;
+                bestKindRank = kindRank;
+            }
+        }
+
+        return best;
+    }
+
+    private static bool TryFindCSharpSameLineDeclarationBodyOpenColumn(
+        string structuralLine,
+        int searchStart,
+        out int bodyOpenColumn)
+    {
+        bodyOpenColumn = -1;
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        for (var column = searchStart; column < structuralLine.Length; column++)
+        {
+            switch (structuralLine[column])
+            {
+                case '(':
+                    parenDepth++;
+                    break;
+                case ')' when parenDepth > 0:
+                    parenDepth--;
+                    break;
+                case '[':
+                    bracketDepth++;
+                    break;
+                case ']' when bracketDepth > 0:
+                    bracketDepth--;
+                    break;
+                case '{' when parenDepth == 0 && bracketDepth == 0:
+                    bodyOpenColumn = column;
+                    return true;
+                case ';' when parenDepth == 0 && bracketDepth == 0:
+                    return false;
+            }
+        }
+
+        return false;
+    }
 
     private static SymbolRecord? FindInnermostCSharpDeclarationRangeContainer(
         IReadOnlyList<SymbolRecord> candidates,

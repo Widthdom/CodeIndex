@@ -681,7 +681,7 @@ public partial class QueryCommandRunnerTests
                 dbPath,
                 "src/Records.cs",
                 "csharp",
-                """
+                """"
                 public record Single(string Value);
                 public sealed record class Named(string Value);
                 public readonly record struct Point(int X, int Y);
@@ -696,7 +696,13 @@ public partial class QueryCommandRunnerTests
                     public string Upper => Value.ToUpperInvariant();
                 }
                 public class Outer { public record Nested; public class AfterNested { } }
-                """);
+                public class RawOuter
+                {
+                    public string Text = """
+                        value
+                        """; public record RawNested; public class RawAfter { }
+                }
+                """");
 
             foreach (var (name, startLine, endLine) in new[]
             {
@@ -791,6 +797,18 @@ public partial class QueryCommandRunnerTests
             Assert.Equal("public record Nested;", nestedBody.GetProperty("body_content").GetString());
             Assert.DoesNotContain("Outer", nestedBody.GetProperty("body_content").GetString(), StringComparison.Ordinal);
             Assert.DoesNotContain("AfterNested", nestedBody.GetProperty("body_content").GetString(), StringComparison.Ordinal);
+
+            var (rawNestedExitCode, rawNestedStdout, rawNestedStderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
+                ["RawNested", "--db", dbPath, "--json", "--body", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+            using var rawNestedDocument = ParseJsonOutput(rawNestedStdout);
+            var rawNested = rawNestedDocument.RootElement;
+            Assert.Equal(CommandExitCodes.Success, rawNestedExitCode);
+            Assert.Equal(string.Empty, rawNestedStderr);
+            Assert.Equal("public record RawNested;", rawNested.GetProperty("body_content").GetString());
+            Assert.DoesNotContain("\"\"\"", rawNested.GetProperty("body_content").GetString(), StringComparison.Ordinal);
+            Assert.DoesNotContain("RawOuter", rawNested.GetProperty("body_content").GetString(), StringComparison.Ordinal);
+            Assert.DoesNotContain("RawAfter", rawNested.GetProperty("body_content").GetString(), StringComparison.Ordinal);
         }
         finally
         {

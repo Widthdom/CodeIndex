@@ -20,6 +20,8 @@ public static partial class ReferenceExtractor
 
         private Dictionary<int, List<SymbolRecord>>? csharpSameLineContainerCandidatesByLine;
         private bool csharpSameLineContainerCandidatesResolved;
+        private Dictionary<int, List<SymbolRecord>>? csharpMultilineContainerCandidatesByStartLine;
+        private bool csharpMultilineContainerCandidatesResolved;
         private IReadOnlyList<SymbolRecord>? csharpXmlDocAttachmentScopeCandidates;
         private bool csharpXmlDocAttachmentScopeCandidatesResolved;
         private IReadOnlyList<SymbolRecord>? enclosingTypeCandidates;
@@ -183,6 +185,18 @@ public static partial class ReferenceExtractor
             }
 
             return csharpSameLineContainerCandidatesByLine;
+        }
+
+        internal Dictionary<int, List<SymbolRecord>>? GetCSharpMultilineContainerCandidatesByStartLine()
+        {
+            if (!csharpMultilineContainerCandidatesResolved)
+            {
+                csharpMultilineContainerCandidatesByStartLine =
+                    BuildCSharpMultilineContainerCandidatesByStartLine(language, containerCandidates);
+                csharpMultilineContainerCandidatesResolved = true;
+            }
+
+            return csharpMultilineContainerCandidatesByStartLine;
         }
 
         internal IReadOnlyList<SymbolRecord>? GetCSharpXmlDocAttachmentScopeCandidates()

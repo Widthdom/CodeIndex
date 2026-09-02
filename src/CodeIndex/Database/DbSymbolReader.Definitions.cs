@@ -225,23 +225,33 @@ public partial class DbReader
         }
 
         var rawLines = definitionExcerpt.Content.Split('\n');
-        var sanitizedLines = SymbolExtractor
-            .SanitizeCSharpDeclarationSignature(definitionExcerpt.Content)
-            .Split('\n');
-        if (rawLines.Length == 0 || rawLines.Length != sanitizedLines.Length)
+        if (rawLines.Length == 0)
             return false;
 
         var startColumn = Math.Clamp(
             symbol.DeclarationStartColumn.Value,
             0,
-            sanitizedLines[0].Length);
+            rawLines[0].Length);
+        var declarationContent = new StringBuilder(definitionExcerpt.Content.Length - startColumn);
+        declarationContent.Append(rawLines[0].AsSpan(startColumn));
+        for (var lineIndex = 1; lineIndex < rawLines.Length; lineIndex++)
+        {
+            declarationContent.Append('\n');
+            declarationContent.Append(rawLines[lineIndex]);
+        }
+
+        var sanitizedLines = SymbolExtractor
+            .SanitizeCSharpDeclarationSignature(declarationContent.ToString())
+            .Split('\n');
+        if (rawLines.Length != sanitizedLines.Length)
+            return false;
+
         var parenDepth = 0;
         var bracketDepth = 0;
         for (var lineIndex = 0; lineIndex < sanitizedLines.Length; lineIndex++)
         {
             var line = sanitizedLines[lineIndex];
-            var fromColumn = lineIndex == 0 ? startColumn : 0;
-            for (var column = fromColumn; column < line.Length; column++)
+            for (var column = 0; column < line.Length; column++)
             {
                 switch (line[column])
                 {
@@ -264,7 +274,9 @@ public partial class DbReader
                             definitionExcerpt.StartLine,
                             startColumn,
                             definitionExcerpt.StartLine + lineIndex,
-                            Math.Min(column, rawLines[lineIndex].Length));
+                            Math.Min(
+                                column + (lineIndex == 0 ? startColumn : 0),
+                                rawLines[lineIndex].Length));
                         return true;
                 }
             }
