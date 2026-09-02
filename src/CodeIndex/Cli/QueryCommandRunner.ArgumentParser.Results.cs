@@ -44,6 +44,28 @@ public static partial class QueryCommandRunner
                     else
                         AddParseError(bodyLinesError!);
                     break;
+                case "--start-column":
+                    if (!TryReadRawOptionValue(args, ref i, "--start-column", inlineValue, out var startColumnValue, out var missingStartColumnError))
+                        AddParseError(missingStartColumnError!);
+                    else if (TryParsePositiveInt(startColumnValue!, "--start-column", out var parsedStartColumn, out var startColumnError))
+                    {
+                        WarnIfDuplicateSingleValueOption("--start-column", startColumnValue!);
+                        startColumn = parsedStartColumn;
+                    }
+                    else
+                        AddParseError(startColumnError!);
+                    break;
+                case "--end-column":
+                    if (!TryReadRawOptionValue(args, ref i, "--end-column", inlineValue, out var endColumnValue, out var missingEndColumnError))
+                        AddParseError(missingEndColumnError!);
+                    else if (TryParsePositiveInt(endColumnValue!, "--end-column", out var parsedEndColumn, out var endColumnError))
+                    {
+                        WarnIfDuplicateSingleValueOption("--end-column", endColumnValue!);
+                        endColumn = parsedEndColumn;
+                    }
+                    else
+                        AddParseError(endColumnError!);
+                    break;
                 case "--count":
                     countFlagRequested = true;
                     break;

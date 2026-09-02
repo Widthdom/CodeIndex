@@ -165,7 +165,10 @@ public static partial class ReferenceExtractor
             // 宣言の signature は 1 行目だけしか持たないので、`record` / `class` / `struct` と
             // `(` を別行に分ける書式では先頭行 regex の前段フィルタが空振りする。ここでは
             // structuralLines から `;` / `{` までヘッダーを連結し、連結後のテキストで判定する。
-            var (headerEndLine, headerEndColumn, headerText) = CollectCSharpRecordHeader(structuralLines, symbol.StartLine);
+            var (headerEndLine, headerEndColumn, headerText) = CollectCSharpRecordHeader(
+                structuralLines,
+                symbol.StartLine,
+                skipCSharpPreprocessorDirectives: true);
             if (!IsCSharpPrimaryCtorHeader(headerText))
                 continue;
             if (!HasCSharpBasePrimaryCtorCall(headerText))
@@ -487,7 +490,8 @@ public static partial class ReferenceExtractor
     internal static (int EndLine, int EndColumn, string Text) CollectCSharpRecordHeader(
         string[] structuralLines,
         int startLine,
-        int startColumn = 0)
+        int startColumn = 0,
+        bool skipCSharpPreprocessorDirectives = false)
     {
         var startIdx = Math.Max(0, startLine - 1);
         if (structuralLines.Length == 0)
@@ -528,6 +532,17 @@ public static partial class ReferenceExtractor
         {
             var line = structuralLines[i];
             var lineStartColumn = i == startIdx ? Math.Clamp(startColumn, 0, line.Length) : 0;
+            if (skipCSharpPreprocessorDirectives
+                && SymbolExtractor.IsCSharpPreprocessorDirectiveLine(line))
+            {
+                // Directive payload is declaration trivia. Preserve its line break as lexical
+                // whitespace, but never let punctuation in a #region message or #pragma payload
+                // terminate the record header.
+                // directive payload は宣言 trivia である。改行は字句上の空白として維持するが、
+                // #region message や #pragma payload 内の記号で record header を終了しない。
+                sb.Append('\n');
+                continue;
+            }
             char[]? masked = null;
             var terminatorIdx = -1;
             void MaskChar(int index)

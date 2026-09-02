@@ -54,6 +54,18 @@ public static partial class QueryCommandRunner
                 "Add `--focus-column <n>` so excerpt knows which token to keep visible inside the clamped line.");
             return CommandExitCodes.UsageError;
         }
+        if ((options.StartColumn.HasValue || options.EndColumn.HasValue)
+            && (options.MaxLineWidth != 0
+                || options.ContextBefore != 0
+                || options.ContextAfter != 0
+                || options.FocusLine.HasValue
+                || options.FocusColumn.HasValue))
+        {
+            WriteValidationError(
+                "--start-column and --end-column require an unclamped, context-free excerpt.",
+                "Add `--max-line-width 0` and omit context/focus options so source columns map exactly to the returned boundary lines.");
+            return CommandExitCodes.UsageError;
+        }
 
         var filePathArgument = options.Query;
         var startLine = options.StartLine;
@@ -189,6 +201,17 @@ public static partial class QueryCommandRunner
                     CommandErrorWriter.WriteStderr("No excerpt found.");
                 return ZeroResultExitCode(options);
             }
+            if (!TryClipExcerptColumns(
+                    excerpt,
+                    options.StartColumn,
+                    options.EndColumn,
+                    out var columnRangeError))
+            {
+                WriteValidationError(
+                    columnRangeError!,
+                    "Use 1-based columns within the first and last returned source lines, with the start column not after the end column on a single-line excerpt.");
+                return CommandExitCodes.UsageError;
+            }
             excerpt.RequestedStartLine = startLineValue;
             excerpt.RequestedEndLine = requestedEndLine;
             if (options.Json)
@@ -224,6 +247,73 @@ public static partial class QueryCommandRunner
             }
             return CommandExitCodes.Success;
         });
+    }
+
+    private static bool TryClipExcerptColumns(
+        FileExcerptResult excerpt,
+        int? startColumn,
+        int? endColumn,
+        out string? error)
+    {
+        error = null;
+        if (!startColumn.HasValue && !endColumn.HasValue)
+            return true;
+
+        var lines = excerpt.Content.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
+        if (lines.Length == 0)
+            return true;
+
+        var firstLineLength = lines[0].Length;
+        var lastLineLength = lines[^1].Length;
+        if (startColumn is int requestedStartColumn
+            && requestedStartColumn > firstLineLength)
+        {
+            error = $"--start-column ({requestedStartColumn}) must be within the first returned line length ({firstLineLength}).";
+            return false;
+        }
+        if (endColumn is int requestedEndColumn
+            && requestedEndColumn > lastLineLength)
+        {
+            error = $"--end-column ({requestedEndColumn}) must be within the last returned line length ({lastLineLength}).";
+            return false;
+        }
+        if (lines.Length == 1
+            && startColumn.HasValue
+            && endColumn.HasValue
+            && startColumn.Value > endColumn.Value)
+        {
+            error = $"--start-column ({startColumn.Value}) must be less than or equal to --end-column ({endColumn.Value}) for a single-line excerpt.";
+            return false;
+        }
+
+        var clippedLines = new string[lines.Length];
+        var spans = new List<ExcerptContentLineSpan>(lines.Length);
+        for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
+        {
+            var line = lines[lineIndex];
+            var sourceStartColumn = lineIndex == 0 && startColumn.HasValue
+                ? startColumn.Value
+                : 1;
+            var sourceEndColumn = lineIndex == lines.Length - 1 && endColumn.HasValue
+                ? endColumn.Value
+                : line.Length;
+            var startIndex = sourceStartColumn - 1;
+            var endIndexExclusive = sourceEndColumn;
+            clippedLines[lineIndex] = line[startIndex..endIndexExclusive];
+            spans.Add(new ExcerptContentLineSpan
+            {
+                ContentLine = lineIndex + 1,
+                SourceLine = excerpt.StartLine + lineIndex,
+                ContentStartColumn = 1,
+                ContentEndColumn = clippedLines[lineIndex].Length,
+                SourceStartColumn = sourceStartColumn,
+                SourceEndColumn = sourceEndColumn,
+            });
+        }
+
+        excerpt.Content = string.Join('\n', clippedLines);
+        excerpt.ContentLineSpans = spans;
+        return true;
     }
 
     private static bool TryParseExcerptLocationArgument(

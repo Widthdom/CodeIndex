@@ -46,6 +46,8 @@ public static partial class QueryCommandRunner
         ["--since"] = "pass an ISO 8601 datetime, e.g. `--since 2024-01-01` or `--since 2024-01-01T00:00:00Z`.",
         ["--start"] = "pass a 1-based line number, e.g. `--start 10`.",
         ["--end"] = "pass a 1-based line number greater than or equal to `--start`, e.g. `--end 20`.",
+        ["--start-column"] = "pass a 1-based inclusive column on the first excerpt line, e.g. `--start-column 5`; use `--max-line-width 0`.",
+        ["--end-column"] = "pass a 1-based inclusive column on the last excerpt line, e.g. `--end-column 40`; use `--max-line-width 0`.",
         ["--before"] = "pass a non-negative integer of context lines before each match, e.g. `--before 2`.",
         ["--after"] = "pass a non-negative integer of context lines after each match, e.g. `--after 2`.",
         ["--focus-line"] = "pass a 1-based line number to focus on, e.g. `--focus-line 12`.",

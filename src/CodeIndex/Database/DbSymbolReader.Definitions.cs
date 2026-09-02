@@ -119,7 +119,16 @@ public partial class DbReader
                     var recoveryStartLine = cappedBodyEndLine + 1;
                     var recoveryEndLine = Math.Min(symbol.BodyEndLine.Value, recoveryStartLine + DefinitionBodyMaxLines - 1);
                     bodyContentNextStartLine = recoveryStartLine;
-                    bodyContentRecovery ??= FileExcerptResult.CreateRecoveryHint(symbol.Path, recoveryStartLine, recoveryEndLine);
+                    bodyContentRecovery ??= csharpSemicolonDeclarationBounds.HasValue
+                        ? CreateCSharpSemicolonRecoveryHint(
+                            symbol.Path,
+                            recoveryStartLine,
+                            recoveryEndLine,
+                            csharpSemicolonDeclarationBounds.Value)
+                        : FileExcerptResult.CreateRecoveryHint(
+                            symbol.Path,
+                            recoveryStartLine,
+                            recoveryEndLine);
                 }
                 bodyContentTruncated |= bodyExcerpt.ContentTruncated;
                 var byteClamp = ClampDefinitionBodyBytes(bodyContent);
@@ -144,7 +153,16 @@ public partial class DbReader
                         if (nextStartLine <= symbol.BodyEndLine.Value)
                             bodyContentNextStartLine = nextStartLine;
                     }
-                    bodyContentRecovery = FileExcerptResult.CreateRecoveryHint(symbol.Path, bodyExcerpt.StartLine, bodyExcerpt.EndLine);
+                    bodyContentRecovery = csharpSemicolonDeclarationBounds.HasValue
+                        ? CreateCSharpSemicolonRecoveryHint(
+                            symbol.Path,
+                            bodyExcerpt.StartLine,
+                            bodyExcerpt.EndLine,
+                            csharpSemicolonDeclarationBounds.Value)
+                        : FileExcerptResult.CreateRecoveryHint(
+                            symbol.Path,
+                            bodyExcerpt.StartLine,
+                            bodyExcerpt.EndLine);
                 }
             }
         }
@@ -251,6 +269,9 @@ public partial class DbReader
         for (var lineIndex = 0; lineIndex < sanitizedLines.Length; lineIndex++)
         {
             var line = sanitizedLines[lineIndex];
+            if (SymbolExtractor.IsCSharpPreprocessorDirectiveLine(line))
+                continue;
+
             for (var column = 0; column < line.Length; column++)
             {
                 switch (line[column])
@@ -340,6 +361,20 @@ public partial class DbReader
         }
 
         return string.Join('\n', clippedLines);
+    }
+
+    private static ExcerptRecoveryHint CreateCSharpSemicolonRecoveryHint(
+        string path,
+        int startLine,
+        int endLine,
+        CSharpSemicolonDeclarationBounds bounds)
+    {
+        var recovery = FileExcerptResult.CreateRecoveryHint(path, startLine, endLine);
+        if (startLine == bounds.StartLine)
+            recovery.StartColumn = bounds.StartColumn + 1;
+        if (endLine == bounds.EndLine)
+            recovery.EndColumn = bounds.EndColumn + 1;
+        return recovery;
     }
 
     private static void AddBodyContentTruncationReason(List<string> reasons, string reason)

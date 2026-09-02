@@ -298,7 +298,8 @@ public static partial class ReferenceExtractor
                 CollectCSharpRecordHeader(
                     structuralLines,
                     recordOwner.StartLine,
-                    recordStartColumn);
+                    recordStartColumn,
+                    skipCSharpPreprocessorDirectives: true);
             var boundary = (
                 endLine,
                 endColumn,

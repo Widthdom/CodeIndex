@@ -135,7 +135,10 @@ public static partial class ReferenceExtractor
         foreach (var typeSymbol in typeSymbols)
         {
             var implementedInterfaces = ExtractCSharpImplementedInterfaces(
-                CollectCSharpRecordHeader(structuralLines, typeSymbol.StartLine).Text,
+                CollectCSharpRecordHeader(
+                    structuralLines,
+                    typeSymbol.StartLine,
+                    skipCSharpPreprocessorDirectives: true).Text,
                 interfaceGenericParameters);
             if (implementedInterfaces.Count == 0)
                 continue;

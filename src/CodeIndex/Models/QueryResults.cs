@@ -625,6 +625,10 @@ public class ExcerptRecoveryHint
 {
     public int StartLine { get; set; }
     public int EndLine { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? StartColumn { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? EndColumn { get; set; }
     public List<string> Argv { get; set; } = [];
     public string Command { get; set; } = string.Empty;
     public string CommandShell { get; set; } = string.Empty;

@@ -829,8 +829,10 @@ public partial class QueryCommandRunnerTests
                 "csharp",
                 """
                 public record Base(int Value);
-                public record Directed(int Value) :
-                #pragma warning disable CS1591
+                public record Directed(int Value)
+                #region declaration ; brace {
+                #endregion
+                    :
                     Base(Value);
                 """);
 
@@ -843,9 +845,10 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(2, definition.GetProperty("body_requested_start_line").GetInt32());
-            Assert.Equal(4, definition.GetProperty("body_requested_end_line").GetInt32());
+            Assert.Equal(6, definition.GetProperty("body_requested_end_line").GetInt32());
             var body = definition.GetProperty("body_content").GetString();
-            Assert.Contains("#pragma warning disable CS1591", body, StringComparison.Ordinal);
+            Assert.Contains("#region declaration ; brace {", body, StringComparison.Ordinal);
+            Assert.Contains("#endregion", body, StringComparison.Ordinal);
             Assert.EndsWith("Base(Value);", body, StringComparison.Ordinal);
         }
         finally
@@ -861,24 +864,24 @@ public partial class QueryCommandRunnerTests
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            const int componentCount = 70;
+            const int componentCount = 21;
             var componentLines = Enumerable.Range(1, componentCount)
                 .Select(i => $"    int Value{i:D2}{(i == componentCount ? string.Empty : ",")}");
             TestProjectHelper.InsertIndexedFile(
                 dbPath,
                 "src/LongRecord.cs",
                 "csharp",
-                "public record LongRecord(\n" + string.Join('\n', componentLines) + "\n);\n");
+                "public record LongRecord(\n" + string.Join('\n', componentLines) + "\n); public class LongSibling { }\n");
 
             var longLiteral = new string('a', DbReader.DefinitionBodyMaxBytes + 1024);
             TestProjectHelper.InsertIndexedFile(
                 dbPath,
                 "src/HugeRecord.cs",
                 "csharp",
-                $"public record HugeRecord(string Value = \"{longLiteral}\");\n");
+                $"public class HugeOuter {{ public record HugeRecord(string Value = \"{longLiteral}\"); public class HugeSibling {{ }} }}\n");
 
             var (lineExitCode, lineStdout, lineStderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
-                ["LongRecord", "--db", dbPath, "--json", "--body", "--lang", "csharp", "--exact-name"],
+                ["LongRecord", "--db", dbPath, "--json", "--body", "--lang", "csharp", "--exact-name", "--show-paths"],
                 _jsonOptions));
             using var lineDocument = ParseJsonOutput(lineStdout);
             var lineDefinition = lineDocument.RootElement;
@@ -894,9 +897,24 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(
                 DbReader.DefinitionBodyMaxLines + 1,
                 lineDefinition.GetProperty("body_content_recovery").GetProperty("start_line").GetInt32());
+            var lineRecovery = lineDefinition.GetProperty("body_content_recovery");
+            Assert.Equal(2, lineRecovery.GetProperty("end_column").GetInt32());
+            var lineRecoveryArgv = lineRecovery.GetProperty("argv")
+                .EnumerateArray()
+                .Select(argument => argument.GetString()!)
+                .ToArray();
+            var lineExcerptIndex = Array.IndexOf(lineRecoveryArgv, "excerpt");
+            Assert.True(lineExcerptIndex >= 0);
+            var (lineRecoveryExitCode, lineRecoveryStdout, lineRecoveryStderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunExcerpt(lineRecoveryArgv[(lineExcerptIndex + 1)..], _jsonOptions));
+            using var lineRecoveryDocument = ParseJsonOutput(lineRecoveryStdout);
+            Assert.Equal(CommandExitCodes.Success, lineRecoveryExitCode);
+            Assert.Equal(string.Empty, lineRecoveryStderr);
+            Assert.EndsWith(");", lineRecoveryDocument.RootElement.GetProperty("content").GetString(), StringComparison.Ordinal);
+            Assert.DoesNotContain("LongSibling", lineRecoveryDocument.RootElement.GetProperty("content").GetString(), StringComparison.Ordinal);
 
             var (byteExitCode, byteStdout, byteStderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
-                ["HugeRecord", "--db", dbPath, "--json", "--body", "--lang", "csharp", "--exact-name"],
+                ["HugeRecord", "--db", dbPath, "--json", "--body", "--lang", "csharp", "--exact-name", "--show-paths"],
                 _jsonOptions));
             using var byteDocument = ParseJsonOutput(byteStdout);
             var byteDefinition = byteDocument.RootElement;
@@ -908,8 +926,27 @@ public partial class QueryCommandRunnerTests
             Assert.Contains(
                 "body_byte_cap",
                 byteDefinition.GetProperty("body_content_truncation_reasons").EnumerateArray().Select(reason => reason.GetString()));
-            Assert.Equal(1, byteDefinition.GetProperty("body_content_recovery").GetProperty("start_line").GetInt32());
-            Assert.Equal(1, byteDefinition.GetProperty("body_content_recovery").GetProperty("end_line").GetInt32());
+            var byteRecovery = byteDefinition.GetProperty("body_content_recovery");
+            Assert.Equal(1, byteRecovery.GetProperty("start_line").GetInt32());
+            Assert.Equal(1, byteRecovery.GetProperty("end_line").GetInt32());
+            Assert.True(byteRecovery.GetProperty("start_column").GetInt32() > 1);
+            Assert.True(byteRecovery.GetProperty("end_column").GetInt32() > DbReader.DefinitionBodyMaxBytes);
+            var byteRecoveryArgv = byteRecovery.GetProperty("argv")
+                .EnumerateArray()
+                .Select(argument => argument.GetString()!)
+                .ToArray();
+            var byteExcerptIndex = Array.IndexOf(byteRecoveryArgv, "excerpt");
+            Assert.True(byteExcerptIndex >= 0);
+            var (byteRecoveryExitCode, byteRecoveryStdout, byteRecoveryStderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunExcerpt(byteRecoveryArgv[(byteExcerptIndex + 1)..], _jsonOptions));
+            using var byteRecoveryDocument = ParseJsonOutput(byteRecoveryStdout);
+            Assert.Equal(CommandExitCodes.Success, byteRecoveryExitCode);
+            Assert.Equal(string.Empty, byteRecoveryStderr);
+            var recoveredHugeBody = byteRecoveryDocument.RootElement.GetProperty("content").GetString();
+            Assert.StartsWith("public record HugeRecord", recoveredHugeBody, StringComparison.Ordinal);
+            Assert.EndsWith(");", recoveredHugeBody, StringComparison.Ordinal);
+            Assert.DoesNotContain("HugeOuter", recoveredHugeBody, StringComparison.Ordinal);
+            Assert.DoesNotContain("HugeSibling", recoveredHugeBody, StringComparison.Ordinal);
         }
         finally
         {

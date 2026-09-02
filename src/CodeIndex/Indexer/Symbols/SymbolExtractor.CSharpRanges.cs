@@ -160,7 +160,7 @@ public static partial class SymbolExtractor
         return false;
     }
 
-    private static bool IsCSharpPreprocessorDirectiveLine(string line)
+    internal static bool IsCSharpPreprocessorDirectiveLine(string line)
     {
         for (var index = 0; index < line.Length; index++)
         {
