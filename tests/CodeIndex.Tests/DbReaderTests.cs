@@ -5975,6 +5975,21 @@ public partial class DbReaderTests : IDisposable
         Assert.Equal(["src/issue5229/App.cs"], rows.Select(result => result.Path));
         Assert.Equal(rows.Count, counts.Count);
         Assert.Equal(rows.Count, map.FileCount);
+
+        var largeIncludes = Enumerable.Range(0, 500).Select(i => $"src/{i}.cs").ToList();
+        var largeExcludes = Enumerable.Range(0, 499).Select(i => $"tests/{i}.cs").ToList();
+        Assert.Throws<ArgumentOutOfRangeException>(() => _reader.ListFiles(
+            pathPatterns: largeIncludes,
+            excludePathPatterns: largeExcludes,
+            requiredPathPatterns: requiredIncludes));
+        Assert.Throws<ArgumentOutOfRangeException>(() => _reader.CountListFiles(
+            pathPatterns: largeIncludes,
+            excludePathPatterns: largeExcludes,
+            requiredPathPatterns: requiredIncludes));
+        Assert.Throws<ArgumentOutOfRangeException>(() => _reader.GetRepoMap(
+            pathPatterns: largeIncludes,
+            excludePathPatterns: largeExcludes,
+            requiredPathPatterns: requiredIncludes));
     }
 
     [Fact]

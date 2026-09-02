@@ -87,6 +87,7 @@ internal sealed class RepoMapBuilder
         int offset = 0, string? requestedCollection = null, bool summaryProjection = false,
         IReadOnlyList<string>? requiredPathPatterns = null)
     {
+        DbReader.EnsurePathFilterParameterBudget(pathPatterns, excludePathPatterns, requiredPathPatterns);
         offset = Math.Max(0, offset);
         var retainedLimit = checked(Math.Max(limit, 0) + offset);
         var includeLanguages = IncludesMapCollection(requestedCollection, summaryProjection, "languages");

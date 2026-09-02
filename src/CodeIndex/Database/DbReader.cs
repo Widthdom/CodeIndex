@@ -2062,6 +2062,7 @@ public partial class DbReader : IDisposable
     {
         if (offset < 0)
             throw new ArgumentOutOfRangeException(nameof(offset), offset, "Offset must be non-negative.");
+        EnsurePathFilterParameterBudget(pathPatterns, excludePathPatterns, requiredPathPatterns);
 
         lang = NormalizeQueryLanguage(lang);
         using var cmd = _conn.CreateCommand();
@@ -2157,6 +2158,7 @@ public partial class DbReader : IDisposable
 
     public QueryCountResult CountListFiles(string? query = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool generatedOnly = false, IReadOnlyList<string>? requiredPathPatterns = null)
     {
+        EnsurePathFilterParameterBudget(pathPatterns, excludePathPatterns, requiredPathPatterns);
         lang = NormalizeQueryLanguage(lang);
         using var cmd = _conn.CreateCommand();
 
@@ -2339,8 +2341,15 @@ public partial class DbReader : IDisposable
         }
     }
 
-    private static void EnsurePathFilterParameterBudget(IReadOnlyCollection<string>? pathPatterns, IReadOnlyCollection<string>? excludePathPatterns)
-        => SqliteDynamicSql.EnsureParameterBudget(CountPathFilterParameters(pathPatterns) + CountPathFilterParameters(excludePathPatterns), "path filters");
+    internal static void EnsurePathFilterParameterBudget(
+        IReadOnlyCollection<string>? pathPatterns,
+        IReadOnlyCollection<string>? excludePathPatterns,
+        IReadOnlyCollection<string>? requiredPathPatterns = null)
+        => SqliteDynamicSql.EnsureParameterBudget(
+            CountPathFilterParameters(pathPatterns)
+            + CountPathFilterParameters(excludePathPatterns)
+            + CountPathFilterParameters(requiredPathPatterns),
+            "path filters");
 
     private static int CountPathFilterParameters(IReadOnlyCollection<string>? pathPatterns)
         => pathPatterns?.Count ?? 0;
