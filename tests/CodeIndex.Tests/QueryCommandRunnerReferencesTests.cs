@@ -2409,6 +2409,45 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunReferences_CSharpSemicolonRecordKeepsOutsideSameLineCallsOnParent_Issue5228()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_record_reference_boundaries_5228");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+                """
+                public static class Target { public static int Create() => 1; }
+                public class Outer
+                {
+                    public event System.Action Changed = Target.Create; public record Á; public static int Value = Target.Create();
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Create", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+            var references = ParseJsonLines(stdout)
+                .Select(document => document.RootElement)
+                .ToArray();
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(2, references.Length);
+            Assert.All(references, reference =>
+            {
+                Assert.Equal("class", reference.GetProperty("container_kind").GetString());
+                Assert.Equal("Outer", reference.GetProperty("container_name").GetString());
+            });
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunReferences_ExactJson_WithResults_StaysCleanWhenEnumMembersAlsoExist()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_references_enum_member_success_metadata");

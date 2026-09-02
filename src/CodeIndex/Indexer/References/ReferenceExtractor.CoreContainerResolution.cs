@@ -131,7 +131,7 @@ public static partial class ReferenceExtractor
         private (bool IsResolved, SymbolRecord? Container)
             ResolveCSharpRecordContainer(int column)
         {
-            if (TryResolveAfterCSharpSemicolonRecord(
+            if (TryResolveOutsideCSharpSemicolonRecord(
                     _container,
                     column,
                     out var enclosingContainer))
@@ -173,7 +173,7 @@ public static partial class ReferenceExtractor
 
             if (primaryCtorOwner != null)
             {
-                if (TryResolveAfterCSharpSemicolonRecord(
+                if (TryResolveOutsideCSharpSemicolonRecord(
                         primaryCtorOwner,
                         column,
                         out enclosingContainer))
@@ -187,7 +187,7 @@ public static partial class ReferenceExtractor
             return (false, null);
         }
 
-        private bool TryResolveAfterCSharpSemicolonRecord(
+        private bool TryResolveOutsideCSharpSemicolonRecord(
             SymbolRecord? candidate,
             int column,
             out SymbolRecord? enclosingContainer)
@@ -204,18 +204,25 @@ public static partial class ReferenceExtractor
             var structuralLines = _loop.Preparation.StructuralLines;
             var (endLine, endColumn, isRecordDeclaration) =
                 _loop.Lookups.GetCSharpRecordHeaderBoundary(recordOwner);
-            if (endLine != _lineNumber
-                || endColumn == int.MaxValue
+            if (endColumn == int.MaxValue
                 || endLine <= 0
                 || endLine > structuralLines.Length
                 || endColumn < 0
                 || endColumn >= structuralLines[endLine - 1].Length
                 || structuralLines[endLine - 1][endColumn] != ';'
-                || column <= endColumn
                 || !isRecordDeclaration)
             {
                 return false;
             }
+
+            var recordKeywordColumn =
+                FindCSharpRecordKeywordColumn(structuralLines, recordOwner);
+            var isBeforeRecord = _lineNumber == recordOwner.StartLine
+                && column < recordKeywordColumn;
+            var isAfterRecord = _lineNumber == endLine
+                && column > endColumn;
+            if (!isBeforeRecord && !isAfterRecord)
+                return false;
 
             enclosingContainer = FindInnermostSameLineCSharpContainer(
                     _loop.Lookups.GetCSharpSameLineContainerCandidatesByLine(),

@@ -231,7 +231,24 @@ public static partial class ReferenceExtractor
 
     private static readonly string[] CSharpPrimaryCtorKeywords = { "record", "class", "struct" };
 
-    private static bool IsCSharpIdentifierPart(char c) => char.IsLetterOrDigit(c) || c == '_';
+    private static bool IsCSharpIdentifierPart(char value)
+    {
+        if (char.IsSurrogate(value))
+            return true;
+
+        return char.GetUnicodeCategory(value) is
+            System.Globalization.UnicodeCategory.UppercaseLetter or
+            System.Globalization.UnicodeCategory.LowercaseLetter or
+            System.Globalization.UnicodeCategory.TitlecaseLetter or
+            System.Globalization.UnicodeCategory.ModifierLetter or
+            System.Globalization.UnicodeCategory.OtherLetter or
+            System.Globalization.UnicodeCategory.LetterNumber or
+            System.Globalization.UnicodeCategory.DecimalDigitNumber or
+            System.Globalization.UnicodeCategory.ConnectorPunctuation or
+            System.Globalization.UnicodeCategory.NonSpacingMark or
+            System.Globalization.UnicodeCategory.SpacingCombiningMark or
+            System.Globalization.UnicodeCategory.Format;
+    }
 
     private static int FindCSharpRecordKeywordColumn(
         string[] structuralLines,

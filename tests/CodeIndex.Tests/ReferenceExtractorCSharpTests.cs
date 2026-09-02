@@ -1048,6 +1048,7 @@ public partial class ReferenceExtractorTests
     [InlineData("public class Outer\n{\n    public event System.Action Changed; public record R; public static int Value = Target.Create();\n}", null, "Outer")]
     [InlineData("public class Outer\n{\n    public event System.Action Changed; public record class R; public static int Value = Target.Create();\n}", null, "Outer")]
     [InlineData("public class Outer\n{\n    public event System.Action Changed; public record struct R; public static int Value = Target.Create();\n}", null, "Outer")]
+    [InlineData("public class Outer\n{\n    public event System.Action Changed = Target.Create; public record R;\n}", null, "Outer")]
     [InlineData("public class Outer\n{\n    public record R\n    ; public static int Value = Target.Create();\n}", "public record R", "Outer")]
     [InlineData("public class Outer\n{\n    public record R(int X)\n    ; public static int Value = Target.Create();\n}", "public record R(int X)", "Outer")]
     [InlineData("public class Outer\n{\n    public record R <T>\n    ; public static int Value = Target.Create();\n}", "public record R <T>", "Outer")]
@@ -1075,6 +1076,28 @@ public partial class ReferenceExtractorTests
         var create = Assert.Single(references, reference => reference.SymbolName == "Create");
         Assert.Equal("class", create.ContainerKind);
         Assert.Equal(expectedContainerName, create.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpUnicodeSemicolonRecord_DoesNotCaptureFollowingSameLineReference_Issue5228()
+    {
+        const string content = """
+            public static class Target { public static int Create() => 1; }
+            public class Outer
+            {
+                public event System.Action Changed; public record Á; public static int Value = Target.Create();
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        Assert.Contains(symbols, symbol =>
+            symbol.Kind == "class"
+            && symbol.Name == "Á");
+
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+        var create = Assert.Single(references, reference => reference.SymbolName == "Create");
+        Assert.Equal("class", create.ContainerKind);
+        Assert.Equal("Outer", create.ContainerName);
     }
 
 #if NET8_0
