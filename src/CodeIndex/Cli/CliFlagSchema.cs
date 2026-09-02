@@ -769,7 +769,7 @@ internal static class CliFlagSchema
             new()
             {
                 Name = "--dry-run",
-                Description = "Preview without writing; hooks supports install and uninstall",
+                Description = "Preview without writing; index reports per-table row operations and projected state; hooks supports install and uninstall",
                 PrimaryCommands = Set("index", "hooks", "backfill-fold", "optimize", "vacuum", "import"),
                 CompletionSubcommands = new Dictionary<string, IReadOnlySet<string>>(StringComparer.Ordinal)
                 {

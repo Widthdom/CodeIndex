@@ -165,6 +165,17 @@ table-mutation estimates without changing the source tree or index. See the
 [User Guide indexing workflow](USER_GUIDE.md#index-a-project) for usage and the
 [Developer Guide](DEVELOPER_GUIDE.md#build--test) for implementation limits.
 
+`table_row_estimates` separates, for every affected table, `rows_deleted`,
+`rows_inserted_or_upserted`, total `row_operations`, `projected_final_rows`, and
+`projected_row_delta`. Each dimension has its own nullable `value`, `source`,
+`confidence`, and `unknown_reasons`, so a known delete count remains usable when
+parse-only insertion estimates are unavailable. The legacy
+`estimated_table_mutations` / `estimated_table_mutation_details` fields remain
+as deprecated total-row-operation aliases for compatibility; the accompanying
+semantics and replacement fields point clients to
+`table_row_estimates.<table>.row_operations`, and removal is reserved for a
+future major release.
+
 Scoped `--files`, `--commits`, and `--changed-between` previews include the
 same read-only C# workspace expansion that execution requires for static
 interface contracts and qualified member-read refreshes. JSON reports
@@ -425,6 +436,16 @@ precedence を維持します。`#compdef` は他言語の source に対する�
 file action と上限付き table mutation estimate を preview します。使い方は
 [プロジェクトをインデックス](USER_GUIDE.md#プロジェクトをインデックス)、実装上の制限は
 [開発者ガイド](DEVELOPER_GUIDE.md#ビルドテスト)を参照してください。
+
+`table_row_estimates` は対象 table ごとに `rows_deleted`、
+`rows_inserted_or_upserted`、合計 `row_operations`、`projected_final_rows`、
+`projected_row_delta` を分離します。各 dimension は独自の nullable な `value`、
+`source`、`confidence`、`unknown_reasons` を持つため、parse-only の insert 推定が
+利用不能でも既知の delete 件数は利用できます。従来の
+`estimated_table_mutations` / `estimated_table_mutation_details` は互換性のため
+非推奨の総 row-operation alias として維持され、semantics / replacement field が
+`table_row_estimates.<table>.row_operations` への移行先を示します。削除は将来の
+major release だけで行います。
 
 `--files`、`--commits`、`--changed-between` の scoped preview では、static
 interface contract と修飾 member-read refresh のために実行時に必要となるものと同じ
