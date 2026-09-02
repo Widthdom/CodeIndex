@@ -95,6 +95,7 @@ public sealed class QueryCommandOptions
     public string? DataDir { get; init; }
     public string? DataDirSource { get; init; }
     public bool Json { get; init; }
+    internal bool JsonExplicit { get; init; }
     public string JsonOutputFormat { get; init; } = "ndjson";
     public bool JsonOutputFormatExplicit { get; init; }
     public string OutputFormat { get; init; } = "text";

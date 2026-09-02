@@ -757,6 +757,16 @@ previews are sanitized and bounded. JSON failures write the envelope to stdout
 and leave stderr empty. Human failures write the matching coded `Error`,
 `Hint`, and `Usage` lines to stderr and leave stdout empty.
 
+An ambiguous `goto` with explicit `--json` uses `E029_QUERY_AMBIGUOUS` /
+`ambiguous_query` and identifies `command: "goto"` with exit code 1. The
+envelope reports authoritative `match_count` / `total_count`, bounded structured
+`candidates`, `returned_count`, `omitted_count`, truncation state, and a
+structured `narrowing` object. Candidate materialization is capped at 20 entries
+and 16 KiB, and every candidate text field is sanitized and bounded before
+serialization. Without explicit `--json`, ambiguity retains the corresponding
+coded human diagnostic on stderr. Never auto-select a ranked candidate; callers
+must narrow the query or opt into `--all`.
+
 Response-budget preflight failures use `E028_RESPONSE_BUDGET_TOO_SMALL` /
 `response_budget` through `CommandErrorWriter.WriteResponseBudgetError`.
 They add `requested_bytes`, `effective_bytes`, `minimum_required_bytes`,
@@ -794,6 +804,7 @@ Other commands load config before those consumers run; malformed config in JSON 
 | Hook platform or filesystem failure | 9 | `E025_HOOK_OPERATION_FAILED` | `platform` |
 | Hooks outside a Git repository | 2 | `E026_NOT_GIT_REPOSITORY` | `not_found` |
 | JSON response budget too small | 1 or underlying command-specific | `E028_RESPONSE_BUDGET_TOO_SMALL` | `response_budget` |
+| Ambiguous `goto` query | 1 | `E029_QUERY_AMBIGUOUS` | `ambiguous_query` |
 | Other recoverable command failure | command-specific | `E023_COMMAND_FAILED` | stable writer classification |
 
 ### Process launch policy
@@ -4984,6 +4995,15 @@ sanitization し、上限を適用してから merge します。JSON の失敗�
 出し、stderr を空に保ちます。human の失敗は対応する code 付き `Error`、`Hint`、
 `Usage` を stderr に出し、stdout を空に保ちます。
 
+`goto` が曖昧一致し、`--json` が明示されている場合は
+`E029_QUERY_AMBIGUOUS` / `ambiguous_query` を使い、`command: "goto"` と exit code 1
+を返します。envelope には authoritative な `match_count` / `total_count`、上限付きの
+構造化 `candidates`、`returned_count`、`omitted_count`、truncation 状態、構造化
+`narrowing` object を含めます。candidate の実体化は20件かつ16 KiBまでとし、すべての
+candidate text field を serialization 前に sanitization して上限を適用します。
+`--json` を明示しない曖昧一致では、対応する code 付き human diagnostic を stderr に
+維持します。rank 上位を自動選択せず、呼び出し側が query を絞るか `--all` を明示します。
+
 response-budget preflight failure は
 `CommandErrorWriter.WriteResponseBudgetError` を通して
 `E028_RESPONSE_BUDGET_TOO_SMALL` / `response_budget` を返します。
@@ -5021,6 +5041,7 @@ JSON mode の不正 config は共通の command-error envelope で
 | hook の platform / filesystem failure | 9 | `E025_HOOK_OPERATION_FAILED` | `platform` |
 | Git repository 外での hooks 実行 | 2 | `E026_NOT_GIT_REPOSITORY` | `not_found` |
 | JSON response budget が小さすぎる | 1 または基となる command 固有値 | `E028_RESPONSE_BUDGET_TOO_SMALL` | `response_budget` |
+| `goto` query の曖昧一致 | 1 | `E029_QUERY_AMBIGUOUS` | `ambiguous_query` |
 | その他の回復可能な command failure | command ごと | `E023_COMMAND_FAILED` | writer による安定した分類 |
 
 ### プロセス起動ポリシー
