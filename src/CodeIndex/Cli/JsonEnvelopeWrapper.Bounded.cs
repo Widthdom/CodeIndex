@@ -668,7 +668,7 @@ internal static partial class JsonEnvelopeWrapper
             metadata["cursor_offset"] = controls.Offset;
             metadata["page_limit"] = controls.PageLimit;
             metadata["has_more"] = hasMore;
-            metadata["next_cursor"] = selectedScanCursor
+            var nextCursor = selectedScanCursor
                 ?? (hasMore && count > 0
                     ? FormatResponseCursor(
                         nextOffset,
@@ -680,6 +680,15 @@ internal static partial class JsonEnvelopeWrapper
                         controls.ResumeMatchOrdinal,
                         controls.ResumeByteOffset)
                     : null);
+            metadata["next_cursor"] = nextCursor;
+            if (scanCursor is not null
+                && metadata["stream_terminal"] is JsonObject adjustedTerminal)
+            {
+                if (nextCursor is null)
+                    adjustedTerminal.Remove("next_cursor");
+                else
+                    adjustedTerminal["next_cursor"] = nextCursor;
+            }
             metadata["truncated"] = scanCursor is not null || totalCount > count || byteLimitOmittedPathCount > 0;
             metadata["pagination_window_limit"] = MaxPageWindow;
             metadata["pagination_window_exhausted"] = paginationWindowExhausted;
@@ -2671,8 +2680,15 @@ internal static partial class JsonEnvelopeWrapper
             null);
     }
 
-    internal static bool IsNdjsonResponseCursorWithinWindow(string command, int returnedCount)
-        => checked(GetBoundedResponseOffset(command) + returnedCount) < MaxPageWindow;
+    internal static bool IsNdjsonResponseCursorWithinWindow(
+        string command,
+        int returnedCount,
+        int replayPageLimit)
+    {
+        var nextOffset = checked(GetBoundedResponseOffset(command) + returnedCount);
+        return nextOffset < MaxPageWindow
+               && checked(nextOffset + replayPageLimit) <= MaxPageWindow;
+    }
 
     private static ResponseSnapshot BuildFallbackResponseSnapshot(string appVersion)
         => new(BuildResponseValueFingerprint("catalog\0" + appVersion), null, null);

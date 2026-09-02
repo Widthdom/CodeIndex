@@ -88,6 +88,7 @@ public static partial class QueryCommandRunner
             var (nextCursor, unavailableReason) = BuildNdjsonContinuation(
                 commandName,
                 returnedCount,
+                options.Limit,
                 hasMore,
                 continuationCursorFactory);
             return BuildJsonStreamDoneLine(
@@ -228,6 +229,7 @@ public static partial class QueryCommandRunner
     private static (string? Cursor, string? UnavailableReason) BuildNdjsonContinuation(
         string commandName,
         int returnedCount,
+        int replayPageLimit,
         bool hasMore,
         Lazy<JsonEnvelopeWrapper.NdjsonResponseCursorContext>? cursorFactory)
     {
@@ -237,7 +239,10 @@ public static partial class QueryCommandRunner
             return (null, "no_result_row_emitted");
         if (cursorFactory is null)
             return (null, "stream_not_cursor_capable");
-        if (!JsonEnvelopeWrapper.IsNdjsonResponseCursorWithinWindow(commandName, returnedCount))
+        if (!JsonEnvelopeWrapper.IsNdjsonResponseCursorWithinWindow(
+                commandName,
+                returnedCount,
+                replayPageLimit))
             return (null, "pagination_window_exhausted");
 
         var cursorContext = cursorFactory.Value;

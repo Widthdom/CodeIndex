@@ -221,6 +221,23 @@ public sealed class QueryCommandRunnerIssue5230Tests
             Assert.Equal(
                 "pagination_window_exhausted",
                 terminal.GetProperty("next_cursor_unavailable_reason").GetString());
+
+            var (largePageExitCode, largePageStdout, largePageStderr) = CaptureConsole(() =>
+                ProgramRunner.Run(
+                    [
+                        "symbols", "Issue5230Window", "--db", dbPath,
+                        "--json", "--limit", "6000",
+                    ],
+                    _jsonOptions,
+                    "1.0.0-test"));
+            Assert.Equal(CommandExitCodes.Success, largePageExitCode);
+            Assert.Equal(string.Empty, largePageStderr);
+            var largePageTerminal = ParseNdjson(largePageStdout)[^1];
+            Assert.True(largePageTerminal.GetProperty("has_more").GetBoolean());
+            Assert.False(largePageTerminal.TryGetProperty("next_cursor", out _));
+            Assert.Equal(
+                "pagination_window_exhausted",
+                largePageTerminal.GetProperty("next_cursor_unavailable_reason").GetString());
         }
         finally
         {
@@ -316,6 +333,79 @@ public sealed class QueryCommandRunnerIssue5230Tests
             var zeroTerminal = ParseNdjson(zeroStdout)[^1];
             Assert.False(zeroTerminal.GetProperty("has_more").GetBoolean());
             Assert.False(zeroTerminal.TryGetProperty("next_cursor", out _));
+
+            var (_, firstPageStdout, _) = CaptureConsole(() => ProgramRunner.Run(
+                [
+                    "search", "Issue5230Large", "--db", dbPath, "--exact-substring",
+                    "--json", "--limit", "1", "--max-line-width", "4096",
+                ],
+                _jsonOptions,
+                "1.0.0-test"));
+            var firstPageRecords = ParseNdjson(firstPageStdout);
+            var firstPagePath = firstPageRecords[0].GetProperty("path").GetString();
+            var firstPageCursor = Assert.IsType<string>(firstPageRecords[^1]
+                .GetProperty("next_cursor")
+                .GetString());
+            JsonElement trimmedMetadata = default;
+            JsonElement[] trimmedResults = [];
+            var trimmedBudget = 0;
+            foreach (var budget in Enumerable.Range(6, 25).Select(index => index * 1_000))
+            {
+                var (exitCode, stdout, _) = CaptureConsole(() => ProgramRunner.Run(
+                    [
+                        "search", "Issue5230Large", "--db", dbPath, "--exact-substring",
+                        "--json", "--limit", "8", "--max-line-width", "4096",
+                        "--cursor", firstPageCursor, "--max-json-bytes", budget.ToString(),
+                    ],
+                    _jsonOptions,
+                    "1.0.0-test"));
+                if (exitCode != CommandExitCodes.Success || string.IsNullOrWhiteSpace(stdout))
+                    continue;
+
+                using var document = JsonDocument.Parse(stdout);
+                var results = document.RootElement.GetProperty("results");
+                if (results.GetArrayLength() is <= 0 or >= 8)
+                    continue;
+
+                Assert.True(Encoding.UTF8.GetByteCount(stdout) <= budget);
+                trimmedMetadata = document.RootElement.GetProperty("metadata").Clone();
+                trimmedResults = results.EnumerateArray().Select(result => result.Clone()).ToArray();
+                trimmedBudget = budget;
+                break;
+            }
+
+            Assert.NotEqual(0, trimmedBudget);
+            var trimmedCursor = Assert.IsType<string>(trimmedMetadata.GetProperty("next_cursor").GetString());
+            Assert.Equal(
+                trimmedCursor,
+                trimmedMetadata.GetProperty("stream_terminal").GetProperty("next_cursor").GetString());
+            var trimmedPaths = trimmedResults
+                .Select(result => result.GetProperty("path").GetString())
+                .ToHashSet(StringComparer.Ordinal);
+            var (trimmedReplayExitCode, trimmedReplayStdout, trimmedReplayStderr) = CaptureConsole(() =>
+                ProgramRunner.Run(
+                    [
+                        "search", "Issue5230Large", "--db", dbPath, "--exact-substring",
+                        "--json", "--limit", "8", "--max-line-width", "4096",
+                        "--cursor", trimmedCursor,
+                    ],
+                    _jsonOptions,
+                    "1.0.0-test"));
+            Assert.Equal(CommandExitCodes.Success, trimmedReplayExitCode);
+            Assert.Equal(string.Empty, trimmedReplayStderr);
+            using (var replayDocument = JsonDocument.Parse(trimmedReplayStdout))
+            {
+                var replayPaths = replayDocument.RootElement.GetProperty("results")
+                    .EnumerateArray()
+                    .Select(result => result.GetProperty("path").GetString())
+                    .ToArray();
+                Assert.DoesNotContain(replayPaths, path => trimmedPaths.Contains(path));
+                var allPaths = trimmedPaths
+                    .Concat(replayPaths)
+                    .Append(firstPagePath)
+                    .ToHashSet(StringComparer.Ordinal);
+                Assert.Equal(10, allPaths.Count);
+            }
 
             JsonElement budgetTerminal = default;
             JsonElement[] budgetRecords = [];
