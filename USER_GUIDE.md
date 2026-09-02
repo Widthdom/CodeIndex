@@ -2531,6 +2531,7 @@ For scripts and AI agents that need to classify failures without substring-match
 | `E026_NOT_GIT_REPOSITORY` | `hooks` was run outside a Git worktree and no valid `--project` was supplied |
 | `E027_DB_NOT_DATABASE` | SQLite rejected the target as not being a database, or maintenance validation rejected it as not being a CodeIndex database |
 | `E028_RESPONSE_BUDGET_TOO_SMALL` | The requested JSON byte budget cannot fit the minimum complete normal payload or envelope |
+| `E029_QUERY_AMBIGUOUS` | `goto` matched multiple definitions; explicit `--json` returns authoritative totals, up to 20 sanitized candidates within a 16 KiB candidate budget, and structured `--kind` / `--lang` / `--path` / `--all` narrowing guidance, while an invocation without explicit JSON keeps the coded human diagnostic on stderr |
 
 ### Debugging reader errors
 
@@ -6215,6 +6216,7 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `E026_NOT_GIT_REPOSITORY` | Git worktree 外で `hooks` を実行し、有効な `--project` も指定されていなかった |
 | `E027_DB_NOT_DATABASE` | SQLite が対象を database ではないと拒否した、または maintenance validation が CodeIndex database ではないと判定した |
 | `E028_RESPONSE_BUDGET_TOO_SMALL` | 要求した JSON byte budget に最小の完全な通常 payload または envelope が収まらない |
+| `E029_QUERY_AMBIGUOUS` | `goto` が複数の definition に一致した。`--json` 明示時は authoritative な総数、20件かつ16 KiB以内の sanitization 済み candidate、構造化した `--kind` / `--lang` / `--path` / `--all` の絞り込み guidance を返し、JSONを明示しない場合はcode付きhuman diagnosticをstderrに維持する |
 
 ### reader エラーのデバッグ
 

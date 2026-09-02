@@ -1,12 +1,17 @@
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using CodeIndex.Database;
+using CodeIndex.Diagnostics;
 using CodeIndex.Models;
 
 namespace CodeIndex.Cli;
 
 public static partial class QueryCommandRunner
 {
+    internal const int GotoAmbiguityCandidateLimit = 20;
+    internal const int GotoAmbiguityCandidateByteLimit = 16 * 1024;
+
     public static int RunDefinition(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var previewOptionError = ValidatePreviewOptions("definition", cmdArgs, allowMaxLineWidth: false, allowFocusOptions: false);
@@ -305,6 +310,9 @@ public static partial class QueryCommandRunner
     public static int RunGoto(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var all = cmdArgs.Any(arg => arg == "--all");
+        var jsonRequested = cmdArgs.Any(arg =>
+            arg.Equals("--json", StringComparison.Ordinal)
+            || arg.StartsWith("--json=", StringComparison.Ordinal));
         var filteredArgs = cmdArgs.Where(arg => arg != "--all").ToArray();
         var options = ParseArgs(filteredArgs, jsonDefault: true, allowNamedQuery: true);
         using var exactLanguageScope = DbReader.BeginExactQueryLanguageScope(
@@ -345,34 +353,25 @@ public static partial class QueryCommandRunner
         {
             var limit = all
                 ? options.LimitExplicit ? options.Limit : int.MaxValue
-                : Math.Max(options.Limit, 2);
+                : Math.Clamp(options.Limit, 2, GotoAmbiguityCandidateLimit);
             var results = reader.GetDefinitions(options.Query, limit, options.Kind, options.Lang, includeBody: false, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters, groupPartials: !all);
             if (results.Count == 0)
             {
-                if (options.Json)
-                {
-                    var payload = JsonSerializer.SerializeToNode(
-                        new CommandErrorJsonResult(
-                            "error",
-                            BuildZeroResultLine("No definitions found", options),
-                            "Check the symbol spelling or narrow/adjust --kind, --lang, and --path filters.",
-                            CommandErrorCodes.QueryNotFound,
-                            Category: "not_found"),
-                        CliJsonSerializerContextFactory.Create(jsonOptions).CommandErrorJsonResult)!.AsObject();
-                    AddIndexGenerationAuthorityJsonFields(payload, reader, jsonOptions);
-                    Console.WriteLine(payload.ToJsonString(EnsureJsonNodeSerializerOptions(jsonOptions)));
-                    return CommandExitCodes.NotFound;
-                }
-
-                WriteIndexGenerationAuthorityWarningIfNeeded(reader);
+                var additionalJsonProperties = new JsonObject();
+                AddIndexGenerationAuthorityJsonFields(additionalJsonProperties, reader, jsonOptions);
+                if (!options.Json)
+                    WriteIndexGenerationAuthorityWarningIfNeeded(reader);
                 return CommandErrorWriter.WriteJsonOrHuman(
-                    false,
+                    options.Json,
                     jsonOptions,
                     BuildZeroResultLine("No definitions found", options),
                     CommandExitCodes.NotFound,
                     "Check the symbol spelling or narrow/adjust --kind, --lang, and --path filters.",
+                    usage: GetUsageLineOrThrow("goto"),
                     errorCode: CommandErrorCodes.QueryNotFound,
-                    category: "not_found");
+                    category: "not_found",
+                    command: "goto",
+                    additionalJsonProperties: additionalJsonProperties);
             }
 
             if (all)
@@ -383,13 +382,155 @@ public static partial class QueryCommandRunner
 
             if (results.Count > 1)
             {
-                CommandErrorWriter.WriteStderr($"Error: goto found {results.Count} matching definitions for '{options.Query}'.");
-                CommandErrorWriter.WriteStderr("Hint: narrow the query with --kind, --lang, --path, or pass --all to return all LSP locations.");
-                return CommandExitCodes.UsageError;
+                var totalCount = reader.CountSearchSymbolsTotal(
+                    options.Query,
+                    options.Kind,
+                    options.Lang,
+                    options.PathPatterns,
+                    options.ExcludePaths,
+                    options.ExcludeTests,
+                    options.Since,
+                    exact,
+                    options.VisibilityFilters,
+                    options.ExcludeVisibilityFilters,
+                    groupPartials: true).Count;
+                var boundedQuery = BoundGotoAmbiguityText(options.Query, redactPaths: true)!;
+                var additionalJsonProperties = BuildGotoAmbiguityJsonProperties(
+                    results,
+                    totalCount,
+                    limit,
+                    jsonOptions);
+                AddIndexGenerationAuthorityJsonFields(additionalJsonProperties, reader, jsonOptions);
+                if (!jsonRequested)
+                    WriteIndexGenerationAuthorityWarningIfNeeded(reader);
+                return CommandErrorWriter.WriteJsonOrHuman(
+                    jsonRequested,
+                    jsonOptions,
+                    $"goto found {totalCount} matching definitions for '{boundedQuery}'.",
+                    CommandExitCodes.UsageError,
+                    "Narrow the query with --kind, --lang, --path, or pass --all to return all LSP locations.",
+                    usage: GetUsageLineOrThrow("goto"),
+                    errorCode: CommandErrorCodes.QueryAmbiguous,
+                    category: "ambiguous_query",
+                    command: "goto",
+                    additionalJsonProperties: additionalJsonProperties);
             }
 
             Console.WriteLine(SerializeQueryJson(ToLspLocation(results[0]), CliJsonSerializerContextFactory.Create(jsonOptions).LspLocation, jsonOptions));
             return CommandExitCodes.Success;
         });
     }
+
+    internal static JsonObject BuildGotoAmbiguityJsonProperties(
+        IReadOnlyList<DefinitionResult> results,
+        int totalCount,
+        int candidateLimit,
+        JsonSerializerOptions jsonOptions)
+    {
+        var candidates = new JsonArray();
+        var candidateBytes = 2;
+        var nodeOptions = EnsureJsonNodeSerializerOptions(jsonOptions);
+        foreach (var result in results)
+        {
+            var candidate = new JsonObject
+            {
+                ["path"] = BoundGotoAmbiguityPath(result.Path),
+                ["line"] = result.Line,
+                ["lang"] = BoundGotoCandidateText(result.Lang),
+                ["kind"] = BoundGotoCandidateText(result.Kind),
+                ["name"] = BoundGotoCandidateText(result.Name),
+                ["container_name"] = BoundGotoCandidateText(result.ContainerName),
+                ["signature"] = BoundGotoCandidateText(result.Signature, maxChars: 240),
+            };
+            var serializedCandidateBytes = Encoding.UTF8.GetByteCount(candidate.ToJsonString(nodeOptions));
+            var separatorBytes = candidates.Count == 0 ? 0 : 1;
+            if (candidateBytes + separatorBytes + serializedCandidateBytes > GotoAmbiguityCandidateByteLimit)
+                break;
+
+            candidates.Add(candidate);
+            candidateBytes += separatorBytes + serializedCandidateBytes;
+        }
+
+        var returnedCount = candidates.Count;
+        return new JsonObject
+        {
+            ["match_count"] = totalCount,
+            ["total_count"] = totalCount,
+            ["total_count_authoritative"] = true,
+            ["returned_count"] = returnedCount,
+            ["omitted_count"] = Math.Max(0, totalCount - returnedCount),
+            ["candidates_truncated"] = returnedCount < totalCount,
+            ["candidate_limit"] = candidateLimit,
+            ["candidate_byte_limit"] = GotoAmbiguityCandidateByteLimit,
+            ["candidate_bytes"] = candidateBytes,
+            ["candidates"] = candidates,
+            ["narrowing"] = new JsonObject
+            {
+                ["filter_options"] = new JsonArray("--kind", "--lang", "--path"),
+                ["all_option"] = "--all",
+            },
+        };
+    }
+
+    private static string? BoundGotoAmbiguityText(
+        string? value,
+        int maxChars = DiagnosticRedactor.DefaultDiagnosticValueCharLimit,
+        bool redactPaths = false)
+    {
+        if (value is null)
+            return null;
+
+        return DiagnosticRedactor.BoundDiagnosticText(
+            DiagnosticRedactor.RedactSensitiveText(value, redactPaths: redactPaths),
+            maxChars);
+    }
+
+    private static string? BoundGotoAmbiguityPath(string? value)
+    {
+        if (value is null)
+            return null;
+
+        if (IsGotoAbsolutePath(value))
+            return DiagnosticRedactor.AngleRedacted;
+
+        var assignmentRedacted = RedactGotoRelativePathSecrets(value);
+        var redacted = DiagnosticRedactor.RedactSuggestionText(assignmentRedacted, out _);
+        return DiagnosticRedactor.BoundDiagnosticText(redacted);
+    }
+
+    private static string? BoundGotoCandidateText(
+        string? value,
+        int maxChars = DiagnosticRedactor.DefaultDiagnosticValueCharLimit)
+    {
+        if (value is null)
+            return null;
+
+        var redacted = DiagnosticRedactor.RedactSuggestionText(value, out _);
+        return DiagnosticRedactor.BoundDiagnosticText(redacted, maxChars);
+    }
+
+    private static string RedactGotoRelativePathSecrets(string value)
+    {
+        var segments = value.Replace('\\', '/').Split('/');
+        for (var index = 0; index < segments.Length; index++)
+        {
+            var segment = segments[index];
+            var separatorIndex = segment.IndexOfAny(['=', ':']);
+            if (separatorIndex <= 0 || !DiagnosticRedactor.IsSensitiveName(segment[..separatorIndex]))
+                continue;
+
+            segments[index] = segment[..(separatorIndex + 1)] + DiagnosticRedactor.AngleRedacted;
+        }
+
+        return string.Join('/', segments);
+    }
+
+    private static bool IsGotoAbsolutePath(string value) =>
+        Path.IsPathRooted(value)
+        || value.StartsWith(@"\\", StringComparison.Ordinal)
+        || value.StartsWith("//", StringComparison.Ordinal)
+        || (value.Length >= 3
+            && char.IsAsciiLetter(value[0])
+            && value[1] == ':'
+            && value[2] is '/' or '\\');
 }
