@@ -320,6 +320,115 @@ public static partial class ReferenceExtractor
         return true;
     }
 
+    // Validate the declaration prefix without flattening the record's generic parameter list
+    // into a regex. Type-parameter attributes can contain nested generic types such as
+    // `[A(typeof(Dictionary<string, int>))]`; brackets are therefore treated as opaque while
+    // locating the outer `>` so the nested type's closer cannot terminate the record arity.
+    // record の generic parameter list を正規表現で平坦化せずに宣言先頭を検証する。
+    // 型パラメーター属性内の nested generic は `[]` ごと読み飛ばし、内側の `>` を
+    // record 自身の generic arity 終端と誤認しない。
+    private static bool IsCSharpRecordDeclarationHeader(
+        string headerText,
+        string recordName)
+    {
+        if (string.IsNullOrWhiteSpace(headerText)
+            || string.IsNullOrWhiteSpace(recordName))
+        {
+            return false;
+        }
+
+        var offset = 0;
+        SkipCSharpRecordHeaderWhitespace(headerText, ref offset);
+        if (!TrySkipCSharpRecordKindKeyword(headerText, ref offset, "record"))
+            return false;
+
+        var separatorStart = offset;
+        SkipCSharpRecordHeaderWhitespace(headerText, ref offset);
+        if (separatorStart == offset)
+            return false;
+
+        var kindOffset = offset;
+        if (TrySkipCSharpRecordKindKeyword(headerText, ref offset, "class")
+            || TrySkipCSharpRecordKindKeyword(headerText, ref offset, "struct"))
+        {
+            separatorStart = offset;
+            SkipCSharpRecordHeaderWhitespace(headerText, ref offset);
+            if (separatorStart == offset)
+                return false;
+        }
+        else
+        {
+            offset = kindOffset;
+        }
+
+        if (offset < headerText.Length && headerText[offset] == '@')
+            offset++;
+        var nameStart = offset;
+        while (offset < headerText.Length && IsCSharpIdentifierPart(headerText[offset]))
+            offset++;
+        if (nameStart == offset
+            || !string.Equals(
+                headerText[nameStart..offset],
+                recordName.TrimStart('@'),
+                StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        SkipCSharpRecordHeaderWhitespace(headerText, ref offset);
+        if (offset < headerText.Length && headerText[offset] == '<')
+        {
+            if (!TrySkipCSharpRecordTypeParameterList(headerText, ref offset))
+                return false;
+            SkipCSharpRecordHeaderWhitespace(headerText, ref offset);
+        }
+
+        if (offset >= headerText.Length || headerText[offset] is '(' or ':')
+            return true;
+
+        return TrySkipCSharpRecordKindKeyword(headerText, ref offset, "where");
+    }
+
+    private static void SkipCSharpRecordHeaderWhitespace(string text, ref int offset)
+    {
+        while (offset < text.Length && char.IsWhiteSpace(text[offset]))
+            offset++;
+    }
+
+    private static bool TrySkipCSharpRecordTypeParameterList(string text, ref int offset)
+    {
+        if (offset >= text.Length || text[offset] != '<')
+            return false;
+
+        var angleDepth = 1;
+        var bracketDepth = 0;
+        for (offset++; offset < text.Length; offset++)
+        {
+            switch (text[offset])
+            {
+                case '[':
+                    bracketDepth++;
+                    break;
+                case ']' when bracketDepth > 0:
+                    bracketDepth--;
+                    break;
+                case '<' when bracketDepth == 0:
+                    angleDepth++;
+                    break;
+                case '>' when bracketDepth == 0:
+                    angleDepth--;
+                    if (angleDepth == 0)
+                    {
+                        offset++;
+                        return true;
+                    }
+                    break;
+            }
+        }
+
+        return false;
+    }
+
     /// <summary>
     /// Walk structural-masked lines starting at the 1-based <paramref name="startLine"/> and collect
     /// the declaration header up to (but not including) the first `;` or `{` that sits outside a

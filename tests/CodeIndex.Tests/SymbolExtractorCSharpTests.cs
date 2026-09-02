@@ -3840,6 +3840,32 @@ public partial class SymbolExtractorTests
         Assert.Equal(single.Name, x.ContainerName);
     }
 
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
+    public void Extract_CSharp_LongSemicolonRecordContainerAssignmentCompletesWithinPracticalBudget_Issue5228()
+    {
+        const int componentCount = 5_000;
+        _ = SymbolExtractor.Extract(1, "csharp", "public record Warmup(Type Value);");
+        var components = Enumerable.Range(0, componentCount)
+            .Select(index => $"    Type{index} Value{index}{(index + 1 == componentCount ? string.Empty : ",")}");
+        var content = "public record LongRecord(\n" + string.Join('\n', components) + "\n);";
+
+        var stopwatch = Stopwatch.StartNew();
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        stopwatch.Stop();
+
+        Assert.Equal(componentCount, symbols.Count(symbol =>
+            symbol.Kind == "property"
+            && symbol.ContainerName == "LongRecord"));
+        var runawayBudget = TimeSpan.FromSeconds(8);
+        Assert.True(
+            stopwatch.Elapsed < runawayBudget,
+            $"Long C# record symbol extraction took {stopwatch.Elapsed.TotalSeconds:F2}s, expected < {runawayBudget.TotalSeconds:F0}s runaway guard budget.");
+    }
+
     [Fact]
     public void Extract_CSharp_TracksRecordPrimaryComponentLineAfterAttributes()
     {

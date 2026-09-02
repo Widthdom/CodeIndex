@@ -168,14 +168,6 @@ public static partial class ReferenceExtractor
     private static readonly Regex CSharpRecordPrimaryCtorSignatureRegex = new(
         $@"\brecord\s+(?:class\s+|struct\s+)?{CSharpIdentifierPattern}(?:\s*<[^>]+>)?\s*\(",
         RegexOptions.Compiled);
-    // C# record declaration prefix, including parameterless semicolon forms. End-of-signature
-    // is accepted because a line-broken `;` is not stored in the signature; the collected header
-    // is still validated separately, rejecting malformed text before an unrelated member.
-    // parameterless なセミコロン形式を含む C# record 宣言の先頭を検出する。改行された `;` は
-    // signature に保存されないため末尾も許可し、連結 header の別検証で malformed な入力を除外する。
-    private static readonly Regex CSharpRecordDeclarationSignatureRegex = new(
-        $@"\brecord\s+(?:class\s+|struct\s+)?{CSharpIdentifierPattern}(?:\s*<[^>]+>)?(?=\s*(?:\(|:|where\b|;|$))",
-        RegexOptions.Compiled);
     // Same intent as CSharpRecordPrimaryCtorSignatureRegex but applied to the joined multi-line
     // header produced by CollectCSharpRecordHeader, so split-line forms like
     // `public record Child\n(\n    int Value\n)\n    : Parent(Value);` still match.

@@ -288,7 +288,7 @@ public static partial class ReferenceExtractor
             var boundary = (
                 endLine,
                 endColumn,
-                CSharpRecordDeclarationSignatureRegex.IsMatch(headerText));
+                IsCSharpRecordDeclarationHeader(headerText, recordOwner.Name));
             (csharpRecordHeaderBoundaries ??= []).Add(recordOwner, boundary);
             return boundary;
         }

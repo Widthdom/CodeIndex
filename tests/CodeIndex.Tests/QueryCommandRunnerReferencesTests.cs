@@ -2417,10 +2417,19 @@ public partial class QueryCommandRunnerTests
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
                 """
+                using System;
+                using System.Collections.Generic;
+                public sealed class AAttribute : Attribute { public AAttribute(Type value) { } }
                 public static class Target { public static int Create() => 1; }
                 public class Outer
                 {
                     public event System.Action Changed = Target.Create; public record Á; public static int Value = Target.Create();
+                }
+                public class GenericOuter
+                {
+                    public record R<
+                        [A(typeof(Dictionary<string, int>))] T>(T Value)
+                    ; public static int Value = Target.Create();
                 }
                 """);
             MarkGraphAndFoldReady(dbPath);
@@ -2434,12 +2443,13 @@ public partial class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal(2, references.Length);
+            Assert.Equal(3, references.Length);
             Assert.All(references, reference =>
-            {
-                Assert.Equal("class", reference.GetProperty("container_kind").GetString());
-                Assert.Equal("Outer", reference.GetProperty("container_name").GetString());
-            });
+                Assert.Equal("class", reference.GetProperty("container_kind").GetString()));
+            Assert.Equal(
+                ["Outer", "Outer", "GenericOuter"],
+                references.Select(reference =>
+                    reference.GetProperty("container_name").GetString()).ToArray());
         }
         finally
         {

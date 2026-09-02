@@ -195,11 +195,8 @@ public static partial class ReferenceExtractor
             enclosingContainer = null;
             if (candidate is not { Kind: "class" or "struct" } recordOwner)
                 return false;
-            if (string.IsNullOrWhiteSpace(recordOwner.Signature)
-                || !CSharpRecordDeclarationSignatureRegex.IsMatch(recordOwner.Signature))
-            {
+            if (string.IsNullOrWhiteSpace(recordOwner.Signature))
                 return false;
-            }
 
             var structuralLines = _loop.Preparation.StructuralLines;
             var (endLine, endColumn, isRecordDeclaration) =

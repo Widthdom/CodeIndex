@@ -1100,6 +1100,33 @@ public partial class ReferenceExtractorTests
         Assert.Equal("Outer", create.ContainerName);
     }
 
+    [Fact]
+    public void Extract_CsharpAttributedGenericSemicolonRecord_DoesNotCaptureFollowingSameLineReference_Issue5228()
+    {
+        const string content = """
+            using System;
+            using System.Collections.Generic;
+            public sealed class AAttribute : Attribute { public AAttribute(Type value) { } }
+            public static class Target { public static int Create() => 1; }
+            public class Outer
+            {
+                public record R<
+                    [A(typeof(Dictionary<string, int>))] T>(T Value)
+                ; public static int X = Target.Create();
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        Assert.Contains(symbols, symbol =>
+            symbol.Kind == "class"
+            && symbol.Name == "R");
+
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+        var create = Assert.Single(references, reference => reference.SymbolName == "Create");
+        Assert.Equal("class", create.ContainerKind);
+        Assert.Equal("Outer", create.ContainerName);
+    }
+
 #if NET8_0
     [Fact]
 #else

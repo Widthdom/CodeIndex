@@ -7,6 +7,7 @@ public static partial class SymbolExtractor
 {
     private const string CSharpFileLocalFamilyPrefix = "file-local:";
     private readonly record struct DeclaredContainerIdentity(long FileId, string Kind, string Name);
+    private readonly record struct CSharpSemicolonTypeDeclarationBoundary(int EndLine, int EndColumn);
 
     private static void PopulateDeclaredContainerQualifiedNames(List<SymbolRecord> symbols)
     {
@@ -106,6 +107,11 @@ public static partial class SymbolExtractor
             return;
         }
 
+        var csharpSemicolonTypeDeclarationBoundaries =
+            BuildCSharpSemicolonTypeDeclarationBoundaries(
+                symbols,
+                rawLines,
+                getCSharpLineStartStates);
         var ordered = BuildContainerAssignmentOrder(symbols);
 
         var stack = new Stack<SymbolRecord>();
@@ -121,7 +127,8 @@ public static partial class SymbolExtractor
                 symbol,
                 containerPathBuffer,
                 rawLines,
-                getCSharpLineStartStates);
+                getCSharpLineStartStates,
+                csharpSemicolonTypeDeclarationBoundaries);
 
             if (containerPath.Count > 0
                 && preserveExistingContainerAssignment?.Invoke(symbol) != true)
@@ -774,7 +781,9 @@ public static partial class SymbolExtractor
         SymbolRecord symbol,
         List<SymbolRecord> containingContainers,
         string[]? rawLines = null,
-        Func<CSharpLexState[]>? getCSharpLineStartStates = null)
+        Func<CSharpLexState[]>? getCSharpLineStartStates = null,
+        IReadOnlyDictionary<SymbolRecord, CSharpSemicolonTypeDeclarationBoundary>?
+            csharpSemicolonTypeDeclarationBoundaries = null)
     {
         containingContainers.Clear();
         if (containers.Count == 0)
@@ -783,14 +792,24 @@ public static partial class SymbolExtractor
         if (containers.Count == 1)
         {
             var container = containers.Peek();
-            if (ContainsSymbol(container, symbol, rawLines, getCSharpLineStartStates))
+            if (ContainsSymbol(
+                    container,
+                    symbol,
+                    rawLines,
+                    getCSharpLineStartStates,
+                    csharpSemicolonTypeDeclarationBoundaries))
                 containingContainers.Add(container);
             return containingContainers;
         }
 
         foreach (var container in containers)
         {
-            if (ContainsSymbol(container, symbol, rawLines, getCSharpLineStartStates))
+            if (ContainsSymbol(
+                    container,
+                    symbol,
+                    rawLines,
+                    getCSharpLineStartStates,
+                    csharpSemicolonTypeDeclarationBoundaries))
                 containingContainers.Add(container);
         }
         containingContainers.Reverse();
@@ -969,7 +988,9 @@ public static partial class SymbolExtractor
         SymbolRecord container,
         SymbolRecord candidate,
         string[]? rawLines = null,
-        Func<CSharpLexState[]>? getCSharpLineStartStates = null)
+        Func<CSharpLexState[]>? getCSharpLineStartStates = null,
+        IReadOnlyDictionary<SymbolRecord, CSharpSemicolonTypeDeclarationBoundary>?
+            csharpSemicolonTypeDeclarationBoundaries = null)
     {
         if (IsFileScopedNamespace(container))
             return candidate.StartLine > container.StartLine;
@@ -982,6 +1003,7 @@ public static partial class SymbolExtractor
                 candidate,
                 rawLines,
                 getCSharpLineStartStates,
+                csharpSemicolonTypeDeclarationBoundaries,
                 out var containsSemicolonTypeDeclarationSymbol))
         {
             return containsSemicolonTypeDeclarationSymbol;
@@ -1022,88 +1044,162 @@ public static partial class SymbolExtractor
     // but those line-only bounds must not make a sibling after the terminating `;` a child.
     // semicolon-form record は宣言行を BodyStartLine/BodyEndLine として公開するが、行単位の
     // range により終端 `;` 後の sibling まで子として扱ってはならない。
+    private static IReadOnlyDictionary<SymbolRecord, CSharpSemicolonTypeDeclarationBoundary>?
+        BuildCSharpSemicolonTypeDeclarationBoundaries(
+            IReadOnlyList<SymbolRecord> symbols,
+            string[]? rawLines,
+            Func<CSharpLexState[]>? getCSharpLineStartStates)
+    {
+        if (rawLines == null || getCSharpLineStartStates == null)
+            return null;
+
+        var recordContainers = symbols.Where(container =>
+                container.Kind is "class" or "struct"
+                && container.Signature != null
+                && FindCSharpIdentifierToken(
+                    container.Signature.AsSpan(),
+                    "record".AsSpan(),
+                    0) >= 0
+                && container.StartLine > 0
+                && container.EndLine >= container.StartLine
+                && container.EndLine <= rawLines.Length)
+            .ToList();
+        if (recordContainers.Count == 0)
+            return null;
+
+        var lineStartStates = getCSharpLineStartStates();
+        var boundaries = new Dictionary<SymbolRecord, CSharpSemicolonTypeDeclarationBoundary>(
+            recordContainers.Count);
+        foreach (var container in recordContainers)
+        {
+            if (container.EndLine > lineStartStates.Length)
+                continue;
+
+            var parenDepth = 0;
+            var bracketDepth = 0;
+            var boundaryResolved = false;
+            for (var lineIndex = container.StartLine - 1;
+                 lineIndex < container.EndLine && !boundaryResolved;
+                 lineIndex++)
+            {
+                var sanitizedLine = LexCSharpLine(
+                    rawLines[lineIndex],
+                    lineStartStates[lineIndex]).SanitizedLine;
+                var fromColumn = lineIndex == container.StartLine - 1
+                    ? Math.Clamp(container.StartColumn ?? 0, 0, sanitizedLine.Length)
+                    : 0;
+                for (var column = fromColumn; column < sanitizedLine.Length; column++)
+                {
+                    switch (sanitizedLine[column])
+                    {
+                        case '(':
+                            parenDepth++;
+                            break;
+                        case ')' when parenDepth > 0:
+                            parenDepth--;
+                            break;
+                        case '[':
+                            bracketDepth++;
+                            break;
+                        case ']' when bracketDepth > 0:
+                            bracketDepth--;
+                            break;
+                        case '{' when parenDepth == 0 && bracketDepth == 0:
+                            boundaryResolved = true;
+                            break;
+                        case ';' when parenDepth == 0 && bracketDepth == 0:
+                            boundaries.Add(
+                                container,
+                                new CSharpSemicolonTypeDeclarationBoundary(
+                                    lineIndex + 1,
+                                    column));
+                            boundaryResolved = true;
+                            break;
+                    }
+
+                    if (boundaryResolved)
+                        break;
+                }
+            }
+        }
+
+        return boundaries.Count == 0 ? null : boundaries;
+    }
+
     private static bool TryContainsCSharpSemicolonTypeDeclarationSymbol(
         SymbolRecord container,
         SymbolRecord candidate,
         string[]? rawLines,
         Func<CSharpLexState[]>? getCSharpLineStartStates,
+        IReadOnlyDictionary<SymbolRecord, CSharpSemicolonTypeDeclarationBoundary>?
+            csharpSemicolonTypeDeclarationBoundaries,
         out bool contains)
     {
         contains = false;
         if (rawLines == null
             || getCSharpLineStartStates == null
-            || container.Kind is not ("class" or "struct")
-            || container.Signature == null
-            || FindCSharpIdentifierToken(container.Signature.AsSpan(), "record".AsSpan(), 0) < 0
+            || csharpSemicolonTypeDeclarationBoundaries == null
+            || !csharpSemicolonTypeDeclarationBoundaries.TryGetValue(container, out var boundary)
             || candidate.StartLine < container.StartLine
             || candidate.StartLine > container.EndLine
-            || container.StartLine <= 0
-            || container.EndLine > rawLines.Length)
+            || boundary.EndLine <= 0
+            || boundary.EndLine > rawLines.Length)
         {
             return false;
         }
 
         var lineStartStates = getCSharpLineStartStates();
-        if (container.EndLine > lineStartStates.Length)
+        if (boundary.EndLine > lineStartStates.Length)
             return false;
 
-        var parenDepth = 0;
-        var bracketDepth = 0;
-        for (var lineIndex = container.StartLine - 1; lineIndex < container.EndLine; lineIndex++)
+        if (candidate.StartLine == container.StartLine)
         {
-            var sanitizedLine = LexCSharpLine(rawLines[lineIndex], lineStartStates[lineIndex]).SanitizedLine;
-            var fromColumn = lineIndex == container.StartLine - 1
-                ? Math.Clamp(container.StartColumn ?? 0, 0, sanitizedLine.Length)
-                : 0;
-            for (var column = fromColumn; column < sanitizedLine.Length; column++)
+            var startLineIndex = container.StartLine - 1;
+            var startColumn = candidate.StartColumn;
+            if (!startColumn.HasValue && candidate.Signature != null)
             {
-                switch (sanitizedLine[column])
-                {
-                    case '(':
-                        parenDepth++;
-                        break;
-                    case ')' when parenDepth > 0:
-                        parenDepth--;
-                        break;
-                    case '[':
-                        bracketDepth++;
-                        break;
-                    case ']' when bracketDepth > 0:
-                        bracketDepth--;
-                        break;
-                    case '{' when parenDepth == 0 && bracketDepth == 0:
-                        return false;
-                    case ';' when parenDepth == 0 && bracketDepth == 0:
-                        var terminatorLine = lineIndex + 1;
-                        if (candidate.StartLine < terminatorLine)
-                        {
-                            contains = true;
-                            return true;
-                        }
+                startColumn = FindSignatureOccurrenceStartColumn(
+                    rawLines[startLineIndex],
+                    candidate.Signature,
+                    candidate.SameLineSignatureOccurrenceIndex ?? 0,
+                    lineStartStates[startLineIndex]);
+            }
 
-                        if (candidate.StartLine > terminatorLine)
-                            return true;
-
-                        var candidateColumn = candidate.StartColumn;
-                        if (!candidateColumn.HasValue && candidate.Signature != null)
-                        {
-                            candidateColumn = FindSignatureOccurrenceStartColumn(
-                                rawLines[lineIndex],
-                                candidate.Signature,
-                                candidate.SameLineSignatureOccurrenceIndex ?? 0,
-                                lineStartStates[lineIndex]);
-                        }
-
-                        if (!candidateColumn.HasValue || candidateColumn.Value < 0)
-                            return false;
-
-                        contains = candidateColumn.Value < column;
-                        return true;
-                }
+            if (startColumn.HasValue
+                && startColumn.Value >= 0
+                && startColumn.Value < (container.StartColumn ?? 0))
+            {
+                return true;
             }
         }
 
-        return false;
+        if (candidate.StartLine < boundary.EndLine)
+        {
+            contains = true;
+            return true;
+        }
+
+        if (candidate.StartLine > boundary.EndLine)
+            return true;
+
+        var lineIndex = boundary.EndLine - 1;
+        var candidateColumn = candidate.StartColumn;
+        if (!candidateColumn.HasValue && candidate.Signature != null)
+        {
+            candidateColumn = FindSignatureOccurrenceStartColumn(
+                rawLines[lineIndex],
+                candidate.Signature,
+                candidate.SameLineSignatureOccurrenceIndex ?? 0,
+                lineStartStates[lineIndex]);
+        }
+
+        if (!candidateColumn.HasValue || candidateColumn.Value < 0)
+            return false;
+
+        contains = candidateColumn.Value < boundary.EndColumn
+            && (candidate.StartLine > container.StartLine
+                || candidateColumn.Value >= (container.StartColumn ?? 0));
+        return true;
     }
 
     private static bool TryContainsCSharpCallableEndLineSymbol(
