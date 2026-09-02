@@ -1052,6 +1052,8 @@ public partial class ReferenceExtractorTests
     [InlineData("public class Outer\n{\n    public record R\n    ; public static int Value = Target.Create();\n}", "public record R", "Outer")]
     [InlineData("public class Outer\n{\n    public record R(int X)\n    ; public static int Value = Target.Create();\n}", "public record R(int X)", "Outer")]
     [InlineData("public class Outer\n{\n    public record R <T>\n    ; public static int Value = Target.Create();\n}", "public record R <T>", "Outer")]
+    [InlineData("public class Outer { public record \\u0052; public static int Value = Target.Create(); }", null, "Outer")]
+    [InlineData("public class Outer { public record \\U00000052; public static int Value = Target.Create(); }", null, "Outer")]
     [InlineData("public record R; public class Next { public static int Value = Target.Create(); }", null, "Next")]
     public void Extract_CsharpSemicolonRecord_DoesNotCaptureFollowingSameLineReference_Issue5228(
         string outerDeclaration,

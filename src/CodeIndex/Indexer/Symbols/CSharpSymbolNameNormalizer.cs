@@ -780,6 +780,9 @@ internal static class CSharpSymbolNameNormalizer
         return ExactSourceSearchNormalizer.Normalize(value, "csharp");
     }
 
+    internal static string NormalizeIdentifierSpelling(string value)
+        => NormalizeVerbatimIdentifiers(value);
+
     internal static bool IsVerbatimIdentifierPrefix(string value, int index)
     {
         if (value[index] != '@' || index + 1 >= value.Length || !IsIdentifierStart(value[index + 1]))

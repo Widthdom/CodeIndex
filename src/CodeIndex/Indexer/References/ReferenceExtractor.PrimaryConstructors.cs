@@ -281,15 +281,12 @@ public static partial class ReferenceExtractor
                         nameStart++;
                 }
 
-                var escaped = nameStart < line.Length && line[nameStart] == '@';
-                if (escaped)
+                if (nameStart < line.Length && line[nameStart] == '@')
                     nameStart++;
                 var nameEnd = nameStart;
-                while (nameEnd < line.Length && IsCSharpIdentifierPart(line[nameEnd]))
-                    nameEnd++;
-                if (nameEnd > nameStart
+                if (TryReadCSharpRecordIdentifier(line, ref nameEnd, out var normalizedName)
                     && string.Equals(
-                        line[nameStart..nameEnd],
+                        normalizedName,
                         recordOwner.Name.TrimStart('@'),
                         StringComparison.Ordinal))
                 {
@@ -363,12 +360,9 @@ public static partial class ReferenceExtractor
 
         if (offset < headerText.Length && headerText[offset] == '@')
             offset++;
-        var nameStart = offset;
-        while (offset < headerText.Length && IsCSharpIdentifierPart(headerText[offset]))
-            offset++;
-        if (nameStart == offset
+        if (!TryReadCSharpRecordIdentifier(headerText, ref offset, out var normalizedName)
             || !string.Equals(
-                headerText[nameStart..offset],
+                normalizedName,
                 recordName.TrimStart('@'),
                 StringComparison.Ordinal))
         {
@@ -387,6 +381,58 @@ public static partial class ReferenceExtractor
             return true;
 
         return TrySkipCSharpRecordKindKeyword(headerText, ref offset, "where");
+    }
+
+    private static bool TryReadCSharpRecordIdentifier(
+        string text,
+        ref int offset,
+        out string normalizedName)
+    {
+        var start = offset;
+        while (offset < text.Length)
+        {
+            if (IsCSharpIdentifierPart(text[offset]))
+            {
+                offset++;
+                continue;
+            }
+
+            if (!TrySkipCSharpIdentifierUnicodeEscape(text, ref offset))
+                break;
+        }
+
+        if (start == offset)
+        {
+            normalizedName = string.Empty;
+            return false;
+        }
+
+        normalizedName = CSharpSymbolNameNormalizer.NormalizeIdentifierSpelling(text[start..offset]);
+        return true;
+    }
+
+    private static bool TrySkipCSharpIdentifierUnicodeEscape(string text, ref int offset)
+    {
+        if (offset + 1 >= text.Length || text[offset] != '\\')
+            return false;
+
+        var digitCount = text[offset + 1] switch
+        {
+            'u' => 4,
+            'U' => 8,
+            _ => 0,
+        };
+        if (digitCount == 0 || offset + 2 + digitCount > text.Length)
+            return false;
+
+        for (var digit = offset + 2; digit < offset + 2 + digitCount; digit++)
+        {
+            if (!char.IsAsciiHexDigit(text[digit]))
+                return false;
+        }
+
+        offset += 2 + digitCount;
+        return true;
     }
 
     private static void SkipCSharpRecordHeaderWhitespace(string text, ref int offset)

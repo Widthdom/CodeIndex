@@ -817,6 +817,44 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunDefinition_CSharpRecordHeaderDirectiveReturnsDeclarationBody_Issue5228()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_definition_csharp_record_directive_5228");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/DirectedRecord.cs",
+                "csharp",
+                """
+                public record Base(int Value);
+                public record Directed(int Value) :
+                #pragma warning disable CS1591
+                    Base(Value);
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
+                ["Directed", "--db", dbPath, "--json", "--body", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+            using var document = ParseJsonOutput(stdout);
+            var definition = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(2, definition.GetProperty("body_requested_start_line").GetInt32());
+            Assert.Equal(4, definition.GetProperty("body_requested_end_line").GetInt32());
+            var body = definition.GetProperty("body_content").GetString();
+            Assert.Contains("#pragma warning disable CS1591", body, StringComparison.Ordinal);
+            Assert.EndsWith("Base(Value);", body, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunDefinition_CSharpSemicolonRecordReportsLineAndByteCaps_Issue5228()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_definition_csharp_semicolon_record_caps_5228");

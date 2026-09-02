@@ -3680,6 +3680,22 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_RecordHeaderDirectivesKeepDeclarationBody_Issue5228()
+    {
+        var content = """
+            public record Base(int Value);
+            public record Directed(int Value) :
+            #pragma warning disable CS1591
+                Base(Value);
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var directed = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Directed"));
+        Assert.Equal((2, 4), (directed.BodyStartLine, directed.BodyEndLine));
+        Assert.Equal(4, directed.EndLine);
+    }
+
+    [Fact]
     public void Extract_CSharp_QualifiedRecordContinuationsKeepDeclarationBodies_Issue5228()
     {
         var content = """

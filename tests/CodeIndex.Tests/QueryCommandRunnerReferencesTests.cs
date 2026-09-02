@@ -2431,6 +2431,10 @@ public partial class QueryCommandRunnerTests
                         [A(typeof(Dictionary<string, int>))] T>(T Value)
                     ; public static int Value = Target.Create();
                 }
+                public class EscapedOuter
+                {
+                    public record \u0052; public static int Value = Target.Create();
+                }
                 public class MultilineOuter
                 {
                     public record S; public void Following() { Target.Create();
@@ -2454,11 +2458,11 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(
-                ["class", "class", "class", "function", "class"],
+                ["class", "class", "class", "class", "function", "class"],
                 references.Select(reference =>
                     reference.GetProperty("container_kind").GetString()).ToArray());
             Assert.Equal(
-                ["Outer", "Outer", "GenericOuter", "Following", "FollowingType"],
+                ["Outer", "Outer", "GenericOuter", "EscapedOuter", "Following", "FollowingType"],
                 references.Select(reference =>
                     reference.GetProperty("container_name").GetString()).ToArray());
         }

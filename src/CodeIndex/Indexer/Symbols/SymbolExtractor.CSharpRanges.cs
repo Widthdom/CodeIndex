@@ -84,6 +84,9 @@ public static partial class SymbolExtractor
         for (var lineIndex = startLineIndex; lineIndex < csharpMatchLines.Length; lineIndex++)
         {
             var sanitizedLine = csharpMatchLines[lineIndex];
+            if (IsCSharpPreprocessorDirectiveLine(sanitizedLine))
+                continue;
+
             if (lineIndex > startLineIndex
                 && parenDepth == 0
                 && bracketDepth == 0)
@@ -154,6 +157,17 @@ public static partial class SymbolExtractor
         }
 
         declarationRange = default;
+        return false;
+    }
+
+    private static bool IsCSharpPreprocessorDirectiveLine(string line)
+    {
+        for (var index = 0; index < line.Length; index++)
+        {
+            if (!char.IsWhiteSpace(line[index]))
+                return line[index] == '#';
+        }
+
         return false;
     }
 
