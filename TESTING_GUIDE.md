@@ -679,6 +679,8 @@ Candidate-ordered parallel-index recovery tests must prove that the fatal result
   Include/exclude typo recovery must preserve selector semantics, unresolved repeated selectors, and raw FTS mode. Missing close matches and recipe-name corrections with child selectors must not offer a replay that broadens the selection, while aliases that collide with canonical names or multiple query owners must be removed with bounded diagnostics.
 - `QueryCommandRunnerTests.RunAudit_UsageErrorsRetainPublicCommandContext_Issue4875` and `RunAudit_RecipeReplayCommandsRetainPublicCommandContext_Issue4875`
   keep audit-alias parse, validation, selection, and conflict errors on `audit` usage; require explicit `--json` failures to expose `command: "audit"` without human-readable usage; preserve direct `search` controls; and keep issue-draft and compact replay commands on the public positional audit syntax.
+- `QueryCommandRunnerTests.RunAudit_CompactResponseBudgetErrorsRetainPublicCommandContext_Issue5234`
+  probes the measured compact response minimum and then retries immediately below it. Keep `command`, human `usage`, recovery `hint`, and `retry.command` on the public `audit` identity, with a direct `search --recipe` control retaining `search`.
 - `QueryCommandRunnerTests.RunReferences_ExactJson_StylesheetAndSqlFixturesShareIndexedWorkspace`
   keeps SCSS variable/mixin/extend references beside SQL multiline MERGE hints, non-ASCII identifiers, quoted-string masking, and temporary-table body boundaries in one multi-file workspace with one CLI index. Use language-specific queries and unique per-file sentinels so count, kind, and line assertions remain independently diagnostic.
 - `QueryCommandRunnerTests.RunReferences_ExactJson_CSharpQueryBoundariesAndVisualBasicQuerySyntaxShareIndexedWorkspace`
@@ -1839,6 +1841,8 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   include / exclude の typo recovery は selector の意味、未解決の繰り返し selector、raw FTS mode を保持します。近い候補がない場合、および child selector を伴う recipe 名訂正では selection を広げる replay を提示せず、canonical 名または複数の query owner と衝突する alias は上限付き diagnostic とともに除去しなければなりません。
 - `QueryCommandRunnerTests.RunAudit_UsageErrorsRetainPublicCommandContext_Issue4875` と `RunAudit_RecipeReplayCommandsRetainPublicCommandContext_Issue4875`
   は audit alias の parse、validation、selection、conflict error が `audit` usage を維持すること、明示的な `--json` の失敗が人間向け usage を含めずに `command: "audit"` を公開すること、直接の `search` control を維持すること、issue-draft と compact の replay command が公開されている audit の positional syntax を使うことを検証します。
+- `QueryCommandRunnerTests.RunAudit_CompactResponseBudgetErrorsRetainPublicCommandContext_Issue5234`
+  は compact response の必要最小 byte 数を計測し、その直下で再試行します。`command`、人間向け `usage`、復旧 `hint`、`retry.command` が公開された `audit` identity を維持し、直接の `search --recipe` control は `search` を維持することを検証してください。
 - `QueryCommandRunnerTests.RunReferences_ExactJson_StylesheetAndSqlFixturesShareIndexedWorkspace`
   は SCSS の variable / mixin / extend 参照と、SQL の multiline MERGE hint、非 ASCII identifier、quoted-string masking、temporary-table body boundary を、CLI index 1回の multi-file workspace で共有します。言語別 query と file ごとの固有 sentinel を使い、件数・kind・line assertion の診断性を独立に保ってください。
 - `QueryCommandRunnerTests.RunReferences_ExactJson_CSharpQueryBoundariesAndVisualBasicQuerySyntaxShareIndexedWorkspace`
