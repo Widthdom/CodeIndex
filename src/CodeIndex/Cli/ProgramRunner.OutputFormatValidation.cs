@@ -125,6 +125,15 @@ internal static partial class ProgramRunner
             }
         }
 
+        // Explicit JSON projection for the native row-array commands is owned by
+        // JsonEnvelopeWrapper so conflicts retain its versioned stdout contract.
+        if (jsonRequested
+            && fieldsRequested
+            && JsonEnvelopeWrapper.SupportsJsonArrayProjection(commandName))
+        {
+            return true;
+        }
+
         if (ShouldDeferOutputCombinationValidation(args, commandIndex, commandName, outputFormat, jsonStreamMode))
             return true;
 

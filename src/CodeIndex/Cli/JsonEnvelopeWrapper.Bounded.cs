@@ -45,6 +45,9 @@ internal static partial class JsonEnvelopeWrapper
         "search", "symbols", "files",
     };
 
+    internal static bool SupportsJsonArrayProjection(string command)
+        => JsonArrayProjectionCommands.Contains(CanonicalizeCommandName(command));
+
     private static readonly HashSet<string> LegacyLocationCompactCommands = new(StringComparer.Ordinal)
     {
         "search", "definition", "find", "references", "callers", "callees", "symbols", "files",
@@ -112,7 +115,9 @@ internal static partial class JsonEnvelopeWrapper
         if (!BoundedResponseCommands.Contains(command)
             && !IsStandaloneWholeRowByteBudgetRequest(command, args))
             return false;
-        if (command == "search" && IsSearchAggregateResponseRequest(args))
+        if (command == "search"
+            && IsSearchAggregateResponseRequest(args)
+            && !HasArgument(command, args, "--fields"))
             return false;
         if (command == "find" && IsStandaloneFindCountContinuationRequest(args))
             return false;
@@ -134,7 +139,9 @@ internal static partial class JsonEnvelopeWrapper
         if (!BoundedResponseCommands.Contains(command)
             && !IsStandaloneWholeRowByteBudgetRequest(command, args))
             return false;
-        if (command == "search" && IsSearchAggregateResponseRequest(args))
+        if (command == "search"
+            && IsSearchAggregateResponseRequest(args)
+            && !HasArgument(command, args, "--fields"))
             return false;
 
         return HasArgument(command, args, "--fields")
@@ -358,9 +365,19 @@ internal static partial class JsonEnvelopeWrapper
                 controls.MaxJsonBytes,
                 jsonOptions);
         }
+        if (controls.Fields is { Count: > 0 }
+            && command == "search"
+            && IsSearchAggregateResponseRequest(args))
+        {
+            return WriteProjectedOutputModeUsageError(
+                command,
+                "--fields cannot be combined with search aggregation because aggregate output is a JSON object rather than search rows.",
+                "Remove --fields to keep the aggregate object, or remove the aggregation options to project search rows.",
+                controls.MaxJsonBytes,
+                jsonOptions);
+        }
         var objectOutputModeSelected = controls.Compact
-                                       || HasArgument(command, args, "--summary-only")
-                                       || command == "search" && IsSearchAggregateResponseRequest(args);
+                                       || HasArgument(command, args, "--summary-only");
         var explicitArrayProjection = controls.Fields is { Count: > 0 }
                                       && HasJsonArrayOutputSelection(command, args)
                                       && !HasEnvelopeFlag(command, args)
@@ -417,7 +434,8 @@ internal static partial class JsonEnvelopeWrapper
         }
         if (controls.Fields is { Count: > 0 }
             && HasJsonNdjsonOutputSelection(command, args)
-            && !HasEnvelopeFlag(command, args))
+            && !HasEnvelopeFlag(command, args)
+            && !objectOutputModeSelected)
         {
             return WriteProjectedOutputModeUsageError(
                 command,
@@ -2118,9 +2136,12 @@ internal static partial class JsonEnvelopeWrapper
                     || arg.StartsWith("--cursor=", StringComparison.Ordinal)
                     || arg.StartsWith("--max-json-bytes=", StringComparison.Ordinal)
                     || arg.StartsWith("--format=", StringComparison.Ordinal)
-                    || (stripLimit && (arg.StartsWith("--limit=", StringComparison.Ordinal) || arg.StartsWith("--top=", StringComparison.Ordinal)))))
+                    || (stripLimit
+                        && (arg.StartsWith("--limit=", StringComparison.Ordinal)
+                            || arg.StartsWith("--top=", StringComparison.Ordinal)
+                            || command == "search" && arg.StartsWith("--max-results=", StringComparison.Ordinal)))))
                 continue;
-            if (token.IsOption && IsResponseValueOption(arg, stripLimit) && i + 1 < tokens.Length)
+            if (token.IsOption && IsResponseValueOption(command, arg, stripLimit) && i + 1 < tokens.Length)
             {
                 i++;
                 continue;
@@ -2176,9 +2197,11 @@ internal static partial class JsonEnvelopeWrapper
         args.InsertRange(insertionIndex, additions);
     }
 
-    private static bool IsResponseValueOption(string arg, bool includeLimit)
+    private static bool IsResponseValueOption(string command, string arg, bool includeLimit)
         => arg is "--fields" or "--cursor" or "--max-json-bytes" or "--format"
-           || includeLimit && arg is "--limit" or "--top";
+           || includeLimit
+           && (arg is "--limit" or "--top"
+               || command == "search" && arg == "--max-results");
 
     private static bool TryParseBoundedResponseControls(
         string command,
@@ -2237,7 +2260,10 @@ internal static partial class JsonEnvelopeWrapper
                 continue;
             }
             if (!TryReadPositiveIntControl(args, ref i, arg, "--limit", out var parsedLimit, out matched, out error)
-                || !matched && !TryReadPositiveIntControl(args, ref i, arg, "--top", out parsedLimit, out matched, out error))
+                || !matched && !TryReadPositiveIntControl(args, ref i, arg, "--top", out parsedLimit, out matched, out error)
+                || !matched
+                && command == "search"
+                && !TryReadPositiveIntControl(args, ref i, arg, "--max-results", out parsedLimit, out matched, out error))
             {
                 controls = default!;
                 return false;

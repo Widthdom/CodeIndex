@@ -243,6 +243,15 @@ public sealed class JsonEnvelopeWrapperIssue4585Tests
                 Assert.Equal(expectedFields, supportedCommandRow.EnumerateObject().Select(property => property.Name));
             }
 
+            var maxResultsArray = CaptureConsole(() => ProgramRunner.Run(
+                ["search", "class", "--db", dbPath, "--json=array", "--max-results", "1", "--fields", "path"],
+                _jsonOptions,
+                "1.0.0-test"));
+            Assert.Equal(CommandExitCodes.Success, maxResultsArray.ExitCode);
+            Assert.Equal(string.Empty, maxResultsArray.Stderr);
+            using (var maxResultsDocument = JsonDocument.Parse(maxResultsArray.Stdout))
+                Assert.Single(maxResultsDocument.RootElement.EnumerateArray());
+
             var emptyArray = CaptureConsole(() => ProgramRunner.Run(
                 ["files", "missing-5233*.cs", "--db", dbPath, "--json=array", "--fields", "path,lines"],
                 _jsonOptions,
@@ -326,6 +335,18 @@ public sealed class JsonEnvelopeWrapperIssue4585Tests
                 Assert.Equal(2, compactOverridesArrayDocument.RootElement.GetProperty("files").GetArrayLength());
             }
 
+            var compactOverridesNdjson = CaptureConsole(() => ProgramRunner.Run(
+                [.. baseArgs, "--json=ndjson", "--compact", "--fields", "path,lines"],
+                _jsonOptions,
+                "1.0.0-test"));
+            Assert.Equal(CommandExitCodes.Success, compactOverridesNdjson.ExitCode);
+            Assert.Equal(string.Empty, compactOverridesNdjson.Stderr);
+            using (var compactOverridesNdjsonDocument = JsonDocument.Parse(compactOverridesNdjson.Stdout))
+            {
+                Assert.Equal(JsonValueKind.Object, compactOverridesNdjsonDocument.RootElement.ValueKind);
+                Assert.Equal("compact", compactOverridesNdjsonDocument.RootElement.GetProperty("format").GetString());
+            }
+
             var summaryOverridesArray = CaptureConsole(() => ProgramRunner.Run(
                 [.. baseArgs, "--json=array", "--summary-only", "--fields", "path"],
                 _jsonOptions,
@@ -370,6 +391,8 @@ public sealed class JsonEnvelopeWrapperIssue4585Tests
                          new[] { "search", "Alpha", "--db", dbPath, "--json=array", "--sample", "1", "--fields", "path" },
                          new[] { "search", "Alpha", "--db", dbPath, "--json=array", "--profile", "--fields", "path" },
                          new[] { "search", "Alpha", "--db", dbPath, "--json=array", "--verbose", "--fields", "path" },
+                         new[] { "search", "Alpha", "--db", dbPath, "--json=array", "--group-by", "file", "--fields", "path" },
+                         new[] { "search", "--list-recipes", "--json=array", "--fields", "path" },
                      })
             {
                 var incompatibleControl = CaptureConsole(() => ProgramRunner.Run(
@@ -409,18 +432,24 @@ public sealed class JsonEnvelopeWrapperIssue4585Tests
                 Assert.Equal(CommandErrorCodes.UsageError, unknownFieldDocument.RootElement.GetProperty("error_code").GetString());
             }
 
-            var incompatibleFormat = CaptureConsole(() => ProgramRunner.Run(
-                [.. baseArgs, "--json=array", "--format", "csv", "--fields", "path"],
-                _jsonOptions,
-                "1.0.0-test"));
-            Assert.Equal(CommandExitCodes.UsageError, incompatibleFormat.ExitCode);
-            Assert.Equal(string.Empty, incompatibleFormat.Stderr);
-            using (var incompatibleFormatDocument = JsonDocument.Parse(incompatibleFormat.Stdout))
+            foreach (var incompatibleFormatArgs in new[]
+                     {
+                         new[] { "search", "Alpha", "--db", dbPath, "--json=array", "--format", "csv", "--fields", "path" },
+                         new[] { "symbols", "Alpha", "--db", dbPath, "--json=array", "--format", "lsp", "--fields", "path" },
+                     })
             {
+                var incompatibleFormat = CaptureConsole(() => ProgramRunner.Run(
+                    incompatibleFormatArgs,
+                    _jsonOptions,
+                    "1.0.0-test"));
+                Assert.Equal(CommandExitCodes.UsageError, incompatibleFormat.ExitCode);
+                Assert.Equal(string.Empty, incompatibleFormat.Stderr);
+                using var incompatibleFormatDocument = JsonDocument.Parse(incompatibleFormat.Stdout);
                 Assert.Equal("error", incompatibleFormatDocument.RootElement.GetProperty("status").GetString());
+                Assert.Equal(JsonOutputContract.ApiVersion, incompatibleFormatDocument.RootElement.GetProperty("api_version").GetString());
                 Assert.Equal(CommandErrorCodes.UsageError, incompatibleFormatDocument.RootElement.GetProperty("error_code").GetString());
                 Assert.Contains(
-                    "projection-incompatible --format csv",
+                    "projection-incompatible --format",
                     incompatibleFormatDocument.RootElement.GetProperty("message").GetString(),
                     StringComparison.Ordinal);
             }

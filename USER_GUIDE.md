@@ -436,9 +436,11 @@ truncation details, or cursor continuation are required. Projected
 projection contract is a single JSON document, and projected array requests
 are likewise rejected for commands without a native row-array contract or
 when `--cursor`, `--results-only`, search row selection, or diagnostic controls
-require a stream or metadata. Object-producing `--compact`, `--summary-only`,
-and search aggregation modes retain their object contracts. Incompatible
-non-JSON formats fail before writing partial output. For example:
+require a stream or metadata. Object-producing `--compact` and `--summary-only`
+retain their object contracts even when an explicit stream selector is present;
+search aggregation rejects `--fields` because it does not produce search rows.
+Incompatible non-JSON formats fail with a versioned error before writing partial
+output. For example:
 
 ```bash
 cdidx files 'src/**/*.cs' --json=array --fields path,lines
@@ -4242,9 +4244,10 @@ projection より先に output mode を解決します。`search`、`symbols`、
 なので、投影付き `--json=ndjson` は `E010_USAGE_ERROR` で拒否します。native な row-array
 contract を持たない command の投影付き array request、および `--cursor`、
 `--results-only`、search の row selection、diagnostic control が stream または metadata を
-必要とする場合も拒否します。object を生成する `--compact`、`--summary-only`、search の
-aggregation mode は object contract を維持します。非互換な非 JSON format は部分出力を
-書き込む前に失敗します。
+必要とする場合も拒否します。object を生成する `--compact` と `--summary-only` は、明示的な
+stream selector があっても object contract を維持します。search aggregation は search row を
+生成しないため `--fields` を拒否します。非互換な非 JSON format は version 付き error を返し、
+部分出力を書き込む前に失敗します。
 例:
 
 ```bash
