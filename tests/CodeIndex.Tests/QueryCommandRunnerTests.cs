@@ -2179,8 +2179,12 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
-    public void RunVacuum_ImmutableDryRunRejectsPostCommandAfterSourceGenerationChanges_Issue5237()
+    [Theory]
+    [InlineData("query_immutable_source", "unavailable")]
+    [InlineData("pre_close_generation", "captured")]
+    public void RunVacuum_ImmutableDryRunRejectsRacedSourceGenerations_Issue5237(
+        string sourceChangePhase,
+        string expectedPostOpenState)
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_vacuum_immutable_post_command_change");
         var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
@@ -2198,26 +2202,34 @@ public partial class QueryCommandRunnerTests
                 PRAGMA wal_checkpoint(TRUNCATE);";
             setup.ExecuteNonQuery();
         }
-        _vacuumSourceGenerationWriterForTesting = writer;
-        _vacuumSourceGenerationAdvancedForTesting = false;
+        var sourceGenerationAdvanced = false;
         var originalCaptureHook = DbContext.VacuumFileSetCaptureForTesting;
 
         try
         {
-            DbContext.VacuumFileSetCaptureForTesting =
-                AdvanceVacuumSourceGenerationDuringPreCloseCaptureForTesting;
+            DbContext.VacuumFileSetCaptureForTesting = (phase, attempt, _) =>
+            {
+                if (phase != sourceChangePhase || attempt != 1 || sourceGenerationAdvanced)
+                    return;
+
+                using var command = writer.CreateCommand();
+                command.CommandText =
+                    "INSERT INTO vacuum_source_generation (payload) VALUES (randomblob(4096))";
+                command.ExecuteNonQuery();
+                sourceGenerationAdvanced = true;
+            };
             var immutableUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
             var (exitCode, stdout, stderr) = CaptureVacuumWithCliJsonOptions(
                 ["--db", immutableUri, "--dry-run", "--json"]);
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.True(_vacuumSourceGenerationAdvancedForTesting);
+            Assert.True(sourceGenerationAdvanced);
             using var document = ParseJsonOutput(stdout);
             var root = document.RootElement;
             var observations = root.GetProperty("file_set_observations");
             Assert.Equal(
-                "captured",
+                expectedPostOpenState,
                 observations.GetProperty("post_open_pre_vacuum").GetProperty("state").GetString());
             var postCommand = observations.GetProperty("post_command");
             Assert.Equal("unavailable", postCommand.GetProperty("state").GetString());
@@ -2232,7 +2244,6 @@ public partial class QueryCommandRunnerTests
         finally
         {
             DbContext.VacuumFileSetCaptureForTesting = originalCaptureHook;
-            _vacuumSourceGenerationWriterForTesting = null;
             SqliteConnection.ClearAllPools();
         }
     }

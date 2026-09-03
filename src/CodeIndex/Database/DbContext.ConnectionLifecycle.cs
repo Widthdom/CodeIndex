@@ -19,6 +19,17 @@ public partial class DbContext : IDisposable
             throw boundsError ?? new FormatException("Invalid SQLite file URI.");
         }
 
+        var explicitImmutable = SqliteFileUri.RequestsImmutableSnapshot(dbPath);
+        DbConnectionFactory.QueryOnlySnapshotSourceState? immutableSourceStateBeforeOpen = null;
+        if (explicitImmutable
+            && DbConnectionFactory.TryCaptureQuerySourceState(
+                dbPath,
+                cancellationToken,
+                out var capturedImmutableSourceState))
+        {
+            immutableSourceStateBeforeOpen = capturedImmutableSourceState;
+        }
+
         try
         {
             var immutableSnapshot = false;
@@ -49,6 +60,22 @@ public partial class DbContext : IDisposable
             _queryOnlySnapshotSourcePath = detachedSnapshot ? dbPath : null;
             _queryOnlySnapshotSourceState = snapshotSourceState;
             WarnIfBatchInProgress();
+            if (explicitImmutable
+                && immutableSourceStateBeforeOpen is { } expectedImmutableSourceState
+                && DbConnectionFactory.TryCaptureQuerySourceState(
+                    dbPath,
+                    cancellationToken,
+                    out var immutableSourceStateAfterOpen)
+                && immutableSourceStateAfterOpen == expectedImmutableSourceState)
+            {
+                // Bracket the immutable open with one unchanged source identity. Later
+                // vacuum observations must remain on this generation because data_version
+                // cannot reveal commits made outside an immutable connection.
+                // immutable open の前後を同一 source identity で挟み、data_version では
+                // 検出できない外部 commit も後続 vacuum observation で拒否する。
+                _queryOnlyImmutableSourcePath = dbPath;
+                _queryOnlyImmutableSourceState = expectedImmutableSourceState;
+            }
         }
         catch
         {
@@ -927,19 +954,20 @@ public partial class DbContext : IDisposable
         }
 
         DbConnectionFactory.QueryOnlySnapshotSourceState? expectedSourceState = _queryOnlySnapshotSourceState;
-        if (_immutableReadOnly && !expectedSourceState.HasValue)
+        if (_queryOnlyImmutableSourceState is { } immutableSourceState)
         {
-            // An explicit immutable URI does not advance data_version after an external
-            // commit. Anchor revalidation to the source tuple captured with the logical
-            // vacuum snapshot, or fail closed when that tuple was unavailable.
-            // 明示 immutable URI では外部 commit 後も data_version が進まないため、logical
-            // vacuum snapshot と共に取得した source tuple に再検証を固定する。
-            if (_vacuumLogicalAfterSourceState is not { } immutableSourceState)
+            if (_vacuumLogicalAfterSourceState != immutableSourceState)
                 return null;
             expectedSourceState = immutableSourceState;
         }
+        else if (_immutableReadOnly && !expectedSourceState.HasValue)
+        {
+            return null;
+        }
 
-        var sourcePath = _queryOnlySnapshotSourcePath ?? _connection.DataSource;
+        var sourcePath = _queryOnlySnapshotSourcePath
+            ?? _queryOnlyImmutableSourcePath
+            ?? _connection.DataSource;
         var fileSet = ReadVacuumFileSetMetrics(
             sourcePath,
             "pre_close_generation",
@@ -976,19 +1004,39 @@ public partial class DbContext : IDisposable
         var freelistCount = ReadPragmaLong("freelist_count");
         var pageSize = ReadPragmaLong("page_size");
         var autoVacuumMode = ReadAutoVacuumMode();
-        var fileSet = _queryOnlySnapshotSourcePath is { } sourcePath
-            && _queryOnlySnapshotSourceState is { } sourceState
-            ? ReadVacuumFileSetMetrics(
-                sourcePath,
+        VacuumFileSetMetrics fileSet;
+        if (_queryOnlySnapshotSourcePath is { } snapshotSourcePath
+            && _queryOnlySnapshotSourceState is { } snapshotSourceState)
+        {
+            fileSet = ReadVacuumFileSetMetrics(
+                snapshotSourcePath,
                 fileSetPhase ?? "query_snapshot_source",
                 cancellationToken,
-                sourceState,
-                fileSetMaxAttempts)
-            : ReadVacuumFileSetMetrics(
+                snapshotSourceState,
+                fileSetMaxAttempts);
+        }
+        else if (_queryOnlyImmutableSourcePath is { } immutableSourcePath
+                 && _queryOnlyImmutableSourceState is { } immutableSourceState)
+        {
+            fileSet = ReadVacuumFileSetMetrics(
+                immutableSourcePath,
+                fileSetPhase ?? "query_immutable_source",
+                cancellationToken,
+                immutableSourceState,
+                fileSetMaxAttempts);
+        }
+        else if (_immutableReadOnly)
+        {
+            fileSet = default;
+        }
+        else
+        {
+            fileSet = ReadVacuumFileSetMetrics(
                 _connection.DataSource,
                 fileSetPhase ?? "connection",
                 cancellationToken,
                 maxAttempts: fileSetMaxAttempts);
+        }
         return new(
             pageCount,
             freelistCount,
