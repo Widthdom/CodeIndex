@@ -1333,7 +1333,7 @@ public partial class QueryCommandRunnerTests
         Assert.Equal(CommandExitCodes.Success, capture.ExitCode);
         Assert.Equal(string.Empty, capture.Stderr);
         Assert.Equal(artifactsBefore, CaptureDatabaseArtifacts(dbPath));
-        Assert.NotEmpty(_vacuumSnapshotDirectoriesForTesting);
+        Assert.Equal(2, _vacuumSnapshotDirectoriesForTesting.Count);
         foreach (var snapshotDirectory in _vacuumSnapshotDirectoriesForTesting)
             Assert.False(Directory.Exists(snapshotDirectory));
         using var document = ParseJsonOutput(capture.Stdout);
@@ -1395,7 +1395,7 @@ public partial class QueryCommandRunnerTests
         Assert.Equal(string.Empty, capture.Stderr);
         Assert.Equal(artifactsBefore, CaptureDatabaseArtifacts(dbPath));
         Assert.Equal(Path.GetFullPath(dbPath), Path.GetFullPath(_vacuumFileSetSampledPathForTesting!));
-        Assert.NotEmpty(_vacuumSnapshotDirectoriesForTesting);
+        Assert.Equal(2, _vacuumSnapshotDirectoriesForTesting.Count);
         foreach (var snapshotDirectory in _vacuumSnapshotDirectoriesForTesting)
         {
             Assert.False(Directory.Exists(snapshotDirectory));

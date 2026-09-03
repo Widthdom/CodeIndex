@@ -754,38 +754,49 @@ public partial class DbContext : IDisposable
         VacuumFileSetMetrics after = default;
         if (expectedWitness.HasValue)
         {
-            for (var attempt = 1; attempt <= VacuumFileSetCaptureMaxAttempts; attempt++)
+            if (result.DryRun)
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                if (!TryReadPostCloseVacuumMetrics(
-                        dbPath,
-                        cancellationToken,
-                        out var observed))
+                after = ReadVacuumFileSetMetrics(
+                    dbPath,
+                    "post_close",
+                    cancellationToken,
+                    expectedWitness.Value.SourceState);
+            }
+            else
+            {
+                for (var attempt = 1; attempt <= VacuumFileSetCaptureMaxAttempts; attempt++)
                 {
-                    continue;
-                }
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (!TryReadPostCloseVacuumMetrics(
+                            dbPath,
+                            cancellationToken,
+                            out var observed))
+                    {
+                        continue;
+                    }
 
-                if (!MatchesVacuumLogicalAfter(result, observed))
-                    break;
-                if (!HasCompleteVacuumFileSet(observed))
-                    continue;
-                if (!IsCompatiblePostCloseVacuumGeneration(
-                        expectedWitness.Value.SourceState,
-                        observed.SourceState!.Value))
-                {
+                    if (!MatchesVacuumLogicalAfter(result, observed))
+                        break;
+                    if (!HasCompleteVacuumFileSet(observed))
+                        continue;
+                    if (!IsCompatiblePostCloseVacuumGeneration(
+                            expectedWitness.Value.SourceState,
+                            observed.SourceState!.Value))
+                    {
+                        break;
+                    }
+
+                    after = new VacuumFileSetMetrics(
+                        observed.MainFileExists,
+                        observed.WalFileExists,
+                        observed.ShmFileExists,
+                        observed.DbSizeBytes,
+                        observed.WalSizeBytes,
+                        observed.ShmSizeBytes,
+                        observed.PhysicalFileSetBytes,
+                        observed.SourceState);
                     break;
                 }
-
-                after = new VacuumFileSetMetrics(
-                    observed.MainFileExists,
-                    observed.WalFileExists,
-                    observed.ShmFileExists,
-                    observed.DbSizeBytes,
-                    observed.WalSizeBytes,
-                    observed.ShmSizeBytes,
-                    observed.PhysicalFileSetBytes,
-                    observed.SourceState);
-                break;
             }
         }
 
