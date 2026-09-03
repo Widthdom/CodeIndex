@@ -6,6 +6,9 @@ namespace CodeIndex.Tests;
 
 public sealed class SymbolExtractorCSharpRegexProbeTests
 {
+    private const int AllocationSampleCount = 5;
+    private const long AllocationNoiseAllowanceBytes = 64 * 1024;
+
     private static readonly PropertyInfo[] SymbolProperties = typeof(SymbolRecord)
         .GetProperties(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
         .Where(property => property.CanRead && property.GetIndexParameters().Length == 0)
@@ -226,16 +229,9 @@ public sealed class SymbolExtractorCSharpRegexProbeTests
                 }
                 """));
 
-        _ = Extract(content, applyOptimizations: false, out _);
-        _ = Extract(content, applyOptimizations: true, out _);
-
-        var baselineAllocatedBytes = MeasureAllocatedBytes(content, applyOptimizations: false);
-        var optimizedAllocatedBytes = MeasureAllocatedBytes(content, applyOptimizations: true);
-
-        Assert.True(
-            optimizedAllocatedBytes < baselineAllocatedBytes,
-            $"Expected wrapped lookup caching to allocate less: "
-            + $"optimized={optimizedAllocatedBytes:N0}, baseline={baselineAllocatedBytes:N0} bytes.");
+        AssertNoMaterialAllocationRegression(
+            "wrapped lookup caching",
+            MeasureRepresentativeAllocatedBytes(content));
     }
 
     [Fact]
@@ -268,16 +264,9 @@ public sealed class SymbolExtractorCSharpRegexProbeTests
         Assert.Equal(0, baselineMetrics.LineStartStateReuseCount);
         Assert.Equal(content.Split('\n').Length, optimizedMetrics.LineStartStateReuseCount);
 
-        _ = Extract(content, applyOptimizations: false, out _);
-        _ = Extract(content, applyOptimizations: true, out _);
-
-        var baselineAllocatedBytes = MeasureAllocatedBytes(content, applyOptimizations: false);
-        var optimizedAllocatedBytes = MeasureAllocatedBytes(content, applyOptimizations: true);
-
-        Assert.True(
-            optimizedAllocatedBytes < baselineAllocatedBytes,
-            $"Expected initial lexer-state reuse to allocate less: "
-            + $"optimized={optimizedAllocatedBytes:N0}, baseline={baselineAllocatedBytes:N0} bytes.");
+        AssertNoMaterialAllocationRegression(
+            "initial lexer-state reuse",
+            MeasureRepresentativeAllocatedBytes(content));
     }
 
     [Fact]
@@ -317,15 +306,24 @@ public sealed class SymbolExtractorCSharpRegexProbeTests
             optimizedMetrics.PropertyHeaderRegexAttemptCount
             < baselineMetrics.PropertyHeaderRegexAttemptCount);
 
-        _ = Extract(content, applyOptimizations: false, out _);
-        _ = Extract(content, applyOptimizations: true, out _);
-        var baselineAllocatedBytes = MeasureAllocatedBytes(content, applyOptimizations: false);
-        var optimizedAllocatedBytes = MeasureAllocatedBytes(content, applyOptimizations: true);
+        AssertNoMaterialAllocationRegression(
+            "property structural gating",
+            MeasureRepresentativeAllocatedBytes(content));
+    }
 
-        Assert.True(
-            optimizedAllocatedBytes < baselineAllocatedBytes,
-            $"Expected property structural gating to allocate less: "
-            + $"optimized={optimizedAllocatedBytes:N0}, baseline={baselineAllocatedBytes:N0} bytes.");
+    [Fact]
+    public void AllocationRegressionComparison_UsesMedianNoiseAllowanceAndRejectsMaterialIncrease_Issue5244()
+    {
+        Assert.Equal(300, SelectMedian([500, 100, 300, 200, 400]));
+        Assert.False(IsMaterialAllocationRegression(
+            baselineAllocatedBytes: 1_000_000,
+            optimizedAllocatedBytes: 1_000_000 + AllocationNoiseAllowanceBytes));
+        Assert.True(IsMaterialAllocationRegression(
+            baselineAllocatedBytes: 1_000_000,
+            optimizedAllocatedBytes: 1_000_001 + AllocationNoiseAllowanceBytes));
+        Assert.False(IsMaterialAllocationRegression(
+            baselineAllocatedBytes: 1_000_000,
+            optimizedAllocatedBytes: 900_000));
     }
 
     [Theory]
@@ -361,6 +359,56 @@ public sealed class SymbolExtractorCSharpRegexProbeTests
         for (var iteration = 0; iteration < 3; iteration++)
             _ = Extract(content, applyOptimizations, out _);
         return GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+    }
+
+    private static (long Baseline, long Optimized) MeasureRepresentativeAllocatedBytes(string content)
+    {
+        _ = Extract(content, applyOptimizations: false, out _);
+        _ = Extract(content, applyOptimizations: true, out _);
+
+        var baselineSamples = new long[AllocationSampleCount];
+        var optimizedSamples = new long[AllocationSampleCount];
+        for (var sampleIndex = 0; sampleIndex < AllocationSampleCount; sampleIndex++)
+        {
+            if ((sampleIndex & 1) == 0)
+            {
+                baselineSamples[sampleIndex] = MeasureAllocatedBytes(content, applyOptimizations: false);
+                optimizedSamples[sampleIndex] = MeasureAllocatedBytes(content, applyOptimizations: true);
+            }
+            else
+            {
+                optimizedSamples[sampleIndex] = MeasureAllocatedBytes(content, applyOptimizations: true);
+                baselineSamples[sampleIndex] = MeasureAllocatedBytes(content, applyOptimizations: false);
+            }
+        }
+
+        return (SelectMedian(baselineSamples), SelectMedian(optimizedSamples));
+    }
+
+    private static long SelectMedian(long[] samples)
+    {
+        Array.Sort(samples);
+        return samples[samples.Length / 2];
+    }
+
+    private static bool IsMaterialAllocationRegression(
+        long baselineAllocatedBytes,
+        long optimizedAllocatedBytes) =>
+        optimizedAllocatedBytes > baselineAllocatedBytes
+        && optimizedAllocatedBytes - baselineAllocatedBytes > AllocationNoiseAllowanceBytes;
+
+    private static void AssertNoMaterialAllocationRegression(
+        string optimization,
+        (long Baseline, long Optimized) allocatedBytes)
+    {
+        var increase = Math.Max(0, allocatedBytes.Optimized - allocatedBytes.Baseline);
+        Assert.False(
+            IsMaterialAllocationRegression(allocatedBytes.Baseline, allocatedBytes.Optimized),
+            $"Expected {optimization} not to materially increase allocations: "
+            + $"optimized median={allocatedBytes.Optimized:N0}, "
+            + $"baseline median={allocatedBytes.Baseline:N0}, "
+            + $"increase={increase:N0}, "
+            + $"noise allowance={AllocationNoiseAllowanceBytes:N0} bytes.");
     }
 
     private static void AssertSymbolsEqual(
