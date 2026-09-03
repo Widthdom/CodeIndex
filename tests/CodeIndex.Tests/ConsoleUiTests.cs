@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.RegularExpressions;
 using CodeIndex.Cli;
+using CodeIndex.Models;
 
 namespace CodeIndex.Tests;
 
@@ -1271,6 +1272,8 @@ public class ConsoleUiTests
             var status = RunShellProcess(zshExecutable, root, ["-f", "-c", ZshStatusProbe, "zsh", completionPath]);
             Assert.Contains("draft open_in_upstream resolved_in_upstream wont_fix duplicate superseded", status.StdOut, StringComparison.Ordinal);
             Assert.DoesNotContain("submitted_pending_triage", status.StdOut, StringComparison.Ordinal);
+            var category = RunShellProcess(zshExecutable, root, ["-f", "-c", ZshSuggestionCategoryProbe, "zsh", completionPath]);
+            Assert.Contains(string.Join(' ', SuggestionRecord.ValidCategories), category.StdOut, StringComparison.Ordinal);
             var nested = RunShellProcess(zshExecutable, root, ["-f", "-c", ZshNestedFlagProbe, "zsh", completionPath]);
             Assert.Contains("--json[", nested.StdOut, StringComparison.Ordinal);
         }
@@ -1705,6 +1708,10 @@ public class ConsoleUiTests
         COMP_CWORD=5
         _cdidx
         printf 'status-allowed:%s\n' "${COMPREPLY[*]}"
+        COMP_WORDS=(cdidx suggestions add --category "")
+        COMP_CWORD=4
+        _cdidx
+        printf 'category:%s\n' "${COMPREPLY[*]}"
         COMP_WORDS=(cdidx validate-config --j)
         COMP_CWORD=2
         _cdidx
@@ -1747,6 +1754,17 @@ public class ConsoleUiTests
         source "$1"
         """;
 
+    private const string ZshSuggestionCategoryProbe = """
+        typeset -ga words=(cdidx suggestions add --category "")
+        typeset -gi CURRENT=5
+        typeset -g PREFIX=
+        typeset -g state=args
+        typeset -gi calls=0
+        _arguments() { (( calls++ )); if (( calls == 1 )); then state=args; else print -rl -- "$@"; fi }
+        _describe() { print -rl -- "${commands[@]}" }
+        source "$1"
+        """;
+
     private const string ZshNestedFlagProbe = """
         typeset -ga words=(cdidx db integrity --j)
         typeset -gi CURRENT=4
@@ -1769,6 +1787,7 @@ public class ConsoleUiTests
         probe multi 'cdidx --quiet --palette truecolor search auth --f'
         probe status 'cdidx suggestions update id --status submitted_'
         probe status-allowed 'cdidx suggestions update id --status d'
+        probe category 'cdidx suggestions add --category '
         probe validate 'cdidx validate-config --j'
         """;
 
@@ -1784,6 +1803,7 @@ public class ConsoleUiTests
         Write-Candidates 'multi' 'cdidx --quiet --palette truecolor search auth --f'
         Write-Candidates 'status' 'cdidx suggestions update id --status submitted_'
         Write-Candidates 'status-allowed' 'cdidx suggestions update id --status d'
+        Write-Candidates 'category' 'cdidx suggestions add --category '
         Write-Candidates 'validate' 'cdidx validate-config --j'
         """;
 
@@ -1848,6 +1868,7 @@ public class ConsoleUiTests
         Assert.Contains("multi:--format --fields --first-per-file --fts", result.StdOut, StringComparison.Ordinal);
         Assert.DoesNotContain("submitted_pending_triage", result.StdOut, StringComparison.Ordinal);
         Assert.Contains("status-allowed:draft duplicate", result.StdOut, StringComparison.Ordinal);
+        Assert.Contains($"category:{string.Join(' ', SuggestionRecord.ValidCategories)}", result.StdOut, StringComparison.Ordinal);
         Assert.Contains("validate:--json", result.StdOut, StringComparison.Ordinal);
     }
 
