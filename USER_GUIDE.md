@@ -1601,17 +1601,20 @@ claim about unique source matches; every emitted row keeps its `recipe` and
 
 The existing search filters, including `--lang`, `--path`, `--exclude-path`,
 `--exclude-tests`, `--audit-scope`, and `--source-only`, apply uniformly to each
-selected recipe. `--limit` remains a per-query result limit. `--total-limit` is
+selected recipe. Add `--show-excluded` to retain each recipe's effective scope
+and bounded exclusion diagnostics in the aggregate output. `--limit` remains a per-query result limit. `--total-limit` is
 the global emitted-row cap; when omitted in row-producing all mode it defaults
 to 200. Count and `--summary-only` modes execute the selected queries with a
 bounded per-query observation window and emit no rows. JSON and compact
 summaries report selected, completed, failed, partial, and omitted recipe
 counts, bounded per-recipe/query status, authoritative or lower-bound count
-facts, row/byte limits, registry diagnostics, and recovery commands. NDJSON
+facts, aggregate and per-query index freshness, row/byte limits, registry
+diagnostics, and recovery commands for failed, partial, or omitted recipes. NDJSON
 emits attributed rows followed by the same terminal cross-recipe summary.
 
 Accumulation is bounded to 10,000 candidate rows per query, 512 returned query
-details, 32 returned errors, five minutes, and a 4 MiB JSON response when no
+details, 32 returned errors, a five-minute deadline enforced within each query,
+and a 4 MiB JSON response when no
 explicit `--max-json-bytes` is supplied. A requested `--total-limit` truncation
 is a successful bounded result. Query failures do not discard successful
 sibling recipes: the run continues, records bounded errors, and returns partial
@@ -5409,15 +5412,19 @@ recipe/query ごとの observation の合計として明示され、出力 row �
 
 `--lang`、`--path`、`--exclude-path`、`--exclude-tests`、`--audit-scope`、
 `--source-only` など既存の search filter は、選択したすべての recipe に同じように適用されます。
+`--show-excluded` を追加すると、各 recipe の effective scope と上限付き exclusion diagnostic を
+aggregate 出力に保持します。
 `--limit` は引き続き query ごとの result 上限です。`--total-limit` は emitted row 全体の上限で、
 row を出す all mode で省略した場合は 200 です。count と `--summary-only` は row を出さず、
 選択した query を query ごとの上限付き observation window で実行します。JSON / compact summary は
 selected / completed / failed / partial / omitted recipe 数、上限付きの recipe/query status、
-authoritative count または lower bound、row/byte 上限、registry diagnostic、recovery command を
+authoritative count または lower bound、aggregate および query ごとの index freshness、row/byte 上限、
+registry diagnostic、failed / partial / omitted recipe の recovery command を
 返します。NDJSON は帰属付き row の後に同じ cross-recipe terminal summary を出力します。
 
 accumulation は query ごとに最大 10,000 candidate row、返却する query detail は 512 件、error は
-32 件、実行時間は5分、明示的な `--max-json-bytes` がない JSON response は 4 MiB に制限されます。
+32 件、各 query 内でも強制される実行 deadline は5分、明示的な `--max-json-bytes` がない JSON response は
+4 MiB に制限されます。
 指定した `--total-limit` による truncation は正常な上限付き結果です。query failure が起きても
 成功済み sibling recipe は破棄せず、実行を継続して上限付き error を記録し、partial exit code 11
 を返します。`--allow-partial` を指定すると不完全な状態を維持したまま exit code 0 を許可します。

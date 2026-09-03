@@ -451,7 +451,7 @@ public partial class DbReader
         if (string.IsNullOrWhiteSpace(path))
             return null;
 
-        _cancellation.ThrowIfCancellationRequested();
+        Cancellation.ThrowIfCancellationRequested();
         using var command = _conn.CreateCommand();
         var generatedFilter = !IncludeGenerated && _fileColumns.Contains("generated")
             ? "AND COALESCE(f.generated, 0) = 0"
@@ -504,7 +504,7 @@ public partial class DbReader
         ArgumentNullException.ThrowIfNull(file);
         var reader = new BoundedIndexedContentReader(
             _conn,
-            _cancellation,
+            Cancellation,
             _hasChunksTable,
             _chunkIndexes,
             BoundedFileReadScanByteLimitOverride.Value,

@@ -49,7 +49,7 @@ public sealed class QueryCommandRunnerAuditAllIssue5238Tests
         var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunAuditAllForTesting(
             [
                 "--all", "--db", dbPath, "--json", "--limit", "10", "--total-limit", "10",
-                "--lang", "csharp", "--path", "src/**", "--exclude-tests",
+                "--lang", "csharp", "--path", "src/**", "--exclude-tests", "--show-excluded",
             ],
             JsonOptions,
             recipes));
@@ -64,6 +64,9 @@ public sealed class QueryCommandRunnerAuditAllIssue5238Tests
         Assert.Equal("sum_of_recipe_query_observations_not_unique_matches", document.RootElement.GetProperty("summary").GetProperty("count_semantics").GetString());
         foreach (var recipeRun in recipeRuns)
         {
+            var scope = recipeRun.GetProperty("scope");
+            Assert.Equal("source", scope.GetProperty("name").GetString());
+            Assert.NotEmpty(scope.GetProperty("excluded_diagnostics").EnumerateArray());
             var row = recipeRun.GetProperty("queries")[0].GetProperty("results")[0];
             Assert.Equal("src/One.cs", row.GetProperty("path").GetString());
             Assert.Equal(recipeRun.GetProperty("name").GetString(), row.GetProperty("recipe").GetString());
@@ -137,6 +140,27 @@ public sealed class QueryCommandRunnerAuditAllIssue5238Tests
         Assert.True(Encoding.UTF8.GetByteCount(boundedStdout) <= byteLimit);
         Assert.True(bounded.RootElement.GetProperty("limits").GetProperty("byte_omitted_result_count").GetInt32() > 0);
         Assert.True(bounded.RootElement.GetProperty("summary").GetProperty("truncated").GetBoolean());
+
+        var (_, fullNdjson, _) = CaptureConsole(() => QueryCommandRunner.RunAuditAllForTesting(
+            ["--all", "--db", dbPath, "--json=ndjson", "--limit", "10", "--total-limit", "10"],
+            JsonOptions,
+            recipes));
+        var ndjsonByteLimit = Encoding.UTF8.GetByteCount(fullNdjson) - 1;
+        var (boundedNdjsonExitCode, boundedNdjson, _) = CaptureConsole(() => QueryCommandRunner.RunAuditAllForTesting(
+            [
+                "--all", "--db", dbPath, "--json=ndjson", "--limit", "10", "--total-limit", "10",
+                "--max-json-bytes", ndjsonByteLimit.ToString(),
+            ],
+            JsonOptions,
+            recipes));
+        var boundedNdjsonLines = boundedNdjson.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        using var boundedTerminal = JsonDocument.Parse(boundedNdjsonLines[^1]);
+
+        Assert.Equal(CommandExitCodes.PartialResult, boundedNdjsonExitCode);
+        Assert.True(Encoding.UTF8.GetByteCount(boundedNdjson) <= ndjsonByteLimit);
+        Assert.All(boundedNdjsonLines, line => JsonDocument.Parse(line).Dispose());
+        Assert.True(boundedTerminal.RootElement.GetProperty("terminal_record").GetBoolean());
+        Assert.True(boundedTerminal.RootElement.GetProperty("limits").GetProperty("byte_omitted_result_count").GetInt32() > 0);
     }
 
     [Fact]
@@ -163,6 +187,41 @@ public sealed class QueryCommandRunnerAuditAllIssue5238Tests
         Assert.Equal("completed", recipeRuns[1].GetProperty("status").GetString());
         Assert.Equal(1, recipeRuns[1].GetProperty("minimum_matched_result_count").GetInt32());
         Assert.Equal(1, document.RootElement.GetProperty("errors").GetProperty("count").GetInt32());
+        Assert.Contains(
+            document.RootElement.GetProperty("recovery").GetProperty("next_commands").EnumerateArray(),
+            command => command.GetString()!.Contains("cdidx audit a-failure", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void AuditAll_StaleIndexMakesAggregateAndQueryCountsNonAuthoritative_Issue5238()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_audit_all_freshness_5238");
+        var sourceDirectory = Path.Combine(project.Root, "src");
+        Directory.CreateDirectory(sourceDirectory);
+        var sourcePath = Path.Combine(sourceDirectory, "One.cs");
+        File.WriteAllText(sourcePath, "class Issue5238Needle { }\n");
+        var dbPath = Path.Combine(project.Root, ".cdidx", "codeindex.db");
+        var (indexExitCode, _, _) = CaptureConsole(() => IndexCommandRunner.Run(
+            [project.Root, "--db", dbPath, "--quiet"],
+            JsonOptions));
+        Assert.Equal(CommandExitCodes.Success, indexExitCode);
+        File.AppendAllText(sourcePath, "// workspace changed\n");
+
+        var (exitCode, stdout, _) = CaptureConsole(() => QueryCommandRunner.RunAuditAllForTesting(
+            ["--all", "--db", dbPath, "--summary-only", "--limit", "1"],
+            JsonOptions,
+            [Recipe("freshness-recipe", "zero-query", "Issue5238Absent")]));
+        using var document = JsonDocument.Parse(stdout);
+        var summary = document.RootElement.GetProperty("summary");
+        var queryFreshness = document.RootElement.GetProperty("recipes")[0]
+            .GetProperty("queries")[0]
+            .GetProperty("query_freshness");
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.False(summary.GetProperty("count_authoritative").GetBoolean());
+        Assert.Equal("stale", summary.GetProperty("query_freshness").GetProperty("index_state").GetString());
+        Assert.Equal("stale", queryFreshness.GetProperty("freshness_state").GetString());
+        Assert.False(document.RootElement.GetProperty("recipes")[0].GetProperty("count_authoritative").GetBoolean());
     }
 
     [Fact]
@@ -171,18 +230,29 @@ public sealed class QueryCommandRunnerAuditAllIssue5238Tests
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_audit_all_time_5238");
         var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
         TestProjectHelper.InsertIndexedFile(dbPath, "src/One.cs", "csharp", "class Issue5238Needle { }\n");
-        QueryCommandRunner.AuditAllTimeBudgetForTesting = TimeSpan.Zero;
+        QueryCommandRunner.AuditAllTimeBudgetForTesting = TimeSpan.FromSeconds(2);
         try
         {
+            var enteredQuery = false;
             var (exitCode, stdout, _) = CaptureConsole(() => QueryCommandRunner.RunAuditAllForTesting(
                 ["--all", "--db", dbPath, "--format", "compact"],
                 JsonOptions,
-                [Recipe("time-recipe", "query", "Issue5238Needle")]));
+                [Recipe("time-recipe", "query", "Issue5238Needle")],
+                beforeQueryForTesting: reader =>
+                {
+                    enteredQuery = true;
+                    Assert.True(reader.Cancellation.WaitHandle.WaitOne(TimeSpan.FromSeconds(5)));
+                    reader.ThrowIfCancellationRequested();
+                }));
             using var document = JsonDocument.Parse(stdout);
 
+            Assert.True(enteredQuery);
             Assert.Equal(CommandExitCodes.PartialResult, exitCode);
             Assert.True(document.RootElement.GetProperty("summary").GetProperty("time_budget_exceeded").GetBoolean());
-            Assert.Equal(1, document.RootElement.GetProperty("summary").GetProperty("omitted_recipe_count").GetInt32());
+            Assert.Equal(1, document.RootElement.GetProperty("summary").GetProperty("partial_recipe_count").GetInt32());
+            Assert.Contains(
+                document.RootElement.GetProperty("recovery").GetProperty("next_commands").EnumerateArray(),
+                command => command.GetString()!.Contains("cdidx audit time-recipe", StringComparison.Ordinal));
         }
         finally
         {

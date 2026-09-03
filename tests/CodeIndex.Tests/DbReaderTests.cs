@@ -6997,6 +6997,24 @@ public partial class DbReaderTests : IDisposable
         Assert.Throws<OperationCanceledException>(() => reader.ThrowIfCancellationRequested());
     }
 
+    [Fact]
+    public void BeginCancellationScope_AppliesNarrowerTokenAndRestoresCallerToken_Issue5238()
+    {
+        using var callerCancellation = new CancellationTokenSource();
+        using var deadlineCancellation = new CancellationTokenSource();
+        var reader = new DbReader(_db.Connection, isReadOnly: false, callerCancellation.Token);
+
+        using (reader.BeginCancellationScope(deadlineCancellation.Token))
+        {
+            Assert.Equal(deadlineCancellation.Token, reader.Cancellation);
+            deadlineCancellation.Cancel();
+            Assert.Throws<OperationCanceledException>(() => reader.ThrowIfCancellationRequested());
+        }
+
+        Assert.Equal(callerCancellation.Token, reader.Cancellation);
+        Assert.False(reader.Cancellation.IsCancellationRequested);
+    }
+
     public void Dispose()
     {
         _db.Dispose();

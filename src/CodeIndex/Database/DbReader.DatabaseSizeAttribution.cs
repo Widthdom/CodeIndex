@@ -51,7 +51,7 @@ public partial class DbReader
 
         try
         {
-            _cancellation.ThrowIfCancellationRequested();
+            Cancellation.ThrowIfCancellationRequested();
             using var command = _conn.CreateCommand();
             command.CommandText = """
                 WITH object_pages AS (
@@ -155,7 +155,7 @@ public partial class DbReader
 
             while (reader.Read())
             {
-                _cancellation.ThrowIfCancellationRequested();
+                Cancellation.ThrowIfCancellationRequested();
                 var rawName = reader.GetString(0);
                 var safeName = DiagnosticSanitizer.ForMessage(
                     rawName,
@@ -268,7 +268,7 @@ public partial class DbReader
             throw new OperationCanceledException(
                 "The SQLite database-attribution scan was interrupted by cancellation.",
                 exception,
-                _cancellation);
+                Cancellation);
         }
         catch (SqliteException)
         {
@@ -317,13 +317,13 @@ public partial class DbReader
                         _conn,
                         pageCount,
                         pageSize,
-                        _cancellation)
+                        Cancellation)
                     : SqlitePageAttributionReader.Read(
                         _conn,
                         databasePath,
                         pageCount,
                         pageSize,
-                        _cancellation);
+                        Cancellation);
             if (!TrySubtractNonNegative(
                     attribution.AllocatedObjectBytes,
                     attribution.PayloadBytes,
