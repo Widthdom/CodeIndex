@@ -2179,6 +2179,90 @@ public partial class QueryCommandRunnerTests
         }
     }
 
+    [Fact]
+    public void RunVacuum_DryRunRejectsAtomicSourceReplacementAfterLogicalSnapshot_Issue5237()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_vacuum_dry_run_atomic_replace");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        SqliteConnection.ClearAllPools();
+        var replacementDbPath = Path.Combine(project.Root, "vacuum-replacement.db");
+        File.Copy(dbPath, replacementDbPath);
+        using (var replacement = new SqliteConnection(SqliteConnectionPolicy.BuildConnectionString(
+                   replacementDbPath,
+                   SqliteConnectionPolicyMode.ReadWriteUnpooled)))
+        {
+            replacement.Open();
+            using var command = replacement.CreateCommand();
+            command.CommandText = @"
+                PRAGMA journal_mode=DELETE;
+                CREATE TABLE vacuum_replacement_payload (id INTEGER PRIMARY KEY, payload BLOB);
+                WITH RECURSIVE n(value) AS (
+                    SELECT 1
+                    UNION ALL
+                    SELECT value + 1 FROM n WHERE value < 256
+                )
+                INSERT INTO vacuum_replacement_payload (payload)
+                SELECT randomblob(4096) FROM n;";
+            command.ExecuteNonQuery();
+        }
+        SqliteConnection.ClearAllPools();
+        var originalFileSet = ReadVacuumFileSetForTesting(dbPath);
+        var replacementFileSet = ReadVacuumFileSetForTesting(replacementDbPath);
+        Assert.NotEqual(originalFileSet.Main, replacementFileSet.Main);
+        var sourceReplaced = false;
+        var originalCaptureHook = DbContext.VacuumFileSetCaptureForTesting;
+
+        try
+        {
+            DbContext.VacuumFileSetCaptureForTesting = (phase, attempt, _) =>
+            {
+                if (phase != "pre_close_generation" || attempt != 1 || sourceReplaced)
+                    return;
+
+                File.Move(replacementDbPath, dbPath, overwrite: true);
+                sourceReplaced = true;
+            };
+            var (exitCode, stdout, stderr) = CaptureVacuumWithCliJsonOptions(
+                ["--db", dbPath, "--dry-run", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.True(sourceReplaced);
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            Assert.Equal(
+                originalFileSet.Main,
+                root.GetProperty("logical_database_bytes_before").GetInt64());
+            Assert.NotEqual(
+                replacementFileSet.Main,
+                root.GetProperty("logical_database_bytes_before").GetInt64());
+            var observations = root.GetProperty("file_set_observations");
+            AssertVacuumFileSetObservation(
+                root,
+                "post_open_pre_vacuum",
+                originalFileSet,
+                walExists: false,
+                shmExists: false);
+            var postCommand = observations.GetProperty("post_command");
+            Assert.Equal("unavailable", postCommand.GetProperty("state").GetString());
+            Assert.Equal(
+                "unstable_or_inaccessible",
+                postCommand.GetProperty("unavailable_reason").GetString());
+            Assert.False(root.TryGetProperty("main_file_bytes_after", out _));
+            Assert.False(root.TryGetProperty("wal_file_bytes_after", out _));
+            Assert.False(root.TryGetProperty("shm_file_bytes_after", out _));
+            Assert.False(root.TryGetProperty("physical_file_set_bytes_after", out _));
+        }
+        finally
+        {
+            DbContext.VacuumFileSetCaptureForTesting = originalCaptureHook;
+            SqliteConnection.ClearAllPools();
+        }
+    }
+
     [Theory]
     [InlineData("query_immutable_source", "unavailable")]
     [InlineData("pre_close_generation", "captured")]

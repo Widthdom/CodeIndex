@@ -257,6 +257,7 @@ public partial class DbContext : IDisposable
     private DbConnectionFactory.QueryOnlySnapshotSourceState? _queryOnlyImmutableSourceState;
     private long? _vacuumLogicalAfterDataVersion;
     private DbConnectionFactory.QueryOnlySnapshotSourceState? _vacuumLogicalAfterSourceState;
+    private bool _vacuumLogicalAfterIsDryRun;
     private string? _walCheckpointSkippedReason;
     private string? _walCheckpointFailureReason;
     private long? _walCheckpointBusy;

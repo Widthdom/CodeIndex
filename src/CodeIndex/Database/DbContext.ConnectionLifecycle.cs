@@ -506,6 +506,7 @@ public partial class DbContext : IDisposable
     {
         _vacuumLogicalAfterDataVersion = null;
         _vacuumLogicalAfterSourceState = null;
+        _vacuumLogicalAfterIsDryRun = false;
         if (_isReadOnly && !dryRun)
         {
             throw new CodeIndexException(
@@ -553,6 +554,7 @@ public partial class DbContext : IDisposable
         }
         _vacuumLogicalAfterDataVersion = afterDataVersion;
         _vacuumLogicalAfterSourceState = after.SourceState;
+        _vacuumLogicalAfterIsDryRun = dryRun;
         cancellationToken.ThrowIfCancellationRequested();
         var pagesReclaimed = dryRun ? 0 : Math.Max(0, before.PageCount - after.PageCount);
         var bytesReclaimed = pagesReclaimed * after.PageSize;
@@ -959,6 +961,17 @@ public partial class DbContext : IDisposable
             if (_vacuumLogicalAfterSourceState != immutableSourceState)
                 return null;
             expectedSourceState = immutableSourceState;
+        }
+        else if (_vacuumLogicalAfterIsDryRun)
+        {
+            // A path can be atomically replaced while this connection keeps reading the
+            // previously opened inode without a data_version change. Bind dry-run physical
+            // observations to the tuple captured with their logical metrics.
+            // path が atomic replace されても connection は旧 inode を data_version の変化なく
+            // 読み続け得るため、dry-run の物理 observation を logical metrics 時の tuple に固定する。
+            if (_vacuumLogicalAfterSourceState is not { } dryRunSourceState)
+                return null;
+            expectedSourceState = dryRunSourceState;
         }
         else if (_immutableReadOnly && !expectedSourceState.HasValue)
         {
