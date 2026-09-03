@@ -2561,6 +2561,40 @@ public class StatusDbPragmaSettings
     public long? AutoVacuum { get; set; }
 }
 
+public sealed record VacuumFileSetObservation
+{
+    public required string State { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? MainFileExists { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? WalFileExists { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? ShmFileExists { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? MainFileBytes { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? WalFileBytes { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? ShmFileBytes { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? PhysicalFileSetBytes { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? UnavailableReason { get; init; }
+}
+
+public sealed record VacuumFileSetObservations(
+    VacuumFileSetObservation CommandEntry,
+    VacuumFileSetObservation PostOpenPreVacuum,
+    VacuumFileSetObservation PostCommand);
+
 public sealed record VacuumResult(
     string Status,
     bool DryRun,
@@ -2587,6 +2621,7 @@ public sealed record VacuumResult(
     long? ShmFileBytesAfter,
     long? PhysicalFileSetBytesBefore,
     long? PhysicalFileSetBytesAfter,
+    VacuumFileSetObservations FileSetObservations,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     string? WalCheckpointTimingNote,
     long AutoVacuumModeBefore,

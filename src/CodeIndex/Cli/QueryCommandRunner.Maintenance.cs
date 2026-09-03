@@ -63,6 +63,10 @@ public static partial class QueryCommandRunner
                 queryOnlyDbPath = canonicalDbUri;
             }
 
+            var commandEntryFileSet = DbContext.CaptureVacuumCommandEntryFileSet(
+                options.DryRun ? queryOnlyDbPath : options.DbPath,
+                cancellationToken);
+
             if (!DbContext.TryValidateExistingCodeIndexDb(
                     options.DryRun ? queryOnlyDbPath : options.DbPath,
                     requireWritable: !options.DryRun,
@@ -96,6 +100,7 @@ public static partial class QueryCommandRunner
             {
                 db.SuppressPlannerStatisticsMaintenanceOnClose();
                 result = db.RunIncrementalVacuum(options.DryRun, cancellationToken);
+                result = DbContext.ApplyVacuumCommandEntryFileSet(result, commandEntryFileSet);
                 if (!options.DryRun)
                     db.CheckpointWalTruncate(cancellationToken);
                 vacuumDataSource = db.Connection.DataSource;

@@ -1217,6 +1217,82 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunVacuum_JsonUsesCommandEntryFileSetBeforeSqliteCreatesSidecars_Issue5237()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_vacuum_command_entry");
+        var sourceDbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        SqliteConnection.ClearAllPools();
+        var dbPath = Path.Combine(project.Root, "vacuum-entry.db");
+        File.Copy(sourceDbPath, dbPath);
+        var entry = ReadVacuumFileSetForTesting(dbPath);
+        Assert.False(File.Exists(dbPath + "-wal"));
+        Assert.False(File.Exists(dbPath + "-shm"));
+
+        var (exitCode, stdout, stderr) = CaptureVacuum(["--db", dbPath, "--json"]);
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = ParseJsonOutput(stdout);
+        var root = document.RootElement;
+        Assert.Equal(0, root.GetProperty("pages_reclaimed").GetInt64());
+        Assert.Equal(0, root.GetProperty("bytes_reclaimed").GetInt64());
+        AssertVacuumJsonFileSet(root, "before", entry);
+        AssertVacuumFileSetObservation(
+            root,
+            "command_entry",
+            entry,
+            walExists: false,
+            shmExists: false);
+        var preVacuum = root
+            .GetProperty("file_set_observations")
+            .GetProperty("post_open_pre_vacuum");
+        Assert.Equal("captured", preVacuum.GetProperty("state").GetString());
+        Assert.True(preVacuum.GetProperty("wal_file_exists").GetBoolean());
+        Assert.True(preVacuum.GetProperty("shm_file_exists").GetBoolean());
+        Assert.True(preVacuum.GetProperty("wal_file_bytes").GetInt64() > 0);
+        Assert.True(preVacuum.GetProperty("shm_file_bytes").GetInt64() > 0);
+        var postCommand = ReadVacuumFileSetForTesting(dbPath);
+        AssertVacuumFileSetObservation(
+            root,
+            "post_command",
+            postCommand,
+            File.Exists(dbPath + "-wal"),
+            File.Exists(dbPath + "-shm"));
+    }
+
+    [Fact]
+    public void RunVacuum_DryRunDistinguishesEmptyEntrySidecarsFromAbsentSidecars_Issue5237()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_vacuum_empty_entry_sidecars");
+        var sourceDbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        SqliteConnection.ClearAllPools();
+        var dbPath = Path.Combine(project.Root, "vacuum-empty-sidecars.db");
+        File.Copy(sourceDbPath, dbPath);
+        File.WriteAllBytes(dbPath + "-wal", []);
+        File.WriteAllBytes(dbPath + "-shm", []);
+        var entry = ReadVacuumFileSetForTesting(dbPath);
+
+        var (exitCode, stdout, stderr) = CaptureVacuum(
+            ["--db", dbPath, "--dry-run", "--json"]);
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = ParseJsonOutput(stdout);
+        var root = document.RootElement;
+        AssertVacuumJsonFileSet(root, "before", entry);
+        AssertVacuumFileSetObservation(
+            root,
+            "command_entry",
+            entry,
+            walExists: true,
+            shmExists: true);
+        Assert.True(File.Exists(dbPath + "-wal"));
+        Assert.True(File.Exists(dbPath + "-shm"));
+        Assert.Equal(0, new FileInfo(dbPath + "-wal").Length);
+        Assert.Equal(0, new FileInfo(dbPath + "-shm").Length);
+    }
+
+    [Fact]
     public void RunVacuum_DryRunJsonReportsRequestedCheckpointedWalFileSet_Issue5092()
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_vacuum_checkpointed_wal_dry_run");
@@ -1331,6 +1407,18 @@ public partial class QueryCommandRunnerTests
         var root = document.RootElement;
         AssertVacuumJsonFileSet(root, "before", source);
         AssertVacuumJsonFileSet(root, "after", source);
+        AssertVacuumFileSetObservation(
+            root,
+            "command_entry",
+            source,
+            walExists: true,
+            shmExists: true);
+        AssertVacuumFileSetObservation(
+            root,
+            "post_open_pre_vacuum",
+            source,
+            walExists: true,
+            shmExists: true);
         var guidance = root.GetProperty("maintenance_guidance");
         Assert.Equal(1, guidance.GetProperty("wal_threshold_bytes").GetInt64());
         Assert.Equal(
@@ -1507,7 +1595,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunVacuum_JsonReportsWalFileSetHeldByConcurrentReader_Issue5092()
+    public void RunVacuum_JsonReportsWalFileSetHeldByConcurrentReader_Issue5092_Issue5237()
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_vacuum_reader_wal");
         using var env = EnvironmentVariableScope.Capture(DbContext.BusyTimeoutEnvironmentVariable);
@@ -1528,6 +1616,17 @@ public partial class QueryCommandRunnerTests
                 readerCommand.Transaction = readerTransaction;
                 readerCommand.CommandText = "SELECT COUNT(*) FROM vacuum_payload";
                 Assert.Equal(0L, Convert.ToInt64(readerCommand.ExecuteScalar()));
+            }
+
+            if (!OperatingSystem.IsWindows())
+            {
+#pragma warning disable CA1416
+                File.SetUnixFileMode(
+                    dbPath,
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite |
+                    UnixFileMode.GroupRead | UnixFileMode.GroupWrite |
+                    UnixFileMode.OtherRead | UnixFileMode.OtherWrite);
+#pragma warning restore CA1416
             }
 
             var (exitCode, stdout, stderr) = CaptureVacuum(["--db", dbPath, "--json"]);
@@ -1557,6 +1656,12 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(
                 mainFile.Length + walFileBytes + shmFileBytes,
                 root.GetProperty("physical_file_set_bytes_after").GetInt64());
+            if (!OperatingSystem.IsWindows())
+            {
+                Assert.Equal("0600", DbContext.GetUnixFileModeString(dbPath));
+                Assert.Equal("0600", DbContext.GetUnixFileModeString(dbPath + "-wal"));
+                Assert.Equal("0600", DbContext.GetUnixFileModeString(dbPath + "-shm"));
+            }
         }
         finally
         {
@@ -1704,6 +1809,13 @@ public partial class QueryCommandRunnerTests
             Assert.False(root.TryGetProperty("physical_file_set_bytes_after", out _));
             Assert.False(root.TryGetProperty("db_size_bytes_after", out _));
             Assert.False(root.TryGetProperty("wal_size_bytes_after", out _));
+            var observations = root.GetProperty("file_set_observations");
+            Assert.Equal(
+                "captured",
+                observations.GetProperty("command_entry").GetProperty("state").GetString());
+            Assert.Equal(
+                "unavailable",
+                observations.GetProperty("post_command").GetProperty("state").GetString());
             Assert.Equal(
                 "unknown",
                 root.GetProperty("maintenance_guidance").GetProperty("wal_state").GetString());
@@ -1975,12 +2087,27 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(
                 root.GetProperty("logical_database_bytes_before").GetInt64(),
                 root.GetProperty("logical_database_bytes_after").GetInt64());
-            Assert.False(root.TryGetProperty("main_file_bytes_before", out _));
+            var observations = root.GetProperty("file_set_observations");
+            var commandEntry = observations.GetProperty("command_entry");
+            Assert.Equal("captured", commandEntry.GetProperty("state").GetString());
+            Assert.Equal(
+                commandEntry.GetProperty("main_file_bytes").GetInt64(),
+                root.GetProperty("main_file_bytes_before").GetInt64());
+            Assert.Equal(
+                commandEntry.GetProperty("wal_file_bytes").GetInt64(),
+                root.GetProperty("wal_file_bytes_before").GetInt64());
+            Assert.Equal(
+                commandEntry.GetProperty("physical_file_set_bytes").GetInt64(),
+                root.GetProperty("physical_file_set_bytes_before").GetInt64());
             Assert.False(root.TryGetProperty("main_file_bytes_after", out _));
-            Assert.False(root.TryGetProperty("wal_file_bytes_before", out _));
             Assert.False(root.TryGetProperty("wal_file_bytes_after", out _));
-            Assert.False(root.TryGetProperty("physical_file_set_bytes_before", out _));
             Assert.False(root.TryGetProperty("physical_file_set_bytes_after", out _));
+            Assert.Equal(
+                "unavailable",
+                observations.GetProperty("post_open_pre_vacuum").GetProperty("state").GetString());
+            Assert.Equal(
+                "unavailable",
+                observations.GetProperty("post_command").GetProperty("state").GetString());
             Assert.Equal(
                 "unknown",
                 root.GetProperty("maintenance_guidance").GetProperty("wal_state").GetString());
@@ -2020,6 +2147,19 @@ public partial class QueryCommandRunnerTests
             Assert.False(root.TryGetProperty("physical_file_set_bytes_after", out _));
             Assert.False(root.TryGetProperty("db_size_bytes_after", out _));
             Assert.False(root.TryGetProperty("wal_size_bytes_after", out _));
+            var observations = root.GetProperty("file_set_observations");
+            Assert.Equal(
+                "unavailable",
+                observations.GetProperty("command_entry").GetProperty("state").GetString());
+            Assert.Equal(
+                "unstable_or_inaccessible",
+                observations
+                    .GetProperty("command_entry")
+                    .GetProperty("unavailable_reason")
+                    .GetString());
+            Assert.Equal(
+                "unavailable",
+                observations.GetProperty("post_command").GetProperty("state").GetString());
             Assert.Equal(
                 "unknown",
                 root.GetProperty("maintenance_guidance").GetProperty("wal_state").GetString());
@@ -2231,6 +2371,28 @@ public partial class QueryCommandRunnerTests
         Assert.Equal(
             expected.Main + expected.Wal + expected.Shm,
             root.GetProperty($"physical_file_set_bytes_{suffix}").GetInt64());
+    }
+
+    private static void AssertVacuumFileSetObservation(
+        JsonElement root,
+        string observationPoint,
+        (long Main, long Wal, long Shm) expected,
+        bool walExists,
+        bool shmExists)
+    {
+        var observation = root
+            .GetProperty("file_set_observations")
+            .GetProperty(observationPoint);
+        Assert.Equal("captured", observation.GetProperty("state").GetString());
+        Assert.True(observation.GetProperty("main_file_exists").GetBoolean());
+        Assert.Equal(walExists, observation.GetProperty("wal_file_exists").GetBoolean());
+        Assert.Equal(shmExists, observation.GetProperty("shm_file_exists").GetBoolean());
+        Assert.Equal(expected.Main, observation.GetProperty("main_file_bytes").GetInt64());
+        Assert.Equal(expected.Wal, observation.GetProperty("wal_file_bytes").GetInt64());
+        Assert.Equal(expected.Shm, observation.GetProperty("shm_file_bytes").GetInt64());
+        Assert.Equal(
+            expected.Main + expected.Wal + expected.Shm,
+            observation.GetProperty("physical_file_set_bytes").GetInt64());
     }
 
     private void CheckpointVacuumFileSetBetweenCapturesForTesting(

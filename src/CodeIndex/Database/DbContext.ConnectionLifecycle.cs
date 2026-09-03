@@ -557,6 +557,10 @@ public partial class DbContext : IDisposable
             ShmFileBytesAfter: after.ShmSizeBytes,
             PhysicalFileSetBytesBefore: before.PhysicalFileSetBytes,
             PhysicalFileSetBytesAfter: after.PhysicalFileSetBytes,
+            FileSetObservations: new VacuumFileSetObservations(
+                CommandEntry: UnavailableVacuumFileSetObservation("command_entry_not_captured"),
+                PostOpenPreVacuum: ToVacuumFileSetObservation(before),
+                PostCommand: ToVacuumFileSetObservation(after)),
             WalCheckpointTimingNote: BuildWalCheckpointTimingNote(dryRun),
             AutoVacuumModeBefore: before.AutoVacuumMode,
             AutoVacuumModeBeforeName: MaintenanceGuidanceBuilder.FormatAutoVacuumMode(before.AutoVacuumMode) ?? "unknown",
@@ -709,6 +713,31 @@ public partial class DbContext : IDisposable
             ? null
             : "wal_size_bytes_after is sampled before the vacuum connection closes; SQLite may checkpoint or truncate WAL pages after command cleanup, so a later status call can report a smaller wal_size_bytes value.";
 
+    internal static VacuumFileSetObservation CaptureVacuumCommandEntryFileSet(
+        string dbPath,
+        CancellationToken cancellationToken = default)
+        => ToVacuumFileSetObservation(ReadVacuumFileSetMetrics(
+            dbPath,
+            "command_entry",
+            cancellationToken));
+
+    internal static VacuumResult ApplyVacuumCommandEntryFileSet(
+        VacuumResult result,
+        VacuumFileSetObservation commandEntry)
+        => result with
+        {
+            DbSizeBytesBefore = commandEntry.MainFileBytes,
+            WalSizeBytesBefore = commandEntry.WalFileBytes,
+            MainFileBytesBefore = commandEntry.MainFileBytes,
+            WalFileBytesBefore = commandEntry.WalFileBytes,
+            ShmFileBytesBefore = commandEntry.ShmFileBytes,
+            PhysicalFileSetBytesBefore = commandEntry.PhysicalFileSetBytes,
+            FileSetObservations = result.FileSetObservations with
+            {
+                CommandEntry = commandEntry,
+            },
+        };
+
     internal static VacuumResult FinalizeVacuumFileMetricsAfterConnectionClose(
         VacuumResult result,
         string dbPath,
@@ -741,11 +770,14 @@ public partial class DbContext : IDisposable
                 }
 
                 after = new VacuumFileSetMetrics(
+                    observed.MainFileExists,
+                    observed.WalFileExists,
+                    observed.ShmFileExists,
                     observed.DbSizeBytes,
                     observed.WalSizeBytes,
                     observed.ShmSizeBytes,
                     observed.PhysicalFileSetBytes,
-                    SourceState: null);
+                    observed.SourceState);
                 break;
             }
         }
@@ -767,6 +799,10 @@ public partial class DbContext : IDisposable
             WalFileBytesAfter = after.WalFileBytes,
             ShmFileBytesAfter = after.ShmFileBytes,
             PhysicalFileSetBytesAfter = after.PhysicalFileSetBytes,
+            FileSetObservations = result.FileSetObservations with
+            {
+                PostCommand = ToVacuumFileSetObservation(after),
+            },
             MaintenanceGuidance = guidance,
             WalCheckpointTimingNote = result.DryRun
                 ? null
@@ -923,6 +959,9 @@ public partial class DbContext : IDisposable
             freelistCount,
             pageSize,
             autoVacuumMode,
+            fileSet.MainFileExists,
+            fileSet.WalFileExists,
+            fileSet.ShmFileExists,
             fileSet.MainFileBytes,
             fileSet.WalFileBytes,
             fileSet.ShmFileBytes,
@@ -955,6 +994,9 @@ public partial class DbContext : IDisposable
                 WalSizeBytes = null,
                 ShmSizeBytes = null,
                 PhysicalFileSetBytes = null,
+                MainFileExists = null,
+                WalFileExists = null,
+                ShmFileExists = null,
                 SourceState = null,
             };
         }
@@ -1019,6 +1061,9 @@ public partial class DbContext : IDisposable
             var walFileBytes = fileSetAfter.WalFile.Exists ? fileSetAfter.WalFile.Length : 0;
             var shmFileBytes = fileSetAfter.ShmFile.Exists ? fileSetAfter.ShmFile.Length : 0;
             return new VacuumFileSetMetrics(
+                fileSetAfter.MainFile.Exists,
+                fileSetAfter.WalFile.Exists,
+                fileSetAfter.ShmFile.Exists,
                 mainFileBytes,
                 walFileBytes,
                 shmFileBytes,
@@ -1028,6 +1073,57 @@ public partial class DbContext : IDisposable
 
         return default;
     }
+
+    private static VacuumFileSetObservation ToVacuumFileSetObservation(VacuumMetrics metrics)
+        => metrics.SourceState.HasValue
+            ? CapturedVacuumFileSetObservation(
+                metrics.MainFileExists,
+                metrics.WalFileExists,
+                metrics.ShmFileExists,
+                metrics.DbSizeBytes,
+                metrics.WalSizeBytes,
+                metrics.ShmSizeBytes,
+                metrics.PhysicalFileSetBytes)
+            : UnavailableVacuumFileSetObservation("unstable_or_inaccessible");
+
+    private static VacuumFileSetObservation ToVacuumFileSetObservation(VacuumFileSetMetrics metrics)
+        => metrics.SourceState.HasValue
+            ? CapturedVacuumFileSetObservation(
+                metrics.MainFileExists,
+                metrics.WalFileExists,
+                metrics.ShmFileExists,
+                metrics.MainFileBytes,
+                metrics.WalFileBytes,
+                metrics.ShmFileBytes,
+                metrics.PhysicalFileSetBytes)
+            : UnavailableVacuumFileSetObservation("unstable_or_inaccessible");
+
+    private static VacuumFileSetObservation CapturedVacuumFileSetObservation(
+        bool? mainFileExists,
+        bool? walFileExists,
+        bool? shmFileExists,
+        long? mainFileBytes,
+        long? walFileBytes,
+        long? shmFileBytes,
+        long? physicalFileSetBytes)
+        => new()
+        {
+            State = "captured",
+            MainFileExists = mainFileExists,
+            WalFileExists = walFileExists,
+            ShmFileExists = shmFileExists,
+            MainFileBytes = mainFileBytes,
+            WalFileBytes = walFileBytes,
+            ShmFileBytes = shmFileBytes,
+            PhysicalFileSetBytes = physicalFileSetBytes,
+        };
+
+    private static VacuumFileSetObservation UnavailableVacuumFileSetObservation(string reason)
+        => new()
+        {
+            State = "unavailable",
+            UnavailableReason = reason,
+        };
 
     private static bool TryReadVacuumFileSetState(
         string dbPath,
@@ -1134,6 +1230,9 @@ public partial class DbContext : IDisposable
         long FreelistCount,
         long PageSize,
         long AutoVacuumMode,
+        bool? MainFileExists,
+        bool? WalFileExists,
+        bool? ShmFileExists,
         long? DbSizeBytes,
         long? WalSizeBytes,
         long? ShmSizeBytes,
@@ -1141,6 +1240,9 @@ public partial class DbContext : IDisposable
         DbConnectionFactory.QueryOnlySnapshotSourceState? SourceState);
 
     private readonly record struct VacuumFileSetMetrics(
+        bool? MainFileExists,
+        bool? WalFileExists,
+        bool? ShmFileExists,
         long? MainFileBytes,
         long? WalFileBytes,
         long? ShmFileBytes,
