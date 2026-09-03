@@ -108,9 +108,9 @@ public static partial class IndexCommandRunner
         var retainedRelativePaths = new HashSet<string>(StringComparer.Ordinal);
         var projectedDeletePaths = new HashSet<string>(StringComparer.Ordinal);
         var projectedPurgePaths = new HashSet<string>(StringComparer.Ordinal);
-        var mutationEstimates = new DryRunMutationEstimateAccumulator();
+        var mutationEstimates = new DryRunMutationEstimateAccumulator(dbSnapshot);
         if (dbSnapshot.ReadFailed)
-            mutationEstimates.MarkAllUnknown("index_snapshot_unavailable");
+            mutationEstimates.MarkSnapshotUnknown("index_snapshot_unavailable");
         var estimatedSymbolsDroppedByKindFilter = 0L;
         var projectedFileUpdates = 0;
         var projectedFileSkips = 0;
@@ -510,7 +510,8 @@ public static partial class IndexCommandRunner
                 AddEstimatedExistingUpdateMutations(
                     mutationEstimates,
                     dbSnapshot,
-                    dbRelativePath);
+                    dbRelativePath,
+                    probe.Language);
                 mutationEstimates.AddParsedEstimate(new DryRunParsedMutationEstimate(
                     0,
                     0,
@@ -626,7 +627,8 @@ public static partial class IndexCommandRunner
                 AddEstimatedExistingUpdateMutations(
                     mutationEstimates,
                     dbSnapshot,
-                    dbRelativePath);
+                    dbRelativePath,
+                    probe.Language);
                 if (parseEstimateFilesProcessed >= DryRunParseEstimateFileLimit)
                 {
                     parseEstimateFilesTruncated = true;
@@ -784,8 +786,17 @@ public static partial class IndexCommandRunner
         var projectionAuthoritative =
             projectionUnavailableReasons.Count == 0;
 
-        var estimatedTableMutations = mutationEstimates.BuildValues();
-        var estimatedTableMutationDetails = mutationEstimates.BuildDetails();
+        var tableRowEstimates = mutationEstimates.BuildTableRowEstimates();
+        var estimatedTableMutations = tableRowEstimates.ToDictionary(
+            static pair => pair.Key,
+            static pair => pair.Value.RowOperations.Value,
+            StringComparer.Ordinal);
+        var estimatedTableMutationDetails = tableRowEstimates.ToDictionary(
+            static pair => pair.Key,
+            static pair => string.Equals(pair.Key, "files", StringComparison.Ordinal)
+                ? pair.Value.RowOperations with { Source = "filesystem_plan" }
+                : pair.Value.RowOperations,
+            StringComparer.Ordinal);
         var unknownExtensionClassification = UnknownExtensionClassifier.Classify(unknownExtensionPaths);
         var unknownExtensionGroups = unknownExtensionClassification.Groups
             .Take(UnknownExtensionClassifier.MaxCompletionGroups)
@@ -853,6 +864,7 @@ public static partial class IndexCommandRunner
                 ParseEstimateFileLimit = DryRunParseEstimateFileLimit,
                 ParseEstimateFilesProcessed = parseEstimateFilesProcessed,
                 ParseEstimateFilesTruncated = parseEstimateFilesTruncated,
+                TableRowEstimates = tableRowEstimates,
                 EstimatedTableMutations = estimatedTableMutations,
                 EstimatedTableMutationDetails = estimatedTableMutationDetails,
                 SymbolsDroppedByKindFilter = estimatedSymbolsDroppedByKindFilter,
@@ -908,13 +920,12 @@ public static partial class IndexCommandRunner
             CommandOutputWriter.WriteLine($"  projected reference cap hits {projectedReferenceCapHits,6}");
             foreach (var metric in DryRunMutationEstimateAccumulator.MetricNames)
             {
-                var estimate = estimatedTableMutationDetails[metric];
-                var value = estimate.Value?.ToString("N0", System.Globalization.CultureInfo.InvariantCulture) ?? "unknown";
-                var reasons = estimate.UnknownReasons.Count == 0
-                    ? string.Empty
-                    : $"; reason {string.Join(",", estimate.UnknownReasons)}";
-                CommandOutputWriter.WriteLine(
-                    $"  estimated {metric,-17} {value,10} ({estimate.Source}, {estimate.Confidence}{reasons})");
+                var estimate = tableRowEstimates[metric];
+                WriteDryRunTableRowEstimate(metric, "rows deleted", estimate.RowsDeleted);
+                WriteDryRunTableRowEstimate(metric, "rows inserted/upserted", estimate.RowsInsertedOrUpserted);
+                WriteDryRunTableRowEstimate(metric, "row operations", estimate.RowOperations);
+                WriteDryRunTableRowEstimate(metric, "projected final rows", estimate.ProjectedFinalRows);
+                WriteDryRunTableRowEstimate(metric, "projected row delta", estimate.ProjectedRowDelta);
             }
             if (parseEstimateFilesTruncated)
                 CommandOutputWriter.WriteLine($"  parse estimates capped at {DryRunParseEstimateFileLimit.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)} update files");
@@ -929,6 +940,21 @@ public static partial class IndexCommandRunner
                 ConsoleUi.PrintWarning(unknownExtensionWarning);
         }
         return CommandExitCodes.Success;
+    }
+
+    private static void WriteDryRunTableRowEstimate(
+        string metric,
+        string dimension,
+        IndexDryRunEstimateJsonResult estimate)
+    {
+        var value = estimate.Value?.ToString(
+            "N0",
+            System.Globalization.CultureInfo.InvariantCulture) ?? "unknown";
+        var reasons = estimate.UnknownReasons.Count == 0
+            ? string.Empty
+            : $"; reason {string.Join(",", estimate.UnknownReasons)}";
+        CommandOutputWriter.WriteLine(
+            $"  {metric,-17} {dimension,-24} {value,10} ({estimate.Source}, {estimate.Confidence}{reasons})");
     }
 
     private static bool TryResolveDryRunCandidates(
@@ -1821,10 +1847,21 @@ public static partial class IndexCommandRunner
     private static void AddEstimatedExistingUpdateMutations(
         DryRunMutationEstimateAccumulator mutations,
         DryRunDbSnapshot snapshot,
-        string relativePath)
+        string relativePath,
+        string? projectedLanguage = null)
     {
-        mutations.Add("files", 1);
-        if (!snapshot.Files.TryGetValue(relativePath, out var rows))
+        var replacesExisting = snapshot.Files.TryGetValue(relativePath, out var rows);
+        mutations.AddInsertOrUpsert(
+            "files",
+            1,
+            projectedRowAddition: replacesExisting ? 0 : 1);
+        if (string.Equals(projectedLanguage, "typescript", StringComparison.Ordinal)
+            || (replacesExisting
+                && string.Equals(rows.Language, "typescript", StringComparison.Ordinal)))
+        {
+            mutations.MarkTypeScriptAugmentationUnknown();
+        }
+        if (!replacesExisting)
             return;
 
         AddExistingChildRows(mutations, snapshot, rows, rows.Symbols);
@@ -1838,7 +1875,9 @@ public static partial class IndexCommandRunner
         if (!snapshot.Files.TryGetValue(relativePath, out var rows))
             return;
 
-        mutations.Add("files", 1);
+        mutations.AddDelete("files", 1);
+        if (string.Equals(rows.Language, "typescript", StringComparison.Ordinal))
+            mutations.MarkTypeScriptAugmentationUnknown();
         AddExistingChildRows(mutations, snapshot, rows, rows.Symbols);
     }
 
@@ -1848,17 +1887,17 @@ public static partial class IndexCommandRunner
         DryRunExistingFileRows rows,
         long symbols)
     {
-        mutations.AddExisting("chunks", rows.Chunks, snapshot.ChunksAvailable);
-        mutations.AddExisting("symbols", symbols, snapshot.SymbolsAvailable);
-        mutations.AddExisting(
+        mutations.AddExistingDelete("chunks", rows.Chunks, snapshot.ChunksAvailable);
+        mutations.AddExistingDelete("symbols", symbols, snapshot.SymbolsAvailable);
+        mutations.AddExistingDelete(
             "symbol_references",
             rows.SymbolReferences,
             snapshot.SymbolReferencesAvailable);
-        mutations.AddExisting(
+        mutations.AddExistingDelete(
             "reference_lines",
             rows.ReferenceLines,
             snapshot.ReferenceLinesAvailable);
-        mutations.AddExisting("file_issues", rows.FileIssues, snapshot.FileIssuesAvailable);
+        mutations.AddExistingDelete("file_issues", rows.FileIssues, snapshot.FileIssuesAvailable);
     }
 
     private static DryRunDbSnapshot ReadDryRunDbSnapshot(
@@ -2257,84 +2296,340 @@ public static partial class IndexCommandRunner
             "file_issues",
         ];
 
-        private readonly Dictionary<string, long> values = MetricNames.ToDictionary(
-            static metric => metric,
-            static _ => 0L,
-            StringComparer.Ordinal);
-        private readonly Dictionary<string, SortedSet<string>> unknownReasons = MetricNames.ToDictionary(
-            static metric => metric,
-            static _ => new SortedSet<string>(StringComparer.Ordinal),
-            StringComparer.Ordinal);
+        private readonly DryRunEstimateDimensionState initialRows = new();
+        private readonly DryRunEstimateDimensionState rowsDeleted = new();
+        private readonly DryRunEstimateDimensionState rowsInsertedOrUpserted = new();
+        private readonly DryRunEstimateDimensionState projectedRowAdditions = new();
+        private bool childInsertionRequiresParseEstimate;
 
-        internal void Add(string metric, long value)
-            => values[metric] += value;
+        internal DryRunMutationEstimateAccumulator(DryRunDbSnapshot snapshot)
+        {
+            InitializeInitialRows(snapshot);
+        }
 
-        internal void AddExisting(string metric, long value, bool available)
+        internal void AddInsertOrUpsert(
+            string metric,
+            long value,
+            long? projectedRowAddition = null)
+        {
+            rowsInsertedOrUpserted.Add(metric, value);
+            projectedRowAdditions.Add(
+                metric,
+                projectedRowAddition ?? value);
+        }
+
+        internal void AddDelete(string metric, long value)
+            => rowsDeleted.Add(metric, value);
+
+        internal void AddExistingDelete(string metric, long value, bool available)
         {
             if (!available)
             {
-                MarkUnknown(metric, "existing_table_unavailable");
+                rowsDeleted.MarkUnknown(metric, "existing_table_unavailable");
                 return;
             }
 
-            Add(metric, value);
+            AddDelete(metric, value);
         }
 
         internal void AddParsedEstimate(DryRunParsedMutationEstimate estimate)
         {
-            Add("chunks", estimate.Chunks);
-            Add("symbols", estimate.Symbols);
-            Add("symbol_references", estimate.SymbolReferences);
-            Add("reference_lines", estimate.ReferenceLines);
-            Add("file_issues", estimate.FileIssues);
+            childInsertionRequiresParseEstimate = true;
+            AddInsertOrUpsert("chunks", estimate.Chunks);
+            AddInsertOrUpsert("symbols", estimate.Symbols);
+            AddInsertOrUpsert("symbol_references", estimate.SymbolReferences);
+            AddInsertOrUpsert("reference_lines", estimate.ReferenceLines);
+            AddInsertOrUpsert("file_issues", estimate.FileIssues);
         }
 
         internal void MarkParseUnknown(string reason)
         {
+            childInsertionRequiresParseEstimate = true;
             foreach (var metric in MetricNames)
             {
                 if (metric != "files")
-                    MarkUnknown(metric, reason);
+                {
+                    rowsInsertedOrUpserted.MarkUnknown(metric, reason);
+                    projectedRowAdditions.MarkUnknown(metric, reason);
+                }
             }
+        }
+
+        internal void MarkTypeScriptAugmentationUnknown()
+        {
+            const string reason = "typescript_augmentation_rebuild_required";
+            rowsDeleted.MarkUnknown("symbol_references", reason);
+            rowsInsertedOrUpserted.MarkUnknown("symbol_references", reason);
+            projectedRowAdditions.MarkUnknown("symbol_references", reason);
         }
 
         internal void MarkAllUnknown(string reason)
         {
+            childInsertionRequiresParseEstimate = true;
             foreach (var metric in MetricNames)
-                MarkUnknown(metric, reason);
+            {
+                initialRows.MarkUnknown(metric, reason);
+                rowsDeleted.MarkUnknown(metric, reason);
+                rowsInsertedOrUpserted.MarkUnknown(metric, reason);
+                projectedRowAdditions.MarkUnknown(metric, reason);
+            }
         }
 
-        internal Dictionary<string, long?> BuildValues()
+        internal void MarkSnapshotUnknown(string reason)
+        {
+            foreach (var metric in MetricNames)
+            {
+                initialRows.MarkUnknown(metric, reason);
+                rowsDeleted.MarkUnknown(metric, reason);
+            }
+            projectedRowAdditions.MarkUnknown("files", reason);
+        }
+
+        internal Dictionary<string, IndexDryRunTableRowEstimateJsonResult>
+            BuildTableRowEstimates()
             => MetricNames.ToDictionary(
                 static metric => metric,
-                metric => unknownReasons[metric].Count == 0 ? (long?)values[metric] : null,
+                BuildTableRowEstimate,
                 StringComparer.Ordinal);
 
-        internal Dictionary<string, IndexDryRunEstimateJsonResult> BuildDetails()
-            => MetricNames.ToDictionary(
-                static metric => metric,
-                metric =>
+        private void InitializeInitialRows(DryRunDbSnapshot snapshot)
+        {
+            if (snapshot.ReadFailed)
+                return;
+
+            initialRows.Add("files", snapshot.Files.Count);
+            InitializeExistingChildRows(
+                "chunks",
+                snapshot,
+                snapshot.ChunksAvailable,
+                static rows => rows.Chunks);
+            InitializeExistingChildRows(
+                "symbols",
+                snapshot,
+                snapshot.SymbolsAvailable,
+                static rows => rows.Symbols);
+            InitializeExistingChildRows(
+                "symbol_references",
+                snapshot,
+                snapshot.SymbolReferencesAvailable,
+                static rows => rows.SymbolReferences);
+            InitializeExistingChildRows(
+                "reference_lines",
+                snapshot,
+                snapshot.ReferenceLinesAvailable,
+                static rows => rows.ReferenceLines);
+            InitializeExistingChildRows(
+                "file_issues",
+                snapshot,
+                snapshot.FileIssuesAvailable,
+                static rows => rows.FileIssues);
+        }
+
+        private void InitializeExistingChildRows(
+            string metric,
+            DryRunDbSnapshot snapshot,
+            bool tableAvailable,
+            Func<DryRunExistingFileRows, long> selectValue)
+        {
+            if (!tableAvailable && snapshot.Files.Count > 0)
+            {
+                initialRows.MarkUnknown(metric, "existing_table_unavailable");
+                return;
+            }
+
+            foreach (var rows in snapshot.Files.Values)
+                initialRows.Add(metric, selectValue(rows));
+        }
+
+        private IndexDryRunTableRowEstimateJsonResult BuildTableRowEstimate(
+            string metric)
+        {
+            var fileMetric = string.Equals(metric, "files", StringComparison.Ordinal);
+            var parseDerived = !fileMetric && childInsertionRequiresParseEstimate;
+            var deleted = BuildDirectEstimate(
+                rowsDeleted,
+                metric,
+                "index_snapshot",
+                "exact");
+            var insertedOrUpserted = BuildDirectEstimate(
+                rowsInsertedOrUpserted,
+                metric,
+                parseDerived ? "parse_only" : "filesystem_plan",
+                parseDerived ? "estimate" : "exact");
+            var operations = BuildBinaryEstimate(
+                rowsDeleted,
+                rowsInsertedOrUpserted,
+                metric,
+                parseDerived
+                    ? "parse_only_and_index_snapshot"
+                    : "filesystem_plan_and_index_snapshot",
+                parseDerived ? "estimate" : "exact",
+                static (left, right) => checked(left + right));
+            var projectedFinalRows = BuildTernaryEstimate(
+                initialRows,
+                rowsDeleted,
+                projectedRowAdditions,
+                metric,
+                parseDerived
+                    ? "parse_only_and_index_snapshot"
+                    : "filesystem_plan_and_index_snapshot",
+                parseDerived ? "estimate" : "exact",
+                static (initial, deletes, additions) => checked(initial - deletes + additions),
+                rejectNegative: true);
+            var projectedRowDelta = BuildBinaryEstimate(
+                projectedRowAdditions,
+                rowsDeleted,
+                metric,
+                parseDerived
+                    ? "parse_only_and_index_snapshot"
+                    : "filesystem_plan_and_index_snapshot",
+                parseDerived ? "estimate" : "exact",
+                static (additions, deletes) => checked(additions - deletes));
+
+            return new IndexDryRunTableRowEstimateJsonResult(
+                deleted,
+                insertedOrUpserted,
+                operations,
+                projectedFinalRows,
+                projectedRowDelta);
+        }
+
+        private static IndexDryRunEstimateJsonResult BuildDirectEstimate(
+            DryRunEstimateDimensionState state,
+            string metric,
+            string source,
+            string knownConfidence)
+        {
+            var (value, reasons) = state.Get(metric);
+            return BuildEstimate(value, source, knownConfidence, reasons);
+        }
+
+        private static IndexDryRunEstimateJsonResult BuildBinaryEstimate(
+            DryRunEstimateDimensionState left,
+            DryRunEstimateDimensionState right,
+            string metric,
+            string source,
+            string knownConfidence,
+            Func<long, long, long> calculate)
+        {
+            var (leftValue, leftReasons) = left.Get(metric);
+            var (rightValue, rightReasons) = right.Get(metric);
+            var reasons = MergeReasons(leftReasons, rightReasons);
+            long? value = null;
+            if (reasons.Count == 0 && leftValue.HasValue && rightValue.HasValue)
+            {
+                try
                 {
-                    var reasons = unknownReasons[metric].ToList();
-                    var value = reasons.Count == 0 ? (long?)values[metric] : null;
-                    var source = metric == "files"
-                        ? "filesystem_plan"
-                        : "parse_only_and_index_snapshot";
-                    var confidence = reasons.Count > 0
-                        ? "unknown"
-                        : metric == "files"
-                            ? "exact"
-                            : "estimate";
-                    return new IndexDryRunEstimateJsonResult(
-                        value,
-                        source,
-                        confidence,
-                        reasons);
-                },
+                    value = calculate(leftValue.Value, rightValue.Value);
+                }
+                catch (OverflowException)
+                {
+                    reasons.Add("arithmetic_overflow");
+                }
+            }
+
+            return BuildEstimate(value, source, knownConfidence, reasons);
+        }
+
+        private static IndexDryRunEstimateJsonResult BuildTernaryEstimate(
+            DryRunEstimateDimensionState first,
+            DryRunEstimateDimensionState second,
+            DryRunEstimateDimensionState third,
+            string metric,
+            string source,
+            string knownConfidence,
+            Func<long, long, long, long> calculate,
+            bool rejectNegative)
+        {
+            var (firstValue, firstReasons) = first.Get(metric);
+            var (secondValue, secondReasons) = second.Get(metric);
+            var (thirdValue, thirdReasons) = third.Get(metric);
+            var reasons = MergeReasons(
+                firstReasons,
+                secondReasons,
+                thirdReasons);
+            long? value = null;
+            if (reasons.Count == 0
+                && firstValue.HasValue
+                && secondValue.HasValue
+                && thirdValue.HasValue)
+            {
+                try
+                {
+                    value = calculate(
+                        firstValue.Value,
+                        secondValue.Value,
+                        thirdValue.Value);
+                    if (rejectNegative && value.Value < 0)
+                    {
+                        value = null;
+                        reasons.Add("projected_row_count_negative");
+                    }
+                }
+                catch (OverflowException)
+                {
+                    reasons.Add("arithmetic_overflow");
+                }
+            }
+
+            return BuildEstimate(value, source, knownConfidence, reasons);
+        }
+
+        private static IndexDryRunEstimateJsonResult BuildEstimate(
+            long? value,
+            string source,
+            string knownConfidence,
+            List<string> reasons)
+            => new(
+                reasons.Count == 0 ? value : null,
+                source,
+                reasons.Count == 0 ? knownConfidence : "unknown",
+                reasons);
+
+        private static List<string> MergeReasons(
+            params IReadOnlyList<string>[] reasonSets)
+        {
+            var merged = new SortedSet<string>(StringComparer.Ordinal);
+            foreach (var reasonSet in reasonSets)
+                merged.UnionWith(reasonSet);
+            return merged.ToList();
+        }
+
+        private sealed class DryRunEstimateDimensionState
+        {
+            private readonly Dictionary<string, long> values = MetricNames.ToDictionary(
+                static metric => metric,
+                static _ => 0L,
+                StringComparer.Ordinal);
+            private readonly Dictionary<string, SortedSet<string>> unknownReasons = MetricNames.ToDictionary(
+                static metric => metric,
+                static _ => new SortedSet<string>(StringComparer.Ordinal),
                 StringComparer.Ordinal);
 
-        private void MarkUnknown(string metric, string reason)
-            => unknownReasons[metric].Add(reason);
+            internal void Add(string metric, long value)
+            {
+                try
+                {
+                    values[metric] = checked(values[metric] + value);
+                }
+                catch (OverflowException)
+                {
+                    MarkUnknown(metric, "arithmetic_overflow");
+                }
+            }
+
+            internal void MarkUnknown(string metric, string reason)
+                => unknownReasons[metric].Add(reason);
+
+            internal (long? Value, List<string> UnknownReasons) Get(
+                string metric)
+            {
+                var reasons = unknownReasons[metric].ToList();
+                return (
+                    reasons.Count == 0 ? values[metric] : null,
+                    reasons);
+            }
+        }
     }
 
     private sealed record DryRunDbSnapshot(

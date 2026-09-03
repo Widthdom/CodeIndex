@@ -167,6 +167,325 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_DryRun_TableRowEstimatesSeparateOperationsFromProjectedState_Issue5236()
+    {
+        var projectRoot = CreateTempProject();
+        var tableNames = new[]
+        {
+            "files",
+            "chunks",
+            "symbols",
+            "symbol_references",
+            "reference_lines",
+            "file_issues",
+        };
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            File.WriteAllText(
+                sourcePath,
+                """
+                public class App
+                {
+                    public void First() => Second();
+                    public void Second() { }
+                }
+                """);
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+
+            var (newDatabaseExitCode, newDatabase) = RunAndCaptureJson([
+                projectRoot,
+                "--dry-run",
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, newDatabaseExitCode);
+            Assert.Equal("row_operations", newDatabase.GetProperty("estimated_table_mutations_semantics").GetString());
+            Assert.True(newDatabase.GetProperty("estimated_table_mutations_deprecated").GetBoolean());
+            Assert.Equal(
+                "table_row_estimates.<table>.row_operations",
+                newDatabase.GetProperty("estimated_table_mutations_replacement").GetString());
+            Assert.Equal(
+                "filesystem_plan",
+                newDatabase
+                    .GetProperty("estimated_table_mutation_details")
+                    .GetProperty("files")
+                    .GetProperty("source")
+                    .GetString());
+            foreach (var tableName in tableNames)
+            {
+                var estimate = GetDryRunTableRowEstimate(newDatabase, tableName);
+                var inserted = GetDryRunEstimateValue(estimate, "rows_inserted_or_upserted");
+                Assert.Equal(0, GetDryRunEstimateValue(estimate, "rows_deleted"));
+                Assert.Equal(inserted, GetDryRunEstimateValue(estimate, "row_operations"));
+                Assert.Equal(inserted, GetDryRunEstimateValue(estimate, "projected_final_rows"));
+                Assert.Equal(inserted, GetDryRunEstimateValue(estimate, "projected_row_delta"));
+            }
+            var newSymbolEstimate = GetDryRunTableRowEstimate(newDatabase, "symbols");
+            AssertDryRunEstimateMetadata(
+                newSymbolEstimate.GetProperty("rows_deleted"),
+                "index_snapshot",
+                "exact");
+            AssertDryRunEstimateMetadata(
+                newSymbolEstimate.GetProperty("rows_inserted_or_upserted"),
+                "parse_only",
+                "estimate");
+            AssertDryRunEstimateMetadata(
+                newSymbolEstimate.GetProperty("row_operations"),
+                "parse_only_and_index_snapshot",
+                "estimate");
+            AssertDryRunEstimateMetadata(
+                newSymbolEstimate.GetProperty("projected_final_rows"),
+                "parse_only_and_index_snapshot",
+                "estimate");
+            AssertDryRunEstimateMetadata(
+                GetDryRunTableRowEstimate(newDatabase, "files").GetProperty("row_operations"),
+                "filesystem_plan_and_index_snapshot",
+                "exact");
+            Assert.False(Directory.Exists(Path.Combine(projectRoot, ".cdidx")));
+
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            var initialCounts = tableNames.ToDictionary(
+                static tableName => tableName,
+                tableName => (long)CountRows(dbPath, tableName),
+                StringComparer.Ordinal);
+            var databaseBeforeRebuildPreview = ReadDatabaseFileSetFingerprint(dbPath);
+
+            var (humanExitCode, humanOutput, _) = RunAndCaptureStreams([
+                projectRoot,
+                "--rebuild",
+                "--dry-run",
+            ]);
+            Assert.Equal(CommandExitCodes.Success, humanExitCode);
+            Assert.Contains("rows deleted", humanOutput);
+            Assert.Contains("rows inserted/upserted", humanOutput);
+            Assert.Contains("row operations", humanOutput);
+            Assert.Contains("projected final rows", humanOutput);
+            Assert.Contains("projected row delta", humanOutput);
+
+            var (rebuildExitCode, rebuild) = RunAndCaptureJson([
+                projectRoot,
+                "--rebuild",
+                "--dry-run",
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, rebuildExitCode);
+            foreach (var tableName in tableNames)
+            {
+                var estimate = GetDryRunTableRowEstimate(rebuild, tableName);
+                var expectedDeletes = tableName == "files" ? 0 : initialCounts[tableName];
+                var expectedInserts = initialCounts[tableName];
+                Assert.Equal(expectedDeletes, GetDryRunEstimateValue(estimate, "rows_deleted"));
+                Assert.Equal(expectedInserts, GetDryRunEstimateValue(estimate, "rows_inserted_or_upserted"));
+                Assert.Equal(expectedDeletes + expectedInserts, GetDryRunEstimateValue(estimate, "row_operations"));
+                Assert.Equal(initialCounts[tableName], GetDryRunEstimateValue(estimate, "projected_final_rows"));
+                Assert.Equal(0, GetDryRunEstimateValue(estimate, "projected_row_delta"));
+                Assert.Equal(
+                    GetDryRunEstimateValue(estimate, "row_operations"),
+                    rebuild.GetProperty("estimated_table_mutations").GetProperty(tableName).GetInt64());
+            }
+            Assert.Equal(databaseBeforeRebuildPreview, ReadDatabaseFileSetFingerprint(dbPath));
+
+            File.AppendAllText(
+                sourcePath,
+                "\npublic class Added { public void Third() => new App().First(); }\n");
+            var databaseBeforeChangedPreview = ReadDatabaseFileSetFingerprint(dbPath);
+            var (changedExitCode, changed) = RunAndCaptureJson([
+                projectRoot,
+                "--files",
+                "app.cs",
+                "--dry-run",
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, changedExitCode);
+            foreach (var tableName in tableNames)
+            {
+                var estimate = GetDryRunTableRowEstimate(changed, tableName);
+                var expectedDeletes = tableName == "files" ? 0 : initialCounts[tableName];
+                var inserted = GetDryRunEstimateValue(estimate, "rows_inserted_or_upserted");
+                var expectedDelta = tableName == "files"
+                    ? 0
+                    : inserted - initialCounts[tableName];
+                Assert.Equal(expectedDeletes, GetDryRunEstimateValue(estimate, "rows_deleted"));
+                Assert.Equal(expectedDeletes + inserted, GetDryRunEstimateValue(estimate, "row_operations"));
+                Assert.Equal(inserted, GetDryRunEstimateValue(estimate, "projected_final_rows"));
+                Assert.Equal(expectedDelta, GetDryRunEstimateValue(estimate, "projected_row_delta"));
+            }
+            Assert.Equal(databaseBeforeChangedPreview, ReadDatabaseFileSetFingerprint(dbPath));
+
+            var (changedApplyExitCode, _) = RunAndCaptureJson([
+                projectRoot,
+                "--files",
+                "app.cs",
+                "--json",
+            ]);
+            Assert.Equal(CommandExitCodes.Success, changedApplyExitCode);
+            foreach (var tableName in tableNames)
+            {
+                Assert.Equal(
+                    GetDryRunEstimateValue(
+                        GetDryRunTableRowEstimate(changed, tableName),
+                        "projected_final_rows"),
+                    CountRows(dbPath, tableName));
+            }
+
+            var currentCounts = tableNames.ToDictionary(
+                static tableName => tableName,
+                tableName => (long)CountRows(dbPath, tableName),
+                StringComparer.Ordinal);
+            var (skipExitCode, skip) = RunAndCaptureJson([
+                projectRoot,
+                "--files",
+                "app.cs",
+                "--dry-run",
+                "--json",
+            ]);
+            Assert.Equal(CommandExitCodes.Success, skipExitCode);
+            Assert.Equal(1, skip.GetProperty("projected_file_skips").GetInt32());
+            foreach (var tableName in tableNames)
+            {
+                var estimate = GetDryRunTableRowEstimate(skip, tableName);
+                Assert.Equal(0, GetDryRunEstimateValue(estimate, "rows_deleted"));
+                Assert.Equal(0, GetDryRunEstimateValue(estimate, "rows_inserted_or_upserted"));
+                Assert.Equal(0, GetDryRunEstimateValue(estimate, "row_operations"));
+                Assert.Equal(currentCounts[tableName], GetDryRunEstimateValue(estimate, "projected_final_rows"));
+                Assert.Equal(0, GetDryRunEstimateValue(estimate, "projected_row_delta"));
+                if (tableName != "files")
+                {
+                    AssertDryRunEstimateMetadata(
+                        estimate.GetProperty("rows_inserted_or_upserted"),
+                        "filesystem_plan",
+                        "exact");
+                    foreach (var dimension in new[]
+                             {
+                                 "row_operations",
+                                 "projected_final_rows",
+                                 "projected_row_delta",
+                             })
+                    {
+                        AssertDryRunEstimateMetadata(
+                            estimate.GetProperty(dimension),
+                            "filesystem_plan_and_index_snapshot",
+                            "exact");
+                    }
+                }
+            }
+
+            File.Delete(sourcePath);
+            var databaseBeforeDeletePreview = ReadDatabaseFileSetFingerprint(dbPath);
+            var (deleteExitCode, delete) = RunAndCaptureJson([
+                projectRoot,
+                "--files",
+                "app.cs",
+                "--dry-run",
+                "--json",
+            ]);
+            Assert.Equal(CommandExitCodes.Success, deleteExitCode);
+            Assert.Equal(1, delete.GetProperty("projected_file_deletes").GetInt32());
+            foreach (var tableName in tableNames)
+            {
+                var estimate = GetDryRunTableRowEstimate(delete, tableName);
+                Assert.Equal(currentCounts[tableName], GetDryRunEstimateValue(estimate, "rows_deleted"));
+                Assert.Equal(0, GetDryRunEstimateValue(estimate, "rows_inserted_or_upserted"));
+                Assert.Equal(currentCounts[tableName], GetDryRunEstimateValue(estimate, "row_operations"));
+                Assert.Equal(0, GetDryRunEstimateValue(estimate, "projected_final_rows"));
+                Assert.Equal(-currentCounts[tableName], GetDryRunEstimateValue(estimate, "projected_row_delta"));
+                if (tableName != "files")
+                {
+                    AssertDryRunEstimateMetadata(
+                        estimate.GetProperty("rows_inserted_or_upserted"),
+                        "filesystem_plan",
+                        "exact");
+                    foreach (var dimension in new[]
+                             {
+                                 "row_operations",
+                                 "projected_final_rows",
+                                 "projected_row_delta",
+                             })
+                    {
+                        AssertDryRunEstimateMetadata(
+                            estimate.GetProperty(dimension),
+                            "filesystem_plan_and_index_snapshot",
+                            "exact");
+                    }
+                }
+            }
+            Assert.Equal(databaseBeforeDeletePreview, ReadDatabaseFileSetFingerprint(dbPath));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DryRun_TypeScriptAugmentationRebuildMarksSymbolReferenceDimensionsUnknown_Issue5236()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var deletedPath = Path.Combine(projectRoot, "deleted.ts");
+            File.WriteAllText(deletedPath, "interface Shared { deleted: string }\n");
+            File.WriteAllText(
+                Path.Combine(projectRoot, "retained.ts"),
+                "interface Shared { retained: number }\n");
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            Assert.Equal(2, CountRows(dbPath, "symbol_references"));
+            File.Delete(deletedPath);
+            var databaseBeforePreview = ReadDatabaseFileSetFingerprint(dbPath);
+
+            var (dryRunExitCode, dryRun) = RunAndCaptureJson([
+                projectRoot,
+                "--files",
+                "deleted.ts",
+                "--dry-run",
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, dryRunExitCode);
+            Assert.Equal(1, dryRun.GetProperty("projected_file_deletes").GetInt32());
+            var referenceEstimate = GetDryRunTableRowEstimate(dryRun, "symbol_references");
+            foreach (var dimension in new[]
+                     {
+                         "rows_deleted",
+                         "rows_inserted_or_upserted",
+                         "row_operations",
+                         "projected_final_rows",
+                         "projected_row_delta",
+                     })
+            {
+                var estimate = referenceEstimate.GetProperty(dimension);
+                Assert.Equal("unknown", estimate.GetProperty("confidence").GetString());
+                Assert.Contains(
+                    "typescript_augmentation_rebuild_required",
+                    estimate.GetProperty("unknown_reasons")
+                        .EnumerateArray()
+                        .Select(static value => value.GetString()));
+            }
+            Assert.Equal(databaseBeforePreview, ReadDatabaseFileSetFingerprint(dbPath));
+
+            var (applyExitCode, _) = RunAndCaptureJson([
+                projectRoot,
+                "--files",
+                "deleted.ts",
+                "--json",
+            ]);
+            Assert.Equal(CommandExitCodes.Success, applyExitCode);
+            Assert.Equal(0, CountRows(dbPath, "symbol_references"));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_DryRun_WithChangedBetweenMissingRef_ReturnsUsageError()
     {
         var projectRoot = CreateTempProject();
@@ -412,8 +731,8 @@ public partial class IndexCommandRunnerTests
             var (humanExitCode, humanOutput, _) = RunAndCaptureStreams([projectRoot, "--dry-run"]);
             Assert.Equal(CommandExitCodes.Success, humanExitCode);
             Assert.Contains("projected updates", humanOutput);
-            Assert.Contains("estimated chunks", humanOutput);
-            Assert.Contains("estimated symbols", humanOutput);
+            Assert.Matches("chunks\\s+row operations", humanOutput);
+            Assert.Matches("symbols\\s+row operations", humanOutput);
             Assert.Contains("parse_only_and_index_snapshot", humanOutput);
             Assert.Contains("estimate", humanOutput);
 
@@ -1794,6 +2113,26 @@ public partial class IndexCommandRunnerTests
             Assert.Contains(
                 "parse_estimation_failed",
                 detail.GetProperty("unknown_reasons").EnumerateArray().Select(value => value.GetString()));
+            var rowEstimate = GetDryRunTableRowEstimate(json, "symbols");
+            var deleted = rowEstimate.GetProperty("rows_deleted");
+            Assert.Equal(0, deleted.GetProperty("value").GetInt64());
+            Assert.Equal("exact", deleted.GetProperty("confidence").GetString());
+            Assert.Empty(deleted.GetProperty("unknown_reasons").EnumerateArray());
+            foreach (var dimension in new[]
+                     {
+                         "rows_inserted_or_upserted",
+                         "row_operations",
+                         "projected_final_rows",
+                         "projected_row_delta",
+                     })
+            {
+                var unknown = rowEstimate.GetProperty(dimension);
+                Assert.Equal(JsonValueKind.Null, unknown.GetProperty("value").ValueKind);
+                Assert.Equal("unknown", unknown.GetProperty("confidence").GetString());
+                Assert.Contains(
+                    "parse_estimation_failed",
+                    unknown.GetProperty("unknown_reasons").EnumerateArray().Select(value => value.GetString()));
+            }
             Assert.Equal(1, json.GetProperty("errors_total").GetInt32());
             Assert.Contains(
                 "Parse-only mutation estimate unavailable",
@@ -2328,12 +2667,38 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(0, json.GetProperty("projected_file_deletes").GetInt32());
             Assert.Equal(1, json.GetProperty("projected_file_purges").GetInt32());
             Assert.True(json.GetProperty("estimated_table_mutations").GetProperty("files").GetInt64() >= 2);
+            var fileEstimate = GetDryRunTableRowEstimate(json, "files");
+            Assert.Equal(1, GetDryRunEstimateValue(fileEstimate, "rows_deleted"));
+            Assert.Equal(1, GetDryRunEstimateValue(fileEstimate, "rows_inserted_or_upserted"));
+            Assert.Equal(2, GetDryRunEstimateValue(fileEstimate, "row_operations"));
+            Assert.Equal(1, GetDryRunEstimateValue(fileEstimate, "projected_final_rows"));
+            Assert.Equal(0, GetDryRunEstimateValue(fileEstimate, "projected_row_delta"));
             Assert.Equal(1, CountRows(dbPath, "files"));
         }
         finally
         {
             DeleteDirectory(projectRoot);
         }
+    }
+
+    private static JsonElement GetDryRunTableRowEstimate(
+        JsonElement result,
+        string tableName)
+        => result.GetProperty("table_row_estimates").GetProperty(tableName);
+
+    private static long GetDryRunEstimateValue(
+        JsonElement tableEstimate,
+        string dimension)
+        => tableEstimate.GetProperty(dimension).GetProperty("value").GetInt64();
+
+    private static void AssertDryRunEstimateMetadata(
+        JsonElement estimate,
+        string source,
+        string confidence)
+    {
+        Assert.Equal(source, estimate.GetProperty("source").GetString());
+        Assert.Equal(confidence, estimate.GetProperty("confidence").GetString());
+        Assert.Empty(estimate.GetProperty("unknown_reasons").EnumerateArray());
     }
 
     [Fact]
