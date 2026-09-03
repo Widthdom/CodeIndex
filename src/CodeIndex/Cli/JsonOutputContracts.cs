@@ -952,6 +952,13 @@ internal sealed record IndexDryRunEstimateJsonResult(
     [property: JsonPropertyName("confidence")] string Confidence,
     [property: JsonPropertyName("unknown_reasons")] List<string> UnknownReasons);
 
+internal sealed record IndexDryRunTableRowEstimateJsonResult(
+    [property: JsonPropertyName("rows_deleted")] IndexDryRunEstimateJsonResult RowsDeleted,
+    [property: JsonPropertyName("rows_inserted_or_upserted")] IndexDryRunEstimateJsonResult RowsInsertedOrUpserted,
+    [property: JsonPropertyName("row_operations")] IndexDryRunEstimateJsonResult RowOperations,
+    [property: JsonPropertyName("projected_final_rows")] IndexDryRunEstimateJsonResult ProjectedFinalRows,
+    [property: JsonPropertyName("projected_row_delta")] IndexDryRunEstimateJsonResult ProjectedRowDelta);
+
 internal sealed class IndexDryRunJsonResult : IVersionedJsonResult
 {
     public string ApiVersion { get; init; } = JsonOutputContract.ApiVersion;
@@ -989,8 +996,12 @@ internal sealed class IndexDryRunJsonResult : IVersionedJsonResult
     public int ParseEstimateFileLimit { get; init; }
     public int ParseEstimateFilesProcessed { get; init; }
     public bool ParseEstimateFilesTruncated { get; init; }
+    public Dictionary<string, IndexDryRunTableRowEstimateJsonResult> TableRowEstimates { get; init; } = new();
     public Dictionary<string, long?> EstimatedTableMutations { get; init; } = new();
     public Dictionary<string, IndexDryRunEstimateJsonResult> EstimatedTableMutationDetails { get; init; } = new();
+    public string EstimatedTableMutationsSemantics { get; init; } = "row_operations";
+    public bool EstimatedTableMutationsDeprecated { get; init; } = true;
+    public string EstimatedTableMutationsReplacement { get; init; } = "table_row_estimates.<table>.row_operations";
     public long SymbolsDroppedByKindFilter { get; init; }
     public IndexSymbolKindFilterJsonResult SymbolKindFilter { get; init; } = new();
     public List<string>? FileSamples { get; init; }

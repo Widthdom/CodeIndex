@@ -344,16 +344,30 @@ public partial class McpServerTests
     [Fact]
     public void ToolsList_SuggestionCategorySchemaMatchesValidCategories_Issue4423()
     {
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
-        var response = _server.HandleMessage(request)!;
+        var defaultRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
+        var defaultResponse = _server.HandleMessage(defaultRequest)!;
 
-        var tool = response["result"]!["tools"]!.AsArray()
+        var defaultTool = defaultResponse["result"]!["tools"]!.AsArray()
             .First(item => item!["name"]!.GetValue<string>() == "suggest_improvement")!;
-        var categories = tool["inputSchema"]!["properties"]!["category"]!["enum"]!.AsArray()
+        var defaultCategories = defaultTool["inputSchema"]!["properties"]!["category"]!["enum"]!.AsArray()
             .Select(item => item!.GetValue<string>())
             .ToArray();
 
-        Assert.Equal(SuggestionRecord.ValidCategories, categories);
+        Assert.Equal(SuggestionRecord.ValidCategories, defaultCategories);
+
+        var fullRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{"format":"full"}}""")!;
+        var fullResponse = _server.HandleMessage(fullRequest)!;
+        var fullTool = fullResponse["result"]!["tools"]!.AsArray()
+            .First(item => item!["name"]!.GetValue<string>() == "suggest_improvement")!;
+        var fullCategorySchema = fullTool["inputSchema"]!["properties"]!["category"]!;
+        var fullCategories = fullCategorySchema["enum"]!.AsArray()
+            .Select(item => item!.GetValue<string>())
+            .ToArray();
+
+        Assert.Equal(SuggestionRecord.ValidCategories, fullCategories);
+        Assert.Equal(
+            $"Suggestion category: {string.Join(", ", SuggestionRecord.ValidCategories)}",
+            fullCategorySchema["description"]!.GetValue<string>());
     }
 
     [Fact]

@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Text.RegularExpressions;
 using CodeIndex.Cli;
+using CodeIndex.Models;
 
 namespace CodeIndex.Tests;
 
@@ -764,6 +765,87 @@ public class CliFlagSchemaTests
 
         var powershell = ConsoleCompletionRenderer.GetCompletionScript("powershell");
         Assert.Contains("'--end' = @('eof')", powershell);
+    }
+
+    [Fact]
+    public void SuggestionCategoryRegistry_DrivesHelpRuntimeAndCompletions_Issue5235()
+    {
+        var expected = SuggestionRecord.ValidCategories;
+        var spaceSeparated = string.Join(' ', expected);
+        var commaSeparated = string.Join(", ", expected);
+
+        Assert.Equal(expected, CliFlagSchema.GetCanonicalValuesForCommand("suggestions", "--category"));
+        Assert.Contains(
+            $"--category <{string.Join('|', expected)}>",
+            ConsoleUi.GetUsageLine("suggestions"),
+            StringComparison.Ordinal);
+
+        var (_, addHelp, addHelpError) = ConsoleCapture.Capture(() =>
+        {
+            SuggestionsCommandRunner.PrintAddHelp();
+            return CommandExitCodes.Success;
+        });
+        Assert.Empty(addHelpError);
+        Assert.Contains(commaSeparated, addHelp, StringComparison.Ordinal);
+
+        var bash = ConsoleCompletionRenderer.GetCompletionScript("bash");
+        Assert.Contains(
+            $"--category) COMPREPLY=($(compgen -W \"{spaceSeparated}\"",
+            bash,
+            StringComparison.Ordinal);
+
+        var zsh = ConsoleCompletionRenderer.GetCompletionScript("zsh");
+        Assert.Contains(
+            $"--category[Suggestions: filter by category]:value:({spaceSeparated})",
+            zsh,
+            StringComparison.Ordinal);
+
+        var fish = ConsoleCompletionRenderer.GetCompletionScript("fish");
+        Assert.Contains(
+            $"-l category -r -a '{spaceSeparated}'",
+            fish,
+            StringComparison.Ordinal);
+
+        var powershell = ConsoleCompletionRenderer.GetCompletionScript("powershell");
+        Assert.Contains(
+            $"'--category' = @({string.Join(", ", expected.Select(value => $"'{value}'"))})",
+            powershell,
+            StringComparison.Ordinal);
+
+        var projectRoot = TestProjectHelper.CreateTempProject("suggestion_category_registry");
+        try
+        {
+            var dbPath = Path.Combine(projectRoot, "codeindex.db");
+            var jsonOptions = ProgramRunner.CreateDefaultJsonOptions();
+            foreach (var category in expected)
+            {
+                var (exitCode, _, stderr) = ConsoleCapture.Capture(() =>
+                    SuggestionsCommandRunner.Run(
+                        [
+                            "add",
+                            $"Issue 5235 accepts the {category} category",
+                            "--category",
+                            category,
+                            "--db",
+                            dbPath,
+                        ],
+                        jsonOptions));
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Empty(stderr);
+            }
+
+            var (invalidExitCode, _, invalidError) = ConsoleCapture.Capture(() =>
+                SuggestionsCommandRunner.Run(
+                    ["add", "Issue 5235 rejects an invalid category", "--category", "invalid", "--db", dbPath],
+                    jsonOptions));
+            Assert.Equal(CommandExitCodes.UsageError, invalidExitCode);
+            Assert.Contains(commaSeparated, invalidError, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
     }
 
     [Fact]

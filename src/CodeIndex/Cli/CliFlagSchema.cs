@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using CodeIndex.Mcp;
+using CodeIndex.Models;
 
 namespace CodeIndex.Cli;
 
@@ -641,7 +642,7 @@ internal static class CliFlagSchema
                 Description = "Suggestions: filter by suggestion status",
                 PrimaryCommands = Set("suggestions"),
             },
-            new() { Name = "--category", ValueDomain = Values(["symbol_extraction", "reference_extraction", "search_ranking", "language_support", "output_format", "crash_report", "unexpected_error", "other"]), Description = "Suggestions: filter by category", PrimaryCommands = Set("suggestions") },
+            new() { Name = "--category", ValueDomain = Values(SuggestionRecord.ValidCategories), Description = "Suggestions: filter by category", PrimaryCommands = Set("suggestions") },
             new() { Name = "--agent", ValuePlaceholder = "<agent>", Description = "Suggestions: filter by agent", PrimaryCommands = Set("suggestions") },
             new() { Name = "--actor", ValuePlaceholder = "<name>", Description = "Suggestions update: actor recorded for a manual status transition", PrimaryCommands = Set("suggestions") },
             new() { Name = "--reason", ValuePlaceholder = "<text>", Description = "Suggestions update: optional reason recorded for a manual status transition", PrimaryCommands = Set("suggestions") },
@@ -771,7 +772,7 @@ internal static class CliFlagSchema
             new()
             {
                 Name = "--dry-run",
-                Description = "Preview without writing; hooks supports install and uninstall",
+                Description = "Preview without writing; index reports per-table row operations and projected state; hooks supports install and uninstall",
                 PrimaryCommands = Set("index", "hooks", "backfill-fold", "optimize", "vacuum", "import"),
                 CompletionSubcommands = new Dictionary<string, IReadOnlySet<string>>(StringComparer.Ordinal)
                 {
