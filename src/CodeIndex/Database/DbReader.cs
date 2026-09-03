@@ -85,6 +85,7 @@ public partial class DbReader : IDisposable
     private readonly IReadOnlySet<string> _chunkIndexes;
     private readonly IReadOnlySet<string> _symbolIndexes;
     private readonly IReadOnlySet<string> _referenceIndexes;
+    private readonly AsyncLocal<CancellationToken?> _scopedCancellation = new();
     private readonly HashSet<string> _indexedHotspotFamilyLanguages;
     private readonly Dictionary<string, CSharpPathUsingCatalog> _csharpUsingCatalogsByPath = new(StringComparer.Ordinal);
     private readonly Dictionary<string, List<CSharpContainingTypeScope>> _csharpContainingTypeScopesByPath = new(StringComparer.Ordinal);
@@ -150,11 +151,11 @@ public partial class DbReader : IDisposable
         using var cancellationRegistration = RegisterSqliteInterruptForCancellation();
         try
         {
-            _cancellation.ThrowIfCancellationRequested();
+            Cancellation.ThrowIfCancellationRequested();
 
             using var transaction = _conn.BeginTransaction(deferred: true);
             var result = action(transaction);
-            _cancellation.ThrowIfCancellationRequested();
+            Cancellation.ThrowIfCancellationRequested();
             transaction.Commit();
             return result;
         }
@@ -163,13 +164,41 @@ public partial class DbReader : IDisposable
             throw new OperationCanceledException(
                 "The SQLite read snapshot was interrupted by cancellation.",
                 exception,
-                _cancellation);
+                Cancellation);
+        }
+    }
+
+    /// <summary>
+    /// Runs one bounded read with the effective cancellation token registered as a SQLite
+    /// interrupt. This is used by compound callers that apply a narrower per-operation deadline.
+    /// effective cancellation token を SQLite interrupt として登録し、上限付き read を 1 回実行する。
+    /// 呼び出し単位で短い deadline を適用する compound operation から利用する。
+    /// </summary>
+    internal T RunWithCancellationInterrupt<T>(Func<T> action)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        using var cancellationRegistration = RegisterSqliteInterruptForCancellation();
+        try
+        {
+            Cancellation.ThrowIfCancellationRequested();
+            var result = action();
+            Cancellation.ThrowIfCancellationRequested();
+            return result;
+        }
+        catch (SqliteException exception) when (IsSqliteInterruptCancellation(exception))
+        {
+            throw new OperationCanceledException(
+                "The SQLite read was interrupted by cancellation.",
+                exception,
+                Cancellation);
         }
     }
 
     private CancellationTokenRegistration RegisterSqliteInterruptForCancellation()
-        => _cancellation.CanBeCanceled
-            ? _cancellation.UnsafeRegister(
+    {
+        var cancellation = Cancellation;
+        return cancellation.CanBeCanceled
+            ? cancellation.UnsafeRegister(
                 static state =>
                 {
                     var connection = (SqliteConnection)state!;
@@ -177,9 +206,10 @@ public partial class DbReader : IDisposable
                 },
                 _conn)
             : default;
+    }
 
     private bool IsSqliteInterruptCancellation(SqliteException exception)
-        => _cancellation.IsCancellationRequested
+        => Cancellation.IsCancellationRequested
            && exception.SqliteErrorCode == SqliteInterruptErrorCode;
     // #86: True when every symbols / symbol_references row has name_folded populated and
     // the Unicode fold path is safe to use for `--exact`. Legacy / partial-backfill DBs
@@ -768,15 +798,41 @@ public partial class DbReader : IDisposable
     /// 呼び出し側から渡される per-request CancellationToken (#1567)。SQLite 行を反復処理する
     /// メソッドはバッチ境界でこれを参照し、shutdown / 切断時に速やかに中断する。
     /// </summary>
-    public CancellationToken Cancellation => _cancellation;
+    public CancellationToken Cancellation => _scopedCancellation.Value ?? _cancellation;
 
     /// <summary>
-    /// Convenience wrapper for <c>_cancellation.ThrowIfCancellationRequested()</c> so partial
-    /// classes do not need to reach into the private field (#1567).
-    /// `_cancellation.ThrowIfCancellationRequested()` の薄いラッパ (#1567)。partial class から
-    /// プライベートフィールドに触れずに済むようにする。
+    /// Temporarily applies a narrower cancellation deadline without replacing the caller-owned
+    /// lifetime token. The scope is async-context-local so bounded compound reads can interrupt
+    /// SQLite while preserving other reader users.
+    /// caller 所有の lifetime token を置き換えず、より短い cancellation deadline を一時適用する。
+    /// scope は async context local で、他の reader 利用を保ったまま SQLite を中断できる。
     /// </summary>
-    public void ThrowIfCancellationRequested() => _cancellation.ThrowIfCancellationRequested();
+    internal IDisposable BeginCancellationScope(CancellationToken cancellation)
+    {
+        var previous = _scopedCancellation.Value;
+        _scopedCancellation.Value = cancellation;
+        return new CancellationScope(this, previous);
+    }
+
+    /// <summary>
+    /// Convenience wrapper for the effective cancellation token so partial
+    /// classes do not need to reach into the private field (#1567).
+    /// effective cancellation token の薄いラッパ (#1567)。partial class から
+    /// token の格納方法に触れずに済むようにする。
+    /// </summary>
+    public void ThrowIfCancellationRequested() => Cancellation.ThrowIfCancellationRequested();
+
+    private sealed class CancellationScope(DbReader owner, CancellationToken? previous) : IDisposable
+    {
+        private DbReader? _owner = owner;
+
+        public void Dispose()
+        {
+            var current = Interlocked.Exchange(ref _owner, null);
+            if (current != null)
+                current._scopedCancellation.Value = previous;
+        }
+    }
 
     private SqliteCommand RentCommand(string sql, Action<SqliteCommand> configureSchema)
     {

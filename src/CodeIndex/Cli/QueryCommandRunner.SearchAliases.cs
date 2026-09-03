@@ -20,6 +20,9 @@ public static partial class QueryCommandRunner
         JsonSerializerOptions jsonOptions,
         CancellationToken cancellationToken = default)
     {
+        if (HasAuditAllFlag(subArgs))
+            return RunAuditAll(subArgs, jsonOptions, cancellationToken);
+
         if (subArgs.Length == 0 || subArgs[0].StartsWith("-", StringComparison.Ordinal))
         {
             var options = ParseArgs(
@@ -77,5 +80,16 @@ public static partial class QueryCommandRunner
             QueryCommandInvocationContext.Audit,
             jsonOptions,
             cancellationToken);
+    }
+
+    private static bool HasAuditAllFlag(IReadOnlyList<string> args)
+    {
+        for (var i = 0; i < args.Count && args[i] != "--"; i++)
+        {
+            if (args[i] == "--all")
+                return true;
+        }
+
+        return false;
     }
 }

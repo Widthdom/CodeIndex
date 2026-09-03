@@ -69,8 +69,10 @@ public static partial class QueryCommandRunner
         return true;
     }
 
-    private static int ExecuteSearchRoute(SearchRoutePlan route) =>
-        route.Execution switch
+    private static int ExecuteSearchRoute(SearchRoutePlan route)
+    {
+        using var exactLanguageScope = CodeIndex.Database.DbReader.BeginExactQueryLanguageScope(route.Options.Lang);
+        return route.Execution switch
         {
             SearchExecutionKind.RecipeList => WriteSearchRecipeList(
                 route.Options,
@@ -114,6 +116,7 @@ public static partial class QueryCommandRunner
                     route.Options.Query!)),
             _ => throw new InvalidOperationException("Unknown search execution route."),
         };
+    }
 
     private static JsonSerializerOptions GetSearchInvocationJsonOptions(QueryCommandOptions options) =>
         options.InvocationJsonOptions

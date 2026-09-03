@@ -71,6 +71,7 @@ cdidx references UserService --limit 20
 cdidx inspect QueryCommandRunner --outline-only
 cdidx map --compact --max-json-bytes 65536
 cdidx audit risky-code --format sarif --limit 20
+cdidx audit --all --format compact --total-limit 200
 cdidx doctor --json
 cdidx doctor --integrations --json
 cdidx validate
@@ -350,6 +351,7 @@ cdidx references UserService --limit 20
 cdidx inspect QueryCommandRunner --outline-only
 cdidx map --compact --max-json-bytes 65536
 cdidx audit risky-code --format sarif --limit 20
+cdidx audit --all --format compact --total-limit 200
 cdidx doctor --json
 cdidx doctor --integrations --json
 cdidx validate

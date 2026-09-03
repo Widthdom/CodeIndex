@@ -757,7 +757,7 @@ public class CliFlagSchemaTests
 
         var fish = ConsoleCompletionRenderer.GetCompletionScript("fish");
         Assert.Contains("__fish_cdidx_using_command audit' -l format -r -a 'text json count compact sarif issue-drafts'", fish);
-        Assert.Contains("__fish_cdidx_using_command search' -l result-kind -r -a 'call_site declaration identifier code comment string_literal regex_literal help_text schema_description unknown'", fish);
+        Assert.Contains("__fish_cdidx_using_command search audit' -l result-kind -r -a 'call_site declaration identifier code comment string_literal regex_literal help_text schema_description unknown'", fish);
         Assert.Contains("__fish_cdidx_using_command excerpt' -l end -r -a 'eof'", fish);
 
         var zsh = ConsoleCompletionRenderer.GetCompletionScript("zsh");

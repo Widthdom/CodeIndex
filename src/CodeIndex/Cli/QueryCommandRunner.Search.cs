@@ -49,11 +49,31 @@ public static partial class QueryCommandRunner
         JsonSerializerOptions jsonOptions,
         CancellationToken cancellationToken)
     {
+        return TryPrepareSearchRoute(
+            cmdArgs,
+            validationArgs,
+            invocationContext,
+            jsonOptions,
+            cancellationToken,
+            out var route)
+                ? ExecuteSearchRoute(route)
+                : CommandExitCodes.UsageError;
+    }
+
+    private static bool TryPrepareSearchRoute(
+        string[] cmdArgs,
+        string[] validationArgs,
+        QueryCommandInvocationContext invocationContext,
+        JsonSerializerOptions jsonOptions,
+        CancellationToken cancellationToken,
+        out SearchRoutePlan route)
+    {
+        route = default;
         var previewOptionError = ValidatePreviewOptions("search", cmdArgs, allowMaxLineWidth: true, allowFocusOptions: false);
         if (previewOptionError != null)
         {
             CommandErrorWriter.WriteStderr(previewOptionError);
-            return CommandExitCodes.UsageError;
+            return false;
         }
         var options = ParseArgs(
             cmdArgs,
@@ -64,11 +84,9 @@ public static partial class QueryCommandRunner
         options.InvocationContext = invocationContext;
         options.InvocationJsonOptions = jsonOptions;
         options.InvocationMachineErrorOutputRequested = ProgramRunner.ContainsJsonOutputFlag(validationArgs);
-        using var exactLanguageScope = DbReader.BeginExactQueryLanguageScope(
-            options.Lang);
         if (ReferenceEquals(invocationContext, QueryCommandInvocationContext.Search)
             && TryWriteSearchFindAlternativeError(validationArgs, options, jsonOptions))
-            return CommandExitCodes.UsageError;
+            return false;
         if (TryWriteUnsupportedOptionError(
             invocationContext,
             validationArgs,
@@ -76,7 +94,7 @@ public static partial class QueryCommandRunner
             options,
             options.Query,
             invocationContext.StructuredMachineUsageErrors ? jsonOptions : null))
-            return CommandExitCodes.UsageError;
+            return false;
         if (TryWriteParseError(
             options,
             invocationContext,
@@ -87,17 +105,17 @@ public static partial class QueryCommandRunner
                 && TryExtractNonPositiveMaxJsonBytes(options.ParseError, out _, out _, out _)
                 ? jsonOptions
                 : null))
-            return CommandExitCodes.UsageError;
+            return false;
         if (!TryResolveSearchExactMode(options, out var exact, out var exactError, out var exactHint))
         {
             var message = StripErrorPrefix(exactError!);
             if (invocationContext.StructuredMachineUsageErrors)
             {
                 WriteUsageError(message, options, exactHint!);
-                return CommandExitCodes.UsageError;
+                return false;
             }
 
-            return CommandErrorWriter.WriteJsonOrHuman(
+            CommandErrorWriter.WriteJsonOrHuman(
                 options.Json,
                 jsonOptions,
                 message,
@@ -107,13 +125,14 @@ public static partial class QueryCommandRunner
                 errorCode: CommandErrorCodes.UsageError,
                 command: invocationContext.CommandName,
                 omitNullUsage: true);
+            return false;
         }
         if (!TryValidateSearchOptions(options, exact, invocationContext))
-            return CommandExitCodes.UsageError;
-        if (!TryCreateSearchRoutePlan(cmdArgs, options, exact, cancellationToken, out var route))
-            return CommandExitCodes.UsageError;
+            return false;
+        if (!TryCreateSearchRoutePlan(cmdArgs, options, exact, cancellationToken, out route))
+            return false;
 
-        return ExecuteSearchRoute(route);
+        return true;
     }
 
     private static List<string> FindUnexpectedRecipePositionals(string[] args)

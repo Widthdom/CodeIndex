@@ -245,19 +245,19 @@ internal static class CliFlagSchema
     private static readonly string[] LangCapableCommands =
     [
         "search", "definition", "goto", "references", "callers", "callees", "symbols",
-        "files", "find", "map", "inspect", "deps", "impact", "unused", "hotspots",
+        "files", "find", "map", "inspect", "deps", "impact", "unused", "hotspots", "audit",
     ];
 
     private static readonly string[] PathFilterCommands =
     [
         "search", "definition", "goto", "references", "callers", "callees", "symbols", "files",
-        "find", "map", "inspect", "deps", "impact", "unused", "hotspots", "validate", "export",
+        "find", "map", "inspect", "deps", "impact", "unused", "hotspots", "validate", "export", "audit",
     ];
 
     private static readonly string[] ExcludeFilterCommands =
     [
         "search", "definition", "goto", "references", "callers", "callees", "symbols", "files",
-        "find", "map", "inspect", "validate", "deps", "impact", "unused", "hotspots", "export",
+        "find", "map", "inspect", "validate", "deps", "impact", "unused", "hotspots", "export", "audit",
     ];
 
     private static readonly string[] CountCommands =
@@ -270,7 +270,7 @@ internal static class CliFlagSchema
         "search", "definition", "references", "callers", "callees", "symbols",
         "files", "find", "excerpt", "map", "inspect", "deps", "impact", "unused", "hotspots",
     ];
-    private static readonly string[] AllowPartialCommands = ["search", "symbols", "files", "find", "index"];
+    private static readonly string[] AllowPartialCommands = ["search", "audit", "symbols", "files", "find", "index"];
 
     private static readonly string[] KindCommands =
     [
@@ -289,9 +289,9 @@ internal static class CliFlagSchema
     private static readonly string[] BoundedProjectionCommands =
         ProjectionFieldRegistry.SupportedCommands.ToArray();
     private static readonly string[] CursorCommands = ["search", "outline", "unused", "deps", "inspect", "diff", .. BoundedProjectionCommands];
-    private static readonly string[] AllResultCommands = ["goto", "find", "unused"];
+    private static readonly string[] AllResultCommands = ["goto", "find", "unused", "audit"];
 
-    private static readonly string[] SinceCommands = ["search", "definition", "symbols", "files", "suggestions"];
+    private static readonly string[] SinceCommands = ["search", "audit", "definition", "symbols", "files", "suggestions"];
     private static readonly string[] ByteFormatCommands = ["files", "map"];
     private static readonly string[] EntrypointConfidenceCommands = ["map"];
     private static readonly string[] MapSectionCommands = ["map"];
@@ -330,7 +330,7 @@ internal static class CliFlagSchema
 
     private static readonly string[] MaxLineWidthCommands =
     [
-        "search", "references", "callers", "callees", "find", "excerpt", "impact", "inspect",
+        "search", "audit", "references", "callers", "callees", "find", "excerpt", "impact", "inspect",
     ];
 
     private static readonly string[] DbPathCommands =
@@ -338,7 +338,7 @@ internal static class CliFlagSchema
         "index", "backfill-fold", "optimize", "search", "definition", "goto", "references", "callers", "callees",
         "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status",
         "validate", "deps", "impact", "unused", "hotspots", "suggestions", "languages", "db", "vacuum", "report", "batch", "mcp",
-        "lsp", "export", "import",
+        "lsp", "export", "import", "audit",
     ];
 
     private static readonly string[] WorkspaceDbCommands = ["deps"];
@@ -347,14 +347,14 @@ internal static class CliFlagSchema
     [
         "index", "search", "definition", "goto", "references", "callers", "callees",
         "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status",
-        "validate", "deps", "impact", "unused", "hotspots", "languages", "batch",
+        "validate", "deps", "impact", "unused", "hotspots", "languages", "batch", "audit",
     ];
 
     private static readonly string[] ReadOnlyDbCommands =
     [
         "search", "definition", "goto", "references", "callers", "callees",
         "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status",
-        "validate", "deps", "impact", "unused", "hotspots", "languages",
+        "validate", "deps", "impact", "unused", "hotspots", "languages", "audit",
     ];
 
     private static readonly string[] JsonCommands =
@@ -554,7 +554,7 @@ internal static class CliFlagSchema
             new() { Name = "--confidence", ValueDomain = Values(["medium", "low"]), Description = "Unused: alias for --min-confidence", PrimaryCommands = Set(UnusedFilterCommands) },
             new() { Name = "--min-confidence", ValueDomain = Values(["medium", "low"]), Description = "Unused: return symbols at or above this confidence", PrimaryCommands = Set(UnusedFilterCommands) },
             new() { Name = "--actionable", Description = "Unused: preset for private medium-confidence cleanup candidates", PrimaryCommands = Set(UnusedFilterCommands) },
-            new() { Name = "--all", Description = "goto: return all matching physical LSP locations; find: search all indexed files instead of requiring --path; unused: include low-confidence contract-domain candidates suppressed by default", PrimaryCommands = Set(AllResultCommands) },
+            new() { Name = "--all", Description = "Audit: execute every registered recipe in deterministic order; goto: return all matching physical LSP locations; find: search all indexed files instead of requiring --path; unused: include low-confidence contract-domain candidates suppressed by default", PrimaryCommands = Set(AllResultCommands) },
             new() { Name = "--line-scan-limit", ValuePlaceholder = "<n>", Description = "Find: override the --all indexed-line scan cap", PrimaryCommands = Set("find") },
             new() { Name = "--rank-by", ValueDomain = Values(["weighted", "count", "kind"]), Description = "Rank callers/callees by the selected primary recipe, then exact-name relevance, production/test/docs path category, and stable location/name tie-breakers", PrimaryCommands = Set(RankByCommands) },
             new() { Name = "--sort", ValuePlaceholder = "<mode>", Description = "Symbols/outline: order audit output by a ranking signal; outline also accepts source, kind, references, size, complexity, path, and name", PrimaryCommands = Set(SymbolSortCommands) },
@@ -612,13 +612,13 @@ internal static class CliFlagSchema
                 },
             },
             new() { Name = "--recipe", ValuePlaceholder = "<name|name/query>", ValueKind = CliOptionValueKind.FreeText, Description = "Search: run a built-in audit recipe query set, optionally selecting one child query", PrimaryCommands = Set("search") },
-            new() { Name = "--include-query", ValuePlaceholder = "<name>", Description = "Search recipe: include one child query; repeat or comma-separate values", PrimaryCommands = Set("search") },
-            new() { Name = "--exclude-query", ValuePlaceholder = "<name>", Description = "Search recipe: exclude one child query; repeat or comma-separate values", PrimaryCommands = Set("search") },
+            new() { Name = "--include-query", ValuePlaceholder = "<name>", Description = "Search recipe: include one child query; repeat or comma-separate values", PrimaryCommands = Set("search", "audit") },
+            new() { Name = "--exclude-query", ValuePlaceholder = "<name>", Description = "Search recipe: exclude one child query; repeat or comma-separate values", PrimaryCommands = Set("search", "audit") },
             new() { Name = "--list-recipes", Description = "Search: list built-in audit recipes", PrimaryCommands = Set("search") },
             new() { Name = "--names", Description = "Recipes: emit only deterministic recipe names", PrimaryCommands = Set("search", "recipes") },
-            new() { Name = "--audit-scope", ValueDomain = Values(["source", "all"]), Description = "Search/Unused: use production source defaults or include all indexed paths", PrimaryCommands = Set("search", "unused") },
-            new() { Name = "--source-only", Description = "Search: alias for --audit-scope source on ad hoc and named searches", PrimaryCommands = Set("search") },
-            new() { Name = "--show-excluded", Description = "Search recipes: include effective scope and exclusion diagnostics in recipe output", PrimaryCommands = Set("search") },
+            new() { Name = "--audit-scope", ValueDomain = Values(["source", "all"]), Description = "Search/Audit/Unused: use production source defaults or include all indexed paths", PrimaryCommands = Set("search", "audit", "unused") },
+            new() { Name = "--source-only", Description = "Search/Audit: alias for --audit-scope source", PrimaryCommands = Set("search", "audit") },
+            new() { Name = "--show-excluded", Description = "Search/Audit recipes: include effective scope and exclusion diagnostics in recipe output", PrimaryCommands = Set("search", "audit") },
             new() { Name = "--named-query", ValuePlaceholder = "<name>=<query>", Description = "Search: add one named ad hoc batch query", PrimaryCommands = Set("search") },
             new() { Name = "--open-issues", ValuePlaceholder = "<path|github|github:owner/name>", ValueKind = CliOptionValueKind.FilePath, SupplementalCompletionValues = ["github"], Description = "Preflight issue drafts against issue JSON or GitHub issues", PrimaryCommands = Set("search", "map", "suggestions") },
             new() { Name = "--repo", ValuePlaceholder = "<owner/name>", ValueKind = CliOptionValueKind.Repository, Description = "Issue-drafts: GitHub repository for --open-issues github", PrimaryCommands = Set("search", "map", "suggestions") },
@@ -672,24 +672,24 @@ internal static class CliFlagSchema
             new() { Name = "--fields", ValuePlaceholder = "<csv>", Description = "Project bounded-response fields; inspect accepts top-level groups or collection.field and `list` prints its typed catalog", PrimaryCommands = Set(InspectFieldCommands.Concat(BoundedProjectionCommands).ToArray()) },
             new() { Name = "--body-only", Description = "Inspect: body-focused JSON shorthand for --body --fields definitions", PrimaryCommands = Set(InspectFieldCommands) },
             new() { Name = "--outline-only", Description = "Inspect: outline-first JSON shorthand for --fields file,definitions,nearby_symbols", PrimaryCommands = Set(InspectFieldCommands) },
-            new() { Name = "--exact", Description = "Backward-compatible exact shorthand; search mode is incompatible with --fts", PrimaryCommands = Set(ExactCommands) },
+            new() { Name = "--exact", Description = "Backward-compatible exact shorthand; search mode is incompatible with --fts", PrimaryCommands = Set(ExactCommands.Concat(["audit"]).ToArray()) },
             new() { Name = "--regex", Description = "Use regular expression matching", PrimaryCommands = Set("find") },
             new() { Name = "--exact-name", Description = "Exact symbol-name equality", PrimaryCommands = Set(ExactNameCommands), AlsoAcceptedBy = Set("search") },
-            new() { Name = "--exact-substring", Description = "Search-only exact substring match; incompatible with --fts", PrimaryCommands = Set("search"), AlsoAcceptedBy = Set(ExactSubstringAccepted) },
+            new() { Name = "--exact-substring", Description = "Search/Audit exact substring match; incompatible with --fts", PrimaryCommands = Set("search", "audit"), AlsoAcceptedBy = Set(ExactSubstringAccepted) },
             new() { Name = "--token-boundary", Description = "Search-only exact substring match with identifier/token boundaries; incompatible with --fts", PrimaryCommands = Set("search") },
             new() { Name = "--prefix", Description = "Trailing-asterisk prefix shorthand", PrimaryCommands = Set("search") },
-            new() { Name = "--require-before", ValuePlaceholder = "<query>", Description = "Search: require a nearby guard query before each primary match", PrimaryCommands = Set("search") },
-            new() { Name = "--require-after", ValuePlaceholder = "<query>", Description = "Search: require a nearby guard query after each primary match", PrimaryCommands = Set("search") },
-            new() { Name = "--reject-before", ValuePlaceholder = "<query>", Description = "Search: reject primary matches with a nearby guard query before them", PrimaryCommands = Set("search") },
-            new() { Name = "--reject-after", ValuePlaceholder = "<query>", Description = "Search: reject primary matches with a nearby guard query after them", PrimaryCommands = Set("search") },
-            new() { Name = "--guard-window", ValuePlaceholder = "<n>", Description = "Search: line window for require/reject guard queries", PrimaryCommands = Set("search") },
-            new() { Name = "--guard-scope", ValueDomain = Values(["window", "same-line"]), Description = "Search: evaluate guard queries in the line window or on the same line as the primary match", PrimaryCommands = Set("search") },
+            new() { Name = "--require-before", ValuePlaceholder = "<query>", Description = "Search/Audit: require a nearby guard query before each primary match", PrimaryCommands = Set("search", "audit") },
+            new() { Name = "--require-after", ValuePlaceholder = "<query>", Description = "Search/Audit: require a nearby guard query after each primary match", PrimaryCommands = Set("search", "audit") },
+            new() { Name = "--reject-before", ValuePlaceholder = "<query>", Description = "Search/Audit: reject primary matches with a nearby guard query before them", PrimaryCommands = Set("search", "audit") },
+            new() { Name = "--reject-after", ValuePlaceholder = "<query>", Description = "Search/Audit: reject primary matches with a nearby guard query after them", PrimaryCommands = Set("search", "audit") },
+            new() { Name = "--guard-window", ValuePlaceholder = "<n>", Description = "Search/Audit: line window for require/reject guard queries", PrimaryCommands = Set("search", "audit") },
+            new() { Name = "--guard-scope", ValueDomain = Values(["window", "same-line"]), Description = "Search/Audit: evaluate guard queries in the line window or on the same line as the primary match", PrimaryCommands = Set("search", "audit") },
             new() { Name = "--unique", ValueDomain = Values(["path", "file", "symbol", "origin", "return-type", "subsystem"]), Description = "Search/Audit recipes: emit unique aggregation rows", PrimaryCommands = Set("search", "audit") },
             new() { Name = "--count-by", ValueDomain = Values(["path", "file", "symbol", "origin", "return-type", "subsystem"]), Description = "Search/Audit recipes: count matches grouped by path/file, symbol, origin, enclosing return type, or subsystem", PrimaryCommands = Set("search", "audit") },
-            new() { Name = "--origin", Description = "Search: alias for --match-origin; keep only matches from selected origins", PrimaryCommands = Set("search"), ValueDomain = SearchOriginValueDomain },
-            new() { Name = "--match-origin", Description = "Search: keep only matches from selected origins; repeat or comma-separate values", PrimaryCommands = Set("search"), ValueDomain = SearchOriginValueDomain },
-            new() { Name = "--exclude-origin", Description = "Search: drop matches from selected origins; repeat or comma-separate values", PrimaryCommands = Set("search"), ValueDomain = SearchOriginValueDomain },
-            new() { Name = "--result-kind", Description = "Search: keep only projected result kinds; repeat or comma-separate values", PrimaryCommands = Set("search"), ValueDomain = SearchResultKindValueDomain },
+            new() { Name = "--origin", Description = "Search/Audit: alias for --match-origin; keep only matches from selected origins", PrimaryCommands = Set("search", "audit"), ValueDomain = SearchOriginValueDomain },
+            new() { Name = "--match-origin", Description = "Search/Audit: keep only matches from selected origins; repeat or comma-separate values", PrimaryCommands = Set("search", "audit"), ValueDomain = SearchOriginValueDomain },
+            new() { Name = "--exclude-origin", Description = "Search/Audit: drop matches from selected origins; repeat or comma-separate values", PrimaryCommands = Set("search", "audit"), ValueDomain = SearchOriginValueDomain },
+            new() { Name = "--result-kind", Description = "Search/Audit: keep only projected result kinds; repeat or comma-separate values", PrimaryCommands = Set("search", "audit"), ValueDomain = SearchResultKindValueDomain },
             new() { Name = "--search-fields", ValuePlaceholder = "<path,line,column,symbol,origin,kind,score,snippet,query_name,recipe>", Description = "Search/Audit: project JSON/NDJSON result fields for audit pipelines", PrimaryCommands = Set("search", "audit") },
             new() { Name = "--outline-fields", ValuePlaceholder = "<kind,name,path,line,signature,...>", Description = "Outline JSON: project symbol fields for audit pipelines", PrimaryCommands = Set("outline") },
             new() { Name = "--results-only", Description = "Search/Symbols/Files/Audit: emit result-only NDJSON without stream terminal records", PrimaryCommands = Set("search", "symbols", "files", "audit") },
@@ -704,17 +704,17 @@ internal static class CliFlagSchema
             new() { Name = "--env-sensitivity", ValuePlaceholder = "<sensitivity>", Description = "Doctor full environment inventory: filter by exact sensitivity", PrimaryCommands = Set("doctor") },
             new() { Name = "--max-json-bytes", ValuePlaceholder = "<n>", Description = "Bound emitted JSON bytes; bounded responses omit whole rows with recovery metadata, including schema-valid audit SARIF", PrimaryCommands = Set("search", "definition", "find", "status", "references", "callers", "callees", "excerpt", "inspect", "outline", "impact", "recipes", "audit", "map", "files", "symbols", "deps", "hotspots", "languages", "unused", "doctor", "suggestions", "diff") },
             new() { Name = "--next-steps", Description = "Search: print inspect/excerpt follow-up commands for top hits", PrimaryCommands = Set("search") },
-            new() { Name = "--exclude-comments", Description = "Search: suppress comment-only matches after origin classification", PrimaryCommands = Set("search") },
-            new() { Name = "--exclude-strings", Description = "Search: suppress string, regex, and help-text matches after origin classification", PrimaryCommands = Set("search") },
-            new() { Name = "--exclude-fixtures", Description = "Search: suppress fixture-only matches in tests after origin classification", PrimaryCommands = Set("search") },
+            new() { Name = "--exclude-comments", Description = "Search/Audit: suppress comment-only matches after origin classification", PrimaryCommands = Set("search", "audit") },
+            new() { Name = "--exclude-strings", Description = "Search/Audit: suppress string, regex, and help-text matches after origin classification", PrimaryCommands = Set("search", "audit") },
+            new() { Name = "--exclude-fixtures", Description = "Search/Audit: suppress fixture-only matches in tests after origin classification", PrimaryCommands = Set("search", "audit") },
             new() { Name = "--no-progress", Description = "Disable animated progress and spinner output", PrimaryCommands = Set(AllCommands.ToArray()), TopLevel = true },
             new() { Name = "--name", ValuePlaceholder = "<name>", Description = "Exact symbol name", PrimaryCommands = Set("symbols") },
             new() { Name = "--max-line-width", ValuePlaceholder = "<n>", Description = "Clamp long single-line payloads (0 disables clamping)", PrimaryCommands = Set(MaxLineWidthCommands) },
             new() { Name = "--snippet-lines", ValuePlaceholder = "<n>", Description = "Snippet length; graph --body uses it for definition and centered call-site evidence; issue-drafts accept 0 for path/line-only evidence", PrimaryCommands = Set("search", "audit", "find", "references", "callers", "callees", "impact") },
-            new() { Name = "--snippet-focus", ValueDomain = Values(["leftmost", "quality", "proximity"]), Description = "Search snippet long-line focus mode", PrimaryCommands = Set("search") },
-            new() { Name = "--fts", Description = "Raw FTS5 syntax; incompatible with search exact/literal modes", PrimaryCommands = Set("search") },
-            new() { Name = "--no-dedup", Description = "Show duplicate chunks", PrimaryCommands = Set("search") },
-            new() { Name = "--no-visibility-rank", Description = "Keep legacy search ranking without symbol visibility weighting", PrimaryCommands = Set("search") },
+            new() { Name = "--snippet-focus", ValueDomain = Values(["leftmost", "quality", "proximity"]), Description = "Search/Audit snippet long-line focus mode", PrimaryCommands = Set("search", "audit") },
+            new() { Name = "--fts", Description = "Raw FTS5 syntax; incompatible with search exact/literal modes", PrimaryCommands = Set("search", "audit") },
+            new() { Name = "--no-dedup", Description = "Show duplicate chunks", PrimaryCommands = Set("search", "audit") },
+            new() { Name = "--no-visibility-rank", Description = "Keep legacy search ranking without symbol visibility weighting", PrimaryCommands = Set("search", "audit") },
             new() { Name = "--line", ValuePlaceholder = "<line>", Description = "Inspect/excerpt: include one source line as source_excerpt or excerpt window", PrimaryCommands = Set(InspectSourceExcerptCommands) },
             new() { Name = "--context", ValuePlaceholder = "<n>", Description = "Find/inspect/excerpt: symmetric context lines; explicit --before/--after override the corresponding find side", PrimaryCommands = Set(InspectSourceExcerptCommands.Concat(new[] { "find" }).ToArray()), AlsoAcceptedBy = Set("suggestions") },
             new() { Name = "--before", ValuePlaceholder = "<n>", Description = "Context lines before", PrimaryCommands = Set("find", "excerpt", "inspect") },

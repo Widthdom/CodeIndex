@@ -802,12 +802,17 @@ public class ConsoleUiTests
     public void StartSpinner_RedirectedOutput_UsesSynchronizedWriterBeforeFallbackLine()
     {
         using var output = new StringWriter();
-        using var capture = ConsoleCapture.Start(output, error: null);
+        using var error = new StringWriter();
+        using var capture = ConsoleCapture.Start(output, error);
 
         var cts = ConsoleUi.StartSpinner("Indexing...", ["|"]);
+        var stderrCts = ConsoleUi.StartSpinner("Auditing all registered recipes...", ["|"], writeToStandardError: true);
 
         Assert.Null(cts);
+        Assert.Null(stderrCts);
         Assert.Contains("Indexing...", output.ToString());
+        Assert.DoesNotContain("Auditing all", output.ToString(), StringComparison.Ordinal);
+        Assert.Contains("Auditing all registered recipes...", error.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1445,8 +1450,8 @@ public class ConsoleUiTests
             # Regenerate this script after upgrading cdidx.
             complete -c cdidx -n '__fish_cdidx_needs_command' -a 'index' -d 'index command'
             complete -c cdidx -n '__fish_cdidx_needs_command' -l license -d 'Show license summary'
-            complete -c cdidx -n '__fish_cdidx_using_command search definition references callers callees symbols find inspect' -l exact -d 'Backward-compatible exact shorthand; search mode is incompatible with --fts'
-            complete -c cdidx -n '__fish_cdidx_using_command search references callers callees find excerpt inspect impact' -l max-line-width -r -d 'Clamp long single-line payloads (0 disables clamping)'
+            complete -c cdidx -n '__fish_cdidx_using_command search audit definition references callers callees symbols find inspect' -l exact -d 'Backward-compatible exact shorthand; search mode is incompatible with --fts'
+            complete -c cdidx -n '__fish_cdidx_using_command search audit references callers callees find excerpt inspect impact' -l max-line-width -r -d 'Clamp long single-line payloads (0 disables clamping)'
             """
         },
         {
@@ -1512,7 +1517,7 @@ public class ConsoleUiTests
         Assert.Contains("__fish_cdidx_using_command find excerpt", output);
         // `--exact` schema membership: search + find + the name-resolution commands.
         // 旧手書きが `search find` だけだった所を、スキーマ準拠の正規列で確認する。
-        Assert.Contains("__fish_cdidx_using_command search definition references callers callees symbols find inspect' -l exact ", output);
+        Assert.Contains("__fish_cdidx_using_command search audit definition references callers callees symbols find inspect' -l exact ", output);
         Assert.Contains("-l query -r -d 'Literal query'", output);
         Assert.Contains("-l before -r -d 'Context lines before'", output);
         Assert.Contains("-l after -r -d 'Context lines after'", output);
@@ -1992,8 +1997,8 @@ public class ConsoleUiTests
                 "# Regenerate this script after upgrading cdidx.",
                 "complete -c cdidx -n '__fish_cdidx_needs_command' -a 'index'",
                 "complete -c cdidx -n '__fish_cdidx_needs_command' -l license",
-                "complete -c cdidx -n '__fish_cdidx_using_command search definition references callers callees symbols find inspect' -l exact",
-                "complete -c cdidx -n '__fish_cdidx_using_command search references callers callees find excerpt inspect impact' -l max-line-width"),
+                "complete -c cdidx -n '__fish_cdidx_using_command search audit definition references callers callees symbols find inspect' -l exact",
+                "complete -c cdidx -n '__fish_cdidx_using_command search audit references callers callees find excerpt inspect impact' -l max-line-width"),
             "powershell" => JoinSnapshotLines(
                 lines,
                 "# cdidx PowerShell completions generated for version",
