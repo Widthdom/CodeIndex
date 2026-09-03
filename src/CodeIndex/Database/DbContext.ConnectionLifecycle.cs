@@ -478,6 +478,7 @@ public partial class DbContext : IDisposable
     public VacuumResult RunIncrementalVacuum(bool dryRun, CancellationToken cancellationToken)
     {
         _vacuumLogicalAfterDataVersion = null;
+        _vacuumLogicalAfterSourceState = null;
         if (_isReadOnly && !dryRun)
         {
             throw new CodeIndexException(
@@ -524,6 +525,7 @@ public partial class DbContext : IDisposable
                 afterFirstPragmaPhase: "metrics_after_page_count");
         }
         _vacuumLogicalAfterDataVersion = afterDataVersion;
+        _vacuumLogicalAfterSourceState = after.SourceState;
         cancellationToken.ThrowIfCancellationRequested();
         var pagesReclaimed = dryRun ? 0 : Math.Max(0, before.PageCount - after.PageCount);
         var bytesReclaimed = pagesReclaimed * after.PageSize;
@@ -924,12 +926,25 @@ public partial class DbContext : IDisposable
             return null;
         }
 
+        DbConnectionFactory.QueryOnlySnapshotSourceState? expectedSourceState = _queryOnlySnapshotSourceState;
+        if (_immutableReadOnly && !expectedSourceState.HasValue)
+        {
+            // An explicit immutable URI does not advance data_version after an external
+            // commit. Anchor revalidation to the source tuple captured with the logical
+            // vacuum snapshot, or fail closed when that tuple was unavailable.
+            // 明示 immutable URI では外部 commit 後も data_version が進まないため、logical
+            // vacuum snapshot と共に取得した source tuple に再検証を固定する。
+            if (_vacuumLogicalAfterSourceState is not { } immutableSourceState)
+                return null;
+            expectedSourceState = immutableSourceState;
+        }
+
         var sourcePath = _queryOnlySnapshotSourcePath ?? _connection.DataSource;
         var fileSet = ReadVacuumFileSetMetrics(
             sourcePath,
             "pre_close_generation",
             cancellationToken,
-            _queryOnlySnapshotSourceState);
+            expectedSourceState);
         cancellationToken.ThrowIfCancellationRequested();
         if (fileSet.SourceState is not { } sourceState
             || ReadPragmaLong("data_version") != expectedDataVersion)

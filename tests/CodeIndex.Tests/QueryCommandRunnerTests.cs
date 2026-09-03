@@ -2180,6 +2180,64 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunVacuum_ImmutableDryRunRejectsPostCommandAfterSourceGenerationChanges_Issue5237()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_vacuum_immutable_post_command_change");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        SqliteConnection.ClearAllPools();
+        using var writer = new SqliteConnection(SqliteConnectionPolicy.BuildConnectionString(
+            dbPath,
+            SqliteConnectionPolicyMode.ReadWriteUnpooled));
+        writer.Open();
+        ConfigureVacuumWalWriterForTesting(writer);
+        using (var setup = writer.CreateCommand())
+        {
+            setup.CommandText = @"
+                CREATE TABLE vacuum_source_generation (id INTEGER PRIMARY KEY, payload BLOB);
+                INSERT INTO vacuum_source_generation (payload) VALUES (randomblob(4096));
+                PRAGMA wal_checkpoint(TRUNCATE);";
+            setup.ExecuteNonQuery();
+        }
+        _vacuumSourceGenerationWriterForTesting = writer;
+        _vacuumSourceGenerationAdvancedForTesting = false;
+        var originalCaptureHook = DbContext.VacuumFileSetCaptureForTesting;
+
+        try
+        {
+            DbContext.VacuumFileSetCaptureForTesting =
+                AdvanceVacuumSourceGenerationDuringPreCloseCaptureForTesting;
+            var immutableUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
+            var (exitCode, stdout, stderr) = CaptureVacuumWithCliJsonOptions(
+                ["--db", immutableUri, "--dry-run", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.True(_vacuumSourceGenerationAdvancedForTesting);
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            var observations = root.GetProperty("file_set_observations");
+            Assert.Equal(
+                "captured",
+                observations.GetProperty("post_open_pre_vacuum").GetProperty("state").GetString());
+            var postCommand = observations.GetProperty("post_command");
+            Assert.Equal("unavailable", postCommand.GetProperty("state").GetString());
+            Assert.Equal(
+                "unstable_or_inaccessible",
+                postCommand.GetProperty("unavailable_reason").GetString());
+            Assert.False(root.TryGetProperty("main_file_bytes_after", out _));
+            Assert.False(root.TryGetProperty("wal_file_bytes_after", out _));
+            Assert.False(root.TryGetProperty("shm_file_bytes_after", out _));
+            Assert.False(root.TryGetProperty("physical_file_set_bytes_after", out _));
+        }
+        finally
+        {
+            DbContext.VacuumFileSetCaptureForTesting = originalCaptureHook;
+            _vacuumSourceGenerationWriterForTesting = null;
+            SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Fact]
     public void RunVacuum_JsonOmitsPhysicalFileSetWhenShmMetadataIsUnavailable_Issue5092()
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_vacuum_shm_metadata_unavailable");
