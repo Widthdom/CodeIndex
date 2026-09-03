@@ -492,7 +492,7 @@ public partial class DbContext : IDisposable
         ReportMaintenanceProgress("vacuum", "metrics_before", _connection.DataSource);
         var before = ReadVacuumMetricsInSnapshot(
             cancellationToken,
-            stableDataVersion: out _);
+            stableDataVersion: out var beforeDataVersion);
         cancellationToken.ThrowIfCancellationRequested();
         if (!dryRun && before.AutoVacuumMode == 2)
         {
@@ -509,13 +509,20 @@ public partial class DbContext : IDisposable
         }
         cancellationToken.ThrowIfCancellationRequested();
         ReportMaintenanceProgress("vacuum", "metrics_after", _connection.DataSource);
-        long? afterDataVersion = null;
-        var after = dryRun
-            ? before
-            : ReadVacuumMetricsInSnapshot(
+        long? afterDataVersion;
+        VacuumMetrics after;
+        if (dryRun)
+        {
+            after = before;
+            afterDataVersion = beforeDataVersion;
+        }
+        else
+        {
+            after = ReadVacuumMetricsInSnapshot(
                 cancellationToken,
                 stableDataVersion: out afterDataVersion,
                 afterFirstPragmaPhase: "metrics_after_page_count");
+        }
         _vacuumLogicalAfterDataVersion = afterDataVersion;
         cancellationToken.ThrowIfCancellationRequested();
         var pagesReclaimed = dryRun ? 0 : Math.Max(0, before.PageCount - after.PageCount);
@@ -560,7 +567,7 @@ public partial class DbContext : IDisposable
             FileSetObservations: new VacuumFileSetObservations(
                 CommandEntry: UnavailableVacuumFileSetObservation("command_entry_not_captured"),
                 PostOpenPreVacuum: ToVacuumFileSetObservation(before),
-                PostCommand: ToVacuumFileSetObservation(after)),
+                PostCommand: UnavailableVacuumFileSetObservation("post_command_not_captured")),
             WalCheckpointTimingNote: BuildWalCheckpointTimingNote(dryRun),
             AutoVacuumModeBefore: before.AutoVacuumMode,
             AutoVacuumModeBeforeName: MaintenanceGuidanceBuilder.FormatAutoVacuumMode(before.AutoVacuumMode) ?? "unknown",
@@ -906,10 +913,12 @@ public partial class DbContext : IDisposable
             return null;
         }
 
+        var sourcePath = _queryOnlySnapshotSourcePath ?? _connection.DataSource;
         var fileSet = ReadVacuumFileSetMetrics(
-            _connection.DataSource,
+            sourcePath,
             "pre_close_generation",
-            cancellationToken);
+            cancellationToken,
+            _queryOnlySnapshotSourceState);
         cancellationToken.ThrowIfCancellationRequested();
         if (fileSet.SourceState is not { } sourceState
             || ReadPragmaLong("data_version") != expectedDataVersion)

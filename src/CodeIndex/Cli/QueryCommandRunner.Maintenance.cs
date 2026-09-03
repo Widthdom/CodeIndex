@@ -103,21 +103,18 @@ public static partial class QueryCommandRunner
                 result = DbContext.ApplyVacuumCommandEntryFileSet(result, commandEntryFileSet);
                 if (!options.DryRun)
                     db.CheckpointWalTruncate(cancellationToken);
-                vacuumDataSource = db.Connection.DataSource;
-                vacuumGenerationWitness = options.DryRun
-                    ? null
-                    : db.CaptureVacuumGenerationWitness(cancellationToken);
+                vacuumDataSource = options.DryRun
+                    ? queryOnlyDbPath
+                    : db.Connection.DataSource;
+                vacuumGenerationWitness = db.CaptureVacuumGenerationWitness(cancellationToken);
             }
             cancellationToken.ThrowIfCancellationRequested();
-            if (!options.DryRun)
-            {
-                result = DbContext.FinalizeVacuumFileMetricsAfterConnectionClose(
-                    result,
-                    vacuumDataSource,
-                    vacuumGenerationWitness,
-                    cancellationToken);
-                cancellationToken.ThrowIfCancellationRequested();
-            }
+            result = DbContext.FinalizeVacuumFileMetricsAfterConnectionClose(
+                result,
+                vacuumDataSource,
+                vacuumGenerationWitness,
+                cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
             if (options.Json)
             {
                 Console.WriteLine(JsonSerializer.Serialize(

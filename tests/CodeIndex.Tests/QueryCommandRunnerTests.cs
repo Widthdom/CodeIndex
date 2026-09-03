@@ -2121,6 +2121,65 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunVacuum_DryRunRevalidatesPostCommandAfterSourceChangesBeforeClose_Issue5237()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_vacuum_dry_run_post_command_change");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        SqliteConnection.ClearAllPools();
+        using var writer = new SqliteConnection(SqliteConnectionPolicy.BuildConnectionString(
+            dbPath,
+            SqliteConnectionPolicyMode.ReadWriteUnpooled));
+        writer.Open();
+        ConfigureVacuumWalWriterForTesting(writer);
+        using (var setup = writer.CreateCommand())
+        {
+            setup.CommandText = @"
+                CREATE TABLE vacuum_source_generation (id INTEGER PRIMARY KEY, payload BLOB);
+                INSERT INTO vacuum_source_generation (payload) VALUES (randomblob(4096));";
+            setup.ExecuteNonQuery();
+        }
+        _vacuumSourceGenerationWriterForTesting = writer;
+        _vacuumSourceGenerationAdvancedForTesting = false;
+        var originalCaptureHook = DbContext.VacuumFileSetCaptureForTesting;
+
+        try
+        {
+            DbContext.VacuumFileSetCaptureForTesting =
+                AdvanceVacuumSourceGenerationDuringPreCloseCaptureForTesting;
+            var (exitCode, stdout, stderr) = CaptureVacuumWithCliJsonOptions(
+                ["--db", dbPath, "--dry-run", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.True(_vacuumSourceGenerationAdvancedForTesting);
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            var observations = root.GetProperty("file_set_observations");
+            Assert.Equal(
+                "captured",
+                observations.GetProperty("command_entry").GetProperty("state").GetString());
+            Assert.Equal(
+                "captured",
+                observations.GetProperty("post_open_pre_vacuum").GetProperty("state").GetString());
+            var postCommand = observations.GetProperty("post_command");
+            Assert.Equal("unavailable", postCommand.GetProperty("state").GetString());
+            Assert.Equal(
+                "unstable_or_inaccessible",
+                postCommand.GetProperty("unavailable_reason").GetString());
+            Assert.False(root.TryGetProperty("main_file_bytes_after", out _));
+            Assert.False(root.TryGetProperty("wal_file_bytes_after", out _));
+            Assert.False(root.TryGetProperty("shm_file_bytes_after", out _));
+            Assert.False(root.TryGetProperty("physical_file_set_bytes_after", out _));
+        }
+        finally
+        {
+            DbContext.VacuumFileSetCaptureForTesting = originalCaptureHook;
+            _vacuumSourceGenerationWriterForTesting = null;
+            SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Fact]
     public void RunVacuum_JsonOmitsPhysicalFileSetWhenShmMetadataIsUnavailable_Issue5092()
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_vacuum_shm_metadata_unavailable");
@@ -2561,6 +2620,26 @@ public partial class QueryCommandRunnerTests
     {
         if (operation != "vacuum"
             || phase != "metrics_before"
+            || _vacuumSourceGenerationAdvancedForTesting)
+        {
+            return;
+        }
+
+        using var command = _vacuumSourceGenerationWriterForTesting!.CreateCommand();
+        command.CommandText =
+            "INSERT INTO vacuum_source_generation (payload) VALUES (randomblob(4096))";
+        command.ExecuteNonQuery();
+        _vacuumSourceGenerationAdvancedForTesting = true;
+    }
+
+    private void AdvanceVacuumSourceGenerationDuringPreCloseCaptureForTesting(
+        string phase,
+        int attempt,
+        string dbPath)
+    {
+        _ = dbPath;
+        if (phase != "pre_close_generation"
+            || attempt != 1
             || _vacuumSourceGenerationAdvancedForTesting)
         {
             return;
