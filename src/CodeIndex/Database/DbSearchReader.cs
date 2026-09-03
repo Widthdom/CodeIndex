@@ -260,6 +260,7 @@ public partial class DbReader
             using var reader = cmd.ExecuteTrackedReader();
             while (reader.TrackedRead())
             {
+                ThrowIfCancellationRequested();
                 nextOffset++;
                 var result = new SearchResult
                 {
@@ -508,6 +509,7 @@ public partial class DbReader
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
         {
+            ThrowIfCancellationRequested();
             var startLine = reader.GetInt32(2);
             var endLine = reader.GetInt32(3);
             var content = reader.GetString(4);
@@ -1175,6 +1177,7 @@ public partial class DbReader
             using var reader = cmd.ExecuteTrackedReader();
             while (reader.TrackedRead())
             {
+                ThrowIfCancellationRequested();
                 var result = batch[reader.GetInt32(0)].Result;
                 result.EnclosingSymbolName = reader.GetString(1);
                 result.EnclosingSymbolKind = reader.GetString(2);
@@ -1325,6 +1328,7 @@ public partial class DbReader
             using var reader = cmd.ExecuteTrackedReader();
             while (reader.TrackedRead())
             {
+                ThrowIfCancellationRequested();
                 var path = reader.GetString(0);
                 var result = new SearchResult
                 {
@@ -1468,6 +1472,7 @@ public partial class DbReader
             using var reader = cmd.ExecuteTrackedReader();
             while (reader.TrackedRead())
             {
+                ThrowIfCancellationRequested();
                 var path = reader.GetString(0);
                 if (deduplicate)
                 {
@@ -2188,6 +2193,7 @@ public partial class DbReader
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
         {
+            ThrowIfCancellationRequested();
             var chunkStartLine = reader.GetInt32(0);
             var relativeStart = Math.Max(0, startLine - chunkStartLine);
             var relativeEnd = Math.Max(relativeStart, endLine - chunkStartLine);

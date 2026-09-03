@@ -11,9 +11,13 @@ namespace CodeIndex.Cli;
 
 public static partial class ConsoleUi
 {
-    public static CancellationTokenSource? StartSpinner(string message, string[] frames)
+    public static CancellationTokenSource? StartSpinner(
+        string message,
+        string[] frames,
+        bool writeToStandardError = false)
     {
         EnsureConsoleWritersSynchronized();
+        var output = writeToStandardError ? Console.Error : Console.Out;
 
         // Braille frames are single-char; themed frames are longer strings containing the display text
         // ブレイルフレームは1文字、テーマフレームは表示テキストを含む長い文字列
@@ -21,11 +25,11 @@ public static partial class ConsoleUi
 
         if (!ShouldUseInteractiveConsole() || !ShouldUseProgressAnimation())
         {
-            Console.WriteLine(message);
+            output.WriteLine(message);
             return null;
         }
 
-        var cts = new SpinnerCancellationTokenSource();
+        var cts = new SpinnerCancellationTokenSource(output);
         var ct = cts.Token;
         var spinnerTask = BackgroundTaskObserver.Run(async token =>
         {
@@ -36,8 +40,8 @@ public static partial class ConsoleUi
                 var line = isThemed ? $"\r{frame}" : $"\r{frame} {message}";
                 lock (TerminalLock)
                 {
-                    Console.Write(line);
-                    Console.Out.Flush();
+                    output.Write(line);
+                    output.Flush();
                 }
                 i++;
                 try { await Task.Delay(SpinnerFrameDelayMs, token).ConfigureAwait(false); } catch (OperationCanceledException) { break; }
@@ -69,20 +73,24 @@ public static partial class ConsoleUi
         }
         if (ShouldUseInteractiveConsole())
         {
+            var output = cts is SpinnerCancellationTokenSource ownedSpinner
+                ? ownedSpinner.Output
+                : Console.Out;
             lock (TerminalLock)
             {
-                Console.Write($"\r{new string(' ', GetWindowWidth() - ConsoleLineMargin)}\r");
-                Console.Out.Flush();
+                output.Write($"\r{new string(' ', GetWindowWidth() - ConsoleLineMargin)}\r");
+                output.Flush();
             }
         }
         cts.Dispose();
     }
 
-    private sealed class SpinnerCancellationTokenSource : CancellationTokenSource
+    private sealed class SpinnerCancellationTokenSource(TextWriter output) : CancellationTokenSource
     {
         private Task _spinnerTask = Task.CompletedTask;
 
         public Task SpinnerTask => _spinnerTask;
+        public TextWriter Output { get; } = output;
 
         public void SetSpinnerTask(Task spinnerTask)
             => _spinnerTask = spinnerTask;

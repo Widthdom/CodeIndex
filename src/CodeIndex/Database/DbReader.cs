@@ -168,6 +168,32 @@ public partial class DbReader : IDisposable
         }
     }
 
+    /// <summary>
+    /// Runs one bounded read with the effective cancellation token registered as a SQLite
+    /// interrupt. This is used by compound callers that apply a narrower per-operation deadline.
+    /// effective cancellation token を SQLite interrupt として登録し、上限付き read を 1 回実行する。
+    /// 呼び出し単位で短い deadline を適用する compound operation から利用する。
+    /// </summary>
+    internal T RunWithCancellationInterrupt<T>(Func<T> action)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        using var cancellationRegistration = RegisterSqliteInterruptForCancellation();
+        try
+        {
+            Cancellation.ThrowIfCancellationRequested();
+            var result = action();
+            Cancellation.ThrowIfCancellationRequested();
+            return result;
+        }
+        catch (SqliteException exception) when (IsSqliteInterruptCancellation(exception))
+        {
+            throw new OperationCanceledException(
+                "The SQLite read was interrupted by cancellation.",
+                exception,
+                Cancellation);
+        }
+    }
+
     private CancellationTokenRegistration RegisterSqliteInterruptForCancellation()
     {
         var cancellation = Cancellation;

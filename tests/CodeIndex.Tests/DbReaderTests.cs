@@ -6998,7 +6998,7 @@ public partial class DbReaderTests : IDisposable
     }
 
     [Fact]
-    public void BeginCancellationScope_AppliesNarrowerTokenAndRestoresCallerToken_Issue5238()
+    public void BeginCancellationScope_AppliesNarrowerTokenInterruptsActiveSqliteAndRestoresCallerToken_Issue5238()
     {
         using var callerCancellation = new CancellationTokenSource();
         using var deadlineCancellation = new CancellationTokenSource();
@@ -7009,6 +7009,27 @@ public partial class DbReaderTests : IDisposable
             Assert.Equal(deadlineCancellation.Token, reader.Cancellation);
             deadlineCancellation.Cancel();
             Assert.Throws<OperationCanceledException>(() => reader.ThrowIfCancellationRequested());
+        }
+
+        Assert.Equal(callerCancellation.Token, reader.Cancellation);
+        Assert.False(reader.Cancellation.IsCancellationRequested);
+
+        using var activeQueryCancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
+        using (reader.BeginCancellationScope(activeQueryCancellation.Token))
+        {
+            Assert.Throws<OperationCanceledException>(() => reader.RunWithCancellationInterrupt(() =>
+            {
+                using var command = _db.Connection.CreateCommand();
+                command.CommandText = """
+                    WITH RECURSIVE sequence(value) AS (
+                        VALUES(0)
+                        UNION ALL
+                        SELECT value + 1 FROM sequence WHERE value < 1000000000
+                    )
+                    SELECT sum(value) FROM sequence;
+                    """;
+                return command.ExecuteScalar();
+            }));
         }
 
         Assert.Equal(callerCancellation.Token, reader.Cancellation);

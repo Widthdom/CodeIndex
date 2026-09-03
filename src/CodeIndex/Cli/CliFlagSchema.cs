@@ -330,7 +330,7 @@ internal static class CliFlagSchema
 
     private static readonly string[] MaxLineWidthCommands =
     [
-        "search", "references", "callers", "callees", "find", "excerpt", "impact", "inspect",
+        "search", "audit", "references", "callers", "callees", "find", "excerpt", "impact", "inspect",
     ];
 
     private static readonly string[] DbPathCommands =

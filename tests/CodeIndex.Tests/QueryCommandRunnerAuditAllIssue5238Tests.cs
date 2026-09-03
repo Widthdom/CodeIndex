@@ -31,6 +31,9 @@ public sealed class QueryCommandRunnerAuditAllIssue5238Tests
         Assert.Equal(expectedNames, document.RootElement.GetProperty("selected_recipe_names").EnumerateArray().Select(value => value.GetString()));
         Assert.Equal(expectedNames.Length, document.RootElement.GetProperty("selected_recipe_count").GetInt32());
         Assert.Equal(expectedNames.Length, document.RootElement.GetProperty("summary").GetProperty("omitted_recipe_count").GetInt32());
+        Assert.Equal(
+            "each_registered_recipe_selected_once_budgeted_execution_including_composites",
+            document.RootElement.GetProperty("recipe_semantics").GetString());
     }
 
     [Fact]
@@ -140,6 +143,10 @@ public sealed class QueryCommandRunnerAuditAllIssue5238Tests
         Assert.True(Encoding.UTF8.GetByteCount(boundedStdout) <= byteLimit);
         Assert.True(bounded.RootElement.GetProperty("limits").GetProperty("byte_omitted_result_count").GetInt32() > 0);
         Assert.True(bounded.RootElement.GetProperty("summary").GetProperty("truncated").GetBoolean());
+        Assert.Equal(1, bounded.RootElement.GetProperty("recovery").GetProperty("returned").GetInt32());
+        Assert.Contains(
+            bounded.RootElement.GetProperty("recovery").GetProperty("next_commands").EnumerateArray(),
+            command => command.GetString()!.Contains("cdidx audit budget-recipe", StringComparison.Ordinal));
 
         var (_, fullNdjson, _) = CaptureConsole(() => QueryCommandRunner.RunAuditAllForTesting(
             ["--all", "--db", dbPath, "--json=ndjson", "--limit", "10", "--total-limit", "10"],
@@ -161,6 +168,39 @@ public sealed class QueryCommandRunnerAuditAllIssue5238Tests
         Assert.All(boundedNdjsonLines, line => JsonDocument.Parse(line).Dispose());
         Assert.True(boundedTerminal.RootElement.GetProperty("terminal_record").GetBoolean());
         Assert.True(boundedTerminal.RootElement.GetProperty("limits").GetProperty("byte_omitted_result_count").GetInt32() > 0);
+
+        var manyRecipes = Enumerable.Range(0, 8)
+            .Select(index => Recipe($"budget-recipe-{index:D2}", "budget-query", "Issue5238Needle"))
+            .ToArray();
+        var (_, unboundedMultiRecipeStdout, _) = CaptureConsole(() => QueryCommandRunner.RunAuditAllForTesting(
+            ["--all", "--db", dbPath, "--json", "--limit", "10", "--total-limit", "100"],
+            JsonOptions,
+            manyRecipes));
+        var accumulationByteLimit = Math.Max(16_384, Encoding.UTF8.GetByteCount(unboundedMultiRecipeStdout) / 3);
+        var (accumulationExitCode, accumulationStdout, _) = CaptureConsole(() => QueryCommandRunner.RunAuditAllForTesting(
+            [
+                "--all", "--db", dbPath, "--json", "--limit", "10", "--total-limit", "100",
+                "--max-json-bytes", accumulationByteLimit.ToString(),
+            ],
+            JsonOptions,
+            manyRecipes));
+        using var accumulation = JsonDocument.Parse(accumulationStdout);
+        var accumulationSummary = accumulation.RootElement.GetProperty("summary");
+        var recovery = accumulation.RootElement.GetProperty("recovery");
+
+        Assert.Equal(CommandExitCodes.PartialResult, accumulationExitCode);
+        Assert.True(Encoding.UTF8.GetByteCount(accumulationStdout) <= accumulationByteLimit);
+        Assert.True(accumulation.RootElement.GetProperty("limits").GetProperty("byte_budget_reached_during_accumulation").GetBoolean());
+        Assert.True(accumulationSummary.GetProperty("omitted_recipe_count").GetInt32() > QueryCommandRunner.AuditAllRecoveryCommandLimit);
+        Assert.Equal(QueryCommandRunner.AuditAllRecoveryCommandLimit, recovery.GetProperty("limit").GetInt32());
+        Assert.Equal(QueryCommandRunner.AuditAllRecoveryCommandLimit, recovery.GetProperty("returned").GetInt32());
+        Assert.Equal(
+            accumulationSummary.GetProperty("omitted_recipe_count").GetInt32() + 1 - QueryCommandRunner.AuditAllRecoveryCommandLimit,
+            recovery.GetProperty("omitted_count").GetInt32());
+        Assert.True(recovery.GetProperty("truncated").GetBoolean());
+        Assert.Contains(
+            accumulation.RootElement.GetProperty("recipes").EnumerateArray(),
+            recipe => recipe.GetProperty("omitted_reason").GetString() == "response_byte_limit");
     }
 
     [Fact]
@@ -176,20 +216,48 @@ public sealed class QueryCommandRunnerAuditAllIssue5238Tests
         };
 
         var (exitCode, stdout, _) = CaptureConsole(() => QueryCommandRunner.RunAuditAllForTesting(
-            ["--all", "--db", dbPath, "--format", "compact", "--limit", "2", "--allow-partial"],
+            [
+                "--all", "--db", dbPath, "--format", "compact", "--limit", "2", "--allow-partial",
+                "--source-only", "--path", "src/**", "--exclude-path", "tests/**", "--exclude-tests",
+                "--include-generated", "--show-excluded", "--no-dedup", "--no-visibility-rank",
+                "--reject-after", "forbidden", "--guard-window", "4", "--guard-scope", "same-line",
+                "--exclude-comments", "--exclude-strings", "--exclude-fixtures", "--origin", "code",
+                "--exclude-origin", "comment", "--result-kind", "code", "--first-per-file",
+                "--snippet-lines", "3", "--snippet-focus", "leftmost", "--max-line-width", "80",
+            ],
             JsonOptions,
             recipes));
         using var document = JsonDocument.Parse(stdout);
         var recipeRuns = document.RootElement.GetProperty("recipes").EnumerateArray().ToArray();
+        var recoveryCommand = document.RootElement.GetProperty("recovery").GetProperty("next_commands")[0].GetString()!;
 
         Assert.Equal(CommandExitCodes.Success, exitCode);
         Assert.Equal("failed", recipeRuns[0].GetProperty("status").GetString());
         Assert.Equal("completed", recipeRuns[1].GetProperty("status").GetString());
         Assert.Equal(1, recipeRuns[1].GetProperty("minimum_matched_result_count").GetInt32());
         Assert.Equal(1, document.RootElement.GetProperty("errors").GetProperty("count").GetInt32());
-        Assert.Contains(
-            document.RootElement.GetProperty("recovery").GetProperty("next_commands").EnumerateArray(),
-            command => command.GetString()!.Contains("cdidx audit a-failure", StringComparison.Ordinal));
+        Assert.Contains("cdidx audit a-failure", recoveryCommand, StringComparison.Ordinal);
+        Assert.Contains("--source-only", recoveryCommand, StringComparison.Ordinal);
+        Assert.Contains("--path 'src/**'", recoveryCommand, StringComparison.Ordinal);
+        Assert.Contains("--exclude-path 'tests/**'", recoveryCommand, StringComparison.Ordinal);
+        Assert.Contains("--exclude-tests", recoveryCommand, StringComparison.Ordinal);
+        Assert.Contains("--include-generated", recoveryCommand, StringComparison.Ordinal);
+        Assert.Contains("--show-excluded", recoveryCommand, StringComparison.Ordinal);
+        Assert.Contains("--no-dedup", recoveryCommand, StringComparison.Ordinal);
+        Assert.Contains("--no-visibility-rank", recoveryCommand, StringComparison.Ordinal);
+        Assert.Contains("--reject-after forbidden", recoveryCommand, StringComparison.Ordinal);
+        Assert.Contains("--guard-window 4", recoveryCommand, StringComparison.Ordinal);
+        Assert.Contains("--guard-scope same-line", recoveryCommand, StringComparison.Ordinal);
+        Assert.Contains("--exclude-comments", recoveryCommand, StringComparison.Ordinal);
+        Assert.Contains("--exclude-strings", recoveryCommand, StringComparison.Ordinal);
+        Assert.Contains("--exclude-fixtures", recoveryCommand, StringComparison.Ordinal);
+        Assert.Contains("--origin code", recoveryCommand, StringComparison.Ordinal);
+        Assert.Contains("--exclude-origin comment", recoveryCommand, StringComparison.Ordinal);
+        Assert.Contains("--result-kind code", recoveryCommand, StringComparison.Ordinal);
+        Assert.Contains("--first-per-file", recoveryCommand, StringComparison.Ordinal);
+        Assert.Contains("--snippet-lines 3", recoveryCommand, StringComparison.Ordinal);
+        Assert.Contains("--snippet-focus leftmost", recoveryCommand, StringComparison.Ordinal);
+        Assert.Contains("--max-line-width 80", recoveryCommand, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -327,6 +395,7 @@ public sealed class QueryCommandRunnerAuditAllIssue5238Tests
         Assert.Contains(CliFlagSchema.GetCompletionFlagsForCommand("audit"), flag => flag.Name == "--all");
         Assert.Contains(CliFlagSchema.GetCompletionFlagsForCommand("audit"), flag => flag.Name == "--allow-partial");
         Assert.Contains(CliFlagSchema.GetCompletionFlagsForCommand("audit"), flag => flag.Name == "--path");
+        Assert.Contains(CliFlagSchema.GetCompletionFlagsForCommand("audit"), flag => flag.Name == "--max-line-width");
         var (printed, stdout, stderr) = ConsoleCapture.Capture(() => ConsoleUi.PrintCommandUsage("audit") ? 1 : 0);
 
         Assert.Equal(1, printed);

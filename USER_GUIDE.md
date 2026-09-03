@@ -1592,8 +1592,10 @@ Add `--query <filter>` to narrow discovery by recipe/query names, query text,
 labels, severity, path metadata, or descriptions.
 `cdidx audit --all` is the full-repository orchestration layer. It takes one
 snapshot from the same authoritative registry as `cdidx recipes --names`, sorts
-recipe names ordinally, and executes every registered entry exactly once,
-including composite recipes. It does not recursively invoke the CLI, change any
+recipe names ordinally, and selects every registered entry exactly once,
+including composite recipes. It attempts those entries in order until a row,
+byte, cancellation, or deadline bound stops execution, and reports any
+unattempted entries as omitted. It does not recursively invoke the CLI, change any
 recipe matching rule, or deduplicate overlaps across recipes. Aggregate count
 fields are therefore explicitly sums of recipe/query observations, never a
 claim about unique source matches; every emitted row keeps its `recipe` and
@@ -1611,11 +1613,17 @@ counts, bounded per-recipe/query status, authoritative or lower-bound count
 facts, aggregate and per-query index freshness, row/byte limits, registry
 diagnostics, and recovery commands for failed, partial, or omitted recipes. NDJSON
 emits attributed rows followed by the same terminal cross-recipe summary.
+Recovery metadata returns at most three commands and explicitly reports its
+limit, omitted command count, and truncation state. Each command preserves the
+active shared search filters so the individual retry reproduces the bounded run.
 
 Accumulation is bounded to 10,000 candidate rows per query, 512 returned query
 details, 32 returned errors, a five-minute deadline enforced within each query,
-and a 4 MiB JSON response when no
-explicit `--max-json-bytes` is supplied. A requested `--total-limit` truncation
+and a 4 MiB JSON response when no explicit `--max-json-bytes` is supplied.
+Structured rows are admitted incrementally against that byte budget, and an
+active SQLite read is interrupted when its scoped deadline is cancelled.
+Interactive terminals show progress on stderr; use `--no-progress` to suppress
+it, and machine-readable stdout remains clean. A requested `--total-limit` truncation
 is a successful bounded result. Query failures do not discard successful
 sibling recipes: the run continues, records bounded errors, and returns partial
 exit code 11; `--allow-partial` accepts that incomplete result with exit code 0.
@@ -5404,7 +5412,9 @@ result level、正規化済みの repository-relative artifact URI を出力し�
 search audit recipe は、名前付き recipe を複数の curated search query に展開します。
 `cdidx audit --all` は full-repository audit 用の orchestration layer です。
 `cdidx recipes --names` と同じ authoritative registry の snapshot を1回取得し、recipe 名を
-ordinal 順に並べ、composite recipe を含む登録 entry をそれぞれ厳密に1回実行します。CLI を
+ordinal 順に並べ、composite recipe を含む登録 entry をそれぞれ厳密に1回選択します。row / byte
+上限、cancellation、または deadline で停止するまで順番に実行を試み、未実行の entry は omitted
+として報告します。CLI を
 再帰的に呼び出したり、recipe の matching rule を変更したり、recipe 間で重複 match を
 deduplicate したりはしません。そのため aggregate count は unique source match 数ではなく、
 recipe/query ごとの observation の合計として明示され、出力 row はすべて `recipe` と
@@ -5421,10 +5431,15 @@ selected / completed / failed / partial / omitted recipe 数、上限付きの r
 authoritative count または lower bound、aggregate および query ごとの index freshness、row/byte 上限、
 registry diagnostic、failed / partial / omitted recipe の recovery command を
 返します。NDJSON は帰属付き row の後に同じ cross-recipe terminal summary を出力します。
+recovery metadata は最大3件の command を返し、上限、省略 command 数、truncation 状態を
+明示します。各 command は有効な共通 search filter を保持するため、個別 retry でも上限付き実行を
+再現できます。
 
 accumulation は query ごとに最大 10,000 candidate row、返却する query detail は 512 件、error は
 32 件、各 query 内でも強制される実行 deadline は5分、明示的な `--max-json-bytes` がない JSON response は
-4 MiB に制限されます。
+4 MiB に制限されます。structured row はこの byte budget に対して逐次受理され、scope 付き deadline が
+cancel されると実行中の SQLite read も interrupt されます。interactive terminal の progress は stderr
+へ出力され、`--no-progress` で抑止できます。機械可読な stdout は progress と混在しません。
 指定した `--total-limit` による truncation は正常な上限付き結果です。query failure が起きても
 成功済み sibling recipe は破棄せず、実行を継続して上限付き error を記録し、partial exit code 11
 を返します。`--allow-partial` を指定すると不完全な状態を維持したまま exit code 0 を許可します。
