@@ -63,6 +63,10 @@ public static partial class QueryCommandRunner
                 queryOnlyDbPath = canonicalDbUri;
             }
 
+            var commandEntryFileSet = DbContext.CaptureVacuumCommandEntryFileSet(
+                options.DryRun ? queryOnlyDbPath : options.DbPath,
+                cancellationToken);
+
             if (!DbContext.TryValidateExistingCodeIndexDb(
                     options.DryRun ? queryOnlyDbPath : options.DbPath,
                     requireWritable: !options.DryRun,
@@ -96,23 +100,21 @@ public static partial class QueryCommandRunner
             {
                 db.SuppressPlannerStatisticsMaintenanceOnClose();
                 result = db.RunIncrementalVacuum(options.DryRun, cancellationToken);
+                result = DbContext.ApplyVacuumCommandEntryFileSet(result, commandEntryFileSet);
                 if (!options.DryRun)
                     db.CheckpointWalTruncate(cancellationToken);
-                vacuumDataSource = db.Connection.DataSource;
-                vacuumGenerationWitness = options.DryRun
-                    ? null
-                    : db.CaptureVacuumGenerationWitness(cancellationToken);
+                vacuumDataSource = options.DryRun
+                    ? queryOnlyDbPath
+                    : db.Connection.DataSource;
+                vacuumGenerationWitness = db.CaptureVacuumGenerationWitness(cancellationToken);
             }
             cancellationToken.ThrowIfCancellationRequested();
-            if (!options.DryRun)
-            {
-                result = DbContext.FinalizeVacuumFileMetricsAfterConnectionClose(
-                    result,
-                    vacuumDataSource,
-                    vacuumGenerationWitness,
-                    cancellationToken);
-                cancellationToken.ThrowIfCancellationRequested();
-            }
+            result = DbContext.FinalizeVacuumFileMetricsAfterConnectionClose(
+                result,
+                vacuumDataSource,
+                vacuumGenerationWitness,
+                cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
             if (options.Json)
             {
                 Console.WriteLine(JsonSerializer.Serialize(
