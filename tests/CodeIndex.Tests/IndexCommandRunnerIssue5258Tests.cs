@@ -166,7 +166,9 @@ public partial class IndexCommandRunnerTests
             {
                 var request = new JsonObject
                 {
-                    ["jsonrpc"] = "2.0", ["id"] = 1, ["method"] = "tools/call",
+                    ["jsonrpc"] = "2.0",
+                    ["id"] = 1,
+                    ["method"] = "tools/call",
                     ["params"] = new JsonObject { ["name"] = "index", ["arguments"] = arguments },
                 };
                 var response = server.HandleMessage(JsonNode.Parse(request.ToJsonString())!)!;
