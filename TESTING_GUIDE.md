@@ -8,6 +8,8 @@ If you change test code, test helpers, test execution flow, or testing conventio
 
 ## Quick Start
 
+`GlobalToolLogTests.TryStart_WritesInvariantUtcTimestampAndStackTrace` (#5264) pins a private, absent `--db` even though its injected exception precedes dispatch: last-failure provenance still resolves database metadata. Its shared theory covers stable and continuously changing ambient WAL databases, proves the latter exhausts snapshot retries with `query_only_wal_changed`, and requires the isolated run to retain the report hint, invariant UTC timestamp, and stack trace without reading that WAL. Keep config discovery disabled, text-log settings and provenance scoped, and restore environment, culture, and the snapshot hook. Finish dogfood index writes before running the full suites; this deterministic interference mechanism does not establish the cause of the historical full-suite failure or prove process-state leakage.
+
 Baseline review regressions also exercise indexing exclusion changes, a different indexed root at the same DB path, contradictory/missing omission metadata, and the partial exit code for empty incomparable snapshots.
 
 `AuditBaselineIssue5261Tests` covers compatible deltas, moved lines, changed reviewed evidence, incomplete/legacy metadata, ambiguous duplicates/renames, bounded counts, private atomic writes, invalid paths and malformed/oversized input, plus actual index/recipe CLI export and compare. Keep human/JSON error identity and contextual help/completion checks on both net8.0 and net9.0. Use the console-sensitive collection for CLI capture and isolated temporary projects for baseline files.
@@ -1201,6 +1203,8 @@ Issue #5260 の `QueryCommandRunnerAuditProgressIssue5260Tests` は子 query を
 テストコード、テストヘルパー、テストの実行フロー、またはテスト規約を変更した場合は、このドキュメントも同じコミットで更新してください。
 
 ## クイックスタート
+
+`GlobalToolLogTests.TryStart_WritesInvariantUtcTimestampAndStackTrace`（#5264）は、dispatch 前に例外を注入する場合も、直近失敗の provenance 作成で DB metadata が解決されるため、専用の未作成 DB を `--db` で指定します。共通の theory で安定したデフォルト WAL と変化し続けるデフォルト WAL を検証し、後者が `query_only_wal_changed` で snapshot の再試行を使い切ることを確認します。分離後の実行では、その WAL を読まずに report 案内、カルチャ非依存の UTC 時刻、stack trace を維持することを検証してください。config 探索を無効化し、text log 設定とその出所をスコープ内に限定し、環境変数・culture・snapshot hook を復元します。全スイート実行前に dogfood index の書き込みを完了してください。この決定的な干渉の再現は、過去の全スイート失敗の原因やプロセス状態の漏洩を断定するものではありません。
 
 ```bash
 dotnet test
