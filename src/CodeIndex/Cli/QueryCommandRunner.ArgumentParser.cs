@@ -151,6 +151,7 @@ public static partial class QueryCommandRunner
         private bool impactDeprecatedDepthUsed;
         private List<string>? mapSections;
         private bool summaryOnly;
+        private bool progress;
         private bool mapSummaryOnly;
         private bool dependencyCycles;
         private int dependencyCycleGraphBudget = DefaultDependencyCycleGraphBudget;
@@ -545,6 +546,7 @@ public static partial class QueryCommandRunner
                 ExtraNames = extraNames,
                 MapSections = mapSections,
                 SummaryOnly = summaryOnly,
+                Progress = progress,
                 MapSummaryOnly = mapSummaryOnly,
                 DependencyCycles = dependencyCycles,
                 DependencyCycleGraphBudget = dependencyCycleGraphBudget,
