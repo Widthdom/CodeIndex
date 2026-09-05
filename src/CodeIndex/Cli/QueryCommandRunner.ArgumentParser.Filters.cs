@@ -119,6 +119,9 @@ public static partial class QueryCommandRunner
                     summaryOnly = true;
                     mapSummaryOnly = true;
                     break;
+                case "--progress":
+                    progress = true;
+                    break;
                 case "--fields":
                     if (TryReadStringOptionValue(args, ref i, "--fields", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var fieldsValue, out var fieldsError))
                     {

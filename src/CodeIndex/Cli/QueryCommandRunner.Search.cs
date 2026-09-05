@@ -87,10 +87,13 @@ public static partial class QueryCommandRunner
         if (ReferenceEquals(invocationContext, QueryCommandInvocationContext.Search)
             && TryWriteSearchFindAlternativeError(validationArgs, options, jsonOptions))
             return false;
+        var acceptedFlags = CliFlagSchema.GetAcceptedFlagNamesForCommand(invocationContext.ValidationCommandName);
+        if (invocationContext == QueryCommandInvocationContext.Audit)
+            acceptedFlags = new HashSet<string>(acceptedFlags, StringComparer.Ordinal) { "--progress" };
         if (TryWriteUnsupportedOptionError(
             invocationContext,
             validationArgs,
-            CliFlagSchema.GetAcceptedFlagNamesForCommand(invocationContext.ValidationCommandName),
+            acceptedFlags,
             options,
             options.Query,
             invocationContext.StructuredMachineUsageErrors ? jsonOptions : null))
@@ -129,6 +132,8 @@ public static partial class QueryCommandRunner
         }
         if (!TryValidateSearchOptions(options, exact, invocationContext))
             return false;
+        if (options.Progress && (!options.All || invocationContext != QueryCommandInvocationContext.Audit))
+            return RejectSearchUsage(options, "--progress requires audit --all.", "Use `cdidx audit --all --progress`, or remove --progress.");
         if (!TryCreateSearchRoutePlan(cmdArgs, options, exact, cancellationToken, out route))
             return false;
 

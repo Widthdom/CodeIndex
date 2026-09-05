@@ -8,6 +8,8 @@ If you change test code, test helpers, test execution flow, or testing conventio
 
 ## Quick Start
 
+Issue #5260 coverage in `QueryCommandRunnerAuditProgressIssue5260Tests` waits for a real heartbeat while a child query is held, verifies JSON/NDJSON stdout and private-identifier exclusion, and exercises cancellation, query/output failures, the deadline, global quiet/no-progress precedence, flag scope, and deterministic monotonic rate/redraw/disposal behavior on both frameworks. Keep console mutations inside the console-sensitive collection and restore captured writers and test budgets in `finally`.
+
 Issue #5258 coverage in `IndexCommandRunnerIssue5258Tests.cs` checks explicit/environment/default size limits, ordinary root and shared-workspace checks, scoped updates, full refreshes, missing/invalid legacy policy, actual deletion, failed reads, MCP persistence/dry runs, and the retained read ceiling on both frameworks. Keep environment and current-directory changes inside the SQLite pool sensitive collection and restore them in `finally`.
 
 ```bash
@@ -1176,6 +1178,8 @@ Check the following:
 
 <a id="テストガイド"></a>
 # テストガイド
+
+Issue #5260 の `QueryCommandRunnerAuditProgressIssue5260Tests` は子 query を待機させて実際の heartbeat を確認し、stdout の JSON/NDJSON とカスタム識別子の非公開、取消、query／出力の失敗、deadline、quiet/no-progress の優先順位、flag の適用範囲、単調増加時計による通知頻度と再描画／破棄を両 framework で検証します。console の変更は console-sensitive collection 内で行い、writer とテスト用 budget を `finally` で復元してください。
 
 `IndexCommandRunnerIssue5258Tests.cs`のIssue #5258検証は、明示指定・環境変数・既定のサイズ上限、通常のルート／共有workspaceチェック、部分更新、全体更新、旧方針の欠落・不正値、実際の削除、読み取り失敗、MCPの保存とdry run、読み取り上限の維持を両フレームワークで確認します。環境変数とカレントディレクトリの変更はSQLite pool sensitiveコレクション内に置き、`finally`で復元してください。
 

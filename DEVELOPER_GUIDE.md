@@ -10,6 +10,8 @@ For indexing, a nonblank invalid environment value retains the existing warning-
 
 ## Build & Test
 
+`audit --all --progress` uses `ConsoleUi.AuditProgress` with a monotonic clock and a synchronized timer independent of the sequential child query. Start/terminal notifications bypass the one-second heartbeat throttle; each ASCII payload is at most 256 characters. Only numeric recipe/query ordinals are published, preventing custom identifiers from leaking private data. The renderer checks stderr's own terminal state, crops redraws to terminal width, flushes captured lines, and stops emission under its gate before disposal. Output serialization completes before the terminal state is selected, including byte-budget failures and partial results accepted with `--allow-partial`. Existing quiet and disabled-animation controls override explicit progress; recipe matching, SQLite cancellation, and audit deadlines are unchanged.
+
 Initial full-index implementation notes / 初回フルインデックスの実装ノート:
 [Initial full-index performance](docs/initial-index-performance.md).
 
@@ -4312,6 +4314,8 @@ For symmetry, the MCP server no longer echoes raw `Exception.Message` content in
 
 <a id="開発者ガイド"></a>
 # 開発者ガイド
+
+`audit --all --progress` は `ConsoleUi.AuditProgress` を使い、単調増加時計と同期された timer により、逐次実行する子 query の処理中も進捗を通知します。開始／終了通知を除く heartbeat は毎秒最大1回で、ASCII payload は最大256文字です。recipe/query は番号だけを出力し、カスタム識別子からの機密情報漏洩を防ぎます。stderr 自身の端末状態を確認し、再描画は端末幅で切り詰め、取得用の行は flush し、破棄前に gate 内で通知を停止します。出力のシリアライズ後に終了状態を決定するため、byte 上限の失敗と `--allow-partial` で許可された不完全な結果も区別します。既存の quiet と animation 無効化指定は明示的な progress より優先され、recipe matching、SQLite cancellation、audit deadline は維持されます。
 
 ### 索引のファイルサイズ方針
 

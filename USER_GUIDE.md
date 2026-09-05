@@ -1622,8 +1622,7 @@ details, 32 returned errors, a five-minute deadline enforced within each query,
 and a 4 MiB JSON response when no explicit `--max-json-bytes` is supplied.
 Structured rows are admitted incrementally against that byte budget, and an
 active SQLite read is interrupted when its scoped deadline is cancelled.
-Interactive terminals show progress on stderr; use `--no-progress` to suppress
-it, and machine-readable stdout remains clean. A requested `--total-limit` truncation
+Interactive terminals show progress on stderr (see below), and machine-readable stdout remains clean. A requested `--total-limit` truncation
 is a successful bounded result. Query failures do not discard successful
 sibling recipes: the run continues, records bounded errors, and returns partial
 exit code 11; `--allow-partial` accepts that incomplete result with exit code 0.
@@ -1631,6 +1630,17 @@ Cancellation returns exit code 8 with the completed/omitted accounting retained.
 Use an individual `cdidx audit <recipe>` for SARIF, issue drafts, child-query
 cursoring, or recipe-specific aggregation. `cdidx recipes` and `cdidx batch`
 remain the lower-level discovery and explicit orchestration tools.
+
+#### Audit progress
+
+The compact terminal labels `r`, `q`, `done` (recipes/queries), `fail`, and `ms` represent the same fields described below for captured lines.
+
+Use `cdidx audit --all --summary-only --json --progress` to opt in when stderr is captured or redirected. `--progress` is valid only with `audit --all`. Without it, non-terminal stderr stays silent; terminal stderr shows progress automatically. `--quiet` (including its aliases and `CDIDX_QUIET`) and `--no-progress` win regardless of argument order. `CDIDX_DISABLE_PROGRESS` and `PREFERS_REDUCED_MOTION` also suppress it.
+
+Progress keeps stdout in its requested format. Stderr receives an immediate start, at most one heartbeat per second even within a slow child query, and one terminal notification. Each ASCII payload is at most 256 characters, followed by the platform newline for captured output. Terminals redraw one line cropped to their width and finish with a newline. `elapsed_ms` uses a monotonic clock. `recipes_completed` and `queries_completed` show successful/selected counts; `queries_failed` counts failed children. No percentages or estimates of remaining time are used. `active_recipe` is the one-based ordinal in the selected, name-sorted registry; `active_query` is the one-based query ordinal within that recipe. Zero means no active child. These identifiers correspond to the result order; names, paths, query text, and exception details are never included in progress.
+
+The final state is `completed`, `partial` (including result/byte limits, deadline, or child failures), `cancelled`, or `failed` (command/output failure). `--allow-partial` changes the exit policy but does not relabel partial progress as completed. Progress does not change the five-minute audit budget or cancellation behavior.
+
 Built-in recipe queries may also include `risk_evidence`, a short set of
 positive and negative evidence facets that explain why a hit is risky or likely
 bounded/safe. Recipe run JSON repeats those facets on each matching result so
@@ -5439,13 +5449,24 @@ accumulation は query ごとに最大 10,000 candidate row、返却する query
 32 件、各 query 内でも強制される実行 deadline は5分、明示的な `--max-json-bytes` がない JSON response は
 4 MiB に制限されます。structured row はこの byte budget に対して逐次受理され、scope 付き deadline が
 cancel されると実行中の SQLite read も interrupt されます。interactive terminal の progress は stderr
-へ出力され、`--no-progress` で抑止できます。機械可読な stdout は progress と混在しません。
+へ出力されます（下記参照）。機械可読な stdout は progress と混在しません。
 指定した `--total-limit` による truncation は正常な上限付き結果です。query failure が起きても
 成功済み sibling recipe は破棄せず、実行を継続して上限付き error を記録し、partial exit code 11
 を返します。`--allow-partial` を指定すると不完全な状態を維持したまま exit code 0 を許可します。
 cancellation は completed / omitted accounting を保持し、exit code 8 を返します。SARIF、issue draft、
 child-query cursor、recipe 固有 aggregation が必要な場合は個別の `cdidx audit <recipe>` を使ってください。
 `cdidx recipes` と `cdidx batch` は lower-level の discovery / 明示的 orchestration tool として維持されます。
+
+#### Audit の進捗
+
+端末で使う短いラベル `r`、`q`、`done`（recipe/query）、`fail`、`ms` は、以下の取得用出力と同じ項目を表します。
+
+stderr を取得／リダイレクトする場合は、`cdidx audit --all --summary-only --json --progress` で明示的に有効化します。`--progress` は `audit --all` 専用です。未指定では非端末の stderr に進捗を出さず、端末の stderr では自動表示します。`--quiet`（別名と `CDIDX_QUIET` を含む）および `--no-progress` は引数の順序に関係なく優先されます。`CDIDX_DISABLE_PROGRESS` と `PREFERS_REDUCED_MOTION` も進捗を抑止します。
+
+stdout は指定された形式を維持します。stderr には開始直後の通知、遅い子 query の実行中を含む毎秒最大1回の heartbeat、終了通知を出力します。各 ASCII payload は最大256文字で、取得用の出力には platform の改行が続きます。端末では幅に合わせて1行を再描画し、終了時に改行します。`elapsed_ms` は単調増加時計を使います。`recipes_completed` と `queries_completed` は成功件数／選択件数、`queries_failed` は失敗した子 query の件数です。百分率や残り時間の推測は表示しません。`active_recipe` は名前順に選択した registry の1始まりの番号、`active_query` はその recipe 内の1始まりの query 番号です。0 は実行中の子 query がないことを示します。番号は結果の順序に対応し、名前、パス、query text、例外の詳細は進捗に含めません。
+
+終了状態は `completed`、`partial`（結果／byte 上限、deadline、子 query の失敗を含む）、`cancelled`、`failed`（command／出力の失敗）です。`--allow-partial` は終了コードの扱いだけを変え、不完全な進捗を completed に変更しません。5分の audit budget と cancellation の挙動は維持されます。
+
 組み込み recipe には `risky-code`、`json-parse-apis`、`dotnet-risk-patterns`、
 `auth-token-audit`、`string-comparison-semantics`、`dogfood-risk-patterns`、
 `sqlite-query-policy-surfaces`、`unsupported-operation-boundaries`、`xml-parser-security`、
