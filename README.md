@@ -20,6 +20,8 @@ dependency, and inspection queries without rescanning the same tree for every qu
 
 ## File-size limits and freshness
 
+For indexing, a nonblank invalid `CDIDX_MAX_FILE_BYTES` value falls back to the 4 MiB default, as the warning indicates, unless an explicit valid limit is supplied.
+
 `index --max-file-bytes 8388608` (MCP: `maxFileBytes`) saves the effective limit with the index. Later indexing and dry runs use an explicit limit first, then `CDIDX_MAX_FILE_BYTES`, then the saved limit, then the 4 MiB default. Ordinary `status --check` and `workspace status --check` reuse the saved budget; an environment override is not required after indexing larger files. Scoped updates preserve the larger prior budget for untouched files. Legacy indexes use at least the largest recorded file size, bounded by the existing 2,147,483,647-byte ceiling, without a rebuild. Failed reads are reported as scan errors and unverifiable indexed files, not deletions. If a file grows beyond the saved budget, retry indexing with a sufficiently larger explicit limit; fix access failures before retrying.
 
 ## Why cdidx
@@ -285,6 +287,8 @@ For commercial use, integration, and naming guidance, see
 # cdidx（日本語）
 
 ### ファイルサイズ上限と鮮度チェック
+
+索引作成時に空白以外の不正な`CDIDX_MAX_FILE_BYTES`が指定されている場合、有効な上限の明示指定がなければ、警告の案内どおり既定の4 MiBに戻ります。
 
 `index --max-file-bytes 8388608`（MCP: `maxFileBytes`）は、実際に使った上限を索引に保存します。後続の索引作成とdry runは、明示指定、`CDIDX_MAX_FILE_BYTES`、保存済み上限、既定の4 MiBの順に設定を選びます。通常の`status --check`と`workspace status --check`は保存済みの読み取り上限を再利用するため、大きなファイルを索引化した後も環境変数の指定は不要です。部分更新は、未更新ファイルに必要な従来の大きい上限を維持します。旧索引は、既存の2,147,483,647バイトの制限内で記録済みファイルサイズ以上の上限を使い、rebuildは不要です。読み取りに失敗した索引済みファイルは、削除ではなく走査エラーと確認不能として報告します。保存済み上限を超えてファイルが増大した場合は十分に大きい上限を明示して再索引し、アクセス失敗の場合は権限などの原因を解消してから再実行してください。
 
