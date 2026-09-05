@@ -11,6 +11,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.46.1] - 2026-09-05
+
+#### Changed
+
+- Reduce repeated name-folding work during indexing across all languages: vectorize ASCII processing and avoid per-character string allocations for Unicode identifiers without changing persisted lookup keys.
+- Speed up initial full-index reference-source lookup across languages by eliminating redundant duplicate-removal work while preserving nested symbol, alias, and legacy-name selection.
+- Reduce temporary UTF-8 allocations for long chunks, signatures, and reference contexts during initial CLI full indexing across all languages, preserving stored text and rollback behavior.
+
 ### [1.46.0] - 2026-09-04
 
 #### Added
@@ -6733,6 +6741,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.46.1] - 2026-09-05
+
+#### 変更
+
+- 全言語共通のインデックス時の名前正規化で、ASCII 処理をベクトル化し、Unicode 識別子の文字ごとの文字列割り当てを省きました。保存される検索 key は変わりません。
+- 全言語共通の初回フルインデックスの参照元検索で、不要な重複除去処理を省きました。入れ子シンボル・別名・旧形式の名前の選択結果は維持します。
+- 全言語共通の CLI 初回フルインデックスで、長いチャンク・シグネチャ・参照コンテキストの UTF-8 一時割り当てを削減しました。保存される文字列とロールバックの挙動は維持します。
+
 ### [1.46.0] - 2026-09-04
 
 #### 追加
@@ -13427,7 +13443,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.46.0...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.46.1...HEAD
+[1.46.1]: https://github.com/Widthdom/CodeIndex/compare/v1.46.0...v1.46.1
 [1.46.0]: https://github.com/Widthdom/CodeIndex/compare/v1.45.1...v1.46.0
 [1.45.1]: https://github.com/Widthdom/CodeIndex/compare/v1.45.0...v1.45.1
 [1.45.0]: https://github.com/Widthdom/CodeIndex/compare/v1.44.3...v1.45.0
