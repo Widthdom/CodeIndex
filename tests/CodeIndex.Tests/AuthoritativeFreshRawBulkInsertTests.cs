@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using CodeIndex.Database;
 using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
@@ -191,6 +192,15 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
     public void BatchStatements_PreserveShapesUnicodeNullsInt64AndProviderExclusions()
     {
         PrimeSequencesForInt64Ids();
+        string[] textValues = [
+            "雪😀a\0β",
+            string.Empty,
+            new string('a', 1024),
+            new string('雪', 342),
+            string.Concat(Enumerable.Repeat("😀\0雪", 1000)),
+            "unpaired\ud800surrogate\udc00",
+            "short after pooled buffer",
+        ];
         var rawWork = new List<DbWriter.AuthoritativeFreshRawInsertWork>();
         var batchWork = new List<DbWriter.DbWriterBatchStatement>();
         DbWriter.AuthoritativeFreshRawInsertScopeStats? observedStats = null;
@@ -242,7 +252,7 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
                     ChunkIndex = index,
                     StartLine = index + 1,
                     EndLine = index + 1,
-                    Content = index == 0 ? "雪😀a\0β" : $"chunk_{index}",
+                    Content = index < textValues.Length ? textValues[index] : $"chunk_{index}",
                 })
                 .ToArray();
             var symbols = Enumerable.Range(0, 41)
@@ -356,6 +366,13 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
         Assert.Equal("E99BAAF09F98806100CEB2", ScalarString("SELECT hex(CAST(checksum AS BLOB)) FROM files WHERE path = 'src/raw-shapes.cs'"));
         Assert.Equal("E99BAAF09F98806100CEB2", ScalarString("SELECT hex(CAST(content AS BLOB)) FROM chunks WHERE chunk_index = 0"));
         Assert.Equal(11L, ScalarLong("SELECT length(CAST(content AS BLOB)) FROM chunks WHERE chunk_index = 0"));
+        for (var index = 0; index < textValues.Length; index++)
+        {
+            Assert.Equal("text", ScalarString($"SELECT typeof(content) FROM chunks WHERE chunk_index = {index}"));
+            Assert.Equal(
+                Convert.ToHexString(Encoding.UTF8.GetBytes(textValues[index])),
+                ScalarString($"SELECT hex(CAST(content AS BLOB)) FROM chunks WHERE chunk_index = {index}"));
+        }
         Assert.Equal(41L, ScalarLong($"SELECT COUNT(*) FROM symbols WHERE file_id = {ExpectedLargeFileId.ToString(CultureInfo.InvariantCulture)}"));
         Assert.Equal(1L, ScalarLong("SELECT COUNT(*) FROM symbols WHERE sub_kind IS NULL AND signature IS NULL AND start_column IS NULL"));
         Assert.Equal(171L, ScalarLong($"SELECT COUNT(*) FROM file_issues WHERE file_id = {ExpectedLargeFileId.ToString(CultureInfo.InvariantCulture)}"));
@@ -369,6 +386,35 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
                 .Where(work => work.Operation == operation)
                 .Select(work => (work.StatementRows, work.BoundParameterCount))
                 .ToArray();
+    }
+
+    [Fact]
+    public void ChunkTextBindings_ReuseScratchSpaceForLongUtf8Values()
+    {
+        using var graph = _writer.BeginReferenceGraphRefreshScope(
+            forceFullRefresh: true,
+            useFreshReferenceResolutionDefaults: true);
+        using var transaction = _writer.BeginTransaction();
+        using var raw = _writer.BeginAuthoritativeFreshBulkInsertScope(true, CancellationToken.None)!;
+        var fileId = InsertNewFile("src/pooled-text.py");
+        var text = new string('雪', 2048);
+        var warmup = CreateChunks(fileId, startIndex: 0, count: 102);
+        var measured = CreateChunks(fileId, startIndex: 102, count: 102);
+        foreach (var chunk in warmup.Concat(measured))
+            chunk.Content = text;
+
+        _writer.InsertChunks(warmup);
+        var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+        _writer.InsertChunks(measured);
+        var allocatedBytes = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+
+        // Per-value UTF-8 arrays alone would exceed 600 KiB for this one batch.
+        // Allow ample bookkeeping overhead without a timing/GC-collection assertion.
+        Assert.InRange(allocatedBytes, 0L, 128 * 1024L);
+        Assert.Equal(204L, ScalarLong("SELECT COUNT(*) FROM chunks"));
+        Assert.Equal(text, ScalarString("SELECT content FROM chunks ORDER BY id DESC LIMIT 1"));
+        raw.Complete();
+        transaction.Commit();
     }
 
     [Fact]
