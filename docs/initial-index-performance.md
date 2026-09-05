@@ -13,6 +13,13 @@ This does not change database layout, extraction coverage, transaction
 boundaries, or cancellation and rollback behavior. Ordinary updates, rebuilds,
 and MCP writes keep their existing writer selection.
 
+Fresh reference-source lookup probes the canonical, display, and legacy ASCII
+name indexes with `UNION ALL`. Matching the same physical symbol through more
+than one name does not change its containment rank or ID, and only the first
+ranked ID is consumed. Avoiding duplicate elimination removes a temporary
+B-tree per reference while preserving same-file scoping, nested range selection,
+tie-breaking, and legacy fallback. Ordinary source repair remains unchanged.
+
 ## 日本語
 
 空のデータベースに対する通常の CLI フルスキャンは、初回専用の一括 writer を
@@ -25,3 +32,9 @@ and MCP writes keep their existing writer selection.
 
 DB レイアウト、抽出範囲、トランザクション境界、取消・ロールバックの挙動は
 変わりません。通常の更新、rebuild、MCP の writer 選択も既存のままです。
+
+初回の参照元検索は canonical 名・display 名・旧 ASCII 名の index を `UNION ALL`
+で照会します。同じ実体シンボルが複数の名前から見つかっても包含範囲の順位と ID は
+同じであり、消費するのは順位先頭の ID だけです。参照ごとの重複除去用の一時 B-tree
+を省きつつ、同一ファイルへの限定、入れ子の選択、同順位の決定、旧形式への fallback
+を維持します。通常の参照元修復処理は変更しません。

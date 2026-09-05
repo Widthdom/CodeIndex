@@ -66,6 +66,10 @@ public partial class DbWriter
 
     private static string BuildMaterializedFreshReferenceSourceSymbolValueSql(
         string referenceAlias)
+        // Only the first ranked symbol ID is observed. A symbol matching multiple
+        // name indexes has the same range and ID in every arm, so duplicates cannot
+        // change that winner. UNION ALL avoids a distinct temporary B-tree per reference.
+        // 同一symbolの重複は順位もIDも同じ。先頭1件の選択に不要な参照ごとの重複除去を省く。
         => $"""
         (
             SELECT candidate.symbol_id
@@ -80,7 +84,7 @@ public partial class DbWriter
                   AND source.file_id = {referenceAlias}.file_id
                   AND source.name_folded = {referenceAlias}.container_name_folded
 
-                UNION
+                UNION ALL
 
                 SELECT source.symbol_id,
                        source.line,
@@ -92,7 +96,7 @@ public partial class DbWriter
                   AND source.file_id = {referenceAlias}.file_id
                   AND source.display_name_folded = {referenceAlias}.container_name_folded
 
-                UNION
+                UNION ALL
 
                 SELECT source.symbol_id,
                        source.line,

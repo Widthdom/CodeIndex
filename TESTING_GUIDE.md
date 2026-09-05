@@ -19,6 +19,8 @@ Use the full suite by default. Use targeted filters only while iterating locally
 
 ## Test Stack
 
+- Fresh source lookup coverage shares the alias/legacy/nested-range fixture across C#, Python, JavaScript, TypeScript, Java, Go, Rust, and C++. Compare every fresh source ID with ordinary full repair, and keep query-plan assertions for the three name indexes and absence of duplicate-elimination B-trees. 初回参照元の選択結果と通常修復の一致を8言語で検証します。
+
 - Initial bulk text binding coverage in `AuthoritativeFreshRawBulkInsertTests` verifies exact UTF-8 bytes for empty text, embedded NUL, supplementary characters, unpaired surrogates, stack/pool boundaries, and a short value after a pooled value, alongside the existing NULL, cancellation, rollback, and statement-reuse cases. 初回一括 bind は空文字列・Unicode・buffer 境界の保存結果と既存の取消／rollback 契約を併せて検証します。
 
 - Issue #5238 audit-all coverage belongs in `QueryCommandRunnerAuditAllIssue5238Tests.cs`, `DbReaderTests.cs`, `CliFlagSchemaTests.cs`, and `ConsoleUiTests.cs`. Keep authoritative registry ordering, shared filters and overlap attribution, per-query and global row limits, incremental JSON/NDJSON byte admission, real scoped cancellation with SQLite interruption, failure continuation, bounded recovery accounting, filter-preserving retry commands, interactive stderr progress isolation, freshness, allocation, help, and completion synchronized across both target frameworks.

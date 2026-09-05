@@ -417,8 +417,18 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
         transaction.Commit();
     }
 
-    [Fact]
-    public void ReferenceSourceLookup_PreservesMultiFileFoldFallbackAndNestedRankingAcrossBatches()
+    [Theory]
+    [InlineData("csharp", "cs")]
+    [InlineData("python", "py")]
+    [InlineData("javascript", "js")]
+    [InlineData("typescript", "ts")]
+    [InlineData("java", "java")]
+    [InlineData("go", "go")]
+    [InlineData("rust", "rs")]
+    [InlineData("cpp", "cpp")]
+    public void ReferenceSourceLookup_PreservesMultiFileFoldFallbackAndNestedRankingAcrossBatches(
+        string language,
+        string extension)
     {
         long firstFileId;
         long secondFileId;
@@ -436,8 +446,8 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
                    enabled: true,
                    CancellationToken.None)!)
         {
-            firstFileId = InsertNewFile("src/source-lookup-a.cs");
-            secondFileId = InsertNewFile("src/source-lookup-b.cs");
+            firstFileId = InsertNewFile($"src/source-lookup-a.{extension}", language);
+            secondFileId = InsertNewFile($"src/source-lookup-b.{extension}", language);
             _writer.InsertSymbols([
                 SourceSymbol(firstFileId, "Caller", line: 1, startLine: 1, endLine: 100),
                 SourceSymbol(firstFileId, "Caller", line: 10, startLine: 10, endLine: 30),
@@ -583,6 +593,14 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
         Assert.Null(SourceSymbolId("empty_container_probe"));
         Assert.Equal(secondNestedSourceId, SourceSymbolId("second_file_probe"));
 
+        const string sourceSnapshotSql = """
+            SELECT group_concat(COALESCE(source_symbol_id, 'null'), '|')
+            FROM (SELECT source_symbol_id FROM symbol_references ORDER BY id)
+            """;
+        var freshSources = ScalarString(sourceSnapshotSql);
+        _writer.RefreshMutualRecursionFlags(stampReferenceIdentityContractReady: false);
+        Assert.Equal(freshSources, ScalarString(sourceSnapshotSql));
+
         static SymbolRecord SourceSymbol(
             long fileId,
             string name,
@@ -667,6 +685,9 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
         Assert.DoesNotContain(
             sourceLookupPlan,
             detail => detail.Contains("SCAN source", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(
+            sourceLookupPlan,
+            detail => detail.Contains("UNION USING TEMP B-TREE", StringComparison.OrdinalIgnoreCase));
 
         raw.Complete();
         transaction.Commit();
@@ -1586,11 +1607,11 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
         TestProjectHelper.DeleteDirectory(_projectRoot);
     }
 
-    private long InsertNewFile(string path)
+    private long InsertNewFile(string path, string language = "csharp")
         => _writer.InsertNewFile(new FileRecord
         {
             Path = path,
-            Lang = "csharp",
+            Lang = language,
             Size = 100,
             Lines = 100,
             Checksum = path,
