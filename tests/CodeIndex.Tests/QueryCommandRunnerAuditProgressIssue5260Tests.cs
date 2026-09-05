@@ -133,6 +133,14 @@ public sealed class QueryCommandRunnerAuditProgressIssue5260Tests
             elapsed = TimeSpan.FromSeconds(1);
             progress.Heartbeat();
             progress.SetCompleted(1, 2, 0);
+            progress.PauseForOutput();
+            var paused = output.ToString();
+            elapsed = TimeSpan.FromSeconds(2);
+            progress.Heartbeat();
+            Assert.Equal(paused, output.ToString());
+            if (interactive)
+                Assert.EndsWith("\r", paused, StringComparison.Ordinal);
+            output.WriteLine("RESULT");
             progress.Finish("partial");
             var completed = output.ToString();
             elapsed = TimeSpan.FromSeconds(2);
@@ -142,6 +150,7 @@ public sealed class QueryCommandRunnerAuditProgressIssue5260Tests
             Assert.DoesNotContain("%", completed);
             Assert.EndsWith(Environment.NewLine, completed);
             Assert.Equal(3, completed.Split("audit:").Length - 1);
+            Assert.Contains("RESULT" + Environment.NewLine, completed, StringComparison.Ordinal);
             if (interactive)
                 Assert.All(completed.Split('\r', StringSplitOptions.RemoveEmptyEntries), line => Assert.True(line.TrimEnd('\n').Length <= 59));
             else

@@ -8,6 +8,8 @@ If you change test code, test helpers, test execution flow, or testing conventio
 
 ## Quick Start
 
+The #5260 redraw test also pauses the renderer, proves later timer ticks emit nothing during result output, and checks that clearing precedes the result and the terminal notification follows it.
+
 Issue #5260 coverage in `QueryCommandRunnerAuditProgressIssue5260Tests` waits for a real heartbeat while a child query is held, verifies JSON/NDJSON stdout and private-identifier exclusion, and exercises cancellation, query/output failures, the deadline, global quiet/no-progress precedence, flag scope, and deterministic monotonic rate/redraw/disposal behavior on both frameworks. Keep console mutations inside the console-sensitive collection and restore captured writers and test budgets in `finally`.
 
 Issue #5258 coverage in `IndexCommandRunnerIssue5258Tests.cs` checks explicit/environment/default size limits, ordinary root and shared-workspace checks, scoped updates, full refreshes, missing/invalid legacy policy, actual deletion, failed reads, MCP persistence/dry runs, and the retained read ceiling on both frameworks. Keep environment and current-directory changes inside the SQLite pool sensitive collection and restore them in `finally`.
@@ -1178,6 +1180,8 @@ Check the following:
 
 <a id="テストガイド"></a>
 # テストガイド
+
+#5260 の再描画テストは、renderer の一時停止後の timer tick が結果出力中に何も書かないことと、行消去・結果出力・終了通知の順序も確認します。
 
 Issue #5260 の `QueryCommandRunnerAuditProgressIssue5260Tests` は子 query を待機させて実際の heartbeat を確認し、stdout の JSON/NDJSON とカスタム識別子の非公開、取消、query／出力の失敗、deadline、quiet/no-progress の優先順位、flag の適用範囲、単調増加時計による通知頻度と再描画／破棄を両 framework で検証します。console の変更は console-sensitive collection 内で行い、writer とテスト用 budget を `finally` で復元してください。
 

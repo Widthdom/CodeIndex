@@ -279,12 +279,14 @@ public static partial class QueryCommandRunner
         using var progress = ConsoleUi.ShouldUseProgressAnimation()
             && (options.Progress || ConsoleUi.ShouldUseInteractiveStandardError())
                 ? new ConsoleUi.AuditProgress(selectedRecipes.Count, selectedRecipes.Sum(recipe => (long)recipe.Queries.Count),
-                    Console.Error, ConsoleUi.ShouldUseInteractiveStandardError(), ConsoleUi.GetWindowWidth())
+                    Console.Error, ConsoleUi.ShouldUseInteractiveStandardError(), ConsoleUi.GetWindowWidth(), startImmediately: false)
                 : null;
         if (cancellationToken.IsCancellationRequested)
         {
             state.Cancelled = true;
             AddOmittedAuditAllRecipes(state, 0, "cancelled");
+            progress?.Start();
+            progress?.PauseForOutput();
             var cancelledExitCode = WriteAuditAllOutput(options, jsonOptions, state);
             progress?.Finish("cancelled");
             return cancelledExitCode;
@@ -330,6 +332,7 @@ public static partial class QueryCommandRunner
         var completedRecipes = 0;
         long completedQueries = 0;
         long failedQueries = 0;
+        progress?.Start();
         try
         {
             for (var recipeIndex = 0; recipeIndex < state.SelectedRecipes.Count; recipeIndex++)
@@ -488,6 +491,7 @@ public static partial class QueryCommandRunner
         finally
         {
             progress?.SetActive(0, 0);
+            progress?.PauseForOutput();
         }
 
         stopwatch.Stop();

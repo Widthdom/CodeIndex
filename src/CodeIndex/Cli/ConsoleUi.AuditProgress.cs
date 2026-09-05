@@ -19,7 +19,8 @@ public static partial class ConsoleUi
         private readonly bool _interactive;
         private readonly int _width;
         private readonly Func<TimeSpan> _elapsed;
-        private readonly Timer? _timer;
+        private Timer? _timer;
+        private readonly bool _startTimer;
         private readonly int _selectedRecipes;
         private readonly long _selectedQueries;
         private int _activeRecipe;
@@ -29,10 +30,12 @@ public static partial class ConsoleUi
         private long _failedQueries;
         private TimeSpan _lastWrite;
         private bool _finished;
+        private bool _started;
+        private bool _paused;
         private int _lastWidth;
 
         internal AuditProgress(int recipes, long queries, TextWriter output, bool interactive,
-            int width = 256, Func<TimeSpan>? elapsed = null, bool startTimer = true)
+            int width = 256, Func<TimeSpan>? elapsed = null, bool startTimer = true, bool startImmediately = true)
         {
             _selectedRecipes = recipes;
             _selectedQueries = queries;
@@ -41,9 +44,45 @@ public static partial class ConsoleUi
             _width = Math.Clamp(width - 1, 1, 256);
             var stopwatch = Stopwatch.StartNew();
             _elapsed = elapsed ?? (() => stopwatch.Elapsed);
-            Write("running");
-            if (startTimer)
-                _timer = new Timer(_ => Heartbeat(), null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
+            _startTimer = startTimer;
+            if (startImmediately)
+                Start();
+        }
+
+        internal void Start()
+        {
+            lock (_gate)
+            {
+                if (_started || _finished)
+                    return;
+                _started = true;
+                Write("running");
+                if (_startTimer && !_finished)
+                    _timer = new Timer(_ => Heartbeat(), null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
+            }
+        }
+
+        internal void PauseForOutput()
+        {
+            lock (_gate)
+            {
+                _paused = true;
+                if (!_interactive || _lastWidth == 0)
+                    return;
+                try
+                {
+                    lock (TerminalLock)
+                    {
+                        _output.Write("\r" + new string(' ', _lastWidth) + "\r");
+                        _output.Flush();
+                        _lastWidth = 0;
+                    }
+                }
+                catch (Exception ex) when (ex is IOException or ObjectDisposedException)
+                {
+                    _finished = true;
+                }
+            }
         }
 
         internal void SetActive(int recipe, int query)
@@ -69,7 +108,7 @@ public static partial class ConsoleUi
         {
             lock (_gate)
             {
-                if (!_finished && _elapsed() - _lastWrite >= TimeSpan.FromSeconds(1))
+                if (_started && !_finished && !_paused && _elapsed() - _lastWrite >= TimeSpan.FromSeconds(1))
                     Write("running");
             }
         }

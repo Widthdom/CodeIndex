@@ -1633,6 +1633,8 @@ remain the lower-level discovery and explicit orchestration tools.
 
 #### Audit progress
 
+Progress pauses and clears any terminal redraw before result output, then emits the final status after output finishes. Database-open failures have no live redraw to corrupt the error output.
+
 The compact terminal labels `r`, `q`, `done` (recipes/queries), `fail`, and `ms` represent the same fields described below for captured lines.
 
 Use `cdidx audit --all --summary-only --json --progress` to opt in when stderr is captured or redirected. `--progress` is valid only with `audit --all`. Without it, non-terminal stderr stays silent; terminal stderr shows progress automatically. `--quiet` (including its aliases and `CDIDX_QUIET`) and `--no-progress` win regardless of argument order. `CDIDX_DISABLE_PROGRESS` and `PREFERS_REDUCED_MOTION` also suppress it.
@@ -5458,6 +5460,8 @@ child-query cursor、recipe 固有 aggregation が必要な場合は個別の `c
 `cdidx recipes` と `cdidx batch` は lower-level の discovery / 明示的 orchestration tool として維持されます。
 
 #### Audit の進捗
+
+結果を出力する前に進捗を一時停止して端末の描画行を消去し、出力後に最終状態を通知します。DB を開く段階で失敗した場合は再描画が始まっていないため、エラー出力に混在しません。
 
 端末で使う短いラベル `r`、`q`、`done`（recipe/query）、`fail`、`ms` は、以下の取得用出力と同じ項目を表します。
 
