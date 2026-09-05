@@ -106,6 +106,12 @@ public partial class McpServer
 
         db.InitializeSchema();
 
+        long effectiveFileSizeLimit;
+        using (var policyReader = new DbReader(db))
+            effectiveFileSizeLimit = IndexedFileSizePolicy.Resolve(policyReader, maxFileBytes);
+        maxFileBytes = effectiveFileSizeLimit;
+        optionsPayload["maxFileBytes"] = effectiveFileSizeLimit;
+
         var writer = new DbWriter(db);
         var repositoryRoot = GitHelper.TryGetRepositoryRoot(projectPath, requestToken);
         var ignoreRuleRoot = repositoryRoot != null && IsPathAuthorized(repositoryRoot)
@@ -1253,6 +1259,7 @@ public partial class McpServer
             }
 
             IndexCommandRunner.StampWriterVersionAndSymbolKindFilter(writer, _version, symbolKindFilter.Signature);
+            writer.StampIndexedFileSizePolicy(effectiveFileSizeLimit, scoped: false);
 
             // Successful no-op MCP full scans should repair explicit-DB roots only after
             // readiness is stamped, preserving the failure-path safety contract.

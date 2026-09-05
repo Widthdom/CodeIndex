@@ -809,7 +809,7 @@ internal static class CliFlagSchema
                 Safety = CliOptionSafety.Override,
             },
             new() { Name = "--duration-format", ValueDomain = Values(["auto", "seconds", "hms"]), Description = "Index elapsed time display format", PrimaryCommands = Set("index") },
-            new() { Name = "--max-file-bytes", ValuePlaceholder = "<bytes>", Description = "Per-file indexing size limit (1..2147483647 bytes; optional B/K/M/G suffix); invalid CDIDX_MAX_FILE_BYTES warns and uses the built-in default", PrimaryCommands = Set("index") },
+            new() { Name = "--max-file-bytes", ValuePlaceholder = "<bytes>", Description = "Per-file indexing size limit (1..2147483647 bytes; optional B/K/M/G suffix); saved for later indexing and freshness checks; precedence: explicit, environment, saved, 4 MiB default; invalid CDIDX_MAX_FILE_BYTES warns and uses the built-in default", PrimaryCommands = Set("index") },
             new() { Name = "--max-symbols-per-file", ValuePlaceholder = "<n>", Description = "Skip file content, symbols, and references when one file emits too many symbols (1..50000)", PrimaryCommands = Set("index") },
             new() { Name = "--max-references-per-file", ValuePlaceholder = "<n>", Description = "Skip references when one file emits too many references (1..1000000)", PrimaryCommands = Set("index") },
             new() { Name = "--parallelism", ValuePlaceholder = "<n>", Description = "Extraction worker count (1..16; default CPU count capped at 8); invalid CDIDX_INDEX_PARALLELISM warns and uses the documented effective value", PrimaryCommands = Set("index") },

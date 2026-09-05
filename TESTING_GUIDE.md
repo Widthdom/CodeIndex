@@ -8,6 +8,8 @@ If you change test code, test helpers, test execution flow, or testing conventio
 
 ## Quick Start
 
+Issue #5258 coverage in `IndexCommandRunnerIssue5258Tests.cs` checks explicit/environment/default size limits, ordinary root and shared-workspace checks, scoped updates, full refreshes, missing/invalid legacy policy, actual deletion, failed reads, MCP persistence/dry runs, and the retained read ceiling on both frameworks. Keep environment and current-directory changes inside the SQLite pool sensitive collection and restore them in `finally`.
+
 ```bash
 dotnet test
 dotnet test tests/CodeIndex.Tests/CodeIndex.Tests.csproj
@@ -1174,6 +1176,8 @@ Check the following:
 
 <a id="テストガイド"></a>
 # テストガイド
+
+`IndexCommandRunnerIssue5258Tests.cs`のIssue #5258検証は、明示指定・環境変数・既定のサイズ上限、通常のルート／共有workspaceチェック、部分更新、全体更新、旧方針の欠落・不正値、実際の削除、読み取り失敗、MCPの保存とdry run、読み取り上限の維持を両フレームワークで確認します。環境変数とカレントディレクトリの変更はSQLite pool sensitiveコレクション内に置き、`finally`で復元してください。
 
 このドキュメントは、`cdidx` のテストスイートがどう構成されているか、どのように安全にテストを追加・更新するか、そして挙動やテスト基盤を変更したときに従うべき規約をまとめたものです。
 

@@ -282,6 +282,7 @@ public static partial class IndexCommandRunner
                 writer,
                 options.SymlinkPolicy,
                 context.IndexRunDiagnostics);
+            writer.StampIndexedFileSizePolicy(options.MaxFileSizeBytes!.Value, scoped: false);
             if (options.MemoryTrace)
                 context.MemorySamples.Add(CaptureMemorySample("finalize", context.Stopwatch));
             var memoryTimelineForStamp = BuildMemoryTimeline(context.MemorySamples);

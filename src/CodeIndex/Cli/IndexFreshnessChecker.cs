@@ -19,7 +19,8 @@ internal static class IndexFreshnessChecker
         HashSet<string>? knownSkipWorktreePaths = null,
         bool knownSkipWorktreePathsComplete = true,
         string? knownWorkspaceHeadCommit = null,
-        string? knownRepositoryRoot = null)
+        string? knownRepositoryRoot = null,
+        Action<string>? beforeFileLoadForTesting = null)
     {
         if (string.IsNullOrWhiteSpace(projectRoot))
         {
@@ -74,7 +75,7 @@ internal static class IndexFreshnessChecker
             projectRoot,
             ignoreCase,
             ignoreRuleRoot,
-            maxFileSizeBytes: null,
+            maxFileSizeBytes: IndexedFileSizePolicy.Resolve(reader, freshness: true),
             directoryIgnoreCaseProbe: null,
             symlinkPolicy: symlinkPolicy,
             internalIndexDatabasePath: internalIndexDatabasePath);
@@ -82,6 +83,9 @@ internal static class IndexFreshnessChecker
             cancellationToken: cancellationToken);
         var scan = scanWithTargets.ScanResult;
         var indexingTargets = scanWithTargets.IndexingTargets;
+        var probeFailedPaths = scan.ProbeFailedFilePaths
+            .Select(FileIndexer.NormalizeIndexPath)
+            .ToHashSet(StringComparer.Ordinal);
         foreach (var error in scan.Errors)
         {
             if (!error.IsFatal)
@@ -112,8 +116,15 @@ internal static class IndexFreshnessChecker
         {
             var target = indexingTargets[targetIndex];
             cancellationToken.ThrowIfCancellationRequested();
+            // Advance by discovered path before loading: a failed read is not a deletion.
+            while (hasIndexed && string.Compare(indexedEnumerator.Current.Path, target.IndexPath, StringComparison.Ordinal) < 0)
+            {
+                AddMissingIndexedPath(indexedEnumerator.Current.Path);
+                hasIndexed = MoveNextIndexed();
+            }
             try
             {
+                beforeFileLoadForTesting?.Invoke(target.IndexPath);
                 var loaded = indexer.BuildLoadedRecordWithRawBytes(
                     target.FilePath,
                     target.RelativePath,
@@ -122,12 +133,6 @@ internal static class IndexFreshnessChecker
                     cancellationToken: cancellationToken);
                 var record = loaded.Record;
                 result.WorkspaceFileCount++;
-                while (hasIndexed && string.Compare(indexedEnumerator.Current.Path, record.Path, StringComparison.Ordinal) < 0)
-                {
-                    AddMissingIndexedPath(indexedEnumerator.Current.Path);
-                    hasIndexed = MoveNextIndexed();
-                }
-
                 if (!hasIndexed || string.Compare(indexedEnumerator.Current.Path, record.Path, StringComparison.Ordinal) > 0)
                 {
                     result.UnindexedFileCount++;
@@ -160,6 +165,12 @@ internal static class IndexFreshnessChecker
             {
                 result.ScanErrorCount++;
                 AddSample(result.ScanErrors, FormatScanFailureSample(target.DisplayRelativePath, ex));
+                if (hasIndexed && string.Equals(indexedEnumerator.Current.Path, target.IndexPath, StringComparison.Ordinal))
+                {
+                    result.UnverifiableFileCount++;
+                    AddSample(result.UnverifiableFiles, target.IndexPath);
+                    hasIndexed = MoveNextIndexed();
+                }
             }
         }
 
@@ -195,6 +206,12 @@ internal static class IndexFreshnessChecker
 
         void AddMissingIndexedPath(string path)
         {
+            if (probeFailedPaths.Contains(path))
+            {
+                result.UnverifiableFileCount++;
+                AddSample(result.UnverifiableFiles, path);
+                return;
+            }
             // Skip-worktree paths are intentionally absent from disk (sparse-checkout cone/non-cone,
             // partial clone, or manual update-index --skip-worktree). Reclassify them so the freshness
             // gate stops flagging them as "missing" and rebuilds.
