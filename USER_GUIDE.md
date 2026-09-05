@@ -1921,11 +1921,21 @@ standalone command output shape. With no input, `batch` exits 0 and prints
 nothing by default. Pass `--json-summary` when a non-interactive caller needs a
 machine-readable batch stream: each non-blank stdin line emits one JSON envelope
 before the final summary. Parsed commands use
-`record: "batch_result"` with `line`, `command`, `arguments`, `exit_code`, and
-captured child `stderr`. Successful single-document JSON is embedded as typed
+`record: "batch_result"` with `line`, `command`, `arguments`, and `exit_code`.
+Successful records retain captured child `stderr`. Successful single-document JSON is embedded as typed
 `result`, successful NDJSON is embedded as a stable `results` array even when it
-contains one row, and text or failed output remains raw `stdout`. Malformed or
-over-limit lines use `record: "batch_error"` with an `error` object. The complete
+contains one row, and successful text remains raw `stdout`. Failures use a typed
+`error` with `error_code`, `category`, sanitized `message` / `hint`, and `scope`.
+Valid child JSON errors preserve their classification and documented budget/retry
+fields by default, including `E028_RESPONSE_BUDGET_TOO_SMALL`, `requested_bytes`,
+`effective_bytes`, `minimum_required_bytes`, its known/uncertain flags and reasons,
+and `retry` (`action`, `option`, `recommended_bytes`, `maximum_effective_bytes`,
+`command`). Parsing is limited to 64 KiB of UTF-8 and depth 16; strings are sanitized
+and limited to 1,024 characters. Unknown fields are omitted. Text, malformed,
+over-limit, or invalid error objects retain the safe exit-code-based fallback.
+Failed stdout/stderr are available only with `--include-raw-streams`, under the
+bounded `raw_streams` object; these diagnostic streams retain their original content.
+Malformed or over-limit input lines use `record: "batch_error"` with an `error` object. The complete
 serialized stream, including envelopes, arguments, JSON escaping, terminal
 errors, and the final summary, defaults to a 10,485,760-character budget.
 `--max-output-chars <n>` can change that budget from 4,096 through the safe
@@ -5695,10 +5705,19 @@ cdidx search "authenticate" --json --verbose
 ない場合、`batch` は既定で exit 0 かつ無出力です。非対話の呼び出し元が machine-readable な batch
 stream を必要とする場合は `--json-summary` を渡します。この場合、空白でない stdin 行ごとに
 1 つの JSON envelope を出力してから final summary を出します。parse 済み command は
-`record: "batch_result"` として `line`、`command`、`arguments`、`exit_code`、捕捉した child
-`stderr` を持ちます。成功した単一 document JSON は型付き `result`、成功した NDJSON は 1 row
-の場合も安定して `results` array に埋め込み、text または失敗時の出力は raw `stdout` のまま
-保持します。malformed line や上限超過 line は `record: "batch_error"` と `error` object を
+`record: "batch_result"` として `line`、`command`、`arguments`、`exit_code` を持ちます。
+成功した record は捕捉した child `stderr` を保持します。成功した単一 document JSON は型付き
+`result`、成功した NDJSON は 1 row の場合も安定して `results` array に埋め込み、成功した text は
+raw `stdout` のまま保持します。失敗時は `error_code`、`category`、機密情報を除去した
+`message` / `hint`、`scope` を持つ型付き `error` を返します。有効な子 JSON エラーの分類と
+文書化されたサイズ上限・再試行情報は既定で保持されます。対象は `E028_RESPONSE_BUDGET_TOO_SMALL`、
+`requested_bytes`、`effective_bytes`、`minimum_required_bytes` と既知・不確実性のフラグ／理由、
+`retry`（`action`、`option`、`recommended_bytes`、`maximum_effective_bytes`、`command`）です。
+解析は UTF-8 で 64 KiB、深さ 16 までとし、文字列は機密情報を除去して 1,024 文字以内に制限します。
+未知のフィールドは省略し、text、不正 JSON、上限超過、不正なエラー object は終了コード由来の安全な
+汎用エラーを維持します。失敗時の stdout / stderr は `--include-raw-streams` を指定した場合だけ、
+上限付きの `raw_streams` object に元の診断内容のまま追加されます。
+malformed な入力 line や上限超過 line は `record: "batch_error"` と `error` object を
 持ちます。envelope、arguments、JSON escape、terminal error、final summary を含む serialized
 stream 全体の既定 budget は 10,485,760 文字です。`--max-output-chars <n>` で 4,096 から安全な
 最大値 67,108,864 文字まで変更できます。最後の `record: "batch_summary"` object は

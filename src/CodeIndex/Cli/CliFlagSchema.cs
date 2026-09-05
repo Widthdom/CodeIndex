@@ -458,7 +458,7 @@ internal static class CliFlagSchema
                     ["config"] = Set("show"),
                 },
             },
-            new() { Name = "--json-summary", Description = "Batch: emit one typed result/error record per input plus a final summary", PrimaryCommands = Set("batch") },
+            new() { Name = "--json-summary", Description = "Batch: emit typed results/errors, preserving safe child JSON error codes and budget/retry fields, plus a final summary", PrimaryCommands = Set("batch") },
             new() { Name = "--include-raw-streams", Description = "Batch JSON-summary: attach bounded child stdout/stderr to failed records", PrimaryCommands = Set("batch") },
             new() { Name = "--max-input-lines", ValuePlaceholder = "<n>", Description = $"Batch: input-line budget (default {QueryCommandRunner.BatchDefaultInputLines}, max {QueryCommandRunner.BatchMaxInputLines})", PrimaryCommands = Set("batch") },
             new() { Name = "--max-output-chars", ValuePlaceholder = "<n>", Description = $"Batch JSON-summary output budget (default {QueryCommandRunner.BatchDefaultTotalOutputChars}, max {QueryCommandRunner.BatchMaxTotalOutputChars})", PrimaryCommands = Set("batch") },
