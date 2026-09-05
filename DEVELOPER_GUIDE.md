@@ -2,6 +2,12 @@
 
 > **[日本語版はこちら / Japanese version](#開発者ガイド)**
 
+## Indexed file-size policy
+
+For indexing, a nonblank invalid environment value retains the existing warning-and-default behavior; an explicit valid limit still takes precedence.
+
+`IndexedFileSizePolicy` stores the effective byte budget in `codeindex_meta.indexed_max_file_size_bytes`. CLI and MCP indexing resolve explicit input, valid environment input, saved policy, then the 4 MiB default. Successful full scans replace the policy; scoped scans keep the larger prior policy. Both retain a budget at least as large as surviving file rows, including skipped rows. Freshness checks never lower that budget because the current environment is smaller. Missing or invalid metadata falls back to the default and largest valid recorded size; all accepted budgets remain within `int.MaxValue`. No schema migration or forced rebuild is required. Dry runs read but do not stamp policy. Normalized content/checksum loading and its byte/allocation bounds remain shared with indexing. The sorted freshness merge consumes discovered indexed paths even when loading fails, preserving scan-error and unverifiable evidence instead of falsely counting a deletion.
+
 ## Build & Test
 
 Initial full-index implementation notes / 初回フルインデックスの実装ノート:
@@ -4306,6 +4312,12 @@ For symmetry, the MCP server no longer echoes raw `Exception.Message` content in
 
 <a id="開発者ガイド"></a>
 # 開発者ガイド
+
+### 索引のファイルサイズ方針
+
+索引作成時の空白以外の不正な環境変数値は、従来どおり警告して既定値へ戻します。有効な上限の明示指定があれば、そちらを優先します。
+
+`IndexedFileSizePolicy`は実効バイト上限を`codeindex_meta.indexed_max_file_size_bytes`に保存します。CLIとMCPの索引作成は、明示指定、有効な環境変数、保存済み方針、既定の4 MiBの順に解決します。成功した全体走査は方針を置き換え、部分走査は従来の大きい上限を維持します。どちらも、スキップされた行を含む残存ファイル行のサイズ以上の上限を保持します。鮮度チェックは現在の環境変数が小さくても読み取り上限を下げません。メタデータが未保存または不正なら、既定値と記録済みの有効な最大サイズを使い、すべての上限を`int.MaxValue`以内に制限します。スキーマ移行や強制rebuildは不要です。dry runは方針を読み取りますが保存しません。内容の正規化・チェックサム計算とバイト数・割り当て上限は索引作成と同じ処理を使います。鮮度比較の整列済みマージは読み取り失敗時も発見済みの索引パスを消費し、削除と誤判定せず走査エラーと確認不能の証拠を保持します。
 
 ## ビルド・テスト
 

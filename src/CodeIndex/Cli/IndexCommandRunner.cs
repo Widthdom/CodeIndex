@@ -572,6 +572,8 @@ public static partial class IndexCommandRunner
                 // 縮退状態に落とさないよう、clear は実際に書き込み直前で行う。
 
                 db.InitializeSchema();
+                options = context.Options.WithResolvedFileSizeLimit(
+                    IndexedFileSizePolicy.ResolveForIndex(db, context.Options.MaxFileSizeBytes));
                 var indexRunDiagnostics = new List<string>();
                 AddToGitExclude(options.ProjectPath!, dbPath, indexRunDiagnostics, indexCancellation.Token);
 
@@ -699,6 +701,13 @@ public static partial class IndexCommandRunner
 
 public sealed class IndexCommandOptions
 {
+    internal IndexCommandOptions WithResolvedFileSizeLimit(long limit)
+    {
+        var copy = (IndexCommandOptions)MemberwiseClone();
+        copy._maxFileSizeBytes = limit;
+        return copy;
+    }
+
     public bool ShowHelp { get; init; }
     public string? ProjectPath { get; init; }
     public string? DbPath { get; init; }
@@ -742,7 +751,8 @@ public sealed class IndexCommandOptions
     public int WatchPendingPathLimit { get; init; } = IndexWatchRunner.DefaultWatchPendingPathLimit;
     public DurationOutputFormat DurationFormat { get; init; } = DurationOutputFormat.Auto;
     public CompletionNotificationMode NotifyMode { get; init; } = CompletionNotificationMode.Auto;
-    public long? MaxFileSizeBytes { get; init; }
+    private long? _maxFileSizeBytes;
+    public long? MaxFileSizeBytes { get => _maxFileSizeBytes; init => _maxFileSizeBytes = value; }
     public int MaxSymbolsPerFile { get; init; } = IndexCommandRunner.DefaultMaxSymbolsPerFile;
     public int MaxReferencesPerFile { get; init; } = IndexCommandRunner.DefaultMaxReferencesPerFile;
     public int Parallelism { get; init; } = IndexCommandRunner.DefaultIndexParallelism();
