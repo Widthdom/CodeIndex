@@ -4,6 +4,9 @@
 
 ## Build & Test
 
+Initial full-index implementation notes / 初回フルインデックスの実装ノート:
+[Initial full-index performance](docs/initial-index-performance.md).
+
 Core commands:
 
 | Command | Use |

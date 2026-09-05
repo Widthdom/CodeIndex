@@ -189,7 +189,7 @@ public sealed class FreshReferenceResolutionTests : IDisposable
             StringComparison.Ordinal);
         Assert.DoesNotContain("FROM symbols AS s", materializedFreshSql, StringComparison.Ordinal);
         Assert.Equal(2, CountOccurrences(materializedFreshSql, "UNION"));
-        Assert.DoesNotContain("UNION ALL", materializedFreshSql, StringComparison.Ordinal);
+        Assert.Equal(2, CountOccurrences(materializedFreshSql, "UNION ALL"));
         Assert.Contains(
             "COALESCE(candidate.start_line, candidate.line) DESC",
             materializedFreshSql,

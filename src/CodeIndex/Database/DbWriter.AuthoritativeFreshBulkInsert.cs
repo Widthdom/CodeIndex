@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Data;
 using System.Globalization;
 using System.Text;
@@ -736,18 +737,42 @@ public partial class DbWriter
             internal void BindText(string value)
             {
                 ArgumentNullException.ThrowIfNull(value);
-                CheckBind(raw.sqlite3_bind_text(
-                    _cached.Statement,
-                    NextParameterOrdinal(),
-                    value));
+                BindUtf8Text(NextParameterOrdinal(), value);
             }
 
             internal void BindNullableText(string? value)
             {
                 var ordinal = NextParameterOrdinal();
-                CheckBind(value == null
-                    ? raw.sqlite3_bind_null(_cached.Statement, ordinal)
-                    : raw.sqlite3_bind_text(_cached.Statement, ordinal, value));
+                if (value == null)
+                    CheckBind(raw.sqlite3_bind_null(_cached.Statement, ordinal));
+                else
+                    BindUtf8Text(ordinal, value);
+            }
+
+            private void BindUtf8Text(int ordinal, string value)
+            {
+                // SQLitePCLRaw's string overload allocates an encoded array for long values.
+                // Its span overload copies with SQLITE_TRANSIENT, so one bounded scratch
+                // buffer can be reused immediately, including before sqlite3_step.
+                // span版はSQLITE_TRANSIENTでコピーするため、bind直後にbufferを返却できる。
+                const int StackByteLimit = 1024;
+                var byteCapacity = value.Length <= StackByteLimit / 3 - 1
+                    ? Encoding.UTF8.GetMaxByteCount(value.Length)
+                    : Encoding.UTF8.GetByteCount(value);
+                byte[]? rented = null;
+                Span<byte> bytes = byteCapacity <= StackByteLimit
+                    ? stackalloc byte[StackByteLimit]
+                    : (rented = ArrayPool<byte>.Shared.Rent(byteCapacity));
+                try
+                {
+                    var written = Encoding.UTF8.GetBytes(value.AsSpan(), bytes);
+                    CheckBind(raw.sqlite3_bind_text(_cached.Statement, ordinal, bytes[..written]));
+                }
+                finally
+                {
+                    if (rented != null)
+                        ArrayPool<byte>.Shared.Return(rented, clearArray: true);
+                }
             }
 
             internal void BindDateTimeText(DateTime value)
