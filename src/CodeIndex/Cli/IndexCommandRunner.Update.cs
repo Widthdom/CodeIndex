@@ -976,6 +976,7 @@ public static partial class IndexCommandRunner
             }
             StampIndexedHeadMetadata(writer, projectRoot, indexRunDiagnostics, cancellationToken);
             StampIndexedSymlinkPolicy(writer, options.SymlinkPolicy, indexRunDiagnostics);
+            writer.StampIndexedFileSizePolicy(options.MaxFileSizeBytes!.Value, scoped: true);
             StampCommitScopedFreshHeadMetadata(
                 writer,
                 priorWorkspaceVerifiedHead,

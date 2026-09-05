@@ -53,6 +53,14 @@ public partial class McpServer
         JsonArray? memorySamples)
     {
         var requestToken = _currentRequestToken.Value;
+        var effectiveFileSizeLimit = IndexedFileSizePolicy.Resolve(null, indexOptions.MaxFileBytes);
+        if (File.Exists(DbPathResolver.NormalizeDbPath(_dbPath)) || _dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+        {
+            using var policyDb = new DbContext(DbOpenIntent.QueryOnly, _dbPath, requestToken);
+            using var policyReader = new DbReader(policyDb);
+            effectiveFileSizeLimit = IndexedFileSizePolicy.Resolve(policyReader, indexOptions.MaxFileBytes);
+        }
+        indexOptions.OptionsPayload["maxFileBytes"] = effectiveFileSizeLimit;
         var ignoreCase = GitHelper.ResolveIgnoreCase(projectPath, requestToken);
         var repositoryRoot = GitHelper.TryGetRepositoryRoot(projectPath, requestToken);
         var ignoreRuleRoot = repositoryRoot != null && IsIndexPathAuthorized(cwd, repositoryRoot)
@@ -62,7 +70,7 @@ public partial class McpServer
             projectPath,
             ignoreCase,
             ignoreRuleRoot,
-            indexOptions.MaxFileBytes,
+            effectiveFileSizeLimit,
             directoryIgnoreCaseProbe: null,
             symlinkPolicy: indexOptions.SymlinkPolicy,
             generatedCodePatterns: IndexCommandRunner.ReadGeneratedCodePatternsFromEnvironment(),
@@ -81,7 +89,7 @@ public partial class McpServer
             ["checked_root_identity"] = authorizedRoot.CheckedRootIdentity,
             ["dry_run"] = true,
             ["would_rebuild"] = indexOptions.Rebuild,
-            ["max_file_bytes"] = indexOptions.MaxFileBytes,
+            ["max_file_bytes"] = effectiveFileSizeLimit,
             ["index_options"] = indexOptions.OptionsPayload,
             ["unsupported_modes"] = unsupportedModes,
             ["summary"] = new JsonObject
