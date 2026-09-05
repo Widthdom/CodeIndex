@@ -248,7 +248,7 @@ internal static class IndexFreshnessChecker
         }
     }
 
-    private static bool IsSkipWorktreePath(HashSet<string> skipWorktreePaths, string path)
+    internal static bool IsSkipWorktreePath(HashSet<string> skipWorktreePaths, string path)
     {
         if (skipWorktreePaths.Contains(path) || skipWorktreePaths.Contains("/"))
             return true;
@@ -262,7 +262,7 @@ internal static class IndexFreshnessChecker
         return false;
     }
 
-    private static FileIndexer.SymlinkPolicy ReadIndexedSymlinkPolicy(DbReader reader)
+    internal static FileIndexer.SymlinkPolicy ReadIndexedSymlinkPolicy(DbReader reader)
     {
         var raw = reader.GetMetaString(DbContext.IndexedFollowSymlinksPolicyMetaKey);
         if (string.IsNullOrWhiteSpace(raw))

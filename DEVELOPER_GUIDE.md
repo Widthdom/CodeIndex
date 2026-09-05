@@ -2,6 +2,14 @@
 
 > **[日本語版はこちら / Japanese version](#開発者ガイド)**
 
+## Audit baseline contract
+
+Workspace identity comes from the indexed project root, independently of the database location. Saved size/symlink policy participates in scope comparison. For prior paths that no longer have indexed rows, reuse indexing path filters and sparse-checkout evidence: only verified physical deletions within the current indexing scope may resolve. Existing excluded files and unverifiable paths make comparison unknown. Reject contradictory truncation/count metadata; missing coverage fields and empty incomparable comparisons remain partial (exit `11`).
+
+`AuditBaselineStore` implements the local v1 baseline schema; `QueryCommandRunner.AuditBaseline.cs` consumes the same bounded recipe runs as `audit --all`. The `baseline-export`, `baseline-compare`, and `baseline-review` audit subcommands do not migrate SQLite or use GitHub. Preserve SHA-256 match/context identities without line coordinates, canonical case-preserving relative paths, schema/identity versions, effective scope and recipe fingerprints, workspace and index-generation provenance, coverage reasons, and count authority. Index generations may differ after a valid refresh; workspace/scope/recipe/identity contracts must match. Missing legacy provenance degrades comparison conservatively.
+
+Absence can become resolved only when both snapshots have complete coverage. Retain unknown classifications for capped, stale, partial, failed, cancelled, changed-scope, changed-recipe, insufficient-evidence, duplicate, or possible-rename cases. Review annotations bind actor/reason/time to the stored context; changed evidence cannot inherit a safe decision. Comparison counts distinct identity groups and separately exposes observation counts. Bound files to 8 MiB, depth to 16, observations to 10,000, and comparison rows to 200 with exact omission accounting. Baselines omit source snippets, use the existing atomic sensitive writer, and require explicit overwrite. Windows paths emitted by the index already use slash separators; ambiguous literal backslashes fail closed. Keep command help, contextual completions, README, and behavioral tests synchronized.
+
 ## Indexed file-size policy
 
 For indexing, a nonblank invalid environment value retains the existing warning-and-default behavior; an explicit valid limit still takes precedence.
@@ -4327,6 +4335,14 @@ For symmetry, the MCP server no longer echoes raw `Exception.Message` content in
 
 <a id="開発者ガイド"></a>
 # 開発者ガイド
+
+## 監査 baseline 契約
+
+ワークスペースの識別には DB の保存先とは独立した索引対象のプロジェクトルートを使用します。保存済みサイズ・シンボリックリンク方針も範囲比較に含めます。以前のパスが索引行を失った場合は索引のパスフィルターと sparse-checkout の情報を再利用し、現在の索引範囲内で確認できた物理的削除だけを解決済みとします。存在する除外ファイルや検証不能なパスは不明扱いです。省略・件数の矛盾したメタデータは拒否し、完全性情報の欠落や空の比較不能結果も部分結果（終了コード `11`）とします。
+
+`AuditBaselineStore` がローカル v1 baseline スキーマを実装し、`QueryCommandRunner.AuditBaseline.cs` は `audit --all` と同じ上限付きレシピ実行を利用します。audit の `baseline-export`、`baseline-compare`、`baseline-review` サブコマンドは SQLite の移行や GitHub 接続を行いません。行番号を含まない SHA-256 の一致・文脈識別、大小文字を保持する正規相対パス、スキーマ・識別バージョン、実効範囲・レシピの指紋、ワークスペース・索引世代の由来、完全性の理由、件数の確実性を維持してください。正しい索引更新後の世代差は許容しますが、ワークスペース・範囲・レシピ・識別契約は一致必須です。旧データの由来情報が欠ける場合は保守的に比較を降格します。
+
+不在を解決済みとできるのは両スナップショットが完全な場合だけです。上限到達・古い索引・部分実行・失敗・取消・範囲変更・レシピ変更・証拠不足・重複・リネーム候補は不明のまま保持します。注釈は担当者・理由・時刻を保存された文脈に結び付け、証拠変更後は安全判定を継承しません。比較では識別グループ数と観測数を別々に示します。ファイル8 MiB、深度16、10,000観測、比較出力200行の上限と正確な省略数を維持してください。ソース抜粋は保存せず、既存のアトミックな機密ファイル保存処理と明示的な上書きを使用します。索引の Windows パスは既にスラッシュ区切りであり、曖昧なリテラルのバックスラッシュは拒否します。ヘルプ・文脈別補完・README・振る舞いのテストを同期してください。
 
 `audit --all --progress` は `ConsoleUi.AuditProgress` を使い、単調増加時計と同期された timer により、逐次実行する子 query の処理中も進捗を通知します。開始／終了通知を除く heartbeat は毎秒最大1回で、ASCII payload は最大256文字です。recipe/query は番号だけを出力し、カスタム識別子からの機密情報漏洩を防ぎます。stderr 自身の端末状態を確認し、再描画は端末幅で切り詰め、取得用の行は flush し、破棄前に gate 内で通知を停止します。出力のシリアライズ後に終了状態を決定するため、byte 上限の失敗と `--allow-partial` で許可された不完全な結果も区別します。既存の quiet と animation 無効化指定は明示的な progress より優先され、recipe matching、SQLite cancellation、audit deadline は維持されます。
 

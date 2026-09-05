@@ -62,6 +62,7 @@ public static partial class QueryCommandRunner
         internal bool ByteBudgetReached { get; set; }
         internal string IndexState { get; set; } = "unknown";
         internal string? IndexReason { get; set; }
+        internal string? BaselineStartGeneration { get; set; }
         internal long ElapsedMilliseconds { get; set; }
     }
 
@@ -140,7 +141,8 @@ public static partial class QueryCommandRunner
         CancellationToken cancellationToken,
         SearchAuditRecipeRegistry registry,
         Action? afterQueryForTesting = null,
-        Action<DbReader>? beforeQueryForTesting = null)
+        Action<DbReader>? beforeQueryForTesting = null,
+        Func<DbReader?, QueryCommandOptions, AuditAllRunState, int>? consume = null)
     {
         var selectedRecipes = registry.Recipes
             .OrderBy(recipe => recipe.Name, StringComparer.Ordinal)
@@ -188,7 +190,8 @@ public static partial class QueryCommandRunner
             registry.Diagnostics,
             cancellationToken,
             afterQueryForTesting,
-            beforeQueryForTesting);
+            beforeQueryForTesting,
+            consume);
     }
 
     private static string[] AddAuditAllSummaryFormatIfNeeded(string[] args)
@@ -271,7 +274,8 @@ public static partial class QueryCommandRunner
         IReadOnlyList<string> registryDiagnostics,
         CancellationToken cancellationToken,
         Action? afterQueryForTesting,
-        Action<DbReader>? beforeQueryForTesting)
+        Action<DbReader>? beforeQueryForTesting,
+        Func<DbReader?, QueryCommandOptions, AuditAllRunState, int>? consume = null)
     {
         var effectiveTotalLimit = options.TotalLimit ?? DefaultAuditAllTotalLimit;
         var timeBudget = AuditAllTimeBudgetForTesting ?? DefaultAuditAllTimeBudget;
@@ -287,7 +291,7 @@ public static partial class QueryCommandRunner
             AddOmittedAuditAllRecipes(state, 0, "cancelled");
             progress?.Start();
             progress?.PauseForOutput();
-            var cancelledExitCode = WriteAuditAllOutput(options, jsonOptions, state);
+            var cancelledExitCode = consume != null ? consume(null, options, state) : WriteAuditAllOutput(options, jsonOptions, state);
             progress?.Finish("cancelled");
             return cancelledExitCode;
         }
@@ -303,7 +307,8 @@ public static partial class QueryCommandRunner
                 progress,
                 cancellationToken,
                 afterQueryForTesting,
-                beforeQueryForTesting),
+                beforeQueryForTesting,
+                consume),
             cancellationToken: cancellationToken);
         progress?.Finish(state.Cancelled || exitCode == CommandExitCodes.CancelledBySignal ? "cancelled"
             : exitCode != CommandExitCodes.Success && exitCode != CommandExitCodes.PartialResult ? "failed"
@@ -322,9 +327,12 @@ public static partial class QueryCommandRunner
         ConsoleUi.AuditProgress? progress,
         CancellationToken cancellationToken,
         Action? afterQueryForTesting,
-        Action<DbReader>? beforeQueryForTesting)
+        Action<DbReader>? beforeQueryForTesting,
+        Func<DbReader?, QueryCommandOptions, AuditAllRunState, int>? consume = null)
     {
         var stopwatch = Stopwatch.StartNew();
+        if (consume != null)
+            state.BaselineStartGeneration = reader.GetPaginationGeneration().Identity;
         var includeRows = !options.CountOnly && !options.SummaryOnly;
         var indexState = ResolveSearchQueryIndexFreshness(reader, options, out var indexReason);
         state.IndexState = indexState;
@@ -496,7 +504,7 @@ public static partial class QueryCommandRunner
 
         stopwatch.Stop();
         state.ElapsedMilliseconds = stopwatch.ElapsedMilliseconds;
-        return WriteAuditAllOutput(options, jsonOptions, state);
+        return consume != null ? consume(reader, options, state) : WriteAuditAllOutput(options, jsonOptions, state);
     }
 
     private static void TrimAuditAllQueryResultsToByteBudget(
@@ -1015,14 +1023,14 @@ public static partial class QueryCommandRunner
         };
     }
 
-    private static string BuildAuditAllRecoveryCommand(string recipeName, QueryCommandOptions options)
+    private static string BuildAuditAllRecoveryCommand(string recipeName, QueryCommandOptions options, bool includeDb = true)
     {
         var args = new List<string>();
         options.InvocationContext.AddRecipeCommandPrefix(args, recipeName);
         args.Add("--format");
         args.Add(OutputFormatCompact);
         AddReplayValueOption(args, "--limit", options.Limit.ToString(CultureInfo.InvariantCulture));
-        if (options.DbPathExplicit)
+        if (includeDb && options.DbPathExplicit)
             AddReplayValueOption(args, "--db", options.DbPath);
         if (options.SourceOnly)
             args.Add("--source-only");

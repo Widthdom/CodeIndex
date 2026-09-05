@@ -1,0 +1,9 @@
+{
+  "api_version": "1",
+  "mode": "audit_baseline_export",
+  "status": "saved",
+  "complete": true,
+  "coverage_reasons": [],
+  "entry_count": 1,
+  "recovery_guidance": "Refresh the index and repeat the same recipes and filters with sufficient --limit and --total-limit. Review unknown or changed evidence manually; never treat unknown as resolved."
+}

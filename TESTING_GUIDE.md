@@ -8,6 +8,10 @@ If you change test code, test helpers, test execution flow, or testing conventio
 
 ## Quick Start
 
+Baseline review regressions also exercise indexing exclusion changes, a different indexed root at the same DB path, contradictory/missing omission metadata, and the partial exit code for empty incomparable snapshots.
+
+`AuditBaselineIssue5261Tests` covers compatible deltas, moved lines, changed reviewed evidence, incomplete/legacy metadata, ambiguous duplicates/renames, bounded counts, private atomic writes, invalid paths and malformed/oversized input, plus actual index/recipe CLI export and compare. Keep human/JSON error identity and contextual help/completion checks on both net8.0 and net9.0. Use the console-sensitive collection for CLI capture and isolated temporary projects for baseline files.
+
 The #5260 redraw test also pauses the renderer, proves later timer ticks emit nothing during result output, and checks that clearing precedes the result and the terminal notification follows it.
 
 Issue #5260 coverage in `QueryCommandRunnerAuditProgressIssue5260Tests` waits for a real heartbeat while a child query is held, verifies JSON/NDJSON stdout and private-identifier exclusion, and exercises cancellation, query/output failures, the deadline, global quiet/no-progress precedence, flag scope, and deterministic monotonic rate/redraw/disposal behavior on both frameworks. Keep console mutations inside the console-sensitive collection and restore captured writers and test budgets in `finally`.
@@ -1181,6 +1185,10 @@ Check the following:
 
 <a id="テストガイド"></a>
 # テストガイド
+
+baseline レビューの回帰テストでは、索引除外設定の変更、同一 DB パスでの索引ルートの変更、矛盾・欠落した省略メタデータ、空の比較不能スナップショットの部分終了コードも検証します。
+
+`AuditBaselineIssue5261Tests` は互換性のある差分、行移動、レビュー済み証拠の変化、不完全・旧形式のメタデータ、曖昧な重複・リネーム、上限付き件数、機密ファイルのアトミック保存、不正パス・壊れた入力・過大入力、および実際の索引・レシピによる CLI 保存と比較を検証します。human／JSON のエラー識別と文脈別ヘルプ・補完を net8.0 と net9.0 の両方で維持してください。CLI 出力の捕捉は console-sensitive コレクションに置き、baseline は分離した一時プロジェクトに保存してください。
 
 #5260 の再描画テストは、renderer の一時停止後の timer tick が結果出力中に何も書かないことと、行消去・結果出力・終了通知の順序も確認します。
 

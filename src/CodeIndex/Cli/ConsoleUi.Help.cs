@@ -246,6 +246,9 @@ public static partial class ConsoleUi
         Console.WriteLine("  cdidx search authenticate --verbose            Emit query debug diagnostics on stderr");
         Console.WriteLine("  cdidx audit --all --format compact --total-limit 200");
         Console.WriteLine("                                              Audit every registered recipe in deterministic order");
+        Console.WriteLine("  cdidx audit baseline-export .cdidx/audit-baseline.json --recipe risky-code");
+        Console.WriteLine("  cdidx audit baseline-compare .cdidx/audit-baseline.json --recipe risky-code");
+        Console.WriteLine("                                              Compare bounded local findings; incomplete absence stays unknown");
         Console.WriteLine("  cdidx definition ResolveGitCommonDir --body   Show a symbol definition and body");
         Console.WriteLine("  cdidx references ResolveGitCommonDir          Find indexed references");
         Console.WriteLine("  cdidx references DbContext --kind instantiate Filter constructor sites by reference kind");
