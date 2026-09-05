@@ -84,6 +84,10 @@ public class BatchChildErrorParserTests
                      ErrorJson.Replace("\"minimum_required_bytes_known\":true", "\"minimum_required_bytes_known\":\"true\""),
                      ErrorJson.Replace("\"message\":", "\"message\":\"duplicate\",\"message\":"),
                      ErrorJson.Replace("\"action\":", "\"action\":\"duplicate\",\"action\":"),
+                     ErrorJson.Replace("Increase the output budget.", "\\uD800"),
+                     ErrorJson.Replace("Retry with more bytes.", "\\uDC00"),
+                     ErrorJson.Replace("\"status\":", "\"\\uD800\":null,\"status\":"),
+                     ErrorJson.Replace("\"action\":", "\"\\uDC00\":null,\"action\":"),
                      ErrorJson.Replace("\"status\":\"error\"", "\"status\":\"error\",\"unknown\":"
                          + new string('[', BatchChildErrorParser.MaxDepth) + "0" + new string(']', BatchChildErrorParser.MaxDepth)),
                      """{"metadata":{"exit_code":"1","error":{}}}""",

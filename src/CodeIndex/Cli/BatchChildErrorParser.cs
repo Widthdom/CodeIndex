@@ -108,8 +108,10 @@ internal static class BatchChildErrorParser
             }
             return result;
         }
-        catch (Exception ex) when (ex is JsonException or InvalidDataException)
+        catch (Exception ex) when (ex is JsonException or InvalidDataException or InvalidOperationException)
         {
+            // JsonDocument defers decoding strings/property names; invalid surrogate
+            // escapes can throw InvalidOperationException during that later access.
             // Malformed or over-budget output retains the exit-code fallback.
             return null;
         }
