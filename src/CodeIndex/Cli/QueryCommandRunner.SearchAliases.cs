@@ -20,6 +20,8 @@ public static partial class QueryCommandRunner
         JsonSerializerOptions jsonOptions,
         CancellationToken cancellationToken = default)
     {
+        if (subArgs.Length > 0 && subArgs[0] is "baseline-export" or "baseline-compare" or "baseline-review")
+            return RunAuditBaseline([subArgs[0]["baseline-".Length..], .. subArgs[1..]], jsonOptions, cancellationToken);
         if (HasAuditAllFlag(subArgs))
             return RunAuditAll(subArgs, jsonOptions, cancellationToken);
 

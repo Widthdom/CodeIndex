@@ -890,6 +890,14 @@ internal static class CliFlagSchema
     /// </summary>
     public static IReadOnlyList<CliFlag> GetCompletionFlagsForCommand(string command, string? subcommand = null)
     {
+        if (command == "audit" && subcommand is "baseline-export" or "baseline-compare" or "baseline-review")
+        {
+            var names = subcommand == "baseline-review"
+                ? Set("--actor", "--reason", "--overwrite", "--json")
+                : Set("--recipe", "--db", "--lang", "--path", "--exclude-path", "--exclude-tests", "--audit-scope", "--since", "--limit", "--total-limit", "--json");
+            return All.Where(flag => names.Contains(flag.Name) || subcommand == "baseline-export" && flag.Name == "--overwrite")
+                .Select(flag => flag with { ShortName = null }).ToList();
+        }
         return All.Where(f => f.AppliesToCompletionContext(command, subcommand)).ToList();
     }
 

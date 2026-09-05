@@ -2,6 +2,12 @@
 
 > **[日本語版はこちら / Japanese version](#開発者ガイド)**
 
+## Audit baseline contract
+
+`AuditBaselineStore` implements the local v1 baseline schema; `QueryCommandRunner.AuditBaseline.cs` consumes the same bounded recipe runs as `audit --all`. The `baseline-export`, `baseline-compare`, and `baseline-review` audit subcommands do not migrate SQLite or use GitHub. Preserve SHA-256 match/context identities without line coordinates, canonical case-preserving relative paths, schema/identity versions, effective scope and recipe fingerprints, workspace and index-generation provenance, coverage reasons, and count authority. Index generations may differ after a valid refresh; workspace/scope/recipe/identity contracts must match. Missing legacy provenance degrades comparison conservatively.
+
+Absence can become resolved only when both snapshots have complete coverage. Retain unknown classifications for capped, stale, partial, failed, cancelled, changed-scope, changed-recipe, insufficient-evidence, duplicate, or possible-rename cases. Review annotations bind actor/reason/time to the stored context; changed evidence cannot inherit a safe decision. Comparison counts distinct identity groups and separately exposes observation counts. Bound files to 8 MiB, depth to 16, observations to 10,000, and comparison rows to 200 with exact omission accounting. Baselines omit source snippets, use the existing atomic sensitive writer, and require explicit overwrite. Windows paths emitted by the index already use slash separators; ambiguous literal backslashes fail closed. Keep command help, contextual completions, README, and behavioral tests synchronized.
+
 ## Indexed file-size policy
 
 For indexing, a nonblank invalid environment value retains the existing warning-and-default behavior; an explicit valid limit still takes precedence.
@@ -4325,6 +4331,12 @@ For symmetry, the MCP server no longer echoes raw `Exception.Message` content in
 
 <a id="開発者ガイド"></a>
 # 開発者ガイド
+
+## 監査 baseline 契約
+
+`AuditBaselineStore` がローカル v1 baseline スキーマを実装し、`QueryCommandRunner.AuditBaseline.cs` は `audit --all` と同じ上限付きレシピ実行を利用します。audit の `baseline-export`、`baseline-compare`、`baseline-review` サブコマンドは SQLite の移行や GitHub 接続を行いません。行番号を含まない SHA-256 の一致・文脈識別、大小文字を保持する正規相対パス、スキーマ・識別バージョン、実効範囲・レシピの指紋、ワークスペース・索引世代の由来、完全性の理由、件数の確実性を維持してください。正しい索引更新後の世代差は許容しますが、ワークスペース・範囲・レシピ・識別契約は一致必須です。旧データの由来情報が欠ける場合は保守的に比較を降格します。
+
+不在を解決済みとできるのは両スナップショットが完全な場合だけです。上限到達・古い索引・部分実行・失敗・取消・範囲変更・レシピ変更・証拠不足・重複・リネーム候補は不明のまま保持します。注釈は担当者・理由・時刻を保存された文脈に結び付け、証拠変更後は安全判定を継承しません。比較では識別グループ数と観測数を別々に示します。ファイル8 MiB、深度16、10,000観測、比較出力200行の上限と正確な省略数を維持してください。ソース抜粋は保存せず、既存のアトミックな機密ファイル保存処理と明示的な上書きを使用します。索引の Windows パスは既にスラッシュ区切りであり、曖昧なリテラルのバックスラッシュは拒否します。ヘルプ・文脈別補完・README・振る舞いのテストを同期してください。
 
 ### 索引のファイルサイズ方針
 

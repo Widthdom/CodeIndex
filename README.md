@@ -18,6 +18,16 @@
 agents, MCP clients, and LSP-native editors can run fast full-text, symbol,
 dependency, and inspection queries without rescanning the same tree for every query.
 
+## Local audit baselines
+
+`cdidx audit baseline-export .cdidx/audit-baseline.json --recipe risky-code` runs the existing audit engine and saves a local baseline. Omit `--recipe` to select all registered recipes. Refresh the index after source changes, then run `cdidx audit baseline-compare .cdidx/audit-baseline.json --recipe risky-code --json`. Use the same filters and limits for comparable runs. Each command accepts `--db`, `--lang`, `--path`, `--exclude-path`, `--exclude-tests`, `--audit-scope`, `--since`, `--limit`, and `--total-limit` as shown in command help; defaults are 1,000 rows per query and 10,000 total rows.
+
+Comparison reports bounded `new`, `unchanged`, `resolved`, and `unknown` identity groups, totals, observation counts, and omissions. Missing findings stay `unknown` when either run is stale, partial, capped, failed, cancelled, or has different recipes, filters, workspace, or identity contracts. Duplicate evidence and possible renames are never guessed. Line numbers are excluded from identity; changed context requires review. Exit `11` identifies incomplete coverage or unknown classifications; export may save an incomplete baseline, explicitly marked as such. Cancellation never publishes an export.
+
+To record a safe finding, copy its `id` from the baseline or comparison and run `cdidx audit baseline-review .cdidx/audit-baseline.json <id> --actor <name> --reason <text> --overwrite`. This requires a complete baseline and an unambiguous entry. The reason, actor, time, and evidence remain traceable; `review_applies` is true only for unchanged compatible evidence. Compare never edits the baseline. Export refuses replacement without `--overwrite`; explicit replacement starts a new baseline without previous annotations.
+
+Files contain hashes of bounded match/context evidence, normalized relative paths, effective filters, and index/recipe provenance, with no source snippets. Store them under `.cdidx/` or outside the indexed source scope. Limits are 8 MiB, JSON depth 16, 10,000 observations, and 200 comparison rows with omission counts. Writes are atomic and use POSIX mode `0600` (Windows inherits directory ACLs). Paths retain case; ambiguous backslashes, absolute paths, and parent segments are rejected. This CLI-only workflow needs neither GitHub credentials nor a database migration. Regenerate installed shell completions after upgrading.
+
 ## File-size limits and freshness
 
 For indexing, a nonblank invalid `CDIDX_MAX_FILE_BYTES` value falls back to the 4 MiB default, as the warning indicates, unless an explicit valid limit is supplied.
@@ -286,6 +296,16 @@ For commercial use, integration, and naming guidance, see
 [TRADEMARKS.md](TRADEMARKS.md).
 
 # cdidx（日本語）
+
+### ローカル監査 baseline
+
+`cdidx audit baseline-export .cdidx/audit-baseline.json --recipe risky-code` は既存の監査エンジンを実行し、ローカル baseline を保存します。`--recipe` を省略すると登録済みの全レシピが対象です。ソース変更後に索引を更新し、`cdidx audit baseline-compare .cdidx/audit-baseline.json --recipe risky-code --json` で比較します。比較時は同じフィルターと上限を指定してください。各コマンドはヘルプ記載の `--db`、`--lang`、`--path`、`--exclude-path`、`--exclude-tests`、`--audit-scope`、`--since`、`--limit`、`--total-limit` に対応します。既定値はクエリごとに1,000行、全体で10,000行です。
+
+比較は `new`、`unchanged`、`resolved`、`unknown` の識別グループ、総数、観測数、省略数を返します。どちらかの実行が古い、不完全、上限到達、失敗、取消済み、またはレシピ・フィルター・ワークスペース・識別契約が異なる場合、消えた検出結果は `unknown` のままです。重複した証拠やリネーム候補を推測で対応付けません。行番号は識別から除外し、文脈が変化した場合は再レビューが必要です。不完全な監査または不明な分類は終了コード `11` となります。export は不完全であることを明記した baseline を保存できますが、取消時は公開しません。
+
+安全確認済みの記録には baseline または比較結果の `id` を用い、`cdidx audit baseline-review .cdidx/audit-baseline.json <id> --actor <name> --reason <text> --overwrite` を実行します。完全な baseline 内の一意な検出結果だけが対象です。理由・担当者・時刻・証拠を保存し、互換性のある証拠が変わっていない場合だけ `review_applies` が真になります。compare は baseline を変更しません。export による置換には `--overwrite` が必要で、明示的な置換後は以前の注釈を含まない新しい baseline になります。
+
+ファイルには上限付きの一致・文脈のハッシュ、正規化した相対パス、実効フィルター、索引・レシピの由来を記録し、ソースの抜粋は保存しません。`.cdidx/` または索引対象外に保存してください。上限は8 MiB、JSON 深度16、10,000観測、比較出力200行で、省略数を明示します。保存はアトミックで、POSIX は `0600`、Windows は親ディレクトリの ACL を継承します。パスの大文字小文字を保持し、曖昧なバックスラッシュ・絶対パス・親ディレクトリ要素は拒否します。CLI 専用で、GitHub 認証や DB 移行は不要です。更新後はインストール済みのシェル補完を再生成してください。
 
 ### ファイルサイズ上限と鮮度チェック
 
