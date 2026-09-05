@@ -79,6 +79,8 @@ internal static class CliContractManifest
         new("excerpt", "excerpt.json"),
         new("deps-cycles-summary", "deps-cycles-summary.json"),
         new("suggestions-compact", "suggestions-compact.json"),
+        new("audit-baseline-export", "audit-baseline-export.json"),
+        new("audit-baseline-compare", "audit-baseline-compare.json"),
     ];
 
     private static IReadOnlyList<Type> LoadCliJsonRootTypes() =>
