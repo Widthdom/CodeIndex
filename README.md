@@ -18,6 +18,10 @@
 agents, MCP clients, and LSP-native editors can run fast full-text, symbol,
 dependency, and inspection queries without rescanning the same tree for every query.
 
+## Audit progress
+
+For captured audit liveness, use `cdidx audit --all --summary-only --json --progress`. Progress goes to stderr while stdout retains JSON/NDJSON. `--quiet` and `--no-progress` override it regardless of argument order. See [audit progress](USER_GUIDE.md#audit-progress).
+
 ## File-size limits and freshness
 
 For indexing, a nonblank invalid `CDIDX_MAX_FILE_BYTES` value falls back to the 4 MiB default, as the warning indicates, unless an explicit valid limit is supplied.
@@ -286,6 +290,8 @@ For commercial use, integration, and naming guidance, see
 [TRADEMARKS.md](TRADEMARKS.md).
 
 # cdidx（日本語）
+
+audit の出力を取得しながら実行状況を確認するには、`cdidx audit --all --summary-only --json --progress` を使います。進捗は stderr に出力し、stdout の JSON/NDJSON を維持します。`--quiet` と `--no-progress` は引数の順序に関係なく優先されます。[audit の進捗](USER_GUIDE.md#audit-の進捗)を参照してください。
 
 ### ファイルサイズ上限と鮮度チェック
 

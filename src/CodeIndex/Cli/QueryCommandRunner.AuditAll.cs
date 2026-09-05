@@ -276,13 +276,22 @@ public static partial class QueryCommandRunner
         var effectiveTotalLimit = options.TotalLimit ?? DefaultAuditAllTotalLimit;
         var timeBudget = AuditAllTimeBudgetForTesting ?? DefaultAuditAllTimeBudget;
         var state = new AuditAllRunState(selectedRecipes, registryDiagnostics, effectiveTotalLimit, timeBudget);
+        using var progress = ConsoleUi.ShouldUseProgressAnimation()
+            && (options.Progress || ConsoleUi.ShouldUseInteractiveStandardError())
+                ? new ConsoleUi.AuditProgress(selectedRecipes.Count, selectedRecipes.Sum(recipe => (long)recipe.Queries.Count),
+                    Console.Error, ConsoleUi.ShouldUseInteractiveStandardError(), ConsoleUi.GetWindowWidth(), startImmediately: false)
+                : null;
         if (cancellationToken.IsCancellationRequested)
         {
             state.Cancelled = true;
             AddOmittedAuditAllRecipes(state, 0, "cancelled");
-            return WriteAuditAllOutput(options, jsonOptions, state);
+            progress?.Start();
+            progress?.PauseForOutput();
+            var cancelledExitCode = WriteAuditAllOutput(options, jsonOptions, state);
+            progress?.Finish("cancelled");
+            return cancelledExitCode;
         }
-        return WithDb(
+        var exitCode = WithDb(
             options,
             jsonOptions,
             reader => ExecuteAuditAllWithReader(
@@ -291,10 +300,17 @@ public static partial class QueryCommandRunner
                 jsonOptions,
                 userExact,
                 state,
+                progress,
                 cancellationToken,
                 afterQueryForTesting,
                 beforeQueryForTesting),
             cancellationToken: cancellationToken);
+        progress?.Finish(state.Cancelled || exitCode == CommandExitCodes.CancelledBySignal ? "cancelled"
+            : exitCode != CommandExitCodes.Success && exitCode != CommandExitCodes.PartialResult ? "failed"
+            : state.TimeBudgetExceeded || state.ResultLimitReached || state.ByteBudgetReached
+                || state.ByteOmittedResultCount > 0 || state.Errors.Count > 0 || state.OmittedErrorCount > 0 ? "partial"
+            : "completed");
+        return exitCode;
     }
 
     private static int ExecuteAuditAllWithReader(
@@ -303,6 +319,7 @@ public static partial class QueryCommandRunner
         JsonSerializerOptions jsonOptions,
         bool userExact,
         AuditAllRunState state,
+        ConsoleUi.AuditProgress? progress,
         CancellationToken cancellationToken,
         Action? afterQueryForTesting,
         Action<DbReader>? beforeQueryForTesting)
@@ -312,12 +329,10 @@ public static partial class QueryCommandRunner
         var indexState = ResolveSearchQueryIndexFreshness(reader, options, out var indexReason);
         state.IndexState = indexState;
         state.IndexReason = indexReason;
-        var progressSpinner = ConsoleUi.ShouldUseInteractiveConsole() && ConsoleUi.ShouldUseProgressAnimation()
-            ? ConsoleUi.StartSpinner(
-                "Auditing all registered recipes...",
-                ConsoleUi.GetSpinnerFrames(null),
-                writeToStandardError: true)
-            : null;
+        var completedRecipes = 0;
+        long completedQueries = 0;
+        long failedQueries = 0;
+        progress?.Start();
         try
         {
             for (var recipeIndex = 0; recipeIndex < state.SelectedRecipes.Count; recipeIndex++)
@@ -349,6 +364,7 @@ public static partial class QueryCommandRunner
                     }
 
                     var query = recipe.Queries[queryIndex];
+                    progress?.SetActive(recipeIndex + 1, queryIndex + 1);
                     var queryRun = new AuditAllQueryRun(query);
                     recipeRun.Queries.Add(queryRun);
                     using var queryCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -446,6 +462,12 @@ public static partial class QueryCommandRunner
                     }
                     finally
                     {
+                        if (queryRun.Status == "completed")
+                            completedQueries++;
+                        else if (queryRun.Status == "failed")
+                            failedQueries++;
+                        progress?.SetCompleted(completedRecipes, completedQueries, failedQueries);
+                        progress?.SetActive(0, 0);
                         afterQueryForTesting?.Invoke();
                     }
 
@@ -454,6 +476,9 @@ public static partial class QueryCommandRunner
                 }
 
                 FinalizeAuditAllRecipeStatus(recipeRun);
+                if (recipeRun.Status == "completed")
+                    completedRecipes++;
+                progress?.SetCompleted(completedRecipes, completedQueries, failedQueries);
                 if (state.Cancelled
                     || state.TimeBudgetExceeded
                     || includeRows && (state.ResultLimitReached || state.ByteBudgetReached))
@@ -465,7 +490,8 @@ public static partial class QueryCommandRunner
         }
         finally
         {
-            ConsoleUi.StopSpinner(progressSpinner);
+            progress?.SetActive(0, 0);
+            progress?.PauseForOutput();
         }
 
         stopwatch.Stop();
