@@ -27,7 +27,7 @@ public partial class IndexCommandRunnerTests
         try
         {
             Environment.SetEnvironmentVariable(FileIndexer.MaxFileSizeEnvironmentVariable,
-                source == "environment" ? largerLimit.ToString(CultureInfo.InvariantCulture) : null);
+                source == "environment" ? largerLimit.ToString(CultureInfo.InvariantCulture) : source == "cli" ? "1024" : null);
             Environment.CurrentDirectory = root;
             Directory.CreateDirectory(Path.Combine(root, "a"));
             Directory.CreateDirectory(Path.Combine(root, "b"));
@@ -49,6 +49,9 @@ public partial class IndexCommandRunnerTests
             Assert.True(initial.GetProperty("index_complete").GetBoolean());
             Environment.SetEnvironmentVariable(FileIndexer.MaxFileSizeEnvironmentVariable, null);
             AssertHealthy();
+            Environment.SetEnvironmentVariable(FileIndexer.MaxFileSizeEnvironmentVariable, "1024");
+            AssertHealthy();
+            Environment.SetEnvironmentVariable(FileIndexer.MaxFileSizeEnvironmentVariable, null);
 
             File.AppendAllText(Path.Combine(root, "a", "small.py"), "print('updated')\n");
             var (scopedExit, scoped) = RunAndCaptureJson(
@@ -148,6 +151,16 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(1, failed.ScanErrorCount);
             Assert.Equal(1, failed.UnverifiableFileCount);
             Assert.Equal(0, failed.MissingFileCount);
+
+            // Invalid environment input must match the existing warning's 4 MiB fallback,
+            // rather than silently keeping the saved 1 KiB admission limit.
+            Environment.SetEnvironmentVariable(FileIndexer.MaxFileSizeEnvironmentVariable, "invalid");
+            var (recoveredExit, recovered) = RunAndCaptureJson([root, "--db", dbPath, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, recoveredExit);
+            Assert.True(recovered.GetProperty("index_complete").GetBoolean());
+            using (var recoveredDb = new DbContext(DbOpenIntent.QueryOnly, dbPath))
+                Assert.Equal(FileIndexer.DefaultMaxFileSizeBytes.ToString(CultureInfo.InvariantCulture),
+                    recoveredDb.GetMetaString(IndexedFileSizePolicy.MetaKey));
 
             JsonNode CallIndex(JsonObject arguments)
             {

@@ -106,9 +106,7 @@ public partial class McpServer
 
         db.InitializeSchema();
 
-        long effectiveFileSizeLimit;
-        using (var policyReader = new DbReader(db))
-            effectiveFileSizeLimit = IndexedFileSizePolicy.Resolve(policyReader, maxFileBytes);
+        var effectiveFileSizeLimit = IndexedFileSizePolicy.ResolveForIndex(db, maxFileBytes);
         maxFileBytes = effectiveFileSizeLimit;
         optionsPayload["maxFileBytes"] = effectiveFileSizeLimit;
 

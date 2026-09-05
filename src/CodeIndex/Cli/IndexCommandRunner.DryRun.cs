@@ -32,15 +32,7 @@ public static partial class IndexCommandRunner
             : [];
         var projectPath = options.ProjectPath!;
         var resolvedDbPath = DbPathResolver.NormalizeDbPath(DbPathResolver.ResolveForIndex(projectPath, options.DbPath, options.DataDir).DbPath);
-        var dryIndexer = new FileIndexer(
-            projectPath,
-            ignoreCase,
-            ignoreRuleRoot,
-            options.MaxFileSizeBytes,
-            directoryIgnoreCaseProbe: null,
-            symlinkPolicy: options.SymlinkPolicy,
-            generatedCodePatterns: options.GeneratedCodePatterns,
-            internalIndexDatabasePath: resolvedDbPath);
+        FileIndexer dryIndexer;
         IEnumerable<string> dryCandidates;
         FileIndexer.IndexingFileTargetCollection? dryIndexingTargets;
         IEnumerable<string> dryDeleteCandidates;
@@ -57,6 +49,22 @@ public static partial class IndexCommandRunner
         try
         {
             dbSnapshot = ReadDryRunDbSnapshot(resolvedDbPath, options, cancellationToken);
+            var largestFile = dbSnapshot.Files.Values
+                .Select(file => file.Size ?? 0)
+                .Where(size => size is >= 0 and <= int.MaxValue)
+                .DefaultIfEmpty(0)
+                .Max();
+            options = options.WithResolvedFileSizeLimit(IndexedFileSizePolicy.ResolveStored(
+                dbSnapshot.GetMeta(IndexedFileSizePolicy.MetaKey), largestFile, options.MaxFileSizeBytes));
+            dryIndexer = new FileIndexer(
+                projectPath,
+                ignoreCase,
+                ignoreRuleRoot,
+                options.MaxFileSizeBytes,
+                directoryIgnoreCaseProbe: null,
+                symlinkPolicy: options.SymlinkPolicy,
+                generatedCodePatterns: options.GeneratedCodePatterns,
+                internalIndexDatabasePath: resolvedDbPath);
             if (options.ExplicitFileInputs.Count > 0)
             {
                 var indexedPaths = CreateExplicitFilesIndexedPathSnapshot(

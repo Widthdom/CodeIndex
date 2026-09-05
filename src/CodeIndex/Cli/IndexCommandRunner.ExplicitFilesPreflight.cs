@@ -22,6 +22,8 @@ public static partial class IndexCommandRunner
         IReadOnlyDictionary<string, IReadOnlyList<string>> CaseFoldedPaths,
         bool ReadFailed)
     {
+        internal long? FileSizeLimit { get; init; }
+
         internal static ExplicitFilesIndexedPathSnapshot Empty()
             => CreateExplicitFilesIndexedPathSnapshot([], readFailed: false);
 
@@ -62,9 +64,10 @@ public static partial class IndexCommandRunner
         {
             indexedPaths = ReadExplicitFilesIndexedPathSnapshot(
                 resolvedDbPath,
-                indexedPathCandidates,
-                cancellationToken,
-                writerLockHeld);
+                    indexedPathCandidates,
+                    cancellationToken,
+                    writerLockHeld,
+                    options.MaxFileSizeBytes);
         }
         if (indexedPaths.ReadFailed && indexedPathCandidates.Count > 0)
         {
@@ -77,6 +80,8 @@ public static partial class IndexCommandRunner
                 errorCode: CommandErrorCodes.DbError);
         }
 
+        options = options.WithResolvedFileSizeLimit(
+            indexedPaths.FileSizeLimit ?? IndexedFileSizePolicy.Resolve(null, options.MaxFileSizeBytes));
         var indexer = new FileIndexer(
             projectRoot,
             ignoreCase,
@@ -504,7 +509,8 @@ public static partial class IndexCommandRunner
         string dbPath,
         IReadOnlyCollection<string> candidates,
         CancellationToken cancellationToken,
-        bool writerLockHeld)
+        bool writerLockHeld,
+        long? explicitFileSizeLimit)
     {
         try
         {
@@ -540,7 +546,14 @@ public static partial class IndexCommandRunner
                 connection,
                 candidates,
                 cancellationToken);
-            return CreateExplicitFilesIndexedPathSnapshot(lookup.Paths, readFailed: false);
+            var metadata = DryRunReadMetadata(connection);
+            metadata.TryGetValue(IndexedFileSizePolicy.MetaKey, out var storedLimit);
+            var largestFile = IndexedFileSizePolicy.ReadLargestFileSize(
+                connection, DryRunColumnExists(connection, "files", "size"));
+            return CreateExplicitFilesIndexedPathSnapshot(lookup.Paths, readFailed: false) with
+            {
+                FileSizeLimit = IndexedFileSizePolicy.ResolveStored(storedLimit, largestFile, explicitFileSizeLimit),
+            };
         }
         catch (SqliteException)
         {

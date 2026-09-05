@@ -349,30 +349,6 @@ public static partial class IndexCommandRunner
         var ignoreCase = context.IgnoreCase;
         var ignoreRuleRoot = context.IgnoreRuleRoot;
 
-        try
-        {
-            if (options.DryRun && (File.Exists(resolvedDbPath) || resolvedDbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase)))
-            {
-                using var policyDb = new DbContext(DbOpenIntent.QueryOnly, dbPath, indexCancellation.Token);
-                using var policyReader = new DbReader(policyDb);
-                options = options.WithResolvedFileSizeLimit(IndexedFileSizePolicy.Resolve(policyReader, options.MaxFileSizeBytes));
-            }
-            else
-            {
-                options = options.WithResolvedFileSizeLimit(IndexedFileSizePolicy.Resolve(null, options.MaxFileSizeBytes));
-            }
-        }
-        catch (OperationCanceledException) when (indexCancellation.IsCancellationRequested)
-        {
-            return WriteInterruptedResult(options.Json, jsonOptions, 0, null, mode, progressPersisted: false);
-        }
-        catch (Exception ex) when (ex is Microsoft.Data.Sqlite.SqliteException or IOException or UnauthorizedAccessException)
-        {
-            // Dry-run snapshot/preflight owns the existing explicit-unknown/error contract.
-            // Do not replace it with a size-policy-specific failure.
-            options = options.WithResolvedFileSizeLimit(IndexedFileSizePolicy.Resolve(null, options.MaxFileSizeBytes));
-        }
-
         // --dry-run: scan files but do not write to database / --dry-run: ファイルスキャンのみでDBに書き込まない
         if (options.DryRun)
             return RunDryRun(
@@ -473,23 +449,6 @@ public static partial class IndexCommandRunner
 
             using (indexLock)
             {
-                // Resolve under the writer lock so a preceding index cannot leave us using
-                // an obsolete, smaller budget during preflight or extraction.
-                if (File.Exists(resolvedDbPath) || resolvedDbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
-                {
-                    try
-                    {
-                        using var policyDb = new DbContext(DbOpenIntent.QueryOnly, dbPath, indexCancellation.Token);
-                        using var policyReader = new DbReader(policyDb);
-                        options = context.Options.WithResolvedFileSizeLimit(
-                            IndexedFileSizePolicy.Resolve(policyReader, context.Options.MaxFileSizeBytes));
-                    }
-                    catch (Exception ex) when (ex is Microsoft.Data.Sqlite.SqliteException or IOException or UnauthorizedAccessException)
-                    {
-                        // Preserve preflight's corrupt/unreadable DB diagnostics. Before any
-                        // extraction, the authoritative write connection resolves policy again.
-                    }
-                }
                 var explicitFilesPreflightExitCode = RunExplicitFilesPreflightBeforeMutation(
                     writerLockHeld: indexLock != null);
                 if (explicitFilesPreflightExitCode is { } preflightExitCode)
@@ -613,9 +572,8 @@ public static partial class IndexCommandRunner
                 // 縮退状態に落とさないよう、clear は実際に書き込み直前で行う。
 
                 db.InitializeSchema();
-                using (var policyReader = new DbReader(db))
-                    options = context.Options.WithResolvedFileSizeLimit(
-                        IndexedFileSizePolicy.Resolve(policyReader, context.Options.MaxFileSizeBytes));
+                options = context.Options.WithResolvedFileSizeLimit(
+                    IndexedFileSizePolicy.ResolveForIndex(db, context.Options.MaxFileSizeBytes));
                 var indexRunDiagnostics = new List<string>();
                 AddToGitExclude(options.ProjectPath!, dbPath, indexRunDiagnostics, indexCancellation.Token);
 
