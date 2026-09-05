@@ -90,6 +90,7 @@ cdidx lsp --db .cdidx/codeindex.db
 | Browse every command | [Command reference](USER_GUIDE.md#command-reference) |
 | Keep the index current | [Keeping the index fresh](USER_GUIDE.md#keeping-the-index-fresh) and [incremental update reliability](USER_GUIDE.md#incremental-update-reliability) |
 | Control JSON size and pagination | [JSON output format](USER_GUIDE.md#json-output-format) |
+| Automate multiple queries | `batch --json-summary` preserves safe child JSON error codes and budget/retry fields; see [JSON output format](USER_GUIDE.md#json-output-format). |
 | Configure MCP, Codex, or an editor | [AI Integration](USER_GUIDE.md#ai-integration) |
 | Tune large repositories | [Performance tuning](USER_GUIDE.md#performance-tuning-for-large-repositories) |
 
@@ -370,6 +371,7 @@ cdidx lsp --db .cdidx/codeindex.db
 | 全 command を確認する | [コマンドリファレンス](USER_GUIDE.md#コマンドリファレンス) |
 | index を最新に保つ | [インデックスを最新に保つ](USER_GUIDE.md#インデックスを最新に保つ) と [インクリメンタル更新の信頼性](USER_GUIDE.md#インクリメンタル更新の信頼性) |
 | JSON size と pagination を制御する | [出力形式](USER_GUIDE.md#出力形式) |
+| 複数の query を自動実行する | `batch --json-summary` は子 JSON の安全なエラーコードとサイズ上限・再試行情報を保持します。[出力形式](USER_GUIDE.md#出力形式)を参照してください。 |
 | MCP、Codex、editor を設定する | [AI との連携](USER_GUIDE.md#aiとの連携) |
 | 大規模リポジトリを調整する | [大規模リポジトリの performance tuning](USER_GUIDE.md#大規模リポジトリの-performance-tuning) |
 

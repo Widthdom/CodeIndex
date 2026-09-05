@@ -882,6 +882,19 @@ single-document JSON is embedded as typed `result`, while successful NDJSON is
 embedded as a stable typed `results` array even when it has one row. Successful
 text remains `stdout`, while every failure uses one typed `error` object with a
 stable `error_code`, `category`, safe `message` / `hint`, and `scope`.
+The common serial/parallel record writer first projects valid child JSON errors
+through `BatchChildErrorParser`, with a 64 KiB UTF-8 input cap, depth 16, unique
+object keys, matching command/exit identity when supplied, and an explicit field
+allowlist. It accepts standalone `status: "error"` objects or JSON envelopes with
+matching `metadata.exit_code` and a `metadata.error` object; it never parses stderr or
+splices NDJSON fragments. Keep byte counts as nonnegative nullable Int64 values,
+known/uncertain flags as booleans, and strings sanitized to at most 1,024 characters.
+Retain `requested_bytes`, `effective_bytes`, `minimum_required_bytes`, both minimum
+availability/uncertainty flags and reasons, and `retry.action`, `option`,
+`recommended_bytes`, `maximum_effective_bytes`, and `command`. Unknown fields are
+omitted; invalid or oversized child errors keep the exit-code fallback. Explicit
+capture-limit, cancellation, timeout, and dispatch-policy errors take precedence.
+The parent output budget still applies to the entire projected error.
 Malformed or over-limit input lines use `record: "batch_error"` and the same
 typed error serializer. Failed records omit captured child stdout/stderr by
 default; `--include-raw-streams` explicitly adds them under a bounded
@@ -5128,6 +5141,16 @@ command / output format で projection を選び、成功した単一 document J
 は型付き `result`、NDJSON は 1 row の場合も安定した型付き `results` array として埋め込む。
 成功した text command は `stdout` のまま保持する一方、すべての失敗は安定した `error_code`、
 `category`、安全な `message` / `hint`、`scope` を持つ共通の型付き `error` object を使う。
+serial / parallel 共通の record writer は、まず `BatchChildErrorParser` で有効な子 JSON エラーを
+許可フィールドへ射影する。入力は UTF-8 で 64 KiB、深さ 16 に制限し、object key の一意性と、
+指定されている command / exit の一致を検証する。単独の `status: "error"` object、または
+一致する `metadata.exit_code` と `metadata.error` object を持つ JSON envelope を受け付け、stderr の解析や
+NDJSON fragment の継ぎ合わせは行わない。byte 数は非負の nullable Int64、既知・不確実性のフラグは
+boolean、文字列は機密情報を除去した最大 1,024 文字とする。`requested_bytes`、`effective_bytes`、
+`minimum_required_bytes`、最小値の既知・不確実性の両フラグと理由、および `retry` の `action`、
+`option`、`recommended_bytes`、`maximum_effective_bytes`、`command` を保持する。未知のフィールドは
+省略し、不正または上限超過の子エラーは終了コード由来の汎用エラーを維持する。明示的な capture 上限、
+取消、timeout、dispatch policy のエラーを優先し、射影後のエラー全体にも親の出力上限を適用する。
 malformed line や入力上限超過 line は `record: "batch_error"` と同じ typed error serializer を
 使う。失敗 record は既定で捕捉した child stdout / stderr を省略し、
 `--include-raw-streams` を明示した場合だけ上限付きの `raw_streams` object に追加する。

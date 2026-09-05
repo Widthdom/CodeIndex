@@ -281,6 +281,10 @@ public static partial class QueryCommandRunner
         }
         else
         {
+            if (error is null
+                && (outputKind != BatchOutputKind.Text || JsonEnvelopeWrapper.ShouldWrap(commandName, subArgs))
+                && CliCommandCatalog.IsBatchReadOnlyCommand(commandName))
+                error = BatchChildErrorParser.Parse(stdout, commandName, exitCode);
             payload["error"] = BuildBatchCommandFailureError(commandName, exitCode, error);
             if (includeRawStreams)
             {
