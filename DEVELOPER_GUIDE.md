@@ -4,6 +4,8 @@
 
 ## Audit baseline contract
 
+Workspace identity comes from the indexed project root, independently of the database location. Saved size/symlink policy participates in scope comparison. For prior paths that no longer have indexed rows, reuse indexing path filters and sparse-checkout evidence: only verified physical deletions within the current indexing scope may resolve. Existing excluded files and unverifiable paths make comparison unknown. Reject contradictory truncation/count metadata; missing coverage fields and empty incomparable comparisons remain partial (exit `11`).
+
 `AuditBaselineStore` implements the local v1 baseline schema; `QueryCommandRunner.AuditBaseline.cs` consumes the same bounded recipe runs as `audit --all`. The `baseline-export`, `baseline-compare`, and `baseline-review` audit subcommands do not migrate SQLite or use GitHub. Preserve SHA-256 match/context identities without line coordinates, canonical case-preserving relative paths, schema/identity versions, effective scope and recipe fingerprints, workspace and index-generation provenance, coverage reasons, and count authority. Index generations may differ after a valid refresh; workspace/scope/recipe/identity contracts must match. Missing legacy provenance degrades comparison conservatively.
 
 Absence can become resolved only when both snapshots have complete coverage. Retain unknown classifications for capped, stale, partial, failed, cancelled, changed-scope, changed-recipe, insufficient-evidence, duplicate, or possible-rename cases. Review annotations bind actor/reason/time to the stored context; changed evidence cannot inherit a safe decision. Comparison counts distinct identity groups and separately exposes observation counts. Bound files to 8 MiB, depth to 16, observations to 10,000, and comparison rows to 200 with exact omission accounting. Baselines omit source snippets, use the existing atomic sensitive writer, and require explicit overwrite. Windows paths emitted by the index already use slash separators; ambiguous literal backslashes fail closed. Keep command help, contextual completions, README, and behavioral tests synchronized.
@@ -4333,6 +4335,8 @@ For symmetry, the MCP server no longer echoes raw `Exception.Message` content in
 # 開発者ガイド
 
 ## 監査 baseline 契約
+
+ワークスペースの識別には DB の保存先とは独立した索引対象のプロジェクトルートを使用します。保存済みサイズ・シンボリックリンク方針も範囲比較に含めます。以前のパスが索引行を失った場合は索引のパスフィルターと sparse-checkout の情報を再利用し、現在の索引範囲内で確認できた物理的削除だけを解決済みとします。存在する除外ファイルや検証不能なパスは不明扱いです。省略・件数の矛盾したメタデータは拒否し、完全性情報の欠落や空の比較不能結果も部分結果（終了コード `11`）とします。
 
 `AuditBaselineStore` がローカル v1 baseline スキーマを実装し、`QueryCommandRunner.AuditBaseline.cs` は `audit --all` と同じ上限付きレシピ実行を利用します。audit の `baseline-export`、`baseline-compare`、`baseline-review` サブコマンドは SQLite の移行や GitHub 接続を行いません。行番号を含まない SHA-256 の一致・文脈識別、大小文字を保持する正規相対パス、スキーマ・識別バージョン、実効範囲・レシピの指紋、ワークスペース・索引世代の由来、完全性の理由、件数の確実性を維持してください。正しい索引更新後の世代差は許容しますが、ワークスペース・範囲・レシピ・識別契約は一致必須です。旧データの由来情報が欠ける場合は保守的に比較を降格します。
 

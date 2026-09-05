@@ -56,6 +56,10 @@ internal static class AuditBaselineStore
         if (Text(root, "format") != "cdidx-audit-baseline" || Number(root, "schema_version") != 1
             || root["entries"] is not JsonArray entries || entries.Count > MaxEntries)
             throw new InvalidDataException("Unsupported or invalid baseline schema; export a new baseline.");
+        if (root["omitted_entry_count"] != null && Number(root, "omitted_entry_count") < 0
+            || Flag(root, "complete") && (Flag(root, "entries_truncated") || Number(root, "omitted_entry_count") > 0
+                || root["omitted_entry_count_authoritative"] != null && !Flag(root, "omitted_entry_count_authoritative")))
+            throw new InvalidDataException("Contradictory baseline coverage metadata.");
         if (root["coverage_reasons"] != null)
         {
             if (root["coverage_reasons"] is not JsonArray coverage || coverage.Count > 32
@@ -79,6 +83,8 @@ internal static class AuditBaselineStore
                 throw new InvalidDataException("Invalid baseline identity or location.");
             if (entry["review"] is JsonObject review)
             {
+                if (review.Count != 5 || review.Any(property => property.Key is not ("state" or "actor" or "reason" or "context" or "recorded_at")))
+                    throw new InvalidDataException("Unsupported review annotation fields.");
                 CheckAnnotation(Text(review, "actor"));
                 CheckAnnotation(Text(review, "reason"));
                 if (Text(review, "recorded_at").Length > 64 || !DateTimeOffset.TryParse(Text(review, "recorded_at"),
@@ -123,7 +129,7 @@ internal static class AuditBaselineStore
         Validate(baseline);
         Validate(current);
         var reasons = new JsonArray();
-        foreach (var key in new[] { "identity_version", "recipe_schema_version", "scope_fingerprint", "recipe_fingerprint", "workspace_fingerprint" })
+        foreach (var key in new[] { "identity_version", "recipe_schema_version", "scope_fingerprint", "recipe_fingerprint", "workspace_fingerprint", "index_scope_fingerprint" })
             if (Text(baseline, key).Length == 0 || Text(baseline, key) != Text(current, key))
                 reasons.Add(key + "_incomparable");
         if (!CoverageComplete(baseline)) reasons.Add("baseline_coverage_incomplete");
@@ -197,7 +203,9 @@ internal static class AuditBaselineStore
     internal static bool Flag(JsonObject node, string key) => node[key] is JsonValue value && value.TryGetValue<bool>(out var flag) && flag;
 
     private static bool CoverageComplete(JsonObject node) => Flag(node, "complete") && Flag(node, "count_authoritative")
-        && node["coverage_reasons"] is JsonArray reasons && reasons.Count == 0;
+        && node["coverage_reasons"] is JsonArray reasons && reasons.Count == 0
+        && node["entries_truncated"] is JsonValue truncated && truncated.TryGetValue<bool>(out var isTruncated) && !isTruncated
+        && Number(node, "omitted_entry_count") == 0 && Flag(node, "omitted_entry_count_authoritative");
 
     private static void CheckAnnotation(string value)
     {

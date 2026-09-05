@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using CodeIndex.Database;
+using CodeIndex.Indexer;
 
 namespace CodeIndex.Cli;
 
@@ -68,7 +69,12 @@ public static partial class QueryCommandRunner
             {
                 var snapshot = BuildAuditBaseline(reader, options, state);
                 JsonObject output;
-                if (previous != null) output = AuditBaselineStore.Compare(previous, snapshot);
+                if (previous != null)
+                {
+                    if (!state.Cancelled)
+                        VerifyBaselinePriorPathCoverage(previous, snapshot, reader, options, cancellationToken);
+                    output = AuditBaselineStore.Compare(previous, snapshot);
+                }
                 else
                 {
                     cancellationToken.ThrowIfCancellationRequested();
@@ -86,7 +92,8 @@ public static partial class QueryCommandRunner
                 }
                 WriteBaselineResult(output, json);
                 return state.Cancelled ? CommandExitCodes.CancelledBySignal
-                    : !AuditBaselineStore.Flag(snapshot, "complete") || previous != null && AuditBaselineStore.Number(output["totals"]!.AsObject(), "unknown") > 0
+                    : !AuditBaselineStore.Flag(snapshot, "complete") || previous != null
+                        && (!AuditBaselineStore.Flag(output, "comparable") || AuditBaselineStore.Number(output["totals"]!.AsObject(), "unknown") > 0)
                         ? CommandExitCodes.PartialResult : CommandExitCodes.Success;
             });
         }
@@ -96,6 +103,56 @@ public static partial class QueryCommandRunner
                 "Baseline operation failed: " + CommandErrorWriter.FormatSanitizedExceptionMessage(ex),
                 CommandExitCodes.UsageError, "Check the bounded baseline schema, input options, and destination permissions. " + AuditBaselineStore.Recovery,
                 AuditBaselineUsage, CommandErrorCodes.UsageError, command: "audit");
+        }
+    }
+
+    private static void VerifyBaselinePriorPathCoverage(JsonObject previous, JsonObject current, DbReader? reader,
+        QueryCommandOptions options, CancellationToken cancellationToken)
+    {
+        var root = reader?.GetIndexedProjectRoot();
+        if (reader == null || string.IsNullOrWhiteSpace(root)) return;
+        FileIndexer? indexer = null;
+        HashSet<string>? sparsePaths = null;
+        var policyLoaded = false;
+        string? repositoryRoot = null;
+        var requiresGitEvidence = !string.IsNullOrWhiteSpace(reader.GetMetaString(DbContext.IndexedHeadCommitMetaKey));
+        foreach (var path in previous["entries"]!.AsArray().OfType<JsonObject>()
+            .Select(entry => AuditBaselineStore.Text(entry, "path")).Distinct(StringComparer.Ordinal))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (reader.GetFileByPath(path) != null) continue;
+            if (!policyLoaded)
+            {
+                repositoryRoot = GitHelper.TryGetRepositoryRoot(root, cancellationToken);
+                sparsePaths = GitHelper.TryGetSkipWorktreePaths(root, cancellationToken);
+                indexer = new FileIndexer(root, GitHelper.ResolveIgnoreCase(root, cancellationToken), repositoryRoot ?? Path.GetFullPath(root),
+                    maxFileSizeBytes: IndexedFileSizePolicy.Resolve(reader, freshness: true), directoryIgnoreCaseProbe: null,
+                    symlinkPolicy: IndexFreshnessChecker.ReadIndexedSymlinkPolicy(reader), internalIndexDatabasePath: options.DbPath);
+                policyLoaded = true;
+            }
+            var coveredDeletion = false;
+            try
+            {
+                var absolutePath = Path.Combine(root, path);
+                if (!indexer!.EvaluatePathFilter(absolutePath).ShouldSkip
+                    && (repositoryRoot == null && !requiresGitEvidence
+                        || sparsePaths != null && !IndexFreshnessChecker.IsSkipWorktreePath(sparsePaths, path)))
+                {
+                    try { _ = File.GetAttributes(absolutePath); }
+                    catch (FileNotFoundException) { coveredDeletion = true; }
+                    catch (DirectoryNotFoundException) { coveredDeletion = true; }
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or ArgumentException)
+            {
+                // Failed coverage probes must not turn an unindexed path into a resolved finding.
+                coveredDeletion = false;
+            }
+            if (coveredDeletion) continue;
+            current["complete"] = false;
+            current["count_authoritative"] = false;
+            current["coverage_reasons"]!.AsArray().Add("prior_path_coverage_unverified");
+            return;
         }
     }
 
@@ -122,6 +179,8 @@ public static partial class QueryCommandRunner
     private static JsonObject BuildAuditBaseline(DbReader? reader, QueryCommandOptions options, AuditAllRunState state)
     {
         var reasons = new HashSet<string>(StringComparer.Ordinal);
+        var indexedRoot = reader?.GetIndexedProjectRoot();
+        if (string.IsNullOrWhiteSpace(indexedRoot)) reasons.Add("workspace_identity_unavailable");
         if (reader != null && state.BaselineStartGeneration != reader.GetPaginationGeneration().Identity)
             reasons.Add("index_changed_during_audit");
         if (reader != null && ResolveSearchQueryIndexFreshness(reader, options, out _) != "current")
@@ -199,7 +258,10 @@ public static partial class QueryCommandRunner
             ["scope_fingerprint"] = AuditBaselineStore.Hash(scopes.ToJsonString()),
             ["effective_filters"] = scopes,
             ["recipe_fingerprint"] = AuditBaselineStore.Hash(definitions.ToArray()),
-            ["workspace_fingerprint"] = AuditBaselineStore.Hash(Path.GetFullPath(options.DbPath)),
+            ["workspace_fingerprint"] = string.IsNullOrWhiteSpace(indexedRoot) ? "" : AuditBaselineStore.Hash(Path.GetFullPath(indexedRoot)),
+            ["index_scope_fingerprint"] = reader == null ? "" : AuditBaselineStore.Hash(
+                IndexedFileSizePolicy.Resolve(reader, freshness: true).ToString(System.Globalization.CultureInfo.InvariantCulture),
+                IndexFreshnessChecker.ReadIndexedSymlinkPolicy(reader).ToString()),
             ["index_generation"] = reader == null ? "" : AuditBaselineStore.Hash(reader.GetPaginationGeneration().Identity),
             ["complete"] = reasons.Count == 0,
             ["count_authoritative"] = reasons.Count == 0,

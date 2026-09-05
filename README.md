@@ -20,6 +20,8 @@ dependency, and inspection queries without rescanning the same tree for every qu
 
 ## Local audit baselines
 
+Changing index exclusions cannot turn an existing excluded file into a resolution. Comparison verifies prior path coverage, distinguishes physical deletion from sparse/ignored paths, and detects when the same database location now indexes another project. Empty incomparable comparisons also return exit `11`.
+
 `cdidx audit baseline-export .cdidx/audit-baseline.json --recipe risky-code` runs the existing audit engine and saves a local baseline. Omit `--recipe` to select all registered recipes. Refresh the index after source changes, then run `cdidx audit baseline-compare .cdidx/audit-baseline.json --recipe risky-code --json`. Use the same filters and limits for comparable runs. Each command accepts `--db`, `--lang`, `--path`, `--exclude-path`, `--exclude-tests`, `--audit-scope`, `--since`, `--limit`, and `--total-limit` as shown in command help; defaults are 1,000 rows per query and 10,000 total rows.
 
 Comparison reports bounded `new`, `unchanged`, `resolved`, and `unknown` identity groups, totals, observation counts, and omissions. Missing findings stay `unknown` when either run is stale, partial, capped, failed, cancelled, or has different recipes, filters, workspace, or identity contracts. Duplicate evidence and possible renames are never guessed. Line numbers are excluded from identity; changed context requires review. Exit `11` identifies incomplete coverage or unknown classifications; export may save an incomplete baseline, explicitly marked as such. Cancellation never publishes an export.
@@ -298,6 +300,8 @@ For commercial use, integration, and naming guidance, see
 # cdidx（日本語）
 
 ### ローカル監査 baseline
+
+索引の除外設定を変更しても、存在する除外ファイルを解決済みとは判定しません。以前のパスの対象範囲を確認し、物理的削除と sparse／除外パスを区別し、同じ DB 保存先が別プロジェクトの索引に置き換わった場合も検出します。空の比較不能結果も終了コード `11` を返します。
 
 `cdidx audit baseline-export .cdidx/audit-baseline.json --recipe risky-code` は既存の監査エンジンを実行し、ローカル baseline を保存します。`--recipe` を省略すると登録済みの全レシピが対象です。ソース変更後に索引を更新し、`cdidx audit baseline-compare .cdidx/audit-baseline.json --recipe risky-code --json` で比較します。比較時は同じフィルターと上限を指定してください。各コマンドはヘルプ記載の `--db`、`--lang`、`--path`、`--exclude-path`、`--exclude-tests`、`--audit-scope`、`--since`、`--limit`、`--total-limit` に対応します。既定値はクエリごとに1,000行、全体で10,000行です。
 

@@ -44,6 +44,17 @@ public sealed class AuditBaselineIssue5261Tests
             AssertCounts(AuditBaselineStore.Compare(baseline, incomplete), 0, 0, 0, 3);
             AssertCounts(AuditBaselineStore.Compare(incomplete, baseline), 0, 0, 0, 3);
         }
+        foreach (var key in new[] { "entries_truncated", "omitted_entry_count", "omitted_entry_count_authoritative" })
+        {
+            var missing = baseline.DeepClone().AsObject();
+            missing.Remove(key);
+            Assert.False(AuditBaselineStore.Compare(missing, current)["comparable"]!.GetValue<bool>());
+            Assert.Throws<InvalidDataException>(() => AuditBaselineStore.Review(missing, id, "actor", "reason"));
+            var contradictory = baseline.DeepClone().AsObject();
+            contradictory[key] = key == "entries_truncated" ? JsonValue.Create(true)
+                : key == "omitted_entry_count" ? JsonValue.Create(1) : JsonValue.Create(false);
+            Assert.Throws<InvalidDataException>(() => AuditBaselineStore.Compare(contradictory, current));
+        }
     }
 
     [Fact]
@@ -136,6 +147,41 @@ public sealed class AuditBaselineIssue5261Tests
             ["compare", baseline, "--db", db, "--json"], JsonOptions, registryForTesting: registry));
         Assert.Equal(0, deltaExit);
         AssertCounts(JsonNode.Parse(deltaOut)!.AsObject(), 1, 0, 1, 0);
+        File.WriteAllText(Path.Combine(project.Root, ".gitignore"), "One.cs\n");
+        CaptureConsole(() => IndexCommandRunner.Run([project.Root, "--db", db, "--json"], JsonOptions));
+        var (ignoredExit, ignoredOut, _) = CaptureConsole(() => QueryCommandRunner.RunAuditBaseline(
+            ["compare", baseline, "--db", db, "--json"], JsonOptions, registryForTesting: registry));
+        Assert.Equal(CommandExitCodes.PartialResult, ignoredExit);
+        AssertCounts(JsonNode.Parse(ignoredOut)!.AsObject(), 0, 0, 0, 2);
+        Assert.Contains("prior_path_coverage_unverified", ignoredOut, StringComparison.Ordinal);
+        File.Delete(Path.Combine(project.Root, ".gitignore"));
+        File.Delete(source);
+        CaptureConsole(() => IndexCommandRunner.Run([project.Root, "--db", db, "--json"], JsonOptions));
+        var (deletedExit, deletedOut, _) = CaptureConsole(() => QueryCommandRunner.RunAuditBaseline(
+            ["compare", baseline, "--db", db, "--json"], JsonOptions, registryForTesting: registry));
+        Assert.Equal(0, deletedExit);
+        AssertCounts(JsonNode.Parse(deletedOut)!.AsObject(), 1, 0, 1, 0);
+
+        using var replacement = TestProjectHelper.CreateTempProjectScope("audit_baseline_other_workspace_5261");
+        File.WriteAllText(Path.Combine(replacement.Root, "One.cs"), "class One { string Value = \"Issue5261Needle\"; }\n");
+        var (replacementExit, _, _) = CaptureConsole(() => IndexCommandRunner.Run(
+            [replacement.Root, "--db", db, "--rebuild", "--yes", "--json"], JsonOptions));
+        Assert.Equal(0, replacementExit);
+        var (otherExit, otherOut, _) = CaptureConsole(() => QueryCommandRunner.RunAuditBaseline(
+            ["compare", baseline, "--db", db, "--json"], JsonOptions, registryForTesting: registry));
+        Assert.Equal(CommandExitCodes.PartialResult, otherExit);
+        Assert.Contains("workspace_fingerprint_incomparable", otherOut, StringComparison.Ordinal);
+        Assert.False(JsonNode.Parse(otherOut)!["results"]![0]!["review_applies"]!.GetValue<bool>());
+
+        var emptyBaseline = Path.Combine(project.Root, ".cdidx", "empty.json");
+        var (emptyExportExit, _, _) = CaptureConsole(() => QueryCommandRunner.RunAuditBaseline(
+            ["export", emptyBaseline, "--db", db, "--path", "missing/**", "--json"], JsonOptions, registryForTesting: registry));
+        Assert.Equal(0, emptyExportExit);
+        var (emptyCompareExit, emptyCompareOut, _) = CaptureConsole(() => QueryCommandRunner.RunAuditBaseline(
+            ["compare", emptyBaseline, "--db", db, "--path", "different/**", "--json"], JsonOptions, registryForTesting: registry));
+        Assert.Equal(CommandExitCodes.PartialResult, emptyCompareExit);
+        Assert.False(JsonNode.Parse(emptyCompareOut)!["comparable"]!.GetValue<bool>());
+        AssertCounts(JsonNode.Parse(emptyCompareOut)!.AsObject(), 0, 0, 0, 0);
         foreach (var extra in new[] { new[] { "--format", "compact" }, new[] { "--summary-only" }, new[] { "--overwrite" } })
         {
             var (exit, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunAudit(
@@ -172,10 +218,14 @@ public sealed class AuditBaselineIssue5261Tests
         ["scope_fingerprint"] = "scope",
         ["recipe_fingerprint"] = "recipe",
         ["workspace_fingerprint"] = "workspace",
+        ["index_scope_fingerprint"] = "policy",
         ["index_generation"] = "generation",
         ["complete"] = true,
         ["count_authoritative"] = true,
         ["coverage_reasons"] = new JsonArray(),
+        ["entries_truncated"] = false,
+        ["omitted_entry_count"] = 0,
+        ["omitted_entry_count_authoritative"] = true,
         ["entries"] = new JsonArray(entries.Cast<JsonNode>().ToArray()),
     };
 

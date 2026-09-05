@@ -8,6 +8,8 @@ If you change test code, test helpers, test execution flow, or testing conventio
 
 ## Quick Start
 
+Baseline review regressions also exercise indexing exclusion changes, a different indexed root at the same DB path, contradictory/missing omission metadata, and the partial exit code for empty incomparable snapshots.
+
 `AuditBaselineIssue5261Tests` covers compatible deltas, moved lines, changed reviewed evidence, incomplete/legacy metadata, ambiguous duplicates/renames, bounded counts, private atomic writes, invalid paths and malformed/oversized input, plus actual index/recipe CLI export and compare. Keep human/JSON error identity and contextual help/completion checks on both net8.0 and net9.0. Use the console-sensitive collection for CLI capture and isolated temporary projects for baseline files.
 
 Issue #5258 coverage in `IndexCommandRunnerIssue5258Tests.cs` checks explicit/environment/default size limits, ordinary root and shared-workspace checks, scoped updates, full refreshes, missing/invalid legacy policy, actual deletion, failed reads, MCP persistence/dry runs, and the retained read ceiling on both frameworks. Keep environment and current-directory changes inside the SQLite pool sensitive collection and restore them in `finally`.
@@ -1179,6 +1181,8 @@ Check the following:
 
 <a id="テストガイド"></a>
 # テストガイド
+
+baseline レビューの回帰テストでは、索引除外設定の変更、同一 DB パスでの索引ルートの変更、矛盾・欠落した省略メタデータ、空の比較不能スナップショットの部分終了コードも検証します。
 
 `AuditBaselineIssue5261Tests` は互換性のある差分、行移動、レビュー済み証拠の変化、不完全・旧形式のメタデータ、曖昧な重複・リネーム、上限付き件数、機密ファイルのアトミック保存、不正パス・壊れた入力・過大入力、および実際の索引・レシピによる CLI 保存と比較を検証します。human／JSON のエラー識別と文脈別ヘルプ・補完を net8.0 と net9.0 の両方で維持してください。CLI 出力の捕捉は console-sensitive コレクションに置き、baseline は分離した一時プロジェクトに保存してください。
 
