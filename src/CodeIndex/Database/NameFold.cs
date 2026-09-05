@@ -91,46 +91,18 @@ public static class NameFold
     public static string? Fold(string? name)
     {
         if (name is null) return null;
-        var asciiTriggerIndex = FindAsciiFoldTrigger(name);
-        if (asciiTriggerIndex < 0)
-            return name;
-        if (name[asciiTriggerIndex] <= '\u007F')
-            return FoldAsciiUppercase(name, asciiTriggerIndex);
-
-        return FoldUnicode(name);
-    }
-
-    private static int FindAsciiFoldTrigger(string name)
-    {
-        var firstUppercaseIndex = -1;
-        for (var i = 0; i < name.Length; i++)
+        // Validate the whole name before taking the ASCII path: a non-ASCII suffix
+        // still requires NFKC and the vendored casefold deltas. Runtime span/casing
+        // primitives vectorize long qualified names without allocating a scan buffer.
+        // 非ASCIIのsuffixもNFKC対象にするため、先に名前全体を確認する。
+        if (Ascii.IsValid(name))
         {
-            var value = name[i];
-            if (value > '\u007F')
-                return i;
-            if (firstUppercaseIndex < 0 && value is >= 'A' and <= 'Z')
-                firstUppercaseIndex = i;
+            return name.AsSpan().IndexOfAnyInRange('A', 'Z') < 0
+                ? name
+                : name.ToLowerInvariant();
         }
 
-        return firstUppercaseIndex;
-    }
-
-    private static string FoldAsciiUppercase(string name, int firstUppercaseIndex)
-    {
-        return string.Create(
-            name.Length,
-            (Name: name, FirstUppercaseIndex: firstUppercaseIndex),
-            static (destination, state) =>
-            {
-                state.Name.AsSpan(0, state.FirstUppercaseIndex).CopyTo(destination);
-                for (var i = state.FirstUppercaseIndex; i < state.Name.Length; i++)
-                {
-                    var value = state.Name[i];
-                    destination[i] = value is >= 'A' and <= 'Z'
-                        ? (char)(value + ('a' - 'A'))
-                        : value;
-                }
-            });
+        return FoldUnicode(name);
     }
 
     private static string FoldUnicode(string name)
@@ -141,7 +113,7 @@ public static class NameFold
         {
             if (!TryAppendCaseFoldDelta(builder, rune))
             {
-                builder.Append(rune.ToString().ToLowerInvariant());
+                AppendScalar(builder, Rune.ToLowerInvariant(rune).Value);
             }
         }
 
@@ -158,7 +130,7 @@ public static class NameFold
         var value = rune.Value;
         if (value is >= 0x13A0 and <= 0x13F5)
         {
-            builder.Append(rune.ToString());
+            AppendScalar(builder, value);
             return true;
         }
 
@@ -269,6 +241,14 @@ public static class NameFold
 
     private static void AppendScalar(StringBuilder builder, int scalarValue)
     {
-        builder.Append(char.ConvertFromUtf32(scalarValue));
+        if (scalarValue <= char.MaxValue)
+        {
+            builder.Append((char)scalarValue);
+            return;
+        }
+
+        Span<char> chars = stackalloc char[2];
+        var written = new Rune(scalarValue).EncodeToUtf16(chars);
+        builder.Append(chars[..written]);
     }
 }

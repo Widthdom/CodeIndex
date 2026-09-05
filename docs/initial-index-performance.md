@@ -20,6 +20,13 @@ ranked ID is consumed. Avoiding duplicate elimination removes a temporary
 B-tree per reference while preserving same-file scoping, nested range selection,
 tie-breaking, and legacy fallback. Ordinary source repair remains unchanged.
 
+All language-independent folded symbol/reference keys use runtime-vectorized
+ASCII validation and casing. Unicode names still normalize with NFKC and apply
+the same vendored casefold deltas, but append lowered scalar values directly
+instead of allocating intermediate strings per character. Already folded ASCII
+names retain their original string. Persisted keys, their contract version and
+runtime fingerprint are unchanged; readers and every writer use the same fold.
+
 ## 日本語
 
 空のデータベースに対する通常の CLI フルスキャンは、初回専用の一括 writer を
@@ -38,3 +45,9 @@ DB レイアウト、抽出範囲、トランザクション境界、取消・�
 同じであり、消費するのは順位先頭の ID だけです。参照ごとの重複除去用の一時 B-tree
 を省きつつ、同一ファイルへの限定、入れ子の選択、同順位の決定、旧形式への fallback
 を維持します。通常の参照元修復処理は変更しません。
+
+全言語共通のシンボル・参照の folded key は、ランタイムのベクトル化された ASCII
+検査と小文字化を使います。Unicode 名は既存の NFKC 正規化と casefold 差分表を
+維持しつつ、文字ごとの一時文字列を作らずに小文字化した scalar を直接追加します。
+変換済みの ASCII 名は元の文字列を再利用します。保存 key、契約バージョン、実行環境
+fingerprint は変わらず、reader と各 writer は同じ変換を使います。

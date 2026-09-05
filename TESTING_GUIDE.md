@@ -19,6 +19,8 @@ Use the full suite by default. Use targeted filters only while iterating locally
 
 ## Test Stack
 
+- `NameFoldTests` keeps all ASCII characters and vector-boundary suffixes beside Unicode delta, NFKC, supplementary casing, invalid-surrogate, and allocation checks. Fold keys and runtime fingerprint semantics must remain compatible across writers/readers and both frameworks. ASCII 境界と Unicode 正規化・割り当ての検証を共有し、保存 key の互換性を維持します。
+
 - Fresh source lookup coverage shares the alias/legacy/nested-range fixture across C#, Python, JavaScript, TypeScript, Java, Go, Rust, and C++. Compare every fresh source ID with ordinary full repair, and keep query-plan assertions for the three name indexes and absence of duplicate-elimination B-trees. 初回参照元の選択結果と通常修復の一致を8言語で検証します。
 
 - Initial bulk text binding coverage in `AuthoritativeFreshRawBulkInsertTests` verifies exact UTF-8 bytes for empty text, embedded NUL, supplementary characters, unpaired surrogates, stack/pool boundaries, and a short value after a pooled value, alongside the existing NULL, cancellation, rollback, and statement-reuse cases. 初回一括 bind は空文字列・Unicode・buffer 境界の保存結果と既存の取消／rollback 契約を併せて検証します。
