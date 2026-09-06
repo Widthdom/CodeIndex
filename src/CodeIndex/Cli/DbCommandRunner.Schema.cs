@@ -30,29 +30,57 @@ public static partial class DbCommandRunner
         ReportMaintenanceProgress("integrity_check", "open_connection", dbPath);
         connection.Open();
         ApplyBusyTimeout(connection, cancellationToken);
-        using var cmd = SqliteConnectionPolicy.CreateCommand(connection, $"PRAGMA integrity_check({IntegrityCheckRowLimit + 1})");
-        ReportMaintenanceProgress("integrity_check", "read_rows", dbPath);
-        cancellationToken.ThrowIfCancellationRequested();
-        using var reader = cmd.ExecuteReader();
-        var rows = new List<string>();
-        var rowsTruncated = false;
-        var textTruncated = false;
-        while (reader.Read())
+        using var cancellationRegistration = RegisterSqliteInterruptForCancellation(connection, cancellationToken);
+        try
         {
+            using var cmd = SqliteConnectionPolicy.CreateCommand(
+                connection,
+                IntegrityCheckCommandTextForTesting ?? $"PRAGMA integrity_check({IntegrityCheckRowLimit + 1})");
+            ReportMaintenanceProgress("integrity_check", "read_rows", dbPath);
             cancellationToken.ThrowIfCancellationRequested();
-            if (rows.Count >= IntegrityCheckRowLimit)
+            using var reader = cmd.ExecuteReader();
+            var rows = new List<string>();
+            var rowsTruncated = false;
+            var textTruncated = false;
+            while (reader.Read())
             {
-                rowsTruncated = true;
-                break;
-            }
+                cancellationToken.ThrowIfCancellationRequested();
+                if (rows.Count >= IntegrityCheckRowLimit)
+                {
+                    rowsTruncated = true;
+                    break;
+                }
 
-            var raw = reader.IsDBNull(0) ? string.Empty : reader.GetString(0);
-            var bounded = TruncateDiagnosticText(raw, IntegrityCheckTextLimit);
-            textTruncated |= bounded.Truncated;
-            rows.Add(bounded.Text);
+                var raw = reader.IsDBNull(0) ? string.Empty : reader.GetString(0);
+                var bounded = TruncateDiagnosticText(raw, IntegrityCheckTextLimit);
+                textTruncated |= bounded.Truncated;
+                rows.Add(bounded.Text);
+            }
+            return new DbIntegrityCheckReadResult(rows.Count > 0 ? rows : new List<string> { "ok" }, rowsTruncated, textTruncated);
         }
-        return new DbIntegrityCheckReadResult(rows.Count > 0 ? rows : new List<string> { "ok" }, rowsTruncated, textTruncated);
+        catch (SqliteException exception) when (
+            cancellationToken.IsCancellationRequested
+            && exception.SqliteErrorCode == SQLitePCL.raw.SQLITE_INTERRUPT)
+        {
+            throw new OperationCanceledException(
+                "The SQLite integrity check was interrupted by cancellation.",
+                exception,
+                cancellationToken);
+        }
     }
+
+    private static CancellationTokenRegistration RegisterSqliteInterruptForCancellation(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
+        => cancellationToken.CanBeCanceled
+            ? cancellationToken.UnsafeRegister(
+                static state =>
+                {
+                    var registeredConnection = (SqliteConnection)state!;
+                    SQLitePCL.raw.sqlite3_interrupt(registeredConnection.Handle);
+                },
+                connection)
+            : default;
 
     private static DbSchemaReadResult ReadSchema(string dbPath, DbCommandOptions options, CancellationToken cancellationToken)
     {

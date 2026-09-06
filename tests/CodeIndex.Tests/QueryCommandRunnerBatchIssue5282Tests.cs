@@ -317,6 +317,67 @@ public partial class QueryCommandRunnerTests
         }
     }
 
+    [Fact]
+    public void RunBatch_DbIntegrityInterruptsExecutingSqliteScan_Issue5282()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_batch_db_interrupt_5282");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        using var cancellation = new CancellationTokenSource();
+        DbCommandRunner.IntegrityCheckCommandTextForTesting = """
+            WITH RECURSIVE numbers(value) AS (
+                VALUES(0)
+                UNION ALL
+                SELECT value + 1 FROM numbers WHERE value < 100000000
+            )
+            SELECT CASE WHEN SUM(value) >= 0 THEN 'ok' ELSE 'failed' END FROM numbers;
+            """;
+        DbCommandRunner.MaintenanceProgressForTesting = (operation, phase) =>
+        {
+            if (operation == "integrity_check" && phase == "read_rows")
+                cancellation.CancelAfter(TimeSpan.FromMilliseconds(100));
+        };
+
+        try
+        {
+            var input = JsonSerializer.Serialize(new[] { "db", "integrity", "--json" }) + "\n";
+            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+            var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
+                input,
+                () => QueryCommandRunner.RunBatch(
+                    ["--db", dbPath, "--json-summary"],
+                    _jsonOptions,
+                    cancellationToken: cancellation.Token));
+            stopwatch.Stop();
+            var lines = ParseJsonLines(stdout);
+            try
+            {
+                Assert.True(cancellation.IsCancellationRequested);
+                Assert.Equal(CommandExitCodes.CancelledBySignal, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                Assert.Equal(2, lines.Count);
+                Assert.Equal(
+                    CommandErrorCodes.Interrupted,
+                    lines[0].RootElement.GetProperty("error").GetProperty("error_code").GetString());
+                Assert.Equal(
+                    CommandExitCodes.CancelledBySignal,
+                    lines[1].RootElement.GetProperty("exit_code").GetInt32());
+                Assert.True(
+                    stopwatch.Elapsed < TimeSpan.FromSeconds(5),
+                    $"SQLite interruption took {stopwatch.Elapsed}.");
+            }
+            finally
+            {
+                foreach (var document in lines)
+                    document.Dispose();
+            }
+        }
+        finally
+        {
+            DbCommandRunner.IntegrityCheckCommandTextForTesting = null;
+            DbCommandRunner.MaintenanceProgressForTesting = null;
+        }
+    }
+
     private static void SetBatchDbUserVersionIssue5282(string dbPath, int userVersion)
     {
         using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);

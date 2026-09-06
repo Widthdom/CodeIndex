@@ -43,6 +43,7 @@ public static partial class DbCommandRunner
     private static readonly string[] SchemaObjectTypes = ["table", "index", "trigger", "view"];
     private static readonly char[] InvalidCheckpointNameChars = Path.GetInvalidFileNameChars();
     private static readonly AsyncLocal<Action<string, string>?> ScopedMaintenanceProgressForTesting = new();
+    private static readonly AsyncLocal<string?> ScopedIntegrityCheckCommandTextForTesting = new();
     internal static Action? RestoreFailureAfterBackupForTesting { get; set; }
     internal static Action<string>? DeleteTemporaryDirectoryForTesting { get; set; }
     internal static Func<string, IEnumerable<string>>? EnumerateCheckpointFilesForTesting { get; set; }
@@ -60,6 +61,11 @@ public static partial class DbCommandRunner
     {
         get => ScopedMaintenanceProgressForTesting.Value;
         set => ScopedMaintenanceProgressForTesting.Value = value;
+    }
+    internal static string? IntegrityCheckCommandTextForTesting
+    {
+        get => ScopedIntegrityCheckCommandTextForTesting.Value;
+        set => ScopedIntegrityCheckCommandTextForTesting.Value = value;
     }
     internal static Func<string, long?>? AvailableFreeSpaceForTesting
     {
