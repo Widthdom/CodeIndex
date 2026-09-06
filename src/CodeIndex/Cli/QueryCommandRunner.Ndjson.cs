@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using CodeIndex.Database;
 
 namespace CodeIndex.Cli;
@@ -51,7 +52,10 @@ public static partial class QueryCommandRunner
         int? selectedTotal = null,
         int? selectorOmittedCount = null,
         int? limitOmittedCount = null,
-        List<SearchRowSelectorJsonResult>? selectors = null)
+        List<SearchRowSelectorJsonResult>? selectors = null,
+        JsonObject? terminalMetadata = null,
+        JsonObject? terminalMetadataFallback = null,
+        JsonObject? terminalMetadataMinimalFallback = null)
     {
         if (options.ResultsOnly)
             return WriteResultOnlyNdjson(records, options, jsonOptions, commandName);
@@ -76,7 +80,8 @@ public static partial class QueryCommandRunner
             int omittedCount,
             int omittedRecordCount,
             string? recoveryGuidance,
-            bool includeSelectionAccounting)
+            bool includeSelectionAccounting,
+            int metadataFallbackLevel = 0)
         {
             var hasMore = truncated || interrupted;
             if (hasMore && totalCountAuthoritative)
@@ -91,7 +96,7 @@ public static partial class QueryCommandRunner
                 options.Limit,
                 hasMore,
                 continuationCursorFactory);
-            return BuildJsonStreamDoneLine(
+            var terminalLine = BuildJsonStreamDoneLine(
                 returnedCount,
                 totalCount,
                 jsonOptions,
@@ -117,6 +122,19 @@ public static partial class QueryCommandRunner
                 nextCursor: nextCursor,
                 nextCursorUnavailableReason: unavailableReason,
                 hasMore: hasMore);
+            var selectedTerminalMetadata = metadataFallbackLevel switch
+            {
+                >= 2 => terminalMetadataMinimalFallback ?? terminalMetadataFallback ?? terminalMetadata,
+                1 => terminalMetadataFallback ?? terminalMetadata,
+                _ => terminalMetadata,
+            };
+            if (selectedTerminalMetadata is null)
+                return terminalLine;
+
+            var terminal = JsonNode.Parse(terminalLine)!.AsObject();
+            foreach (var property in selectedTerminalMetadata)
+                terminal[property.Key] = property.Value?.DeepClone();
+            return terminal.ToJsonString(jsonOptions);
         }
 
         if (options.MaxJsonBytes.HasValue)
@@ -152,6 +170,64 @@ public static partial class QueryCommandRunner
                         candidateRecoveryGuidance,
                         includeSelectionAccounting: false);
                 }
+                if (candidatePrefixBytes + JsonLineBytes(candidateTerminal) > options.MaxJsonBytes.Value
+                    && terminalMetadataFallback != null)
+                {
+                    candidateTerminal = BuildTerminal(
+                        candidateReturnedCount,
+                        candidateInterrupted,
+                        limitTruncated || candidateInterrupted,
+                        candidateFirstOmittedBytes,
+                        Math.Max(0, totalCount - candidateReturnedCount),
+                        Math.Max(0, records.Count - candidate),
+                        candidateRecoveryGuidance,
+                        includeSelectionAccounting: true,
+                        metadataFallbackLevel: 1);
+                }
+                if (candidatePrefixBytes + JsonLineBytes(candidateTerminal) > options.MaxJsonBytes.Value
+                    && sourceTotal.HasValue
+                    && terminalMetadataFallback != null)
+                {
+                    candidateTerminal = BuildTerminal(
+                        candidateReturnedCount,
+                        candidateInterrupted,
+                        limitTruncated || candidateInterrupted,
+                        candidateFirstOmittedBytes,
+                        Math.Max(0, totalCount - candidateReturnedCount),
+                        Math.Max(0, records.Count - candidate),
+                        candidateRecoveryGuidance,
+                        includeSelectionAccounting: false,
+                        metadataFallbackLevel: 1);
+                }
+                if (candidatePrefixBytes + JsonLineBytes(candidateTerminal) > options.MaxJsonBytes.Value
+                    && terminalMetadataMinimalFallback != null)
+                {
+                    candidateTerminal = BuildTerminal(
+                        candidateReturnedCount,
+                        candidateInterrupted,
+                        limitTruncated || candidateInterrupted,
+                        candidateFirstOmittedBytes,
+                        Math.Max(0, totalCount - candidateReturnedCount),
+                        Math.Max(0, records.Count - candidate),
+                        candidateRecoveryGuidance,
+                        includeSelectionAccounting: true,
+                        metadataFallbackLevel: 2);
+                }
+                if (candidatePrefixBytes + JsonLineBytes(candidateTerminal) > options.MaxJsonBytes.Value
+                    && sourceTotal.HasValue
+                    && terminalMetadataMinimalFallback != null)
+                {
+                    candidateTerminal = BuildTerminal(
+                        candidateReturnedCount,
+                        candidateInterrupted,
+                        limitTruncated || candidateInterrupted,
+                        candidateFirstOmittedBytes,
+                        Math.Max(0, totalCount - candidateReturnedCount),
+                        Math.Max(0, records.Count - candidate),
+                        candidateRecoveryGuidance,
+                        includeSelectionAccounting: false,
+                        metadataFallbackLevel: 2);
+                }
                 if (candidatePrefixBytes + JsonLineBytes(candidateTerminal) > options.MaxJsonBytes.Value)
                     continue;
 
@@ -184,16 +260,52 @@ public static partial class QueryCommandRunner
                         "Increase --max-json-bytes so the bounded NDJSON terminal record fits before streaming begins.",
                         includeSelectionAccounting: false);
                 }
+                if (JsonLineBytes(requiredTerminal) > options.MaxJsonBytes.Value
+                    && terminalMetadataFallback != null)
+                {
+                    requiredTerminal = BuildTerminal(
+                        0,
+                        records.Count > 0,
+                        limitTruncated || records.Count > 0,
+                        records.Count > 0 ? JsonLineBytes(records[0].Line) : null,
+                        totalCount,
+                        records.Count,
+                        "Increase --max-json-bytes so the bounded NDJSON terminal record fits before streaming begins.",
+                        includeSelectionAccounting: false,
+                        metadataFallbackLevel: 1);
+                }
+                if (JsonLineBytes(requiredTerminal) > options.MaxJsonBytes.Value
+                    && terminalMetadataMinimalFallback != null)
+                {
+                    requiredTerminal = BuildTerminal(
+                        0,
+                        records.Count > 0,
+                        limitTruncated || records.Count > 0,
+                        records.Count > 0 ? JsonLineBytes(records[0].Line) : null,
+                        totalCount,
+                        records.Count,
+                        "Increase --max-json-bytes so the bounded NDJSON terminal record fits before streaming begins.",
+                        includeSelectionAccounting: false,
+                        metadataFallbackLevel: 2);
+                }
                 var requiredTerminalBytes = JsonLineBytes(requiredTerminal);
-                var budgetExitCode = WriteNdjsonResponseBudgetError(
-                    options,
-                    jsonOptions,
-                    commandName,
-                    $"{commandName} NDJSON terminal record is {requiredTerminalBytes} bytes and exceeds --max-json-bytes {options.MaxJsonBytes.Value}.",
-                    "Increase --max-json-bytes; the hard cap includes both result records and the terminal record.",
-                    requiredTerminalBytes,
-                    minimumUncertain: true);
-                return new(0, false, null, null, budgetExitCode);
+                if (requiredTerminalBytes <= options.MaxJsonBytes.Value)
+                {
+                    emittedRecords = 0;
+                    terminalLine = requiredTerminal;
+                }
+                else
+                {
+                    var budgetExitCode = WriteNdjsonResponseBudgetError(
+                        options,
+                        jsonOptions,
+                        commandName,
+                        $"{commandName} NDJSON terminal record is {requiredTerminalBytes} bytes and exceeds --max-json-bytes {options.MaxJsonBytes.Value}.",
+                        "Increase --max-json-bytes; the hard cap includes both result records and the terminal record.",
+                        requiredTerminalBytes,
+                        minimumUncertain: true);
+                    return new(0, false, null, null, budgetExitCode);
+                }
             }
         }
         else

@@ -918,6 +918,7 @@ public partial class McpServerTests
         env.Set("CDIDX_SEARCH_RECIPE_PATHS", null);
         InsertIndexedFile("src/json.cs", "csharp", "var doc = JsonDocument.Parse(payload);\n");
         InsertIndexedFile("src/json-extra.cs", "csharp", "var doc = JsonDocument.Parse(otherPayload);\n");
+        InsertIndexedFile(".github/workflows/json.yml", "yaml", "run: JsonDocument.Parse(payload)\n");
         InsertIndexedFile("docs/json.md", "markdown", "Document JsonDocument.Parse usage.\n");
         InsertIndexedFile("tests/JsonTests.cs", "csharp", "var doc = JsonDocument.Parse(payload);\n");
 
@@ -942,6 +943,23 @@ public partial class McpServerTests
         Assert.True(sourceQuery["truncated"]!.GetValue<bool>());
         Assert.Equal(sourcePath, sourceQuery["top_files"]![0]!["path"]!.GetValue<string>());
 
+        var toolingRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"search","arguments":{"recipe":"json-parse-apis","auditScope":"production-and-tooling","limit":10}}}""")!;
+        var toolingResponse = _server.HandleMessage(toolingRequest)!;
+
+        Assert.Null(toolingResponse["error"]);
+        var toolingStructured = toolingResponse["result"]!["structuredContent"]!;
+        var toolingPaths = toolingStructured["queries"]!.AsArray()
+            .Single(query => query!["name"]!.GetValue<string>() == "json-document-parse")!["results"]!.AsArray()
+            .Select(result => result!["path"]!.GetValue<string>())
+            .ToList();
+        var toolingCoverage = toolingStructured["scope"]!["coverage"]!;
+        Assert.Equal("production-and-tooling", toolingStructured["audit_scope"]!.GetValue<string>());
+        Assert.Contains(".github/workflows/json.yml", toolingPaths);
+        Assert.DoesNotContain("tests/JsonTests.cs", toolingPaths);
+        Assert.True(toolingCoverage["included"]!["count_authoritative"]!.GetValue<bool>());
+        Assert.Equal(0, toolingCoverage["unexecuted"]!["count"]!.GetValue<int>());
+        Assert.Equal("not_declared", toolingCoverage["human_review"]!["state"]!.GetValue<string>());
+
         var allRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"search","arguments":{"recipe":"json-parse-apis","auditScope":"all","limit":10}}}""")!;
         var allResponse = _server.HandleMessage(allRequest)!;
 
@@ -965,28 +983,41 @@ public partial class McpServerTests
     public void ToolsCall_Search_ListRecipesIncludesConfiguredSources_Issue3545()
     {
         var recipePath = Path.Combine(_projectRoot, "search-recipes.json");
-        File.WriteAllText(recipePath, """
+        const string recipeJson = """
             {
               "recipes": [
                 {
                   "name": "local-audit",
                   "description": "Local audit recipe",
+                  "default_scope": "production-and-tooling",
                   "queries": [
                     {
                       "name": "todo-comments",
-                      "query": "TODO",
+                      "query": "McpBoundaryNeedle",
                       "description": "Find local TODO markers",
                       "recommendedLabels": ["audit"],
                       "falsePositiveGuidance": "Ignore deliberate test fixtures.",
-                      "exactSubstring": true
+                      "exactSubstring": true,
+                      "pathPatterns": ["src/**"],
+                      "excludePaths": ["src/private/**"]
+                    },
+                    {
+                      "name": "definition-only",
+                      "query": "McpRecipeDefinitionNeedle5281",
+                      "description": "Do not match this loaded definition."
                     }
                   ]
                 }
               ]
             }
-            """);
+            """;
+        File.WriteAllText(recipePath, recipeJson);
         using var env = EnvironmentVariableScope.Capture("CDIDX_SEARCH_RECIPE_PATHS");
         env.Set("CDIDX_SEARCH_RECIPE_PATHS", recipePath);
+        InsertIndexedFile("src/mcp-boundary.cs", "csharp", "McpBoundaryNeedle\n");
+        InsertIndexedFile("src/private/mcp-boundary.cs", "csharp", "McpBoundaryNeedle\n");
+        InsertIndexedFile("tools/mcp-boundary.sh", "shell", "McpBoundaryNeedle\n");
+        InsertIndexedFile("search-recipes.json", "json", recipeJson);
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"listRecipes":true}}}""")!;
         var response = _server.HandleMessage(request)!;
 
@@ -995,7 +1026,23 @@ public partial class McpServerTests
         var recipes = structured["recipes"]!.AsArray();
         var local = recipes.Single(recipe => recipe!["name"]!.GetValue<string>() == "local-audit")!;
         Assert.Equal("todo-comments", local["queries"]![0]!["name"]!.GetValue<string>());
+        Assert.Equal("production-and-tooling", local["default_scope"]!.GetValue<string>());
         Assert.Null(structured["recipe_source_diagnostics"]);
+
+        var runRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"search","arguments":{"recipe":"local-audit","limit":10}}}""")!;
+        var runResponse = _server.HandleMessage(runRequest)!;
+
+        Assert.Null(runResponse["error"]);
+        var runStructured = runResponse["result"]!["structuredContent"]!;
+        Assert.Equal("production-and-tooling", runStructured["audit_scope"]!.GetValue<string>());
+        Assert.Contains(
+            runStructured["scope"]!["exclude_paths"]!.AsArray(),
+            path => path!.GetValue<string>() == "search-recipes.json");
+        var queries = runStructured["queries"]!.AsArray();
+        var query = queries.Single(item => item!["name"]!.GetValue<string>() == "todo-comments")!;
+        var result = Assert.Single(query["results"]!.AsArray())!;
+        Assert.Equal("src/mcp-boundary.cs", result["path"]!.GetValue<string>());
+        Assert.Empty(queries.Single(item => item!["name"]!.GetValue<string>() == "definition-only")!["results"]!.AsArray());
     }
 
     [Fact]

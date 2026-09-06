@@ -484,10 +484,18 @@ public static partial class QueryCommandRunner
 
     private static UnusedAuditScopeFilters BuildUnusedAuditScopeFilters(QueryCommandOptions options)
     {
-        var shouldApplySourceDefaults =
-            string.Equals(options.AuditScope, SearchAuditRecipes.DefaultAuditScope, StringComparison.OrdinalIgnoreCase) &&
+        var sourceScope = string.Equals(
+            options.AuditScope,
+            SearchAuditRecipes.DefaultAuditScope,
+            StringComparison.OrdinalIgnoreCase);
+        var productionAndToolingScope = string.Equals(
+            options.AuditScope,
+            SearchAuditRecipes.ProductionAndToolingAuditScope,
+            StringComparison.OrdinalIgnoreCase);
+        var shouldApplyAuditDefaults =
+            (sourceScope || productionAndToolingScope) &&
             (options.AuditScopeExplicit || (options.ExcludeTests && options.PathPatterns.Count == 0));
-        if (!shouldApplySourceDefaults)
+        if (!shouldApplyAuditDefaults)
         {
             return new(
                 options.PathPatterns,
@@ -500,9 +508,19 @@ public static partial class QueryCommandRunner
 
         var pathPatterns = new List<string>(options.PathPatterns);
         if (pathPatterns.Count == 0)
-            AddDistinct(pathPatterns, SearchAuditRecipes.DefaultSourcePathPatterns);
+        {
+            AddDistinct(
+                pathPatterns,
+                sourceScope
+                    ? SearchAuditRecipes.DefaultSourcePathPatterns
+                    : ProductionAndToolingScopeDefaults.IncludePaths);
+        }
         var excludePaths = new List<string>(options.ExcludePaths);
-        AddDistinct(excludePaths, UnusedSourceAuditExcludePaths);
+        AddDistinct(
+            excludePaths,
+            sourceScope
+                ? UnusedSourceAuditExcludePaths
+                : ProductionAndToolingScopeDefaults.ExcludePaths);
         var visibilityFilters = options.VisibilityFilters.Count > 0
             ? options.VisibilityFilters
             : [.. UnusedSourceAuditVisibilityFilters];

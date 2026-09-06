@@ -318,6 +318,10 @@ public sealed class QueryCommandRunnerAuditAllIssue5238Tests
             Assert.Equal(CommandExitCodes.PartialResult, exitCode);
             Assert.True(document.RootElement.GetProperty("summary").GetProperty("time_budget_exceeded").GetBoolean());
             Assert.Equal(1, document.RootElement.GetProperty("summary").GetProperty("partial_recipe_count").GetInt32());
+            var coverage = document.RootElement.GetProperty("recipes")[0].GetProperty("scope").GetProperty("coverage");
+            Assert.Equal(1, coverage.GetProperty("unexecuted").GetProperty("count").GetInt32());
+            Assert.False(coverage.GetProperty("execution_complete").GetBoolean());
+            Assert.Equal("not_declared", coverage.GetProperty("human_review").GetProperty("state").GetString());
             Assert.Contains(
                 document.RootElement.GetProperty("recovery").GetProperty("next_commands").EnumerateArray(),
                 command => command.GetString()!.Contains("cdidx audit time-recipe", StringComparison.Ordinal));
@@ -385,7 +389,10 @@ public sealed class QueryCommandRunnerAuditAllIssue5238Tests
         Assert.Equal(128, document.RootElement.GetProperty("summary").GetProperty("emitted_result_count").GetInt32());
         Assert.Equal(QueryCommandRunner.DefaultAuditAllTotalLimit, document.RootElement.GetProperty("limits").GetProperty("effective_total_limit").GetInt32());
         Assert.True(document.RootElement.GetProperty("limits").GetProperty("total_limit_defaulted").GetBoolean());
-        Assert.True(allocatedBytes < 32 * 1024 * 1024, $"Expected bounded allocation below 32 MiB, saw {allocatedBytes} bytes.");
+        const long allocationBudgetBytes = 40 * 1024 * 1024;
+        Assert.True(
+            allocatedBytes < allocationBudgetBytes,
+            $"Expected bounded allocation below 40 MiB including per-recipe coverage summaries, saw {allocatedBytes} bytes.");
         Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(10), $"Expected bounded execution below 10 seconds, saw {stopwatch.Elapsed}.");
     }
 

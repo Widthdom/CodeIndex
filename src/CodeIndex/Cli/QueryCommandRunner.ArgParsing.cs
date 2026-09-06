@@ -9,14 +9,21 @@ namespace CodeIndex.Cli;
 
 public static partial class QueryCommandRunner
 {
-    private static bool TryNormalizeSearchAuditScope(string value, out string scope)
+    internal static bool TryNormalizeSearchAuditScope(string value, out string scope)
     {
         scope = value.Trim().ToLowerInvariant();
-        if (scope is SearchAuditRecipes.DefaultAuditScope or SearchAuditRecipes.AllAuditScope)
+        if (scope is SearchAuditRecipes.DefaultAuditScope
+            or SearchAuditRecipes.ProductionAndToolingAuditScope
+            or SearchAuditRecipes.AllAuditScope)
             return true;
         if (scope is "production" or "production-only")
         {
             scope = SearchAuditRecipes.DefaultAuditScope;
+            return true;
+        }
+        if (scope is "production-tooling" or "production+tooling" or "tooling")
+        {
+            scope = SearchAuditRecipes.ProductionAndToolingAuditScope;
             return true;
         }
 

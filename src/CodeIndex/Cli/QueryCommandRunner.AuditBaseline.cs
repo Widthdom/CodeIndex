@@ -7,7 +7,7 @@ namespace CodeIndex.Cli;
 
 public static partial class QueryCommandRunner
 {
-    internal const string AuditBaselineUsage = "cdidx audit baseline-export|baseline-compare <baseline.json> [--recipe <name>] [--db <path>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--audit-scope <source|all>] [--since <datetime>] [--limit <n>] [--total-limit <n>] [--overwrite] [--json]; cdidx audit baseline-review <baseline.json> <id> --actor <actor> --reason <reason> --overwrite [--json]";
+    internal const string AuditBaselineUsage = "cdidx audit baseline-export|baseline-compare <baseline.json> [--recipe <name>] [--db <path>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--audit-scope <source|production-and-tooling|all>] [--since <datetime>] [--limit <n>] [--total-limit <n>] [--overwrite] [--json]; cdidx audit baseline-review <baseline.json> <id> --actor <actor> --reason <reason> --overwrite [--json]";
 
     internal static int RunAuditBaseline(string[] args, JsonSerializerOptions jsonOptions, CancellationToken cancellationToken = default,
         SearchAuditRecipeRegistry? registryForTesting = null)
@@ -194,6 +194,7 @@ public static partial class QueryCommandRunner
         var entries = new JsonArray();
         var definitions = new List<string>();
         var scopes = new JsonArray();
+        var scopeIdentities = new JsonArray();
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var omittedEntries = 0;
         foreach (var recipe in state.Recipes)
@@ -201,11 +202,19 @@ public static partial class QueryCommandRunner
             if (recipe.Status != "completed" || recipe.Queries.Count != recipe.Recipe.Queries.Count) reasons.Add("recipe_incomplete");
             // Reuse the canonical replay builder so every effective search filter participates.
             var replay = BuildAuditAllRecoveryCommand(recipe.Recipe.Name, options, includeDb: false);
+            var scopeNode = recipe.Scope == null ? null : JsonSerializer.SerializeToNode(recipe.Scope,
+                CliJsonSerializerContextFactory.Create(options.InvocationJsonOptions!).SearchRecipeScopeJsonResult);
             scopes.Add(new JsonObject
             {
                 ["replay"] = replay,
-                ["scope"] = recipe.Scope == null ? null : JsonSerializer.SerializeToNode(recipe.Scope,
-                    CliJsonSerializerContextFactory.Create(options.InvocationJsonOptions!).SearchRecipeScopeJsonResult),
+                ["scope"] = scopeNode,
+            });
+            var identityScope = scopeNode?.DeepClone().AsObject();
+            identityScope?.Remove("coverage");
+            scopeIdentities.Add(new JsonObject
+            {
+                ["replay"] = replay,
+                ["scope"] = identityScope,
             });
             foreach (var query in recipe.Queries)
             {
@@ -255,7 +264,7 @@ public static partial class QueryCommandRunner
             ["identity_version"] = "1",
             ["recipe_schema_version"] = "1",
             ["created_at"] = DateTimeOffset.UtcNow.ToString("O"),
-            ["scope_fingerprint"] = AuditBaselineStore.Hash(scopes.ToJsonString()),
+            ["scope_fingerprint"] = AuditBaselineStore.Hash(scopeIdentities.ToJsonString()),
             ["effective_filters"] = scopes,
             ["recipe_fingerprint"] = AuditBaselineStore.Hash(definitions.ToArray()),
             ["workspace_fingerprint"] = string.IsNullOrWhiteSpace(indexedRoot) ? "" : AuditBaselineStore.Hash(Path.GetFullPath(indexedRoot)),

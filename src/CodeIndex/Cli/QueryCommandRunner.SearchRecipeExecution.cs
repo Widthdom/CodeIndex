@@ -23,6 +23,7 @@ public static partial class QueryCommandRunner
     private static SearchRecipeQueryMaterializationResult MaterializeSearchRecipeQuery(
         in SearchRecipeQueryMaterializationRequest request)
     {
+        EnsureSearchRecipeCoverage(request.Reader, request.Scope, request.Options);
         var queryScope = BuildSearchRecipeQueryScope(request.Scope, request.RecipeQuery);
         var guardFilters = BuildSearchRecipeGuardFilters(request.Options, request.RecipeQuery);
         var fetchLimit = request.ResultLimit.HasValue
@@ -78,6 +79,7 @@ public static partial class QueryCommandRunner
             request.Options,
             request.RecipeQuery,
             rows);
+        MarkSearchRecipeQueryExecuted(request.Scope, request.RecipeQuery.Name);
         return new SearchRecipeQueryMaterializationResult(rows, sourceTotalAuthoritative, candidateWindowExhausted);
     }
 

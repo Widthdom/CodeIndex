@@ -618,7 +618,7 @@ internal static class CliFlagSchema
             new() { Name = "--exclude-query", ValuePlaceholder = "<name>", Description = "Search recipe: exclude one child query; repeat or comma-separate values", PrimaryCommands = Set("search", "audit") },
             new() { Name = "--list-recipes", Description = "Search: list built-in audit recipes", PrimaryCommands = Set("search") },
             new() { Name = "--names", Description = "Recipes: emit only deterministic recipe names", PrimaryCommands = Set("search", "recipes") },
-            new() { Name = "--audit-scope", ValueDomain = Values(["source", "all"]), Description = "Search/Audit/Unused: use production source defaults or include all indexed paths", PrimaryCommands = Set("search", "audit", "unused") },
+            new() { Name = "--audit-scope", ValueDomain = Values(["source", "production-and-tooling", "all"]), Description = "Search/Audit/Unused: use production source, production-plus-tooling, or all indexed-path defaults", PrimaryCommands = Set("search", "audit", "unused") },
             new() { Name = "--source-only", Description = "Search/Audit: alias for --audit-scope source", PrimaryCommands = Set("search", "audit") },
             new() { Name = "--show-excluded", Description = "Search/Audit recipes: include effective scope and exclusion diagnostics in recipe output", PrimaryCommands = Set("search", "audit") },
             new() { Name = "--named-query", ValuePlaceholder = "<name>=<query>", Description = "Search: add one named ad hoc batch query", PrimaryCommands = Set("search") },
