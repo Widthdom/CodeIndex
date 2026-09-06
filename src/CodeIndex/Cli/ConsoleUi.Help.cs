@@ -238,6 +238,8 @@ public static partial class ConsoleUi
         Console.WriteLine("  cdidx search --query --path --path README.md   Search for a literal option token");
         Console.WriteLine("  cdidx search --named-query pack=\"dotnet pack\" --named-query push=\"nuget push\" --format compact");
         Console.WriteLine("                                              Run named ad hoc searches with compact snippets");
+        Console.WriteLine("  cdidx search --named-query restore=TryValidateCheckpointManifest --search-fields path,line --json");
+        Console.WriteLine("                                              Project named-query rows in grouped JSON; explicit NDJSON is unsupported with --search-fields");
         Console.WriteLine("  cdidx search \"Run();\" --exact-substring        Case-sensitive exact substring search");
         Console.WriteLine("  cdidx search \"File.ReadAllText\" --exact-substring --reject-before \"Length\" --guard-window 8");
         Console.WriteLine("                                              Find calls without a nearby preceding size guard");

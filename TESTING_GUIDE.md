@@ -8,6 +8,8 @@ If you change test code, test helpers, test execution flow, or testing conventio
 
 ## Quick Start
 
+Named-query projection coverage in `QueryCommandRunnerSearchTests.cs` (#5276) extends the existing compact/rich fixture. Keep the `TryValidateCheckpointManifest` reproduction, single/multiple/empty queries, ordinary-row parity for every optional field, query metadata and truncation preservation, explicit format ordering, unsupported combinations, and exact UTF-8 document/newline budget boundaries on net8.0 and net9.0. Use the same isolated database for the read-only variants.
+
 Shell search-origin regression coverage in `QueryCommandRunnerSearchIssue5275Tests.cs` pairs executable direct, quoted, nested, and backtick substitutions with literal, escaped, and help/comment controls. Keep backtick unescaping, nested `case` patterns (including `esac` as a pattern alternative), quote restoration, depth/character/work budgets, C#/JavaScript controls, and ordinary/named/recipe filter and coordinate parity on both net8.0 and net9.0. The CLI variants share one isolated database and restore the external-recipe environment setting.
 
 Raw JSON envelope fixtures in `JsonEnvelopeWrapperTests` share `CaptureRawEnvelope`, which pins an initialized temporary project database with explicit `--db` (#5270). Keep the capture, line-size, item-count, node-count, depth, malformed-line, and mixed-line assertions independent of the live repository index. The deterministic regression commits an ambient database change inside the inner callback: an unpinned response must still fail the production snapshot guard, while the isolated item-limit fixture must retain exit 7 and `max_items`. Keep environment/current-directory changes restored in `finally` inside the non-parallel console collection, and validate net8.0 and net9.0 with an unrelated index writer active.
@@ -1211,6 +1213,8 @@ Issue #5260 の `QueryCommandRunnerAuditProgressIssue5260Tests` は子 query を
 テストコード、テストヘルパー、テストの実行フロー、またはテスト規約を変更した場合は、このドキュメントも同じコミットで更新してください。
 
 ## クイックスタート
+
+`QueryCommandRunnerSearchTests.cs` の名前付き検索のフィールド選択テスト（#5276）は既存の compact / rich fixture を拡張します。`TryValidateCheckpointManifest` の再現、単一・複数・空のクエリ、全オプションフィールドの通常検索との一致、クエリ情報と切り詰め情報の保持、明示形式の指定順、未対応の組み合わせ、UTF-8 document 全体と末尾改行の厳密なバイト境界を net8.0 / net9.0 で維持してください。読み取り専用の各変種では同じ分離済みDBを共有します。
 
 `QueryCommandRunnerSearchIssue5275Tests.cs` のShell検索由来テストは、直接実行・引用符内・入れ子・バッククォートによる置換と、リテラル・エスケープ・ヘルプ・コメントの対照例を組み合わせます。バッククォートのエスケープ解除、入れ子の `case` パターン（選択肢内の `esac` を含む）、引用符状態の復元、深さ・文字数・処理量の上限、C#/JavaScriptの対照例、通常・名前付き・recipe検索のフィルターと位置情報の一致をnet8.0とnet9.0の両方で維持してください。CLIの各変種は分離したDBを共有し、外部recipeの環境変数を復元します。
 
