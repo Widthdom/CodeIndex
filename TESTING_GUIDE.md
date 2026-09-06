@@ -10,6 +10,10 @@ If you change test code, test helpers, test execution flow, or testing conventio
 
 `DiffCommandRunnerTests.Run_ComparisonBudgetProvenanceAndRecovery_Issue5279` shares isolated databases across human/JSON diff and import checks. Inject small row and row-byte budgets independently on each side; retain one-file archive versus larger destination coverage, metadata filter limitations, lower-bound counters, output bounds/control and path privacy, and byte-for-byte destination/artifact preservation. Restore static budgets in `finally` in the console-sensitive collection and run both net8.0 and net9.0.
 
+Issue #5278 review regressions also cover 10,000 overlapping raw chunks with a later hidden match, the only matching child beyond the 512-query JSON detail cap (with NDJSON parity), and short projected NDJSON rows whose complete response fits while a partial envelope grows. Preserve these fixtures when changing candidate or byte admission.
+
+`QueryCommandRunnerAuditContinuationIssue5278Tests` verifies small-budget traversal without missing or duplicate attributed observations, exact final boundaries, independent execution/emission/selector completeness, opt-in exit semantics, and stale/scope/recipe/corrupt/oversized token rejection before child execution. Keep audit-all JSON/NDJSON byte tests coordinated with the continuation cursor after final output trimming, and run the audit, progress, baseline, help, and completion regressions on net8.0 and net9.0.
+
 `DbCommandRunnerManifestIssue5277Tests.cs` extends the existing SQLite pool sensitive fixture. Keep deterministic growth after the handle-length probe, replacement before/after open, missing/unreadable/directory/link/FIFO paths, UTF-8 and UTF-16/32 BOMs, exact byte boundaries, bounded stream consumption, cancellation, and restore non-mutation coverage on net8.0 and net9.0. Restore test hooks and Unix permissions in `finally`; POSIX-only FIFO/link/permission fixtures do not run on Windows, while ordinary replacement exercises Windows sharing too.
 
 Named-query projection coverage in `QueryCommandRunnerSearchTests.cs` (#5276) extends the existing compact/rich fixture. Keep the `TryValidateCheckpointManifest` reproduction, single/multiple/empty queries, ordinary-row parity for every optional field, query metadata and truncation preservation, explicit format ordering, unsupported combinations, and exact UTF-8 document/newline budget boundaries on net8.0 and net9.0. Use the same isolated database for the read-only variants.
@@ -1205,6 +1209,10 @@ Check the following:
 # テストガイド
 
 `DiffCommandRunnerTests.Run_ComparisonBudgetProvenanceAndRecovery_Issue5279` は、隔離したDBを通常表示／JSONのdiffとimport検証で共有します。左右それぞれに小さな行数・1行のバイト上限を注入し、1ファイルのアーカイブと大きな宛先、メタデータの絞り込み制約、観測値の下限、出力サイズ・制御文字・パスの秘匿、宛先と関連ファイルのバイト単位の不変性を検証します。コンソール依存のコレクションで静的上限を `finally` で復元し、net8.0とnet9.0で実行してください。
+
+Issue #5278 のレビュー回帰テストでは、10,000件の重複 raw chunk とその先の未走査 match、JSON の512件 detail 上限より後にだけ match がある子 query（NDJSON との比較を含む）、全件応答は収まる一方で部分応答の metadata が増える短い投影 NDJSON 行も検証します。候補枠や byte 判定を変更する際はこれらの fixture を維持してください。
+
+`QueryCommandRunnerAuditContinuationIssue5278Tests` は、小予算の再開で帰属付き observation に欠落・重複がないこと、最終ページの厳密な境界、実行・出力・selector の完了状態の分離、明示許可による終了コード、古い generation・変更 scope/recipe・破損・過大 token の子 query 実行前の拒否を検証します。audit-all の JSON/NDJSON byte テストは最終出力削減後の再開位置と整合させ、audit・progress・baseline・help・補完の回帰テストを net8.0 と net9.0 で実行してください。
 
 `DbCommandRunnerManifestIssue5277Tests.cs` は既存の SQLite pool sensitive フィクスチャを拡張します。ハンドルのサイズ確認後の決定的な増大、open 前後の差し替え、欠落・読み取り不可・ディレクトリ・リンク・FIFO、UTF-8 と UTF-16／32 の BOM、厳密なバイト境界、上限付きストリーム消費、キャンセル、復元時の非変更を net8.0 と net9.0 で検証してください。テストフックと Unix 権限は `finally` で復元します。POSIX 専用の FIFO・リンク・権限テストは Windows では実行せず、通常ファイルの差し替えで Windows の共有動作も検証します。
 

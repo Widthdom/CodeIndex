@@ -24,6 +24,9 @@ public static partial class QueryCommandRunner
             return RunAuditBaseline([subArgs[0]["baseline-".Length..], .. subArgs[1..]], jsonOptions, cancellationToken);
         if (HasAuditAllFlag(subArgs))
             return RunAuditAll(subArgs, jsonOptions, cancellationToken);
+        if (subArgs.TakeWhile(arg => arg != "--").Any(arg => arg == "--continuation"
+            || arg.StartsWith("--continuation=", StringComparison.Ordinal)))
+            return WriteAuditContinuationError(subArgs, jsonOptions);
 
         if (subArgs.Length == 0 || subArgs[0].StartsWith("-", StringComparison.Ordinal))
         {

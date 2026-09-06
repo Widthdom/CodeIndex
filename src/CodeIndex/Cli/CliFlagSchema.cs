@@ -708,6 +708,7 @@ internal static class CliFlagSchema
             new() { Name = "--exclude-strings", Description = "Search/Audit: suppress string, regex, and help-text matches after origin classification", PrimaryCommands = Set("search", "audit") },
             new() { Name = "--exclude-fixtures", Description = "Search/Audit: suppress fixture-only matches in tests after origin classification", PrimaryCommands = Set("search", "audit") },
             new() { Name = "--progress", Description = "Audit --all: opt in to bounded stderr progress, including captured JSON output; quiet/no-progress take precedence", PrimaryCommands = Set("audit") },
+            new() { Name = "--continuation", ValuePlaceholder = "<token>", Description = "Audit --all: resume bounded recipe/query observations with an unchanged index, scope, recipes, and --limit", PrimaryCommands = Set("audit") },
             new() { Name = "--no-progress", Description = "Disable animated progress, spinner output, and explicit audit progress", PrimaryCommands = Set(AllCommands.ToArray()), TopLevel = true },
             new() { Name = "--name", ValuePlaceholder = "<name>", Description = "Exact symbol name", PrimaryCommands = Set("symbols") },
             new() { Name = "--max-line-width", ValuePlaceholder = "<n>", Description = "Clamp long single-line payloads (0 disables clamping)", PrimaryCommands = Set(MaxLineWidthCommands) },

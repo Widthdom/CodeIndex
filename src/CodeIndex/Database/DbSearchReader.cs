@@ -135,6 +135,11 @@ public partial class DbReader
     /// FTS5を使ったチャンク全文検索。
     /// </summary>
     public List<SearchResult> Search(string query, int limit = 20, string? lang = null, bool rawQuery = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool deduplicate = true, DateTime? since = null, bool exact = false, bool prefix = false, bool visibilityRank = true, SearchCursor? cursor = null, IReadOnlyList<SearchGuardFilter>? guardFilters = null, int guardWindow = DefaultSearchGuardWindow, int? guardRequestedLimit = null, IReadOnlyList<string>? requiredPathPatterns = null, SearchGuardScope guardScope = SearchGuardScope.Window, bool tokenBoundary = false, SearchResultRanking resultRanking = SearchResultRanking.Default)
+        => SearchWithCandidateEvidence(query, limit, lang, rawQuery, pathPatterns, excludePathPatterns, excludeTests,
+            deduplicate, since, exact, prefix, visibilityRank, cursor, guardFilters, guardWindow, guardRequestedLimit,
+            requiredPathPatterns, guardScope, tokenBoundary, resultRanking);
+
+    internal List<SearchResult> SearchWithCandidateEvidence(string query, int limit = 20, string? lang = null, bool rawQuery = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool deduplicate = true, DateTime? since = null, bool exact = false, bool prefix = false, bool visibilityRank = true, SearchCursor? cursor = null, IReadOnlyList<SearchGuardFilter>? guardFilters = null, int guardWindow = DefaultSearchGuardWindow, int? guardRequestedLimit = null, IReadOnlyList<string>? requiredPathPatterns = null, SearchGuardScope guardScope = SearchGuardScope.Window, bool tokenBoundary = false, SearchResultRanking resultRanking = SearchResultRanking.Default, Action<bool>? candidateWindowObserver = null)
     {
         // Guard against empty/whitespace queries that would match everything
         // 空白のみのクエリが全件マッチするのを防止
@@ -372,6 +377,9 @@ public partial class DbReader
         }
 
         AttachSearchEnclosingSymbols(pagedResults, searchPrimaryMatchContext);
+        candidateWindowObserver?.Invoke(guardCandidateLimitReached || contextRankingCandidateLimitReached
+            || !hasCandidatePostProcessing && nextOffset - (cursor?.Offset ?? 0) >= limit
+            || results.Count >= limit);
         return pagedResults;
     }
 
