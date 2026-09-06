@@ -172,6 +172,9 @@ public class QueryCommandRunnerAuditSarifIssue4903Tests
             Assert.Equal(0, byteBudget.GetProperty("emitted_result_count").GetInt32());
             Assert.Equal(1, byteBudget.GetProperty("omitted_result_count").GetInt32());
             Assert.True(byteBudget.GetProperty("first_omitted_result_bytes").GetInt32() > 4_000);
+            Assert.Equal(
+                "response_byte_budget",
+                properties.GetProperty("scope").GetProperty("coverage_omitted_reason").GetString());
             Assert.Contains(
                 "--recipe risky-code/raw-diagnostic-echo",
                 properties.GetProperty("replay_command").GetString(),

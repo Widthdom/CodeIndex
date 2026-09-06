@@ -8,6 +8,18 @@ If you change test code, test helpers, test execution flow, or testing conventio
 
 ## Quick Start
 
+`AuditScopeIssue5281Tests` owns the production-and-tooling scope boundary and
+coverage contract. Keep mixed production/tooling paths, hidden CI, installer
+self-test naming, nested tests/fixtures, docs, recipe definitions, exact and
+truncated unknown-extension inventories, custom include/exclude filters, and
+authoritative versus bounded uncertainty assertions together. Also cover legacy
+generated-filter availability, configured recipe defaults, child-filter
+preservation, loaded recipe-definition self-exclusion, incomplete-generation
+uncertainty with oversized-file accounting, and full-versus-pruned NDJSON
+coverage metadata. Pair it with the MCP recipe-scope test and the audit-all
+coverage/query deadline tests so normal completion and unexecuted-query
+reporting remain aligned on net8.0 and net9.0.
+
 `DiffCommandRunnerTests.Run_ComparisonBudgetProvenanceAndRecovery_Issue5279` shares isolated databases across human/JSON diff and import checks. Inject small row and row-byte budgets independently on each side; retain one-file archive versus larger destination coverage, metadata filter limitations, lower-bound counters, output bounds/control and path privacy, and byte-for-byte destination/artifact preservation. Restore static budgets in `finally` in the console-sensitive collection and run both net8.0 and net9.0.
 
 Issue #5278 review regressions also cover 10,000 overlapping raw chunks with a later hidden match, the only matching child beyond the 512-query JSON detail cap (with NDJSON parity), and short projected NDJSON rows whose complete response fits while a partial envelope grows. Preserve these fixtures when changing candidate or byte admission.
@@ -1208,6 +1220,15 @@ Check the following:
 
 <a id="テストガイド"></a>
 # テストガイド
+
+`AuditScopeIssue5281Tests` は production-and-tooling scope の境界と coverage 契約を担当します。
+本番コードと tooling の混在 path、hidden CI、installer の self-test 命名、nested test / fixture、docs、
+recipe definition、完全版と truncated 版の unknown-extension inventory、custom include/exclude filter、
+authoritative count と上限付き uncertainty の assertion をまとめて維持してください。legacy DB の
+generated filter 可用性、設定 recipe の既定値、child filter の保持、NDJSON coverage metadata の完全版と
+読み込み済み recipe definition の自己一致除外、incomplete generation の uncertainty と oversized file の
+accounting、省略版も検証します。MCP の recipe scope test と audit-all の coverage/query deadline test も
+組み合わせ、通常完了と unexecuted-query report を net8.0 / net9.0 で一致させます。
 
 `DiffCommandRunnerTests.Run_ComparisonBudgetProvenanceAndRecovery_Issue5279` は、隔離したDBを通常表示／JSONのdiffとimport検証で共有します。左右それぞれに小さな行数・1行のバイト上限を注入し、1ファイルのアーカイブと大きな宛先、メタデータの絞り込み制約、観測値の下限、出力サイズ・制御文字・パスの秘匿、宛先と関連ファイルのバイト単位の不変性を検証します。コンソール依存のコレクションで静的上限を `finally` で復元し、net8.0とnet9.0で実行してください。
 

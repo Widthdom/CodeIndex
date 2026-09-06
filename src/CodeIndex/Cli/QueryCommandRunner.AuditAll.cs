@@ -148,14 +148,16 @@ public static partial class QueryCommandRunner
         IReadOnlyList<SearchAuditRecipe> recipes,
         CancellationToken cancellationToken = default,
         Action? afterQueryForTesting = null,
-        Action<DbReader>? beforeQueryForTesting = null)
+        Action<DbReader>? beforeQueryForTesting = null,
+        Action<DbReader>? beforeCoverageForTesting = null)
         => RunAuditAll(
             subArgs,
             jsonOptions,
             cancellationToken,
             new SearchAuditRecipeRegistry(recipes, []),
             afterQueryForTesting,
-            beforeQueryForTesting);
+            beforeQueryForTesting,
+            beforeCoverageForTesting);
 
     private static int RunAuditAll(
         string[] subArgs,
@@ -164,6 +166,7 @@ public static partial class QueryCommandRunner
         SearchAuditRecipeRegistry registry,
         Action? afterQueryForTesting = null,
         Action<DbReader>? beforeQueryForTesting = null,
+        Action<DbReader>? beforeCoverageForTesting = null,
         Func<DbReader?, QueryCommandOptions, AuditAllRunState, int>? consume = null)
     {
         var selectedRecipes = registry.Recipes
@@ -215,6 +218,7 @@ public static partial class QueryCommandRunner
             cancellationToken,
             afterQueryForTesting,
             beforeQueryForTesting,
+            beforeCoverageForTesting,
             consume,
             continuation);
     }
@@ -300,6 +304,7 @@ public static partial class QueryCommandRunner
         CancellationToken cancellationToken,
         Action? afterQueryForTesting,
         Action<DbReader>? beforeQueryForTesting,
+        Action<DbReader>? beforeCoverageForTesting,
         Func<DbReader?, QueryCommandOptions, AuditAllRunState, int>? consume = null,
         string? continuation = null)
     {
@@ -335,6 +340,7 @@ public static partial class QueryCommandRunner
                 cancellationToken,
                 afterQueryForTesting,
                 beforeQueryForTesting,
+                beforeCoverageForTesting,
                 consume),
             cancellationToken: cancellationToken);
         progress?.Finish(state.Cancelled || exitCode == CommandExitCodes.CancelledBySignal ? "cancelled"
@@ -355,6 +361,7 @@ public static partial class QueryCommandRunner
         CancellationToken cancellationToken,
         Action? afterQueryForTesting,
         Action<DbReader>? beforeQueryForTesting,
+        Action<DbReader>? beforeCoverageForTesting,
         Func<DbReader?, QueryCommandOptions, AuditAllRunState, int>? consume = null)
     {
         var stopwatch = Stopwatch.StartNew();
@@ -370,6 +377,7 @@ public static partial class QueryCommandRunner
         var completedRecipes = 0;
         long completedQueries = 0;
         long failedQueries = 0;
+        var coverageCache = new SearchRecipeFileCoverageCache();
         progress?.Start();
         try
         {
@@ -389,6 +397,44 @@ public static partial class QueryCommandRunner
                 state.Recipes.Add(recipeRun);
                 var scope = BuildSearchRecipeScope(recipe, options);
                 recipeRun.Scope = scope;
+                using var coverageCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                var coverageBudget = state.TimeBudget - stopwatch.Elapsed;
+                coverageCancellation.CancelAfter(coverageBudget > TimeSpan.Zero ? coverageBudget : TimeSpan.Zero);
+                try
+                {
+                    using var cancellationScope = reader.BeginCancellationScope(coverageCancellation.Token);
+                    reader.RunWithCancellationInterrupt(() =>
+                    {
+                        beforeCoverageForTesting?.Invoke(reader);
+                        EnsureSearchRecipeCoverage(
+                            reader,
+                            scope,
+                            options.Lang,
+                            options.Since,
+                            options.IncludeGenerated,
+                            coverageCache);
+                        return true;
+                    });
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    state.Cancelled = true;
+                    recipeRun.Status = "partial";
+                    recipeRun.OmittedReason = "cancelled";
+                    recipeRun.OmittedQueryCount = recipe.Queries.Count;
+                }
+                catch (OperationCanceledException) when (coverageCancellation.IsCancellationRequested)
+                {
+                    state.TimeBudgetExceeded = true;
+                    recipeRun.Status = "partial";
+                    recipeRun.OmittedReason = "time_budget";
+                    recipeRun.OmittedQueryCount = recipe.Queries.Count;
+                }
+                if (state.Cancelled || state.TimeBudgetExceeded)
+                {
+                    AddOmittedAuditAllRecipes(state, recipeIndex + 1, GetAuditAllStopReason(state));
+                    break;
+                }
                 var freshnessContext = BuildSearchRecipeFreshnessContext(
                     recipe,
                     recipe.Queries,
@@ -399,6 +445,7 @@ public static partial class QueryCommandRunner
                     var position = recipeOffset + queryIndex;
                     if (state.InitialOffsets is { } offsets && offsets[position] < 0)
                     {
+                        MarkSearchRecipeQueryExecuted(scope, recipe.Queries[queryIndex].Name);
                         recipeRun.Queries.Add(new AuditAllQueryRun(recipe.Queries[queryIndex])
                         {
                             Position = position,
