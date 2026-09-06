@@ -30,7 +30,8 @@ public static partial class QueryCommandRunner
             : int.MaxValue;
         if (request.FetchLimitCap.HasValue)
             fetchLimit = Math.Min(fetchLimit, request.FetchLimitCap.Value);
-        var results = request.Reader.Search(
+        var candidateWindowExhausted = false;
+        var results = request.Reader.SearchWithCandidateEvidence(
             request.RecipeQuery.Query,
             fetchLimit,
             request.Options.Lang,
@@ -50,8 +51,8 @@ public static partial class QueryCommandRunner
             requiredPathPatterns: GetSearchRecipeRequiredPathPatterns(request.Options, request.RecipeQuery),
             resultRanking: request.ResultLimit.HasValue
                 ? GetSearchRecipeResultRanking(request.RecipeQuery.ResultRanking, request.ResultLimit.Value)
-                : SearchResultRanking.Default);
-        var candidateWindowExhausted = results.Count >= fetchLimit;
+                : SearchResultRanking.Default,
+            candidateWindowObserver: exhausted => candidateWindowExhausted = exhausted);
         var sourceTotalAuthoritative = request.ResultLimit.HasValue
             && IsSearchRecipeSourceTotalAuthoritative(
                 request.Options,

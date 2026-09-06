@@ -39,6 +39,7 @@ public static partial class QueryCommandRunner
         internal SearchRecipeQueryResultJsonResult? Result { get; set; }
         internal SearchRecipeQueryFreshnessStateJsonResult? Freshness { get; set; }
         internal int ByteOmittedResultCount { get; set; }
+        internal int DetailOmittedResultCount { get; set; }
     }
 
     private sealed class AuditAllRunState(
@@ -57,6 +58,7 @@ public static partial class QueryCommandRunner
         internal int EmittedResultCount { get; set; }
         internal int MaterializedResultCount { get; set; }
         internal int ByteOmittedResultCount { get; set; }
+        internal int DetailOmittedResultCount { get; set; }
         internal long AccumulatedResultBytes { get; set; }
         internal bool Cancelled { get; set; }
         internal bool TimeBudgetExceeded { get; set; }
@@ -80,6 +82,19 @@ public static partial class QueryCommandRunner
         private int InitialByteOmittedResultCount { get; set; }
 
         internal int TotalResultCount { get; private set; }
+
+        internal List<int> QueryPrefixEnds()
+        {
+            var ends = new List<int>();
+            var count = 0;
+            foreach (var (_, results, _) in _entries)
+            {
+                if (results.Length == 0) continue;
+                count += results.Length;
+                ends.Add(count);
+            }
+            return ends;
+        }
 
         internal static AuditAllResultSnapshot Capture(AuditAllRunState state)
         {
@@ -698,6 +713,17 @@ public static partial class QueryCommandRunner
         if (ndjson)
             return WriteAuditAllNdjson(options, jsonOptions, serializationOptions, state, byteLimit);
 
+        // JSON query-detail admission is also row admission. Hidden query payloads
+        // must stay pending instead of being acknowledged by continuation.
+        foreach (var query in state.Recipes.SelectMany(recipe => recipe.Queries).Skip(AuditAllQueryDetailLimit))
+        {
+            var count = query.Result?.Results.Count ?? 0;
+            query.Result?.Results.Clear();
+            query.DetailOmittedResultCount += count;
+            state.DetailOmittedResultCount += count;
+            state.EmittedResultCount -= count;
+        }
+
         var includePayloadResults = !ndjson && !options.CountOnly && !options.SummaryOnly;
         var payload = BuildAuditAllPayload(options, state, includeResults: includePayloadResults);
         var json = payload.ToJsonString(serializationOptions);
@@ -741,27 +767,19 @@ public static partial class QueryCommandRunner
         int byteLimit,
         bool includeResults)
     {
-        var low = 0;
-        var high = snapshot.TotalResultCount - 1;
-        var bestCount = -1;
         string? bestJson = null;
-        while (low <= high)
+        var bestCount = FindLargestAuditAllPrefix(snapshot, candidateCount =>
         {
-            var candidateCount = low + (high - low) / 2;
             snapshot.ApplyPrefix(state, candidateCount);
             var candidateJson = BuildAuditAllPayload(options, state, includeResults)
                 .ToJsonString(serializationOptions);
             if (GetJsonDocumentByteCount(candidateJson) <= byteLimit)
             {
-                bestCount = candidateCount;
                 bestJson = candidateJson;
-                low = candidateCount + 1;
+                return true;
             }
-            else
-            {
-                high = candidateCount - 1;
-            }
-        }
+            return false;
+        });
 
         if (bestCount >= 0)
         {
@@ -771,6 +789,28 @@ public static partial class QueryCommandRunner
 
         snapshot.ApplyPrefix(state, 0);
         return BuildAuditAllPayload(options, state, includeResults).ToJsonString(serializationOptions);
+    }
+
+    private static int FindLargestAuditAllPrefix(AuditAllResultSnapshot snapshot, Func<int, bool> fits)
+    {
+        // Completing a query can remove continuation/fallback/restart metadata.
+        // Probe those discontinuities separately, descending from the full response.
+        var ends = snapshot.QueryPrefixEnds();
+        for (var i = ends.Count - 1; i >= 0; i--)
+        {
+            if (fits(ends[i])) return ends[i];
+            var low = (i == 0 ? 0 : ends[i - 1]) + 1;
+            var high = ends[i] - 1;
+            var best = -1;
+            while (low <= high)
+            {
+                var candidate = low + (high - low) / 2;
+                if (fits(candidate)) { best = candidate; low = candidate + 1; }
+                else high = candidate - 1;
+            }
+            if (best >= 0) return best;
+        }
+        return fits(0) ? 0 : -1;
     }
 
     private static int WriteAuditAllNdjson(
@@ -786,27 +826,19 @@ public static partial class QueryCommandRunner
         for (var i = 0; i < rowLines.Count; i++)
             prefixBytes[i + 1] = prefixBytes[i] + JsonLineBytes(rowLines[i]);
 
-        var low = 0;
-        var high = snapshot.TotalResultCount;
-        var bestCount = -1;
         string? bestTerminalLine = null;
-        while (low <= high)
+        var bestCount = FindLargestAuditAllPrefix(snapshot, candidateCount =>
         {
-            var candidateCount = low + (high - low) / 2;
             snapshot.ApplyPrefix(state, candidateCount);
             var terminalLine = BuildAuditAllTerminalLine(options, state, serializationOptions);
             var totalBytes = prefixBytes[candidateCount] + JsonLineBytes(terminalLine);
             if (totalBytes <= byteLimit)
             {
-                bestCount = candidateCount;
                 bestTerminalLine = terminalLine;
-                low = candidateCount + 1;
+                return true;
             }
-            else
-            {
-                high = candidateCount - 1;
-            }
-        }
+            return false;
+        });
 
         if (bestCount < 0)
         {
@@ -931,7 +963,7 @@ public static partial class QueryCommandRunner
                 ["omitted_query_count"] = recipeRun.OmittedQueryCount,
                 ["minimum_matched_result_count"] = recipeRun.Queries.Sum(query => query.Result?.MinimumMatchedCount ?? 0),
                 ["emitted_result_count"] = recipeRun.Queries.Sum(query => query.Result?.Results.Count ?? 0),
-                ["minimum_omitted_result_count"] = recipeRun.Queries.Sum(query => (query.Result?.MinimumOmittedResultCount ?? 0) + query.ByteOmittedResultCount),
+                ["minimum_omitted_result_count"] = recipeRun.Queries.Sum(query => (query.Result?.MinimumOmittedResultCount ?? 0) + query.ByteOmittedResultCount + query.DetailOmittedResultCount),
                 ["count_authoritative"] = recipeCountAuthoritative,
                 ["count_approximate"] = !recipeCountAuthoritative,
                 ["omitted_reason"] = recipeRun.OmittedReason,
@@ -997,7 +1029,7 @@ public static partial class QueryCommandRunner
                 ["omitted_recipe_count"] = state.Recipes.Count(recipe => recipe.Status == "omitted"),
                 ["emitted_result_count"] = state.EmittedResultCount,
                 ["minimum_matched_result_count"] = state.Recipes.Sum(recipe => recipe.Queries.Sum(query => query.Result?.MinimumMatchedCount ?? 0)),
-                ["minimum_omitted_result_count"] = state.Recipes.Sum(recipe => recipe.Queries.Sum(query => (query.Result?.MinimumOmittedResultCount ?? 0) + query.ByteOmittedResultCount)),
+                ["minimum_omitted_result_count"] = state.Recipes.Sum(recipe => recipe.Queries.Sum(query => (query.Result?.MinimumOmittedResultCount ?? 0) + query.ByteOmittedResultCount + query.DetailOmittedResultCount)),
                 ["count_semantics"] = "sum_of_recipe_query_observations_not_unique_matches",
                 ["count_scope"] = "current_page_evaluated_candidate_windows_not_cumulative",
                 ["count_authoritative"] = countAuthoritative,
@@ -1047,6 +1079,7 @@ public static partial class QueryCommandRunner
                 ["returned"] = emittedQueryDetails,
                 ["omitted_count"] = omittedQueryDetails,
                 ["limit"] = AuditAllQueryDetailLimit,
+                ["omitted_result_count"] = state.DetailOmittedResultCount,
             },
             ["recovery"] = new JsonObject
             {

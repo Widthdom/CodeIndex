@@ -1641,6 +1641,8 @@ remain the lower-level discovery and explicit orchestration tools.
 
 #### Audit continuation
 
+Candidate exhaustion is tracked before overlapping-chunk deduplication and includes the reader's bounded guard/context-ranking windows. The all-recipe layer retains at most 10,000 returned candidates per child. JSON rows omitted by the 512-query detail cap remain unaccounted and contribute to `query_details.omitted_result_count`; the bounded fallback targets the omitted child. NDJSON still emits attributed rows beyond the detail cap. Byte admission checks complete-query boundaries separately because adding continuation metadata can make a shorter response larger.
+
 `summary.execution_complete` means every selected child query was successfully evaluated (or accounted for on an earlier page). `summary.observation_emission_complete` additionally requires no remaining rows or unverifiable child coverage. `summary.truncated` reports either form of incompleteness. Intentional `--sample` / `--first-per-file` selection is reported separately through `intentional_selection_omitted_count`; it does not itself fail execution. Count/summary modes intentionally suppress rows. Counts describe this page's evaluated candidate windows, not cumulative unique findings; preserve recipe/query attribution when combining pages.
 
 Resume with `continuation.next_command`, or pass `continuation.next_token` as `--continuation <token>` to the same `audit --all` command. Tokens retain each child's accounted row offset, including byte-budget trimming, and skip completed children. Failed or interrupted children remain pending. Keep the index generation, recipe definitions, effective filters, selectors, ordering, and `--limit` unchanged; changing them or supplying a corrupt token fails before child queries execute. Total-row and JSON-byte budgets may change. Ordinary search and named-recipe cursors keep their existing behavior, and baseline files remain finding-comparison artifacts.
@@ -5503,6 +5505,8 @@ child-query cursor、recipe 固有 aggregation が必要な場合は個別の `c
 `cdidx recipes` と `cdidx batch` は lower-level の discovery / 明示的 orchestration tool として維持されます。
 
 #### Audit の再開
+
+候補枠の終了は重複チャンク除去前に追跡し、reader が持つ上限付き guard／context-ranking の候補枠も含めて判定します。全レシピ層は子 query ごとに最大10,000件の返却候補を保持します。512件の query detail 上限で JSON に出なかった行は未処理のまま `query_details.omitted_result_count` に加算し、省略された子 query を上限付き fallback の対象にします。NDJSON は detail 上限を超えた帰属付き行も出力します。再開メタデータを加えると行の少ない応答が大きくなる場合があるため、byte 判定では子 query が完了する境界を別に確認します。
 
 `summary.execution_complete` は選択した子 query をすべて正常に評価済み（前ページで処理済みの場合を含む）であることを示します。`summary.observation_emission_complete` はさらに未出力 row や全件性を確認できない子 query がないことを要求します。`summary.truncated` はどちらかの不完全性を示します。意図的な `--sample` / `--first-per-file` の選択は `intentional_selection_omitted_count` に分離し、それ自体では実行失敗にしません。count / summary mode は意図的に row を出力しません。件数は当該ページで評価した候補集合の情報であり、累積の unique finding 数ではありません。ページを結合する際も recipe/query の帰属を保持してください。
 

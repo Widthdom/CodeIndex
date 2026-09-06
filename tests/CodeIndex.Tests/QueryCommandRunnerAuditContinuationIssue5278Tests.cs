@@ -1,5 +1,6 @@
 using System.Text.Json;
 using CodeIndex.Cli;
+using Microsoft.Data.Sqlite;
 using Xunit;
 using static CodeIndex.Tests.QueryCommandTestSupport;
 
@@ -221,5 +222,87 @@ public sealed class QueryCommandRunnerAuditContinuationIssue5278Tests
         Assert.Contains("--include-query needle", continuation.GetProperty("fallbacks")[0].GetProperty("command").GetString());
         Assert.True(result.RootElement.GetProperty("summary").GetProperty("execution_complete").GetBoolean());
         Assert.False(result.RootElement.GetProperty("summary").GetProperty("observation_emission_complete").GetBoolean());
+    }
+
+    [Fact]
+    public void AuditContinuation_DeduplicatedRawCapCannotClaimCompleteCoverage()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("audit_resume_dedup_cap_5278");
+        var db = TestProjectHelper.CreateProjectDb(project.Root);
+        TestProjectHelper.InsertIndexedFile(db, "src/A.cs", "csharp", "class Needle5278 { }\n");
+        TestProjectHelper.InsertIndexedFile(db, "src/Z.cs", "csharp", "class Needle5278Beyond { }\n");
+        using (var connection = new SqliteConnection($"Data Source={db}"))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                WITH RECURSIVE positions(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM positions WHERE n < 9999)
+                INSERT INTO chunks(file_id, chunk_index, start_line, end_line, content)
+                SELECT f.id, positions.n, 1, 1, 'class Needle5278 { }' FROM positions, files f WHERE f.path = 'src/A.cs';
+                """;
+            command.ExecuteNonQuery();
+        }
+        var (exit, stdout, _) = CaptureConsole(() => QueryCommandRunner.RunAuditAllForTesting(
+            ["--all", "--db", db, "--json", "--limit", "10"], JsonOptions, [Recipe("first")]));
+        using var result = JsonDocument.Parse(stdout);
+        Assert.Equal(CommandExitCodes.PartialResult, exit);
+        Assert.Equal(1, result.RootElement.GetProperty("summary").GetProperty("emitted_result_count").GetInt32());
+        Assert.True(result.RootElement.GetProperty("recipes")[0].GetProperty("queries")[0].GetProperty("candidate_window_exhausted").GetBoolean());
+        Assert.False(result.RootElement.GetProperty("summary").GetProperty("observation_emission_complete").GetBoolean());
+        Assert.Equal(1, result.RootElement.GetProperty("continuation").GetProperty("fallback_count").GetInt32());
+    }
+
+    [Fact]
+    public void AuditContinuation_QueryDetailOmissionsStayPendingWithTargetedFallback()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("audit_resume_details_5278");
+        var db = TestProjectHelper.CreateProjectDb(project.Root);
+        TestProjectHelper.InsertIndexedFile(db, "src/One.cs", "csharp", "class Needle5278 { }\n");
+        var recipes = Enumerable.Range(0, 9).Select(r => new SearchAuditRecipe($"recipe{r}", "details",
+            Enumerable.Range(0, 64).Select(q => new SearchAuditRecipeQuery($"query{q}",
+                r == 8 && q == 63 ? "Needle5278" : "Missing5278", "query", [], "Review", ExactSubstring: true)).ToList())).ToArray();
+        var (exit, stdout, _) = CaptureConsole(() => QueryCommandRunner.RunAuditAllForTesting(
+            ["--all", "--db", db, "--json", "--limit", "10"], JsonOptions, recipes));
+        using var result = JsonDocument.Parse(stdout);
+        var root = result.RootElement;
+        Assert.Equal(CommandExitCodes.PartialResult, exit);
+        Assert.Equal(0, root.GetProperty("summary").GetProperty("emitted_result_count").GetInt32());
+        Assert.Equal(1, root.GetProperty("query_details").GetProperty("omitted_result_count").GetInt32());
+        Assert.True(root.GetProperty("summary").GetProperty("execution_complete").GetBoolean());
+        Assert.False(root.GetProperty("summary").GetProperty("observation_emission_complete").GetBoolean());
+        var continuation = root.GetProperty("continuation");
+        Assert.Equal("continuation_query_limit", continuation.GetProperty("unavailable_reason").GetString());
+        Assert.Equal(1, continuation.GetProperty("fallback_count").GetInt32());
+        Assert.Equal("recipe8", continuation.GetProperty("fallbacks")[0].GetProperty("recipe").GetString());
+        Assert.Equal("query63", continuation.GetProperty("fallbacks")[0].GetProperty("query_name").GetString());
+
+        var (ndjsonExit, ndjson, _) = CaptureConsole(() => QueryCommandRunner.RunAuditAllForTesting(
+            ["--all", "--db", db, "--json=ndjson", "--limit", "10"], JsonOptions, recipes));
+        using var terminal = JsonDocument.Parse(ndjson.Split('\n', StringSplitOptions.RemoveEmptyEntries)[^1]);
+        Assert.Equal(CommandExitCodes.Success, ndjsonExit);
+        Assert.Equal(1, terminal.RootElement.GetProperty("summary").GetProperty("emitted_result_count").GetInt32());
+        Assert.True(terminal.RootElement.GetProperty("summary").GetProperty("observation_emission_complete").GetBoolean());
+    }
+
+    [Fact]
+    public void AuditContinuation_NdjsonAcceptsCompleteResponseAcrossMetadataSizeTransitions()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("audit_resume_ndjson_boundary_5278");
+        var db = TestProjectHelper.CreateProjectDb(project.Root);
+        for (var i = 0; i < 4; i++)
+            TestProjectHelper.InsertIndexedFile(db, $"src/File{i}.cs", "csharp", $"class Needle5278_{i} {{ }}\n");
+        var recipes = new[] { Recipe("first"), Recipe("second") };
+        string[] args = ["--all", "--db", db, "--json=ndjson", "--search-fields", "path", "--limit", "10"];
+        var (fullExit, full, _) = CaptureConsole(() => QueryCommandRunner.RunAuditAllForTesting(args, JsonOptions, recipes));
+        Assert.Equal(CommandExitCodes.Success, fullExit);
+        var budget = System.Text.Encoding.UTF8.GetByteCount(full) + 128; // Timing and explicit-budget fields can vary.
+        var (exit, stdout, _) = CaptureConsole(() => QueryCommandRunner.RunAuditAllForTesting(
+            [.. args, "--max-json-bytes", budget.ToString(System.Globalization.CultureInfo.InvariantCulture)], JsonOptions, recipes));
+        Assert.Equal(CommandExitCodes.Success, exit);
+        Assert.True(System.Text.Encoding.UTF8.GetByteCount(stdout) <= budget);
+        var lines = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        Assert.Equal(9, lines.Length);
+        using var terminal = JsonDocument.Parse(lines[^1]);
+        Assert.True(terminal.RootElement.GetProperty("summary").GetProperty("observation_emission_complete").GetBoolean());
     }
 }

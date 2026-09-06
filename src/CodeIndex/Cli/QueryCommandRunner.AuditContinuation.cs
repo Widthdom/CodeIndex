@@ -116,7 +116,7 @@ public static partial class QueryCommandRunner
         {
             if (query.Status != "completed" || query.Result == null) continue;
             var result = query.Result;
-            offsets[query.Position] = !state.SuppressRows && (result.Truncated || query.ByteOmittedResultCount > 0)
+            offsets[query.Position] = !state.SuppressRows && (result.Truncated || query.ByteOmittedResultCount > 0 || query.DetailOmittedResultCount > 0)
                 ? query.RowOffset + result.Results.Count
                 : result.CandidateWindowExhausted ? -2 : -1;
         }
@@ -132,6 +132,7 @@ public static partial class QueryCommandRunner
 
     private static bool AuditHasObservationOmissions(AuditAllRunState state)
         => state.ByteOmittedResultCount > 0
+            || state.DetailOmittedResultCount > 0
             || state.InitialOffsets?.Contains(-2) == true
             || state.Recipes.SelectMany(recipe => recipe.Queries).Any(query => !state.SuppressRows && query.Result?.Truncated == true
                 || query.Result?.CandidateWindowExhausted == true);
@@ -163,7 +164,8 @@ public static partial class QueryCommandRunner
         {
             foreach (var query in recipe.Queries)
             {
-                var needsFallback = offsets != null && offsets[position] == -2 || unavailableReason != null;
+                var needsFallback = offsets != null && offsets[position] == -2
+                    || unavailableReason != null && (unavailableReason != "continuation_query_limit" || offsets![position] >= 0);
                 position++;
                 if (!needsFallback) continue;
                 fallbackCount++;
