@@ -195,7 +195,7 @@ public class DbCommandRunnerParseTests
 }
 
 [Collection("SQLite pool sensitive")]
-public class DbCommandRunnerTests
+public partial class DbCommandRunnerTests
 {
     private readonly JsonSerializerOptions _jsonOptions = new()
     {

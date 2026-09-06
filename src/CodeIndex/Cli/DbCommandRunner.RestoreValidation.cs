@@ -4,12 +4,16 @@ using System.Text.Json.Nodes;
 using CodeIndex.Database;
 using CodeIndex.Diagnostics;
 using CodeIndex.Indexer;
+using CodeIndex.Indexer.Extensibility;
 using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Cli;
 
 public static partial class DbCommandRunner
 {
+    internal static Action<string>? CheckpointManifestAfterLengthProbeForTesting { get; set; }
+    internal static Action<string>? CheckpointManifestBeforeOpenForTesting { get; set; }
+
     private static DbRestorePreviewResult PreviewRestoreCheckpoint(
         string fullDbPath,
         string name,
@@ -44,7 +48,8 @@ public static partial class DbCommandRunner
                 name,
                 validatedCheckpointPath,
                 diagnostics,
-                out _);
+                out _,
+                cancellationToken);
             payload = ValidateCheckpointPayload(
                 fullDbPath,
                 validatedCheckpointPath,
@@ -100,7 +105,8 @@ public static partial class DbCommandRunner
         string name,
         string checkpointPath,
         List<DbDiagnosticJsonResult> diagnostics,
-        out DateTimeOffset createdAtUtc)
+        out DateTimeOffset createdAtUtc,
+        CancellationToken cancellationToken = default)
     {
         createdAtUtc = default;
         if (!TryValidateCheckpointDirectoryTarget(
@@ -121,7 +127,8 @@ public static partial class DbCommandRunner
             name,
             validatedCheckpointPath,
             diagnostics,
-            out createdAtUtc);
+            out createdAtUtc,
+            cancellationToken);
         var payload = ValidateCheckpointPayload(
             fullDbPath,
             validatedCheckpointPath,
@@ -186,12 +193,14 @@ public static partial class DbCommandRunner
         string name,
         string checkpointPath,
         List<DbDiagnosticJsonResult> diagnostics,
-        out DateTimeOffset createdAtUtc)
+        out DateTimeOffset createdAtUtc,
+        CancellationToken cancellationToken)
     {
         createdAtUtc = default;
         var manifestPath = Path.Combine(checkpointPath, "manifest.txt");
         try
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (!TryGetRegularExistingFile(manifestPath, out var normalizedManifestPath))
             {
                 diagnostics.Add(new DbDiagnosticJsonResult(
@@ -201,8 +210,18 @@ public static partial class DbCommandRunner
                 return false;
             }
 
-            var length = new FileInfo(normalizedManifestPath).Length;
-            if (length > CheckpointManifestByteLimit)
+            CheckpointManifestBeforeOpenForTesting?.Invoke(normalizedManifestPath);
+            if (!ExtractorPluginRegistry.TryOpenSecureRegularFile(normalizedManifestPath, out var stream, out var length))
+                throw new InvalidOperationException("checkpoint manifest could not be opened as a regular file");
+
+            using var manifestStream = stream;
+            CheckpointManifestAfterLengthProbeForTesting?.Invoke(normalizedManifestPath);
+            // The size probe and consumption share the validated handle. The path can
+            // still change, and shared writers can modify the opened file's contents.
+            var text = length > CheckpointManifestByteLimit
+                ? null
+                : DataDirectorySecurity.ReadTextWithinLimit(stream, CheckpointManifestByteLimit, cancellationToken);
+            if (text is null)
             {
                 diagnostics.Add(new DbDiagnosticJsonResult(
                     "checkpoint_manifest_too_large",
@@ -212,9 +231,10 @@ public static partial class DbCommandRunner
             }
 
             var values = new Dictionary<string, string>(StringComparer.Ordinal);
-            using var reader = new StringReader(File.ReadAllText(normalizedManifestPath));
+            using var reader = new StringReader(text);
             while (reader.ReadLine() is { } line)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 if (line.Length == 0)
                     continue;
                 var separator = line.IndexOf('=');
