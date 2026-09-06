@@ -17,7 +17,8 @@ public static partial class QueryCommandRunner
 
     private readonly record struct SearchRecipeQueryMaterializationResult(
         List<SearchDisplayRow> Rows,
-        bool SourceTotalAuthoritative);
+        bool SourceTotalAuthoritative,
+        bool CandidateWindowExhausted);
 
     private static SearchRecipeQueryMaterializationResult MaterializeSearchRecipeQuery(
         in SearchRecipeQueryMaterializationRequest request)
@@ -50,6 +51,7 @@ public static partial class QueryCommandRunner
             resultRanking: request.ResultLimit.HasValue
                 ? GetSearchRecipeResultRanking(request.RecipeQuery.ResultRanking, request.ResultLimit.Value)
                 : SearchResultRanking.Default);
+        var candidateWindowExhausted = results.Count >= fetchLimit;
         var sourceTotalAuthoritative = request.ResultLimit.HasValue
             && IsSearchRecipeSourceTotalAuthoritative(
                 request.Options,
@@ -74,7 +76,7 @@ public static partial class QueryCommandRunner
             request.Options,
             request.RecipeQuery,
             rows);
-        return new SearchRecipeQueryMaterializationResult(rows, sourceTotalAuthoritative);
+        return new SearchRecipeQueryMaterializationResult(rows, sourceTotalAuthoritative, candidateWindowExhausted);
     }
 
     private static List<SearchRecipeQueryResultJsonResult> CollectSearchRecipeQueryResults(
@@ -92,7 +94,8 @@ public static partial class QueryCommandRunner
         int emittedBefore = 0,
         int? aggregateResultLimit = null,
         int? fetchLimitCap = null,
-        IReadOnlyList<SearchAuditRecipeQuery>? auditClassificationQueries = null)
+        IReadOnlyList<SearchAuditRecipeQuery>? auditClassificationQueries = null,
+        int? auditRowOffset = null)
     {
         var queryResults = new List<SearchRecipeQueryResultJsonResult>();
         freshnessObservations = [];
@@ -113,7 +116,7 @@ public static partial class QueryCommandRunner
                     options,
                     recipeQuery,
                     exact,
-                    resultLimit,
+                    auditRowOffset.HasValue ? AuditAllCandidateRowsPerQuery : resultLimit,
                     RawFtsOverride: false,
                     FetchLimitCap: fetchLimitCap);
                 var materialization = MaterializeSearchRecipeQuery(in materializationRequest);
@@ -127,8 +130,23 @@ public static partial class QueryCommandRunner
                 var outputSelection = ApplySearchOutputSelection(
                     rows,
                     options,
-                    resultLimit,
+                    auditRowOffset.HasValue ? AuditAllCandidateRowsPerQuery : resultLimit,
                     materialization.SourceTotalAuthoritative);
+                if (auditRowOffset.HasValue)
+                {
+                    // Replay a fixed, bounded selection before slicing. Candidate ranking and
+                    // selectors must not change when a caller changes the page budget.
+                    var page = outputSelection.Rows.Skip(auditRowOffset.Value).Take(resultLimit).ToList();
+                    var remaining = Math.Max(0, outputSelection.Rows.Count - auditRowOffset.Value - page.Count);
+                    outputSelection = outputSelection with
+                    {
+                        Rows = page,
+                        Returned = page.Count,
+                        LimitOmittedCount = remaining,
+                        LimitTruncated = remaining > 0,
+                        Truncated = remaining > 0 || outputSelection.SelectorOmittedCount > 0,
+                    };
+                }
                 rows = outputSelection.Rows;
                 if (includeAuditClassifications)
                     ApplySearchRecipeAuditClassifications(
@@ -136,7 +154,9 @@ public static partial class QueryCommandRunner
                         recipeQuery,
                         auditClassificationQueries ?? recipeQueries,
                         rows);
-                var minimumOmitted = Math.Max(0, outputSelection.OriginalCount - rows.Count);
+                var minimumOmitted = auditRowOffset.HasValue
+                    ? outputSelection.LimitOmittedCount
+                    : Math.Max(0, outputSelection.OriginalCount - rows.Count);
                 var selectionReason = GetSearchRecipeSelectionReason(outputSelection);
                 total += rows.Count;
                 minimumMatchedTotal += outputSelection.OriginalCount;
@@ -189,6 +209,7 @@ public static partial class QueryCommandRunner
                     SummaryEvidencePaths = summaryEvidencePaths,
                     SummaryEvidencePathCount = summaryEvidencePathCount,
                     SummaryEvidencePathCountAuthoritative = materialization.SourceTotalAuthoritative,
+                    CandidateWindowExhausted = materialization.CandidateWindowExhausted,
                 });
                 if (freshnessContext != null)
                 {

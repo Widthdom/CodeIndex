@@ -120,7 +120,7 @@ public sealed class QueryCommandRunnerAuditAllIssue5238Tests
             JsonOptions,
             recipes));
         using var limited = JsonDocument.Parse(limitedStdout);
-        Assert.Equal(CommandExitCodes.Success, limitedExitCode);
+        Assert.Equal(CommandExitCodes.PartialResult, limitedExitCode);
         Assert.Equal(1, limited.RootElement.GetProperty("summary").GetProperty("emitted_result_count").GetInt32());
         Assert.True(limited.RootElement.GetProperty("summary").GetProperty("truncated").GetBoolean());
 
@@ -129,7 +129,7 @@ public sealed class QueryCommandRunnerAuditAllIssue5238Tests
             JsonOptions,
             recipes));
         var fullBytes = Encoding.UTF8.GetByteCount(fullStdout);
-        var byteLimit = fullBytes - 1;
+        var byteLimit = fullBytes - 512; // Leave room for varying elapsed-time and continuation metadata.
         var (boundedExitCode, boundedStdout, _) = CaptureConsole(() => QueryCommandRunner.RunAuditAllForTesting(
             [
                 "--all", "--db", dbPath, "--json", "--limit", "10", "--total-limit", "10",
@@ -152,7 +152,7 @@ public sealed class QueryCommandRunnerAuditAllIssue5238Tests
             ["--all", "--db", dbPath, "--json=ndjson", "--limit", "10", "--total-limit", "10"],
             JsonOptions,
             recipes));
-        var ndjsonByteLimit = Encoding.UTF8.GetByteCount(fullNdjson) - 1;
+        var ndjsonByteLimit = Encoding.UTF8.GetByteCount(fullNdjson) - 512;
         var (boundedNdjsonExitCode, boundedNdjson, _) = CaptureConsole(() => QueryCommandRunner.RunAuditAllForTesting(
             [
                 "--all", "--db", dbPath, "--json=ndjson", "--limit", "10", "--total-limit", "10",
@@ -195,7 +195,7 @@ public sealed class QueryCommandRunnerAuditAllIssue5238Tests
         Assert.Equal(QueryCommandRunner.AuditAllRecoveryCommandLimit, recovery.GetProperty("limit").GetInt32());
         Assert.Equal(QueryCommandRunner.AuditAllRecoveryCommandLimit, recovery.GetProperty("returned").GetInt32());
         Assert.Equal(
-            accumulationSummary.GetProperty("omitted_recipe_count").GetInt32() + 1 - QueryCommandRunner.AuditAllRecoveryCommandLimit,
+            manyRecipes.Length - QueryCommandRunner.AuditAllRecoveryCommandLimit,
             recovery.GetProperty("omitted_count").GetInt32());
         Assert.True(recovery.GetProperty("truncated").GetBoolean());
         Assert.Contains(

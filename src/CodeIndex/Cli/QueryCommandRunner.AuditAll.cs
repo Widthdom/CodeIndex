@@ -31,6 +31,8 @@ public static partial class QueryCommandRunner
 
     private sealed class AuditAllQueryRun(SearchAuditRecipeQuery query)
     {
+        internal int Position { get; set; }
+        internal int RowOffset { get; set; }
         internal SearchAuditRecipeQuery Query { get; } = query;
         internal string Status { get; set; } = "completed";
         internal string? FailureReason { get; set; }
@@ -64,6 +66,11 @@ public static partial class QueryCommandRunner
         internal string? IndexReason { get; set; }
         internal string? BaselineStartGeneration { get; set; }
         internal long ElapsedMilliseconds { get; set; }
+        internal string? ContinuationInput { get; set; }
+        internal string? ContinuationBinding { get; set; }
+        internal int[]? InitialOffsets { get; set; }
+        internal bool GenerationChanged { get; set; }
+        internal bool SuppressRows { get; set; }
     }
 
     private sealed class AuditAllResultSnapshot
@@ -160,7 +167,9 @@ public static partial class QueryCommandRunner
                 command: "audit");
         }
 
-        var normalizedArgs = AddAuditAllSummaryFormatIfNeeded(subArgs);
+        if (!TryExtractAuditContinuation(subArgs, out var cleanArgs, out var continuation))
+            return WriteAuditContinuationError(subArgs, jsonOptions);
+        var normalizedArgs = AddAuditAllSummaryFormatIfNeeded(cleanArgs);
         var searchArgs = new string[normalizedArgs.Length + 2];
         searchArgs[0] = "--recipe";
         searchArgs[1] = selectedRecipes[0].Name;
@@ -191,7 +200,8 @@ public static partial class QueryCommandRunner
             cancellationToken,
             afterQueryForTesting,
             beforeQueryForTesting,
-            consume);
+            consume,
+            continuation);
     }
 
     private static string[] AddAuditAllSummaryFormatIfNeeded(string[] args)
@@ -275,11 +285,13 @@ public static partial class QueryCommandRunner
         CancellationToken cancellationToken,
         Action? afterQueryForTesting,
         Action<DbReader>? beforeQueryForTesting,
-        Func<DbReader?, QueryCommandOptions, AuditAllRunState, int>? consume = null)
+        Func<DbReader?, QueryCommandOptions, AuditAllRunState, int>? consume = null,
+        string? continuation = null)
     {
         var effectiveTotalLimit = options.TotalLimit ?? DefaultAuditAllTotalLimit;
         var timeBudget = AuditAllTimeBudgetForTesting ?? DefaultAuditAllTimeBudget;
         var state = new AuditAllRunState(selectedRecipes, registryDiagnostics, effectiveTotalLimit, timeBudget);
+        state.ContinuationInput = continuation;
         using var progress = ConsoleUi.ShouldUseProgressAnimation()
             && (options.Progress || ConsoleUi.ShouldUseInteractiveStandardError())
                 ? new ConsoleUi.AuditProgress(selectedRecipes.Count, selectedRecipes.Sum(recipe => (long)recipe.Queries.Count),
@@ -312,7 +324,7 @@ public static partial class QueryCommandRunner
             cancellationToken: cancellationToken);
         progress?.Finish(state.Cancelled || exitCode == CommandExitCodes.CancelledBySignal ? "cancelled"
             : exitCode != CommandExitCodes.Success && exitCode != CommandExitCodes.PartialResult ? "failed"
-            : state.TimeBudgetExceeded || state.ResultLimitReached || state.ByteBudgetReached
+            : !AuditExecutionComplete(state) || AuditHasObservationOmissions(state) || state.ByteBudgetReached
                 || state.ByteOmittedResultCount > 0 || state.Errors.Count > 0 || state.OmittedErrorCount > 0 ? "partial"
             : "completed");
         return exitCode;
@@ -331,9 +343,12 @@ public static partial class QueryCommandRunner
         Func<DbReader?, QueryCommandOptions, AuditAllRunState, int>? consume = null)
     {
         var stopwatch = Stopwatch.StartNew();
+        if (consume == null && !InitializeAuditContinuation(reader, options, state))
+            return WriteAuditContinuationError([], jsonOptions, options.Json);
         if (consume != null)
             state.BaselineStartGeneration = reader.GetPaginationGeneration().Identity;
         var includeRows = !options.CountOnly && !options.SummaryOnly;
+        state.SuppressRows = !includeRows;
         var indexState = ResolveSearchQueryIndexFreshness(reader, options, out var indexReason);
         state.IndexState = indexState;
         state.IndexReason = indexReason;
@@ -346,7 +361,10 @@ public static partial class QueryCommandRunner
             for (var recipeIndex = 0; recipeIndex < state.SelectedRecipes.Count; recipeIndex++)
             {
                 var recipe = state.SelectedRecipes[recipeIndex];
-                if (ShouldStopAuditAllAccumulation(state, stopwatch, cancellationToken, includeRows))
+                var recipeOffset = state.SelectedRecipes.Take(recipeIndex).Sum(item => item.Queries.Count);
+                var previouslyAccounted = state.InitialOffsets != null
+                    && state.InitialOffsets.Skip(recipeOffset).Take(recipe.Queries.Count).All(offset => offset < 0);
+                if (!previouslyAccounted && ShouldStopAuditAllAccumulation(state, stopwatch, cancellationToken, includeRows))
                 {
                     AddOmittedAuditAllRecipes(state, recipeIndex, GetAuditAllStopReason(state));
                     break;
@@ -363,6 +381,18 @@ public static partial class QueryCommandRunner
                     indexReason);
                 for (var queryIndex = 0; queryIndex < recipe.Queries.Count; queryIndex++)
                 {
+                    var position = recipeOffset + queryIndex;
+                    if (state.InitialOffsets is { } offsets && offsets[position] < 0)
+                    {
+                        recipeRun.Queries.Add(new AuditAllQueryRun(recipe.Queries[queryIndex])
+                        {
+                            Position = position,
+                            Status = "previously_accounted",
+                        });
+                        completedQueries++;
+                        progress?.SetCompleted(completedRecipes, completedQueries, failedQueries);
+                        continue;
+                    }
                     if (ShouldStopAuditAllAccumulation(state, stopwatch, cancellationToken, includeRows))
                     {
                         recipeRun.Status = "partial";
@@ -374,6 +404,8 @@ public static partial class QueryCommandRunner
                     var query = recipe.Queries[queryIndex];
                     progress?.SetActive(recipeIndex + 1, queryIndex + 1);
                     var queryRun = new AuditAllQueryRun(query);
+                    queryRun.Position = position;
+                    queryRun.RowOffset = state.InitialOffsets?[position] ?? 0;
                     recipeRun.Queries.Add(queryRun);
                     using var queryCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                     var remainingBudget = state.TimeBudget - stopwatch.Elapsed;
@@ -399,7 +431,8 @@ public static partial class QueryCommandRunner
                             emittedBefore: includeRows ? state.MaterializedResultCount : 0,
                             aggregateResultLimit: includeRows ? state.EffectiveTotalLimit : options.Limit,
                             fetchLimitCap: AuditAllCandidateRowsPerQuery,
-                            auditClassificationQueries: recipe.Queries));
+                            auditClassificationQueries: recipe.Queries,
+                            auditRowOffset: state.InitialOffsets != null && includeRows ? queryRun.RowOffset : null));
                         queryRun.Freshness = BuildAuditAllQueryFreshness(
                             freshnessContext,
                             query,
@@ -487,9 +520,7 @@ public static partial class QueryCommandRunner
                 if (recipeRun.Status == "completed")
                     completedRecipes++;
                 progress?.SetCompleted(completedRecipes, completedQueries, failedQueries);
-                if (state.Cancelled
-                    || state.TimeBudgetExceeded
-                    || includeRows && (state.ResultLimitReached || state.ByteBudgetReached))
+                if (state.Cancelled || state.TimeBudgetExceeded)
                 {
                     AddOmittedAuditAllRecipes(state, recipeIndex + 1, GetAuditAllStopReason(state));
                     break;
@@ -504,6 +535,8 @@ public static partial class QueryCommandRunner
 
         stopwatch.Stop();
         state.ElapsedMilliseconds = stopwatch.ElapsedMilliseconds;
+        if (state.ContinuationBinding != null)
+            state.GenerationChanged = state.ContinuationBinding != BuildAuditContinuationBinding(reader, options, state);
         return consume != null ? consume(reader, options, state) : WriteAuditAllOutput(options, jsonOptions, state);
     }
 
@@ -655,7 +688,7 @@ public static partial class QueryCommandRunner
     {
         if (!options.Json && options.OutputFormat == OutputFormatText)
         {
-            WriteAuditAllText(state);
+            WriteAuditAllText(options, state);
             return GetAuditAllExitCode(options, state);
         }
 
@@ -892,7 +925,8 @@ public static partial class QueryCommandRunner
                         recipeRun.Scope,
                         CliJsonSerializerContextFactory.Create(serializationOptions).SearchRecipeScopeJsonResult),
                 ["selected_query_count"] = recipeRun.Recipe.Queries.Count,
-                ["completed_query_count"] = recipeRun.Queries.Count(query => query.Status == "completed"),
+                ["completed_query_count"] = recipeRun.Queries.Count(query => query.Status is "completed" or "previously_accounted"),
+                ["previously_accounted_query_count"] = recipeRun.Queries.Count(query => query.Status == "previously_accounted"),
                 ["failed_query_count"] = recipeRun.Queries.Count(query => query.Status == "failed"),
                 ["omitted_query_count"] = recipeRun.OmittedQueryCount,
                 ["minimum_matched_result_count"] = recipeRun.Queries.Sum(query => query.Result?.MinimumMatchedCount ?? 0),
@@ -916,7 +950,7 @@ public static partial class QueryCommandRunner
             diagnostics.Add(diagnostic);
         var incompleteRecipes = state.Recipes
             .Where(recipe => recipe.Status is "partial" or "failed" or "omitted"
-                             || recipe.Queries.Any(query => query.ByteOmittedResultCount > 0))
+                             || recipe.Queries.Any(query => query.ByteOmittedResultCount > 0 || query.Result?.Truncated == true))
             .DistinctBy(recipe => recipe.Recipe.Name, StringComparer.Ordinal)
             .ToList();
         var returnedRecoveryRecipes = incompleteRecipes
@@ -965,9 +999,13 @@ public static partial class QueryCommandRunner
                 ["minimum_matched_result_count"] = state.Recipes.Sum(recipe => recipe.Queries.Sum(query => query.Result?.MinimumMatchedCount ?? 0)),
                 ["minimum_omitted_result_count"] = state.Recipes.Sum(recipe => recipe.Queries.Sum(query => (query.Result?.MinimumOmittedResultCount ?? 0) + query.ByteOmittedResultCount)),
                 ["count_semantics"] = "sum_of_recipe_query_observations_not_unique_matches",
+                ["count_scope"] = "current_page_evaluated_candidate_windows_not_cumulative",
                 ["count_authoritative"] = countAuthoritative,
                 ["count_approximate"] = !countAuthoritative,
-                ["truncated"] = state.ResultLimitReached || state.ByteOmittedResultCount > 0,
+                ["truncated"] = !AuditExecutionComplete(state) || AuditHasObservationOmissions(state),
+                ["execution_complete"] = AuditExecutionComplete(state),
+                ["observation_emission_complete"] = AuditExecutionComplete(state) && !AuditHasObservationOmissions(state),
+                ["intentional_selection_omitted_count"] = state.Recipes.Sum(recipe => recipe.Queries.Sum(query => query.Result?.SelectorOmittedCount ?? 0)),
                 ["cancelled"] = state.Cancelled,
                 ["time_budget_exceeded"] = state.TimeBudgetExceeded,
                 ["query_freshness"] = new JsonObject
@@ -1012,7 +1050,7 @@ public static partial class QueryCommandRunner
             },
             ["recovery"] = new JsonObject
             {
-                ["guidance"] = "Increase --total-limit or --max-json-bytes, narrow with shared filters, or run an incomplete recipe individually. --allow-partial changes exit 11 to 0 but does not make omitted work complete.",
+                ["guidance"] = "Prefer continuation.next_command to resume accounted observations. The recipe commands below restart their recipes and can repeat observations. --allow-partial changes exit 11 to 0 without changing completeness.",
                 ["returned"] = returnedRecoveryRecipes.Count,
                 ["omitted_count"] = incompleteRecipes.Count - returnedRecoveryRecipes.Count,
                 ["limit"] = AuditAllRecoveryCommandLimit,
@@ -1020,6 +1058,7 @@ public static partial class QueryCommandRunner
                 ["next_commands"] = recoveryCommands,
             },
             ["recipes"] = recipeNodes,
+            ["continuation"] = BuildAuditContinuation(options, state),
         };
     }
 
@@ -1116,7 +1155,10 @@ public static partial class QueryCommandRunner
             ["count_approximate"] = result?.SourceTotalAuthoritative != true,
             ["source_total_lower_bound"] = result?.SourceTotalAuthoritative == true ? null : result?.SourceTotal,
             ["minimum_omitted_result_count"] = (result?.MinimumOmittedResultCount ?? 0) + queryRun.ByteOmittedResultCount,
-            ["truncated"] = result?.Truncated == true || queryRun.ByteOmittedResultCount > 0,
+            ["truncated"] = result?.Truncated == true || result?.CandidateWindowExhausted == true || queryRun.ByteOmittedResultCount > 0,
+            ["candidate_window_exhausted"] = result?.CandidateWindowExhausted == true,
+            ["row_offset"] = queryRun.RowOffset,
+            ["intentional_selection_omitted_count"] = result?.SelectorOmittedCount ?? 0,
             ["results"] = results,
         };
     }
@@ -1149,6 +1191,8 @@ public static partial class QueryCommandRunner
         if (state.Cancelled)
             return CommandExitCodes.CancelledBySignal;
         var partial = state.TimeBudgetExceeded
+            || !AuditExecutionComplete(state)
+            || AuditHasObservationOmissions(state)
             || state.Errors.Count > 0
             || state.OmittedErrorCount > 0
             || state.ByteOmittedResultCount > 0;
@@ -1157,7 +1201,7 @@ public static partial class QueryCommandRunner
             : CommandExitCodes.Success;
     }
 
-    private static void WriteAuditAllText(AuditAllRunState state)
+    private static void WriteAuditAllText(QueryCommandOptions options, AuditAllRunState state)
     {
         Console.WriteLine($"Audit all: {state.SelectedRecipes.Count.ToString(CultureInfo.InvariantCulture)} recipes selected");
         foreach (var recipe in state.Recipes)
@@ -1175,5 +1219,10 @@ public static partial class QueryCommandRunner
         }
         CommandErrorWriter.WriteStderr(
             $"({state.EmittedResultCount.ToString(CultureInfo.InvariantCulture)} emitted recipe-query observations; counts are not cross-recipe unique)");
+        Console.WriteLine($"Execution complete: {AuditExecutionComplete(state)}; observation emission complete: {AuditExecutionComplete(state) && !AuditHasObservationOmissions(state)}");
+        var continuation = BuildAuditContinuation(options, state);
+        if (continuation["next_command"] is { } command) Console.WriteLine($"Continue: {command.GetValue<string>()}");
+        foreach (var fallback in continuation["fallbacks"]!.AsArray())
+            Console.WriteLine($"Fallback ({fallback!["reason"]}): {fallback["command"]}");
     }
 }
