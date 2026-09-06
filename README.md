@@ -38,6 +38,8 @@ Files contain hashes of bounded match/context evidence, normalized relative path
 
 For captured audit liveness, use `cdidx audit --all --summary-only --json --progress`. Progress goes to stderr while stdout retains JSON/NDJSON. `--quiet` and `--no-progress` override it regardless of argument order. See [audit progress](USER_GUIDE.md#audit-progress).
 
+Capped `audit --all` runs return exit 11 unless `--allow-partial` is explicit. Follow `continuation.next_command` to resume accounted recipe/query observations; check execution and emission completeness separately. See [audit continuation](USER_GUIDE.md#audit-continuation).
+
 ## File-size limits and freshness
 
 For indexing, a nonblank invalid `CDIDX_MAX_FILE_BYTES` value falls back to the 4 MiB default, as the warning indicates, unless an explicit valid limit is supplied.
@@ -324,6 +326,8 @@ Shell検索の由来分類は、二重引用符内で実行される `$()` や�
 ファイルには上限付きの一致・文脈のハッシュ、正規化した相対パス、実効フィルター、索引・レシピの由来を記録し、ソースの抜粋は保存しません。`.cdidx/` または索引対象外に保存してください。上限は8 MiB、JSON 深度16、10,000観測、比較出力200行で、省略数を明示します。保存はアトミックで、POSIX は `0600`、Windows は親ディレクトリの ACL を継承します。パスの大文字小文字を保持し、曖昧なバックスラッシュ・絶対パス・親ディレクトリ要素は拒否します。CLI 専用で、GitHub 認証や DB 移行は不要です。更新後はインストール済みのシェル補完を再生成してください。
 
 audit の出力を取得しながら実行状況を確認するには、`cdidx audit --all --summary-only --json --progress` を使います。進捗は stderr に出力し、stdout の JSON/NDJSON を維持します。`--quiet` と `--no-progress` は引数の順序に関係なく優先されます。[audit の進捗](USER_GUIDE.md#audit-の進捗)を参照してください。
+
+上限で不完全になった `audit --all` は、`--allow-partial` を明示しなければ終了コード11を返します。`continuation.next_command` で処理済みの recipe/query observation を引き継いで再開できます。実行完了と出力完了は別々に確認してください。[audit の再開](USER_GUIDE.md#audit-の再開)を参照してください。
 
 ### ファイルサイズ上限と鮮度チェック
 

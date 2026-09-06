@@ -4710,6 +4710,9 @@ internal sealed record SearchRecipeQueryResultJsonResult(
 
     [JsonIgnore]
     public bool SummaryEvidencePathCountAuthoritative { get; init; }
+
+    [JsonIgnore]
+    public bool CandidateWindowExhausted { get; init; }
 }
 
 internal sealed record SearchNamedBatchCountSummaryRunJsonResult(

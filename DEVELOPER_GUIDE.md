@@ -4,6 +4,10 @@
 
 ## Audit baseline contract
 
+Audit continuation consumes raw pre-deduplication candidate exhaustion from `DbReader.Search`, including bounded guard/ranking evidence. JSON query-detail admission must remove hidden rows before continuation accounting; NDJSON row admission is independent of detail metadata. Probe query-completion prefix boundaries independently when byte-fitting JSON/NDJSON, since tokens and restart commands disappear discontinuously when a child completes.
+
+All-recipe continuation is separate from baselines. `QueryCommandRunner.AuditContinuation.cs` binds a bounded per-child offset vector to pagination generation, recipe definition versions, canonical effective filter replay, selectors, and ordering. Replay a fixed 10,000-candidate window before slicing so total-row/byte budgets cannot reorder observations. Advance offsets only from retained output rows after final JSON/NDJSON admission; failed children remain pending. Validate token length, depth, vector bounds, binding and checksum before executing queries. Report execution completeness separately from emission completeness and intentional selection. Tokens support 512 children and 16 KiB; non-authoritative child coverage requires explicit bounded restart/narrowing guidance. CLI `audit --all` owns this scheduler; individual MCP recipe queries and baseline files do not consume these tokens.
+
 Workspace identity comes from the indexed project root, independently of the database location. Saved size/symlink policy participates in scope comparison. For prior paths that no longer have indexed rows, reuse indexing path filters and sparse-checkout evidence: only verified physical deletions within the current indexing scope may resolve. Existing excluded files and unverifiable paths make comparison unknown. Reject contradictory truncation/count metadata; missing coverage fields and empty incomparable comparisons remain partial (exit `11`).
 
 `AuditBaselineStore` implements the local v1 baseline schema; `QueryCommandRunner.AuditBaseline.cs` consumes the same bounded recipe runs as `audit --all`. The `baseline-export`, `baseline-compare`, and `baseline-review` audit subcommands do not migrate SQLite or use GitHub. Preserve SHA-256 match/context identities without line coordinates, canonical case-preserving relative paths, schema/identity versions, effective scope and recipe fingerprints, workspace and index-generation provenance, coverage reasons, and count authority. Index generations may differ after a valid refresh; workspace/scope/recipe/identity contracts must match. Missing legacy provenance degrades comparison conservatively.
@@ -4359,6 +4363,10 @@ For symmetry, the MCP server no longer echoes raw `Exception.Message` content in
 
 <a id="開発者ガイド"></a>
 # 開発者ガイド
+
+監査の再開では `DbReader.Search` から重複除去前の候補枠終了を受け取り、上限付き guard／ranking の情報も含めます。JSON の query detail 上限で隠れる行は、再開位置を計算する前に除去してください。NDJSON の行の出力可否は detail metadata とは独立です。子 query が完了すると token や再実行コマンドが不連続に消えるため、JSON/NDJSON の byte 判定では query 完了位置を個別に確認します。
+
+全レシピ監査の再開は baseline から分離します。`QueryCommandRunner.AuditContinuation.cs` は子 query ごとの上限付き offset 配列を pagination generation、recipe 定義 version、有効な filter の正規化 replay、selector、順序に結び付けます。固定の10,000候補を再取得してからページ分割し、全体行数・byte budget の変更で observation の順序が変わらないようにします。最終 JSON/NDJSON の予算判定後に保持された行だけ offset を進め、失敗した子 query は未処理のまま残します。query 実行前に token の長さ・深さ・配列範囲・binding・checksum を検証します。実行完了、出力完了、意図的な選択は分離して報告します。token は子 query 512件、16 KiBまでです。子 query の全件性を確認できない場合は上限付き再実行と範囲の絞り込みを明示します。この実行管理は CLI `audit --all` が担当し、個別 MCP recipe query と baseline file はこの token を使用しません。
 
 ## 監査 baseline 契約
 
