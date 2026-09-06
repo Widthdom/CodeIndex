@@ -97,13 +97,7 @@ public static partial class DbCommandRunner
                 "Pass `integrity`, `--integrity-check`, `schema`, `prune --dry-run|--apply`, `checkpoint [name]`, `checkpoints --list|--delete|--prune`, `restore <name> [--dry-run] [--no-backup]`, or `restore-backups --list|--prune --keep <n>|--restore <id> [--dry-run] [--no-backup]`.",
                 CommandErrorCodes.UsageError);
 
-        if ((options.IntegrityCheck ? 1 : 0)
-            + (options.Schema ? 1 : 0)
-            + (options.Prune ? 1 : 0)
-            + (options.Checkpoint ? 1 : 0)
-            + (options.ListCheckpoints ? 1 : 0)
-            + (options.Restore ? 1 : 0)
-            + (options.RestoreBackups ? 1 : 0) > 1)
+        if (CountModes(options) > 1)
             return WriteCommandError(
                 options.Json,
                 jsonOptions,
@@ -396,7 +390,9 @@ internal sealed class DbCommandOptions
     public bool ShowHelp { get; init; }
     public bool ShowPaths { get; init; }
     public bool IntegrityCheck { get; init; }
+    public bool IntegrityAliasUsed { get; init; }
     public bool Schema { get; init; }
+    public string? ExplicitSubcommand { get; init; }
     public bool Prune { get; init; }
     public bool PruneDryRun { get; init; }
     public bool PruneApply { get; init; }

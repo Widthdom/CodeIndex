@@ -34,9 +34,32 @@ public class CliFlagSchemaTests
         Assert.All(CliCommandCatalog.BatchReadOnlyCommands, command => Assert.Contains(command, known));
         Assert.Contains("goto", CliCommandCatalog.BatchReadOnlyCommands);
         Assert.Contains("audit", CliCommandCatalog.BatchReadOnlyCommands);
+        Assert.DoesNotContain("db", CliCommandCatalog.BatchReadOnlyCommands);
         Assert.DoesNotContain("index", CliCommandCatalog.BatchReadOnlyCommands);
         Assert.DoesNotContain("import", CliCommandCatalog.BatchReadOnlyCommands);
         Assert.DoesNotContain("hooks", CliCommandCatalog.BatchReadOnlyCommands);
+        Assert.False(CliCommandCatalog.IsBatchReadOnlyCommand("db"));
+        Assert.True(CliCommandCatalog.IsBatchReadOnlyCommand(
+            "db",
+            ["schema", "--name", "prune", "--summary-only", "--json"]));
+        Assert.True(CliCommandCatalog.IsBatchReadOnlyCommand(
+            "db",
+            ["--db", "schema", "integrity", "--json"]));
+        Assert.False(CliCommandCatalog.IsBatchReadOnlyCommand(
+            "db",
+            ["--integrity-check", "--json"]));
+        Assert.False(CliCommandCatalog.IsBatchReadOnlyCommand(
+            "db",
+            ["schema", "prune", "--dry-run", "--json"]));
+        Assert.False(CliCommandCatalog.IsBatchReadOnlyCommand(
+            "db",
+            ["schema", "--apply", "--json"]));
+        Assert.False(CliCommandCatalog.IsBatchReadOnlyCommand(
+            "db",
+            ["integrity", "--dry-run", "--json"]));
+        Assert.False(CliCommandCatalog.IsBatchReadOnlyCommand(
+            "db",
+            ["schema", "unknown", "--json"]));
     }
 
     [Fact]

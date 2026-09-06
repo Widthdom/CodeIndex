@@ -20,6 +20,7 @@ public class BatchChildErrorParserTests
     public void Parse_PreservesAllowlistedFieldsAndSanitizesUntrustedText()
     {
         var source = JsonNode.Parse(ErrorJson)!.AsObject();
+        source["command"] = null;
         source["message"] = "Failed\u001b\n at /private/secret/file.cs password=hunter2 Bearer abcdefghijklmnopqrstuvwxyz";
         source["hint"] = @"Retry C:\private\secret.cs --token hidden-value";
         source["path"] = "/private/secret/file.cs";

@@ -1951,7 +1951,10 @@ may be the established string-array form
 `["search","Needle","--json"]` or the structured form
 `{"command":"search","args":["Needle","--json"]}`. Both forms dispatch only the
 schema-owned side-effect-free allowlist, which includes read-only navigation and
-audit commands such as `goto` and `audit`. Each stdin line is capped at
+audit commands such as `goto` and `audit`. Within the `db` family, only the
+literal read-only forms `db schema` and `db integrity` are accepted. They
+inherit the batch `--db` unless the child supplies its own `--db`;
+`--integrity-check` and every other `db` mode remain rejected. Each stdin line is capped at
 1,048,576 characters, each decoded string argument is capped at 8,192
 characters, and each command can carry at most 256 arguments after the command
 name. The default 1,024-line input budget can be changed with
@@ -5779,7 +5782,10 @@ cdidx search "authenticate" --json --verbose
 `cdidx batch --db <path>` が stdin の各行から 1 つの JSON command を読みます。各行は従来の
 文字列配列 `["search","Needle","--json"]`、または structured form
 `{"command":"search","args":["Needle","--json"]}` を使用できます。どちらの form も
-`goto` や `audit` を含む schema 管理の副作用なし allowlist だけを dispatch します。各 stdin 行は
+`goto` や `audit` を含む schema 管理の副作用なし allowlist だけを dispatch します。`db` family では、
+literal の read-only form `db schema` と `db integrity` だけを受理します。child が自身の `--db` を
+指定しない場合は batch の `--db` を継承します。`--integrity-check` alias とその他すべての `db` mode は
+引き続き拒否します。各 stdin 行は
 1,048,576 文字まで、デコード後の各文字列引数は 8,192 文字まで、各 command は command 名の後ろに
 最大 256 引数までです。既定の入力 budget は 1,024 行で、`--max-input-lines <n>` により安全な最大値
 65,536 まで変更できます。

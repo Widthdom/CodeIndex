@@ -16,7 +16,9 @@ public static partial class DbCommandRunner
         private bool json;
         private bool showPaths;
         private bool integrityCheck;
+        private bool integrityAliasUsed;
         private bool schema;
+        private string? explicitSubcommand;
         private bool prune;
         private bool pruneDryRun;
         private bool pruneApply;
@@ -69,6 +71,11 @@ public static partial class DbCommandRunner
                 case "--db":
                     parseError = "--db requires a value";
                     break;
+                case var argument when argument.StartsWith("--db=", StringComparison.Ordinal):
+                    dbPath = argument["--db=".Length..];
+                    if (string.IsNullOrWhiteSpace(dbPath))
+                        parseError = "--db requires a value";
+                    break;
                 case "--json":
                     json = true;
                     break;
@@ -77,12 +84,15 @@ public static partial class DbCommandRunner
                     break;
                 case "--integrity-check":
                     integrityCheck = true;
+                    integrityAliasUsed = true;
                     break;
                 case "integrity":
                     integrityCheck = true;
+                    explicitSubcommand = "integrity";
                     break;
                 case "schema":
                     schema = true;
+                    explicitSubcommand = "schema";
                     break;
                 case "--type" when i + 1 < args.Length:
                     schemaSpecificOptionSeen = true;
@@ -297,7 +307,9 @@ public static partial class DbCommandRunner
                 Json = json,
                 ShowPaths = showPaths,
                 IntegrityCheck = integrityCheck,
+                IntegrityAliasUsed = integrityAliasUsed,
                 Schema = schema,
+                ExplicitSubcommand = explicitSubcommand,
                 Prune = prune,
                 PruneDryRun = pruneDryRun,
                 PruneApply = pruneApply,
