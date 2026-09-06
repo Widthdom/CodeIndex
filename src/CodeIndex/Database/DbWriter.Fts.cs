@@ -158,7 +158,7 @@ public partial class DbWriter
     /// 1つの FTS table を中間 automerge なしで再構築する。設定変更、rebuild、復元を同じ
     /// transaction/savepoint に置き、cancel や process failure でも無効設定を残さない。
     /// </summary>
-    private void RebuildFtsTableWithAutomergeSuppressed(
+    internal void RebuildFtsTableWithAutomergeSuppressed(
         string tableName,
         CancellationToken cancellationToken)
     {

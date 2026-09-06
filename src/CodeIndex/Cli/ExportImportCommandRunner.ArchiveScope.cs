@@ -136,6 +136,19 @@ internal static partial class ExportImportCommandRunner
             transaction.Commit();
         }
 
+        // FTS5 deletion tombstones can retain excluded terms in live segments, which
+        // VACUUM alone preserves. Rebuild both indexes from retained chunks in this
+        // disposable snapshot before the final vacuum, hashing, and publication.
+        var writer = new DbWriter(connection);
+        writer.RebuildFtsTableWithAutomergeSuppressed("fts_chunks", cancellationToken);
+        using (var trigramTable = connection.CreateCommand())
+        {
+            // Read migrations intentionally do not add trigram support to legacy DBs.
+            trigramTable.CommandText = "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'fts_chunks_trigram'";
+            if (trigramTable.ExecuteScalar() != null)
+                writer.RebuildFtsTableWithAutomergeSuppressed(DbContext.FtsChunksTrigramTableName, cancellationToken);
+        }
+
         cancellationToken.ThrowIfCancellationRequested();
         using (var foreignKeyCheck = connection.CreateCommand())
         {

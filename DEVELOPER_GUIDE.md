@@ -77,6 +77,20 @@ Development contracts:
 
 Portable archive trust is scope-aware. Unfiltered exports set `scope.represents_entire_source_database` and preserve completeness, indexed-HEAD, run, and unknown-extension metadata. Filtered exports normalize only the archive snapshot to `index_complete=false` with `partial_archive`, remove source-wide HEAD/run provenance, and omit unavailable unknown-extension summaries. Import repeats that normalization for legacy manifests without scope metadata, while current full-snapshot manifests preserve trust. Scoped indexing of a partial archive falls back to a full workspace scan before it may clear `partial_archive`.
 
+Scoped archive confidentiality requires rebuilding both `fts_chunks` and
+`fts_chunks_trigram` from retained `chunks` after scope pruning. FTS5 deletion
+tombstones can leave excluded terms in live segments, which `VACUUM` alone does
+not remove. Use the cancellation-aware `DbWriter.RebuildFtsTableWithAutomergeSuppressed`
+on the private snapshot after its existing read migration; legacy databases
+without the optional trigram table keep that schema and rebuild ordinary FTS only. Run before the single final
+vacuum and hash calculation. Apply this to every scope selector, even when all
+or no files survive, independently of path redaction. Keep default full exports
+unchanged; never rebuild the source DB or publish after cancellation.
+Open the scoped snapshot with `DbContext.CreateUnpooled` so disposing its context
+closes the native SQLite handle on every exit, including cancellation and failures,
+before deleting the snapshot and sidecars. Success-only pool clearing is insufficient
+on Windows, where an open pooled handle prevents deletion.
+
 Portable archive path privacy is opt-in for compatibility. Default exports retain
 `manifest.project_root`, the snapshot's `indexed_project_root`, requested scope
 values, and resolved success paths. `--redact-paths` must operate only on the
@@ -4407,6 +4421,19 @@ net9 CI lane に合わせる場合は `FRAMEWORK=net9.0 make test` を使いま�
 | Fold backfill の preview / recovery | `backfill-fold --dry-run`; `backfill-fold --checkpoint`; MCP `backfill_fold` の `dry_run: true` または `force: true` | dry-run は DB を変更せず FoldReady stamp も書かずに、rewrite 対象の folded-key row をプレビューします。CLI preflight でmutation不要と判断された場合でもsnapshotを明示的に保存するには `--checkpoint` を使います。既定の完了済みno-opはcheckpoint artifactを作りません。MCP も同じ preview を受け付け、stored version / fingerprint が current に見える場合でも suspicious な fold metadata や row state を復旧するため `force: true` を受け付けます。non-dry-run rewrite は中断後に resume でき、完了済み row update は durable に残り、最終 FoldReady metadata は verification 成功後にだけ stamp されます。MCP response は `progress.rows_done`、`progress.rows_total`、`progress.fraction` を含みます。 |
 
 portable archive の trust は scope を考慮します。filter なし export は `scope.represents_entire_source_database` を設定し、completeness、indexed-HEAD、run、unknown-extension metadata を維持します。filter 済み export は archive snapshot だけを `index_complete=false` / `partial_archive` に正規化し、source 全体に対する HEAD / run provenance を削除して、未計測の unknown-extension summary を省略します。scope metadata がない legacy manifest は import 時に同じ正規化を行い、現行の full-snapshot manifest は trust を維持します。partial archive に対する scoped index は `partial_archive` を解除する前に full workspace scan へ fallback します。
+
+scoped archive の機密性を保つため、scope の削除処理後に残した `chunks` から
+`fts_chunks` と `fts_chunks_trigram` の両方を再構築します。FTS5 の削除 tombstone は
+live segment に除外 term を残す場合があり、`VACUUM` だけでは除去できません。
+既存の read migration を通した private snapshot に cancellation 対応の
+`DbWriter.RebuildFtsTableWithAutomergeSuppressed` を適用します。任意の trigram table を
+持たない旧 DB はその schema を維持し、通常 FTS だけを再構築します。その後に一度だけ最終 vacuum と hash 計算を
+行います。path redaction の有無によらず、全件残存・0件残存を含むすべての scope selector
+を対象とします。既定の full export は維持し、source DB の再構築や cancellation 後の
+公開を行ってはいけません。
+scoped snapshot は `DbContext.CreateUnpooled` で開き、cancel・失敗を含むすべての終了経路で
+context の破棄により native SQLite handle を閉じてから snapshot と sidecar を削除します。
+Windows では開いた pooled handle が削除を妨げるため、成功時だけの pool 解放では不十分です。
 
 portable archive の path privacy は互換性のため opt-in です。既定 export は
 `manifest.project_root`、snapshot の `indexed_project_root`、指定 scope value、解決済み

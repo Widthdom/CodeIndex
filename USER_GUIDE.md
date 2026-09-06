@@ -589,7 +589,13 @@ repeatable `--project`, optional `--solution`, and `--exclude-tests`. Requested
 paths and resolved project directories form one inclusive scope; language,
 exclusion, and test filters then narrow that scope. The exported SQLite
 snapshot contains only the retained files and their dependent chunks, symbols,
-references, and diagnostics, and is vacuumed before packaging. JSON output and
+references, and diagnostics. Every scoped export rebuilds ordinary and trigram
+full-text indexes from retained chunks, then vacuums before hashing and packaging
+so excluded-file terms and previously deleted FTS data do not remain in the raw
+archive database. This applies with or without `--redact-paths`; retained source
+remains searchable. Legacy databases without trigram support retain their schema
+and rebuild ordinary FTS only. Cancellation during reconstruction cannot publish an archive
+or replace an existing destination. JSON output and
 `manifest.json` include the requested scope, resolved project paths, and source
 and exported file counts. The scope also reports
 `represents_entire_source_database`. An export without scope flags remains a
@@ -4448,7 +4454,12 @@ archive export では `--lang`、繰り返し指定できる `--path` / `--exclu
 `--project`、任意の `--solution`、`--exclude-tests` を使えます。指定した path と
 解決した project directory を包含 scope とし、language、除外 path、test filter で
 さらに絞り込みます。出力する SQLite snapshot には残した file と、それに従属する
-chunk、symbol、reference、diagnostic だけを保持し、packaging 前に vacuum します。
+chunk、symbol、reference、diagnostic だけを保持します。すべての scoped export は残した
+chunk から通常・trigram の全文検索 index を再構築し、hash 計算と packaging の前に vacuum
+するため、除外 file の term や削除済み FTS data が archive database の生バイトに残りません。
+これは `--redact-paths` の有無によらず適用され、残した source は引き続き検索できます。
+trigram 未対応の旧 DB は schema を維持し、通常 FTS だけを再構築します。
+再構築中の cancellation では archive の公開や既存 destination の置換を行いません。
 JSON output と `manifest.json` には指定 scope、解決済み project path、元と出力後の
 file count が含まれます。scope には `represents_entire_source_database` も含まれます。
 scope flag を指定しない full archive は source database の index completeness、
