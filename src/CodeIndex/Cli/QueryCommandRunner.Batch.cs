@@ -283,9 +283,9 @@ public static partial class QueryCommandRunner
         {
             if (error is null
                 && (outputKind != BatchOutputKind.Text || JsonEnvelopeWrapper.ShouldWrap(commandName, subArgs))
-                && CliCommandCatalog.IsBatchReadOnlyCommand(commandName))
+                && CliCommandCatalog.IsBatchReadOnlyCommand(commandName, subArgs))
                 error = BatchChildErrorParser.Parse(stdout, commandName, exitCode);
-            payload["error"] = BuildBatchCommandFailureError(commandName, exitCode, error);
+            payload["error"] = BuildBatchCommandFailureError(commandName, subArgs, exitCode, error);
             if (includeRawStreams)
             {
                 payload["raw_streams"] = new JsonObject
@@ -301,15 +301,16 @@ public static partial class QueryCommandRunner
 
     private static JsonObject BuildBatchCommandFailureError(
         string commandName,
+        string[] subArgs,
         int exitCode,
         JsonObject? error)
     {
-        if (error is null && !CliCommandCatalog.IsBatchReadOnlyCommand(commandName))
+        if (error is null && !CliCommandCatalog.IsBatchReadOnlyCommand(commandName, subArgs))
         {
             return BuildBatchTypedError(
                 "batch command was rejected by the read-only dispatch policy.",
                 exitCode,
-                $"Use one of {string.Join(", ", CliCommandCatalog.BatchReadOnlyCommands)}.",
+                $"Use one of {string.Join(", ", CliCommandCatalog.BatchReadOnlyCommandShapes)}.",
                 CommandErrorCodes.UsageError,
                 "batch_command_not_allowed",
                 "command");
@@ -884,7 +885,7 @@ public static partial class QueryCommandRunner
         string appVersion,
         CancellationToken cancellationToken)
     {
-        if (!CliCommandCatalog.IsBatchReadOnlyCommand(commandName))
+        if (!CliCommandCatalog.IsBatchReadOnlyCommand(commandName, subArgs))
             return WriteBatchUnsupportedCommand(commandName);
 
         var batchContext = s_batchDatabaseContext;
@@ -924,6 +925,7 @@ public static partial class QueryCommandRunner
             "deps" => args => RunDeps(args, jsonOptions, cancellationToken),
             "unused" => args => RunUnused(args, jsonOptions),
             "hotspots" => args => RunHotspots(args, jsonOptions),
+            "db" => args => DbCommandRunner.Run(args, jsonOptions, cancellationToken),
             _ => throw new InvalidOperationException($"Batch schema command '{commandName}' has no dispatcher."),
         };
 
@@ -1012,7 +1014,7 @@ public static partial class QueryCommandRunner
     private static int WriteBatchUnsupportedCommand(string commandName)
     {
         CommandErrorWriter.WriteStderr($"Error: batch only supports query and read-only discovery commands; '{commandName}' is not supported.");
-        CommandErrorWriter.WriteStderr($"Hint: use one of {string.Join(", ", CliCommandCatalog.BatchReadOnlyCommands)}.");
+        CommandErrorWriter.WriteStderr($"Hint: use one of {string.Join(", ", CliCommandCatalog.BatchReadOnlyCommandShapes)}.");
         return CommandExitCodes.UsageError;
     }
 

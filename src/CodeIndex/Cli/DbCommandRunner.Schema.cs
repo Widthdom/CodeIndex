@@ -10,6 +10,9 @@ namespace CodeIndex.Cli;
 
 public static partial class DbCommandRunner
 {
+    private const int DiagnosticBusyRetrySliceSeconds = 1;
+    private const int DiagnosticBusyRetrySliceMilliseconds = 50;
+
     // PRAGMA integrity_check returns a single row `"ok"` when the file passes every consistency
     // probe, otherwise it returns up to N rows of corruption findings. The pragma itself only
     // reads the database, so a read-only connection is sufficient and avoids the WAL-mode
@@ -29,43 +32,91 @@ public static partial class DbCommandRunner
             out _);
         ReportMaintenanceProgress("integrity_check", "open_connection", dbPath);
         connection.Open();
-        ApplyBusyTimeout(connection, cancellationToken);
-        using var cmd = SqliteConnectionPolicy.CreateCommand(connection, $"PRAGMA integrity_check({IntegrityCheckRowLimit + 1})");
-        ReportMaintenanceProgress("integrity_check", "read_rows", dbPath);
-        cancellationToken.ThrowIfCancellationRequested();
-        using var reader = cmd.ExecuteReader();
-        var rows = new List<string>();
-        var rowsTruncated = false;
-        var textTruncated = false;
-        while (reader.Read())
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (rows.Count >= IntegrityCheckRowLimit)
+        return RunReadOnlyDiagnosticWithCancellation(
+            connection,
+            cancellationToken,
+            "integrity check",
+            commandTimeoutSeconds =>
             {
-                rowsTruncated = true;
-                break;
-            }
+                using var cmd = SqliteConnectionPolicy.CreateCommand(
+                    connection,
+                    IntegrityCheckCommandTextForTesting ?? $"PRAGMA integrity_check({IntegrityCheckRowLimit + 1})");
+                cmd.CommandTimeout = commandTimeoutSeconds;
+                ReportMaintenanceProgress("integrity_check", "read_rows", dbPath);
+                cancellationToken.ThrowIfCancellationRequested();
+                using var reader = cmd.ExecuteReader();
+                var rows = new List<string>();
+                var rowsTruncated = false;
+                var textTruncated = false;
+                while (reader.Read())
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (rows.Count >= IntegrityCheckRowLimit)
+                    {
+                        rowsTruncated = true;
+                        break;
+                    }
 
-            var raw = reader.IsDBNull(0) ? string.Empty : reader.GetString(0);
-            var bounded = TruncateDiagnosticText(raw, IntegrityCheckTextLimit);
-            textTruncated |= bounded.Truncated;
-            rows.Add(bounded.Text);
-        }
-        return new DbIntegrityCheckReadResult(rows.Count > 0 ? rows : new List<string> { "ok" }, rowsTruncated, textTruncated);
+                    var raw = reader.IsDBNull(0) ? string.Empty : reader.GetString(0);
+                    var bounded = TruncateDiagnosticText(raw, IntegrityCheckTextLimit);
+                    textTruncated |= bounded.Truncated;
+                    rows.Add(bounded.Text);
+                }
+                return new DbIntegrityCheckReadResult(rows.Count > 0 ? rows : new List<string> { "ok" }, rowsTruncated, textTruncated);
+            });
     }
+
+    private static CancellationTokenRegistration RegisterSqliteInterruptForCancellation(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
+        => cancellationToken.CanBeCanceled
+            ? cancellationToken.UnsafeRegister(
+                static state =>
+                {
+                    var registeredConnection = (SqliteConnection)state!;
+                    SQLitePCL.raw.sqlite3_interrupt(registeredConnection.Handle);
+                },
+                connection)
+            : default;
 
     private static DbSchemaReadResult ReadSchema(string dbPath, DbCommandOptions options, CancellationToken cancellationToken)
     {
-        using var connection = OpenConnection(dbPath, writable: false, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        using var connection = DbConnectionFactory.CreateArtifactPreservingQueryOnlyConnection(
+            dbPath,
+            pooling: false,
+            out _,
+            out _);
+        connection.Open();
+        return RunReadOnlyDiagnosticWithCancellation(
+            connection,
+            cancellationToken,
+            "schema read",
+            commandTimeoutSeconds => ReadSchemaCore(
+                connection,
+                options,
+                dbPath,
+                cancellationToken,
+                commandTimeoutSeconds));
+    }
+
+    private static DbSchemaReadResult ReadSchemaCore(
+        SqliteConnection connection,
+        DbCommandOptions options,
+        string dbPath,
+        CancellationToken cancellationToken,
+        int commandTimeoutSeconds)
+    {
         ReportMaintenanceProgress("schema", "read_version", dbPath);
         cancellationToken.ThrowIfCancellationRequested();
         using var versionCmd = connection.CreateCommand();
+        versionCmd.CommandTimeout = commandTimeoutSeconds;
         versionCmd.CommandText = "PRAGMA user_version";
         var rawVersion = versionCmd.ExecuteScalar();
         var userVersion = rawVersion is long l ? (int)l : (rawVersion is int i ? i : 0);
         cancellationToken.ThrowIfCancellationRequested();
         ReportMaintenanceProgress("schema", "count_objects", dbPath);
-        var objectTypeCounts = ReadSchemaObjectTypeCounts(connection, options);
+        var objectTypeCounts = ReadSchemaObjectTypeCounts(connection, options, commandTimeoutSeconds);
 
         if (options.SchemaSummaryOnly)
         {
@@ -79,6 +130,7 @@ public static partial class DbCommandRunner
         }
 
         using var cmd = SqliteConnectionPolicy.CreateCommand(connection);
+        cmd.CommandTimeout = commandTimeoutSeconds;
         var whereSql = BuildSchemaWhereSql(options);
         cmd.CommandText = $@"
             SELECT type, name, tbl_name, substr(sql, 1, @sql_limit)
@@ -125,7 +177,56 @@ public static partial class DbCommandRunner
         return new DbSchemaReadResult(userVersion, entries, objectTypeCounts, omittedTypeCounts, entriesTruncated, sqlTruncated);
     }
 
-    private static Dictionary<string, int> ReadSchemaObjectTypeCounts(SqliteConnection connection, DbCommandOptions options)
+    private static T RunReadOnlyDiagnosticWithCancellation<T>(
+        SqliteConnection connection,
+        CancellationToken cancellationToken,
+        string operation,
+        Func<int, T> read)
+    {
+        using var cancellationRegistration = RegisterSqliteInterruptForCancellation(connection, cancellationToken);
+        try
+        {
+            ApplyBusyTimeout(
+                connection,
+                cancellationToken,
+                cancellationToken.CanBeCanceled ? DiagnosticBusyRetrySliceMilliseconds : null);
+            var commandTimeoutSeconds = cancellationToken.CanBeCanceled
+                ? DiagnosticBusyRetrySliceSeconds
+                : SqliteConnectionPolicy.DefaultCommandTimeoutSeconds;
+            var maximumBusyWaitMs = SqliteConnectionPolicy.DefaultCommandTimeoutSeconds * 1000L;
+            var busyWait = System.Diagnostics.Stopwatch.StartNew();
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                try
+                {
+                    var result = read(commandTimeoutSeconds);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    return result;
+                }
+                catch (SqliteException exception) when (
+                    exception.SqliteErrorCode == SQLitePCL.raw.SQLITE_BUSY
+                    && busyWait.ElapsedMilliseconds < maximumBusyWaitMs)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                }
+            }
+        }
+        catch (SqliteException exception) when (
+            cancellationToken.IsCancellationRequested
+            && exception.SqliteErrorCode is SQLitePCL.raw.SQLITE_INTERRUPT or SQLitePCL.raw.SQLITE_BUSY)
+        {
+            throw new OperationCanceledException(
+                $"The SQLite {operation} was interrupted by cancellation.",
+                exception,
+                cancellationToken);
+        }
+    }
+
+    private static Dictionary<string, int> ReadSchemaObjectTypeCounts(
+        SqliteConnection connection,
+        DbCommandOptions options,
+        int commandTimeoutSeconds)
     {
         var counts = new Dictionary<string, int>(StringComparer.Ordinal)
         {
@@ -136,6 +237,7 @@ public static partial class DbCommandRunner
         };
 
         using var cmd = SqliteConnectionPolicy.CreateCommand(connection);
+        cmd.CommandTimeout = commandTimeoutSeconds;
         var whereSql = BuildSchemaWhereSql(options);
         cmd.CommandText = $@"
             SELECT type, COUNT(*)
@@ -305,11 +407,16 @@ public static partial class DbCommandRunner
         }
     }
 
-    private static void ApplyBusyTimeout(SqliteConnection connection, CancellationToken cancellationToken)
+    private static void ApplyBusyTimeout(
+        SqliteConnection connection,
+        CancellationToken cancellationToken,
+        int? busyTimeoutMs = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
         using var cmd = SqliteConnectionPolicy.CreateCommand(connection);
-        cmd.CommandText = DbPragmaPolicy.ReadBusyTimeoutPragmaSql(DbContext.BusyTimeoutEnvironmentVariable);
+        cmd.CommandText = busyTimeoutMs.HasValue
+            ? DbPragmaPolicy.BusyTimeoutPragmaSql(busyTimeoutMs.Value)
+            : DbPragmaPolicy.ReadBusyTimeoutPragmaSql(DbContext.BusyTimeoutEnvironmentVariable);
         cmd.ExecuteNonQuery();
     }
 

@@ -16,8 +16,17 @@ internal static class CliCommandCatalog
         "validate", "languages", "impact", "deps", "unused", "hotspots",
     ];
 
-    internal static bool IsBatchReadOnlyCommand(string command) =>
-        BatchReadOnlyCommands.Contains(command, StringComparer.Ordinal);
+    internal static readonly string[] BatchReadOnlyCommandShapes =
+    [
+        .. BatchReadOnlyCommands,
+        "db schema", "db integrity",
+    ];
+
+    internal static bool IsBatchReadOnlyCommand(string command, string[]? args = null) =>
+        BatchReadOnlyCommands.Contains(command, StringComparer.Ordinal)
+        || (string.Equals(command, "db", StringComparison.Ordinal)
+            && args is not null
+            && DbCommandRunner.IsExplicitBatchReadOnlyInvocation(args));
 
     internal static IReadOnlyDictionary<string, string> CommandAliases =>
         CliCommandMetadata.CommandAliases;

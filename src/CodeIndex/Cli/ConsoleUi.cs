@@ -194,6 +194,7 @@ public static partial class ConsoleUi
         ("status", "--config redacts DB, data, and log paths by default; use --show-paths only for local inspection."),
         ("backfill-fold", "`fold` is a compatibility alias for `backfill-fold`; prefer `backfill-fold` in scripts and documentation."),
         ("batch", "Each stdin line may be a JSON string array such as [\"search\",\"Needle\",\"--json\"] or an object such as {\"command\":\"search\",\"args\":[\"Needle\",\"--json\"]}; blank lines are skipped."),
+        ("batch", "Within the db family, only the literal read-only forms `db schema` and `db integrity` are accepted; `--integrity-check` and every other db mode remain rejected."),
         ("batch", "By default child commands stream their normal stdout/stderr; with --json-summary each non-blank line writes a batch_result or batch_error envelope."),
         ("batch", $"--max-input-lines and --max-output-chars tune the default {QueryCommandRunner.BatchDefaultInputLines}-line / {QueryCommandRunner.BatchDefaultTotalOutputChars}-character budgets up to safe maxima of {QueryCommandRunner.BatchMaxInputLines} lines / {QueryCommandRunner.BatchMaxTotalOutputChars} characters."),
         ("batch", $"--parallel <n> (max {QueryCommandRunner.BatchMaxParallelism}) requires --json-summary, uses isolated read-only DB connections, and emits stable results in input order."),

@@ -119,6 +119,7 @@ internal static class BatchChildErrorParser
 
     private static bool IdentityMatches(JsonElement source, string command, int exitCode)
         => (!source.TryGetProperty("command", out var name)
+            || name.ValueKind == JsonValueKind.Null
             || (name.ValueKind == JsonValueKind.String
                 && name.GetString() == JsonEnvelopeWrapper.CanonicalizeCommandName(command)))
            && (!source.TryGetProperty("exit_code", out var code)
