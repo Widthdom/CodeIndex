@@ -8,6 +8,8 @@ If you change test code, test helpers, test execution flow, or testing conventio
 
 ## Quick Start
 
+`DbCommandRunnerManifestIssue5277Tests.cs` extends the existing SQLite pool sensitive fixture. Keep deterministic growth after the handle-length probe, replacement before/after open, missing/unreadable/directory/link/FIFO paths, UTF-8 and UTF-16/32 BOMs, exact byte boundaries, bounded stream consumption, cancellation, and restore non-mutation coverage on net8.0 and net9.0. Restore test hooks and Unix permissions in `finally`; POSIX-only FIFO/link/permission fixtures do not run on Windows, while ordinary replacement exercises Windows sharing too.
+
 For #5274 interruption coverage, capture the export snapshot's native SQLite handle and assert it is closed after cancellation or a reconstruction exception, before any test cleanup clears pools. Also require removal of its database, sidecars, and private directory. Unix permits unlinking open files, so file-absence checks alone miss the pooled-handle leak that blocks Windows cleanup.
 
 `ExportImportCommandRunnerIssue5274Tests` shares a disposable multi-segment FTS fixture across path, language, project, exclusion, empty, and all-file scopes, with and without path redaction and with a legacy database missing trigram support. Verify excluded and previously deleted artificial canaries against raw extracted DB bytes, retained ordinary/trigram searches, size reduction, manifest counts/hashes/partial readiness, import validation, source non-mutation, and private archive permissions. Use the existing FTS completion hook to cancel after either index rebuild and verify that absent or existing archive destinations remain untouched. Run on both net8.0 and net9.0 in the SQLite pool sensitive collection.
@@ -1197,6 +1199,8 @@ Check the following:
 
 <a id="テストガイド"></a>
 # テストガイド
+
+`DbCommandRunnerManifestIssue5277Tests.cs` は既存の SQLite pool sensitive フィクスチャを拡張します。ハンドルのサイズ確認後の決定的な増大、open 前後の差し替え、欠落・読み取り不可・ディレクトリ・リンク・FIFO、UTF-8 と UTF-16／32 の BOM、厳密なバイト境界、上限付きストリーム消費、キャンセル、復元時の非変更を net8.0 と net9.0 で検証してください。テストフックと Unix 権限は `finally` で復元します。POSIX 専用の FIFO・リンク・権限テストは Windows では実行せず、通常ファイルの差し替えで Windows の共有動作も検証します。
 
 `QueryCommandRunnerSearchIssue4906Tests` の検索代替案テストは、呼び出しごとに初期化済みの一時DBとプロジェクトを使用します (#5266)。SQLite pool sensitive コレクションで実行し、CLIフラグを追加せずに `CDIDX_DATA_DIR` を固定し、外部の設定読み込みを無効にして、環境変数とカレントディレクトリを `finally` で復元してください。再実行案に `--db` / `--data-dir` が含まれない検証を維持し、リポジトリの索引更新中にも net8.0 と net9.0 の両方で検証します。言語エイリアス解決とcompact出力が作業用索引を参照してはいけません。
 
