@@ -136,6 +136,7 @@ public static partial class QueryCommandRunner
         private string outputFormat = OutputFormatText;
         private bool countOutputFormatExplicit;
         private bool outputFormatExplicit;
+        private string? explicitOutputFormat;
         private bool outputFormatImpliesStructuredOutput;
         private bool statusConfig;
         private bool? redactPaths;
@@ -259,6 +260,8 @@ public static partial class QueryCommandRunner
 
         private void NormalizeOutputMode()
         {
+            if (namedSearchQueries.Count > 0 && searchFields != null && explicitOutputFormat != null)
+                outputFormat = explicitOutputFormat;
             if (countOutputFormatExplicit)
                 outputFormat = OutputFormatCount;
             countOnly = countFlagRequested || outputFormat == OutputFormatCount;

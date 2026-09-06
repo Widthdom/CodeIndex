@@ -1458,7 +1458,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunSearch_NamedQueriesHonorCompactProjectionAndPreserveRichJson_Issues3481_4584()
+    public void RunSearch_NamedQueriesHonorCompactProjectionAndPreserveRichJson_Issues3481_4584_5276()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_named_queries");
         try
@@ -1548,6 +1548,138 @@ public partial class QueryCommandRunnerTests
                 CommandErrorCodes.ResponseBudgetTooSmall,
                 capDocument.RootElement.GetProperty("error_code").GetString());
             Assert.Equal("search", capDocument.RootElement.GetProperty("command").GetString());
+
+            TestProjectHelper.InsertIndexedFile(
+                dbPath, "src/復元.cs", "csharp",
+                "public bool TryValidateCheckpointManifest() => true;\n");
+            foreach (var namedArgs in new[]
+            {
+                new[] { "--named-query=restore=TryValidateCheckpointManifest" },
+                new[] { "--named-query=pack=dotnet pack", "--named-query=push=nuget push", "--named-query=missing=Absent5276" },
+                new[] { "--named-query=missing=Absent5276" },
+            })
+            {
+                string[] baseArgs = [.. namedArgs, "--db", dbPath, "--json", "--limit", "1"];
+                var (baselineExit, baselineOutput, baselineError) = CaptureConsole(() => QueryCommandRunner.RunSearch(baseArgs, _jsonOptions));
+                Assert.Equal(CommandExitCodes.Success, baselineExit);
+                Assert.Empty(baselineError);
+                using var baseline = ParseJsonOutput(baselineOutput);
+                var (legacyStreamExit, legacyStreamOutput, legacyStreamError) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                    [.. baseArgs, "--json=ndjson"], _jsonOptions));
+                Assert.Equal(CommandExitCodes.Success, legacyStreamExit);
+                Assert.Empty(legacyStreamError);
+                Assert.Equal(baselineOutput, legacyStreamOutput);
+                foreach (var fields in new[] { "path,line", "path,line,end_line,lang,column,symbol,symbol_kind,origin,kind,score,snippet,query_name,recipe" })
+                {
+                    string[] args = [.. baseArgs, "--search-fields", fields];
+                    var (projectedExit, projectedOutput, projectedError) = CaptureConsole(() => QueryCommandRunner.RunSearch(args, _jsonOptions));
+                    Assert.Equal(CommandExitCodes.Success, projectedExit);
+                    Assert.Empty(projectedError);
+                    using var projected = ParseJsonOutput(projectedOutput);
+                    Assert.Equal(baseline.RootElement.GetProperty("result_count").GetInt32(), projected.RootElement.GetProperty("result_count").GetInt32());
+                    Assert.Equal(namedArgs.Length, projected.RootElement.GetProperty("query_count").GetInt32());
+                    var projectedQueries = projected.RootElement.GetProperty("queries").EnumerateArray().ToArray();
+                    var baselineQueries = baseline.RootElement.GetProperty("queries").EnumerateArray().ToArray();
+                    for (var i = 0; i < projectedQueries.Length; i++)
+                    {
+                        var projectedQuery = projectedQueries[i];
+                        foreach (var property in baselineQueries[i].EnumerateObject().Where(property => property.Name != "results"))
+                            Assert.Equal(property.Value.GetRawText(), projectedQuery.GetProperty(property.Name).GetRawText());
+                        var projectedRows = projectedQuery.GetProperty("results").EnumerateArray().ToArray();
+                        Assert.Equal(projectedQuery.GetProperty("count").GetInt32(), projectedRows.Length);
+                        if (projectedRows.Length == 0)
+                            continue;
+                        var (plainExit, plainOutput, plainError) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                            [projectedQuery.GetProperty("query").GetString()!, "--db", dbPath, "--json=array", "--limit", "1", "--search-fields", fields], _jsonOptions));
+                        Assert.Equal(CommandExitCodes.Success, plainExit);
+                        Assert.Empty(plainError);
+                        using var plain = ParseJsonOutput(plainOutput);
+                        var plainRow = Assert.Single(plain.RootElement.EnumerateArray());
+                        var namedRow = Assert.Single(projectedRows);
+                        Assert.Equal(plainRow.EnumerateObject().Select(property => property.Name), namedRow.EnumerateObject().Select(property => property.Name));
+                        foreach (var property in plainRow.EnumerateObject())
+                        {
+                            if (property.Name == "query_name")
+                                Assert.Equal(projectedQuery.GetProperty("name").GetString(), namedRow.GetProperty("query_name").GetString());
+                            else
+                                Assert.Equal(property.Value.GetRawText(), namedRow.GetProperty(property.Name).GetRawText());
+                        }
+                        var (streamExit, streamOutput, streamError) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                            [projectedQuery.GetProperty("query").GetString()!, "--db", dbPath, "--json=ndjson", "--limit", "1", "--search-fields", fields], _jsonOptions));
+                        Assert.Equal(CommandExitCodes.Success, streamExit);
+                        Assert.Empty(streamError);
+                        var streamLines = streamOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+                        using var streamRow = JsonDocument.Parse(streamLines[0]);
+                        using var terminal = JsonDocument.Parse(streamLines[^1]);
+                        Assert.True(terminal.RootElement.GetProperty("terminal_record").GetBoolean());
+                        Assert.Equal(plainRow.EnumerateObject().Select(property => property.Name), streamRow.RootElement.EnumerateObject().Select(property => property.Name));
+                    }
+
+                    var bytes = Encoding.UTF8.GetByteCount(projectedOutput);
+                    foreach (var budget in new[] { bytes, bytes - 1, 1 })
+                    {
+                        var (budgetExit, budgetOutput, budgetError) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                            [.. args, "--max-json-bytes", budget.ToString(CultureInfo.InvariantCulture)], _jsonOptions));
+                        Assert.Empty(budgetError);
+                        using var bounded = ParseJsonOutput(budgetOutput);
+                        if (budget == bytes)
+                        {
+                            Assert.Equal(CommandExitCodes.Success, budgetExit);
+                            Assert.Equal(projectedOutput, budgetOutput);
+                            Assert.Equal(budget, Encoding.UTF8.GetByteCount(budgetOutput));
+                        }
+                        else
+                        {
+                            Assert.Equal(CommandExitCodes.UsageError, budgetExit);
+                            Assert.Equal(CommandErrorCodes.ResponseBudgetTooSmall, bounded.RootElement.GetProperty("error_code").GetString());
+                        }
+                    }
+                    if (projectedQueries.Any(query => query.GetProperty("count").GetInt32() > 0) && fields == "path,line")
+                    {
+                        var (unprojectedExit, _, _) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                            [.. baseArgs, "--max-json-bytes", bytes.ToString(CultureInfo.InvariantCulture)], _jsonOptions));
+                        Assert.Equal(CommandExitCodes.UsageError, unprojectedExit);
+                    }
+                }
+            }
+
+            foreach (var formatArgs in new[] { new[] { "--format", "compact" }, new[] { "--format=json" }, Array.Empty<string>() })
+                foreach (var formatFirst in new[] { true, false })
+                {
+                    var fieldsArgs = new[] { "--search-fields", "path,line" };
+                    var (formatExit, formatOutput, formatError) = CaptureConsole(() => ProgramRunner.Run(
+                        ["search", "--named-query=pack=dotnet pack", "--db", dbPath, "--limit", "1",
+                        .. (formatFirst ? formatArgs : fieldsArgs), .. (formatFirst ? fieldsArgs : formatArgs)], _jsonOptions, "test"));
+                    Assert.Equal(CommandExitCodes.Success, formatExit);
+                    Assert.Empty(formatError);
+                    using var formatDocument = ParseJsonOutput(formatOutput);
+                    var formatQuery = Assert.Single(formatDocument.RootElement.GetProperty("queries").EnumerateArray());
+                    Assert.True(formatQuery.GetProperty("truncated").GetBoolean());
+                    Assert.Equal(new[] { "path", "line" }, Assert.Single(formatQuery.GetProperty("results").EnumerateArray()).EnumerateObject().Select(property => property.Name));
+                    Assert.Equal(formatArgs.Length == 2, formatDocument.RootElement.TryGetProperty("format", out _));
+                }
+
+            foreach (var incompatible in new[]
+            {
+                new[] { "--json=array" }, new[] { "--json=ndjson" }, new[] { "--results-only" },
+                new[] { "--count" }, new[] { "--summary-only" }, new[] { "--count-by", "path" },
+                new[] { "--format", "text" }, new[] { "--format", "csv" }, new[] { "--format", "sarif" },
+            })
+                foreach (var formatFirst in new[] { true, false })
+                {
+                    var fieldsArgs = new[] { "--search-fields", "path,line" };
+                    var (invalidExit, invalidOutput, invalidError) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                        ["--named-query=restore=TryValidateCheckpointManifest", "--db", dbPath,
+                        .. (formatFirst ? incompatible : fieldsArgs), .. (formatFirst ? fieldsArgs : incompatible)], _jsonOptions));
+                    Assert.Equal(CommandExitCodes.UsageError, invalidExit);
+                    Assert.Empty(invalidOutput);
+                    Assert.Contains("not supported", invalidError);
+                }
+            var (invalidFieldExit, invalidFieldOutput, invalidFieldError) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--named-query=restore=TryValidateCheckpointManifest", "--db", dbPath, "--search-fields", "path,invalid5276"], _jsonOptions));
+            Assert.Equal(CommandExitCodes.UsageError, invalidFieldExit);
+            Assert.Empty(invalidFieldOutput);
+            Assert.Contains("unsupported --search-fields value 'invalid5276'", invalidFieldError);
         }
         finally
         {

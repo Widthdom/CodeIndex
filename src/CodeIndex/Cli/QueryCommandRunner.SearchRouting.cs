@@ -173,6 +173,19 @@ public static partial class QueryCommandRunner
 
     private static bool TryValidateSearchNamedBatchRoute(QueryCommandOptions options)
     {
+        if (options.SearchFields != null
+            && (options.ResultsOnly
+                || (options.JsonOutputFormatExplicit && options.JsonOutputFormat == JsonOutputFormatNdjson)
+                || options.CountOnly
+                || options.SummaryOnly
+                || HasSearchAggregation(options)
+                || options.OutputFormat is not OutputFormatJson and not OutputFormatCompact))
+        {
+            return RejectSearchUsage(
+                options,
+                "--search-fields with --named-query requires grouped JSON row output; NDJSON, results-only, count, summary, aggregation, and non-JSON formats are not supported.",
+                "Use --named-query <name>=<query> --search-fields path,line --json (or --format compact); run each query as a plain search for projected NDJSON.");
+        }
         if (HasSearchRowSelectors(options))
         {
             return RejectSearchUsage(

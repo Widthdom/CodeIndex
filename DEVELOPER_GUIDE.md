@@ -2551,6 +2551,14 @@ self-identifying. The ambiguous `file_impacts.path` and `file_impacts.file`
 aliases are rejected; callers and definitions keep their established path
 aliases.
 
+Named-query `--search-fields` uses `BuildProjectedSearchResult` for every nested
+result, including `query_name` attribution to the assigned name. Serialize the
+existing grouped JSON/compact envelope metadata with projected rows before
+checking the complete UTF-8 byte budget, including the final newline. Preserve
+unprojected contracts and reject projected NDJSON/array, results-only, count,
+summary, aggregation, and non-JSON combinations. Explicit format selection must
+remain effective regardless of its position relative to `--search-fields`.
+
 `inspect` keeps a dedicated typed schema in the same registry because its
 established JSON bundle is not a shared bounded-response envelope. It accepts
 top-level groups and exactly one `collection.field` level for definitions,
@@ -6853,6 +6861,13 @@ help はすべてこのレジストリを参照します。field 名は大文字
 `target_path`、`reference_count`、`result_kind` を保持するため、空でない各 row を
 一意に識別できます。曖昧な `file_impacts.path` と `file_impacts.file` alias は拒否し、
 callers と definitions では既存の path alias を維持します。
+
+名前付き検索の `--search-fields` は入れ子の各結果に `BuildProjectedSearchResult` を
+使い、`query_name` には割り当てた名前を設定します。既存のグループ化された JSON /
+compact の envelope 情報と選択済みの結果行を serialize してから、末尾改行を含む
+UTF-8 全体のバイト上限を検証します。フィールド選択なしの契約を保持し、選択と
+NDJSON / array、results-only、count、summary、集計、非 JSON 形式の併用を拒否します。
+明示した形式は `--search-fields` との指定順にかかわらず有効でなければなりません。
 
 `inspect` は従来の JSON bundle を shared bounded-response envelope に変更しないため、
 同じレジストリ内に専用の typed schema を持ちます。top-level group に加え、definitions、

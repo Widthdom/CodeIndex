@@ -10,6 +10,8 @@ If you change test code, test helpers, test execution flow, or testing conventio
 
 `DbCommandRunnerManifestIssue5277Tests.cs` extends the existing SQLite pool sensitive fixture. Keep deterministic growth after the handle-length probe, replacement before/after open, missing/unreadable/directory/link/FIFO paths, UTF-8 and UTF-16/32 BOMs, exact byte boundaries, bounded stream consumption, cancellation, and restore non-mutation coverage on net8.0 and net9.0. Restore test hooks and Unix permissions in `finally`; POSIX-only FIFO/link/permission fixtures do not run on Windows, while ordinary replacement exercises Windows sharing too.
 
+Named-query projection coverage in `QueryCommandRunnerSearchTests.cs` (#5276) extends the existing compact/rich fixture. Keep the `TryValidateCheckpointManifest` reproduction, single/multiple/empty queries, ordinary-row parity for every optional field, query metadata and truncation preservation, explicit format ordering, unsupported combinations, and exact UTF-8 document/newline budget boundaries on net8.0 and net9.0. Use the same isolated database for the read-only variants.
+
 For #5274 interruption coverage, capture the export snapshot's native SQLite handle and assert it is closed after cancellation or a reconstruction exception, before any test cleanup clears pools. Also require removal of its database, sidecars, and private directory. Unix permits unlinking open files, so file-absence checks alone miss the pooled-handle leak that blocks Windows cleanup.
 
 `ExportImportCommandRunnerIssue5274Tests` shares a disposable multi-segment FTS fixture across path, language, project, exclusion, empty, and all-file scopes, with and without path redaction and with a legacy database missing trigram support. Verify excluded and previously deleted artificial canaries against raw extracted DB bytes, retained ordinary/trigram searches, size reduction, manifest counts/hashes/partial readiness, import validation, source non-mutation, and private archive permissions. Use the existing FTS completion hook to cancel after either index rebuild and verify that absent or existing archive destinations remain untouched. Run on both net8.0 and net9.0 in the SQLite pool sensitive collection.
@@ -1219,6 +1221,8 @@ Issue #5260 の `QueryCommandRunnerAuditProgressIssue5260Tests` は子 query を
 テストコード、テストヘルパー、テストの実行フロー、またはテスト規約を変更した場合は、このドキュメントも同じコミットで更新してください。
 
 ## クイックスタート
+
+`QueryCommandRunnerSearchTests.cs` の名前付き検索のフィールド選択テスト（#5276）は既存の compact / rich fixture を拡張します。`TryValidateCheckpointManifest` の再現、単一・複数・空のクエリ、全オプションフィールドの通常検索との一致、クエリ情報と切り詰め情報の保持、明示形式の指定順、未対応の組み合わせ、UTF-8 document 全体と末尾改行の厳密なバイト境界を net8.0 / net9.0 で維持してください。読み取り専用の各変種では同じ分離済みDBを共有します。
 
 #5274 の中断テストでは、export snapshot の native SQLite handle を取得し、テストの後片付けで pool を解放する前に、cancel または再構築例外の後で handle が閉じていることを検証します。DB・sidecar・private directory の削除も確認してください。Unix は開いた file を unlink できるため、file がないことだけでは Windows の削除を妨げる pooled handle の残存を検出できません。
 
