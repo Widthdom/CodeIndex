@@ -8,10 +8,6 @@ namespace CodeIndex.Indexer;
 
 public static partial class SymbolExtractor
 {
-
-    private static readonly IReadOnlyDictionary<string, string> EmptyMarkdownReferenceDefinitionTargets =
-        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-
     private static List<SymbolRecord> ExtractMarkdownSymbols(long fileId, string[] lines)
     {
         // Markdown headings are the closest thing to navigable symbols in docs files.

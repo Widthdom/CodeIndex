@@ -5780,14 +5780,6 @@ public static partial class QueryCommandRunner
         return $"--{role}-{direction}";
     }
 
-    private static string? FormatSearchGuardFilterScope(SearchGuardFilter guardFilter)
-        => guardFilter.Scope switch
-        {
-            SearchGuardScope.Window => "window",
-            SearchGuardScope.SameLine => "same_line",
-            _ => null
-        };
-
     private static string FormatSearchSnippetFocusMode(SearchSnippetFocusMode mode)
         => mode.ToString().ToLowerInvariant();
 

@@ -722,10 +722,6 @@ public static partial class SymbolExtractor
         $@"^\s*(?<name>[A-Z][\w$]*(?:\.[\w$]+)+)\s*(?<![=!<>])=(?![=>])\s*(?<rhs>.*)$",
         RegexOptions.Compiled);
 
-    private static readonly Regex JavaScriptTypeScriptArrowAssignmentValueRegex = new(
-        $@"^(?:async\s+)?(?:\([^)]*\)|{JavaScriptTypeScriptIdentifierPattern})\s*=>",
-        RegexOptions.Compiled);
-
     private static readonly Regex SvelteReactivePropertyRegex = new(
         @"^\s*\$:\s*(?<name>\w+)\s*=",
         RegexOptions.Compiled);

@@ -98,12 +98,6 @@ internal sealed partial class LspServer : IDisposable
         return _reader.AnalyzeSymbol(context.Token, DefaultLimit, exact: true).References;
     }
 
-    private DefinitionResult? ResolveReferenceTargetAtPosition(PositionTokenContext context)
-    {
-        var targets = ResolveReferenceTargetsAtPosition(context);
-        return targets.Count == 1 ? targets[0] : null;
-    }
-
     private List<DefinitionResult> ResolveReferenceTargetsAtPosition(PositionTokenContext context)
         => ResolveReferenceTargetsAtPosition(context, out _);
 
