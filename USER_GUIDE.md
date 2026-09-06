@@ -1717,6 +1717,16 @@ production/test scope facets before filing findings.
 `--exclude-path`, `--exclude-tests`, `--limit`, and snippet controls to every
 query in the recipe. With `--json`, recipe runs emit one aggregate JSON payload
 grouped by recipe query instead of the usual newline-delimited search stream.
+Named-query `--search-fields path,line` applies the ordinary search row projection
+inside `queries[].results[]`, retaining the grouped object, query identity, counts,
+and truncation/continuation metadata. `query_name` selects the assigned query name.
+Plain `--json` (also implied by `--search-fields`) and `--format compact` support
+this projection; explicit NDJSON, arrays, results-only, count/summary, aggregation,
+and non-JSON formats are rejected with projection. Without projection, existing
+output stays unchanged. `--max-json-bytes` measures the complete projected UTF-8
+document, including nested query metadata and the final newline; if it cannot fit,
+the command returns `E028_RESPONSE_BUDGET_TOO_SMALL` rather than oversized results.
+
 Recipe and named-query JSON include per-query counts, `top_files`, and
 `truncated` metadata. Recipe JSON rows may include `audit_classifications`
 when a recipe classifier can classify an individual result, and query payloads
@@ -5561,7 +5571,16 @@ category を含めます。
 `--json` 併用時、recipe run は通常の newline-delimited search stream ではなく、recipe
 query ごとに grouped された 1 つの aggregate JSON payload を出力し、query ごとの count、
 `top_files`、`truncated` metadata を含みます。named-query JSON も count、`top_files`、
-`truncated` の per-query metadata を返します。recipe classifier が個別 result を分類できる場合、
+`truncated` の per-query metadata を返します。
+名前付き検索の `--search-fields path,line` は、通常検索と共通のフィールド選択を
+`queries[].results[]` に適用し、グループ化された object、クエリ識別情報、件数、
+切り詰め・継続情報を保持します。`query_name` は割り当てたクエリ名を返します。
+この選択は通常の `--json`（`--search-fields` でも暗黙に有効）と `--format compact`
+で利用でき、明示的な NDJSON、array、results-only、count / summary、集計、非 JSON
+形式との併用は拒否します。フィールド選択なしの既存出力は維持します。
+`--max-json-bytes` は入れ子のクエリ情報と末尾改行を含む選択後の UTF-8 document
+全体を測定し、収まらない場合は超過した結果ではなく `E028_RESPONSE_BUDGET_TOO_SMALL`
+を返します。recipe classifier が個別 result を分類できる場合、
 recipe JSON row は `audit_classifications` を含むことがあり、分類済み row がある query payload は
 `classifier_counts` を含みます。例えば `phrase-risk-patterns/task-result-property-review` は
 DTO / result-wrapper の `.Result` property と Task / ValueTask の blocking wait を分離します。

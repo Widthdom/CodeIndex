@@ -1006,7 +1006,9 @@ public static partial class QueryCommandRunner
 
             if (options.Json)
             {
-                var json = options.OutputFormat == OutputFormatCompact
+                var json = options.SearchFields != null
+                    ? BuildProjectedNamedSearchBatchPayload(queryResults, total, options, jsonOptions).ToJsonString(jsonOptions)
+                    : options.OutputFormat == OutputFormatCompact
                     ? BuildCompactNamedSearchBatchPayload(queryResults, total, options, jsonOptions).ToJsonString(jsonOptions)
                     : JsonSerializer.Serialize(
                         new SearchNamedBatchRunJsonResult(
@@ -1019,7 +1021,7 @@ public static partial class QueryCommandRunner
                     json,
                     options,
                     "named-query search",
-                    "Reduce --limit, use --snippet-lines 0, or increase --max-json-bytes.",
+                    "Reduce --limit or --search-fields, or increase --max-json-bytes.",
                     jsonOptions);
             }
 
@@ -1041,6 +1043,31 @@ public static partial class QueryCommandRunner
             CommandErrorWriter.WriteStderr($"({total} named-query results across {queryResults.Count} queries)");
             return CommandExitCodes.Success;
         });
+    }
+
+    private static JsonObject BuildProjectedNamedSearchBatchPayload(
+        IReadOnlyList<SearchNamedBatchQueryResultJsonResult> queryResults,
+        int total,
+        QueryCommandOptions options,
+        JsonSerializerOptions jsonOptions)
+    {
+        // Serialize the existing envelope contract without materializing unrequested row fields.
+        var summaries = queryResults.Select(query => query with { Results = [] }).ToList();
+        var payload = options.OutputFormat == OutputFormatCompact
+            ? BuildCompactNamedSearchBatchPayload(summaries, total, options, jsonOptions)
+            : JsonSerializer.SerializeToNode(
+                new SearchNamedBatchRunJsonResult(JsonOutputContract.ApiVersion, summaries.Count, total, summaries),
+                CliJsonSerializerContextFactory.Create(jsonOptions).SearchNamedBatchRunJsonResult)!.AsObject();
+        var queries = payload["queries"]!.AsArray();
+        for (var i = 0; i < queryResults.Count; i++)
+        {
+            var query = queryResults[i];
+            var rows = new JsonArray();
+            foreach (var result in query.Results)
+                rows.Add(BuildProjectedSearchResult(result, options.SearchFields!, query.Name, recipeName: null));
+            queries[i]!["results"] = rows;
+        }
+        return payload;
     }
 
     private static JsonObject BuildCompactNamedSearchBatchPayload(
