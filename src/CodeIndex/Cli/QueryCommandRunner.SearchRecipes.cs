@@ -762,7 +762,7 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.UsageError;
         }
         var recipe = selection.Recipe;
-        var scope = BuildSearchRecipeScope(recipe, options);
+        var scope = BuildSearchRecipeScope(recipe, options, selection.Queries);
         if (options.SearchCursor.HasValue && selection.Queries.Count != 1)
         {
             WriteUsageError(
@@ -775,6 +775,7 @@ public static partial class QueryCommandRunner
         string? ndjsonTerminalLine = null;
         return WithDb(options, jsonOptions, reader =>
         {
+            EnsureSearchRecipeCoverage(reader, scope, options);
             if (options.ResultsOnly || options.SearchFields != null || (options.Json && options.JsonOutputFormatExplicit && options.JsonOutputFormat == JsonOutputFormatNdjson))
             {
                 var rowQueryResults = CollectSearchRecipeQueryResults(
@@ -794,6 +795,7 @@ public static partial class QueryCommandRunner
                     recipe.Name,
                     rowQueryResults,
                     rowMinimumMatchedTotal,
+                    scope,
                     options,
                     GetCompactJsonOptions(jsonOptions));
                 ndjsonTerminalLine = stream.TerminalLine;
@@ -907,6 +909,7 @@ public static partial class QueryCommandRunner
             if (scope.ExcludePaths.Count > 0)
                 Console.WriteLine($"Excludes: {string.Join(", ", scope.ExcludePaths)}");
             Console.WriteLine($"Exclude tests: {scope.ExcludeTests.ToString().ToLowerInvariant()}");
+            WriteSearchRecipeCoverageText(scope.Coverage);
             if (scope.ExcludedDiagnostics is { Count: > 0 })
             {
                 Console.WriteLine("Excluded diagnostics:");
@@ -1075,6 +1078,27 @@ public static partial class QueryCommandRunner
                 jsonOptions,
                 runProperties: candidateProperties,
                 resultCount: candidate);
+            if (candidateDocumentBytes > byteLimit)
+            {
+                candidateProperties = BuildSearchRecipeSarifRunProperties(
+                    recipe,
+                    scope,
+                    queryResults,
+                    options,
+                    jsonOptions,
+                    freshnessContext,
+                    freshnessObservations,
+                    items,
+                    candidate,
+                    completeDocumentBytes,
+                    firstOmittedResultBytes,
+                    omitCoverage: true);
+                candidateDocumentBytes = GetSarifDocumentUtf8LineByteCount(
+                    items,
+                    jsonOptions,
+                    runProperties: candidateProperties,
+                    resultCount: candidate);
+            }
             if (candidateDocumentBytes <= byteLimit)
             {
                 emittedResultCount = candidate;
@@ -1130,7 +1154,8 @@ public static partial class QueryCommandRunner
         int emittedResultCount,
         int? minimumCompleteBytes = null,
         int? firstOmittedResultBytes = null,
-        int? byteLimitOverride = null)
+        int? byteLimitOverride = null,
+        bool omitCoverage = false)
     {
         var summary = BuildSearchRecipeRunSummary(
             queryResults,
@@ -1190,9 +1215,11 @@ public static partial class QueryCommandRunner
         {
             ["format"] = "audit-recipe",
             ["recipe"] = recipe.Name,
-            ["scope"] = JsonSerializer.SerializeToNode(
+            ["scope"] = BuildSearchRecipeScopeNodeForByteBudget(
                 scope,
-                CliJsonSerializerContextFactory.Create(jsonOptions).SearchRecipeScopeJsonResult),
+                jsonOptions,
+                omitCoveragePathSamples: bounded,
+                omitCoverage: omitCoverage),
             ["query_count"] = summary.QueryFreshness.Queries.Count,
             ["result_count"] = emittedResultCount,
             ["query_freshness"] = JsonSerializer.SerializeToNode(
@@ -1243,6 +1270,76 @@ public static partial class QueryCommandRunner
         return runProperties;
     }
 
+    private static JsonNode? BuildSearchRecipeScopeNodeForByteBudget(
+        SearchRecipeScopeJsonResult scope,
+        JsonSerializerOptions jsonOptions,
+        bool omitCoveragePathSamples,
+        bool omitCoverage = false)
+    {
+        static long? ReadLong(JsonNode? node)
+            => node is JsonValue value && value.TryGetValue<long>(out var number)
+                ? number
+                : null;
+
+        var scopeNode = JsonSerializer.SerializeToNode(
+            scope,
+            CliJsonSerializerContextFactory.Create(jsonOptions).SearchRecipeScopeJsonResult);
+        if (omitCoverage && scopeNode is JsonObject scopeObject)
+        {
+            scopeObject.Remove("coverage");
+            scopeObject["coverage_omitted_reason"] = "response_byte_budget";
+            return scopeObject;
+        }
+        if (!omitCoveragePathSamples
+            || scopeNode?["coverage"] is not JsonObject coverage)
+        {
+            return scopeNode;
+        }
+
+        scopeNode.AsObject().Remove("recipe_default_path_patterns");
+        scopeNode.AsObject().Remove("recipe_default_exclude_paths");
+        scopeNode.AsObject()["metadata_omitted_reason"] = "response_byte_budget";
+        if (coverage["human_review"] is JsonObject humanReview)
+        {
+            humanReview.Remove("reason");
+            humanReview["reason_omitted"] = "response_byte_budget";
+        }
+
+        foreach (var name in new[] { "included", "excluded", "unindexed" })
+        {
+            if (coverage[name] is not JsonObject set)
+                continue;
+
+            var hadPaths = set["paths"] is JsonArray { Count: > 0 };
+            var count = ReadLong(set["count"]);
+            var lowerBound = ReadLong(set["count_lower_bound"]);
+            var upperBound = ReadLong(set["count_upper_bound"]);
+            var wasTruncated = set["paths_truncated"] is JsonValue truncatedNode
+                && truncatedNode.TryGetValue<bool>(out var truncated)
+                && truncated;
+            var hasKnownFiles = count > 0 || lowerBound > 0 || upperBound > 0 || hadPaths;
+            set["paths"] = new JsonArray();
+            set["path_limit"] = 0;
+            set["paths_truncated"] = wasTruncated || hasKnownFiles;
+            set["path_sample_omitted_reason"] = "response_byte_budget";
+            if (set["count_authoritative"] is JsonValue authoritativeNode
+                && authoritativeNode.TryGetValue<bool>(out var authoritative)
+                && authoritative
+                && count.HasValue)
+            {
+                set["omitted_path_count"] = count.Value;
+                set["omitted_path_count_authoritative"] = true;
+            }
+            else
+            {
+                set.Remove("omitted_path_count");
+                set["omitted_path_count_authoritative"] = false;
+            }
+        }
+
+        return scopeNode;
+    }
+
     private static int GetMinimumBoundedSearchRecipeSarifBytes(
         SearchAuditRecipe recipe,
         SearchRecipeScopeJsonResult scope,
@@ -1271,7 +1368,8 @@ public static partial class QueryCommandRunner
                 emittedResultCount: 0,
                 minimumCompleteBytes,
                 firstOmittedResultBytes,
-                byteLimitOverride: minimum);
+                byteLimitOverride: minimum,
+                omitCoverage: true);
             var required = GetSarifDocumentUtf8LineByteCount(
                 items,
                 jsonOptions,
@@ -1698,7 +1796,7 @@ public static partial class QueryCommandRunner
         }
 
         var recipe = selection.Recipe;
-        var scope = BuildSearchRecipeScope(recipe, options);
+        var scope = BuildSearchRecipeScope(recipe, options, selection.Queries);
         var groupBy = NormalizeSearchAggregationKey(options.GroupBy ?? options.CountBy ?? options.UniqueBy!);
         var uniqueOnly = options.UniqueBy != null;
         var mode = uniqueOnly ? "unique" : options.GroupBy != null ? "group_by" : "count_by";
@@ -1768,6 +1866,7 @@ public static partial class QueryCommandRunner
         string recipeName,
         IReadOnlyList<SearchRecipeQueryResultJsonResult> queryResults,
         int totalCount,
+        SearchRecipeScopeJsonResult scope,
         QueryCommandOptions options,
         JsonSerializerOptions ndjsonOptions)
     {
@@ -1813,7 +1912,22 @@ public static partial class QueryCommandRunner
             selectedTotal: hasSelectors ? queryResults.Sum(query => query.SelectedTotal) : null,
             selectorOmittedCount: hasSelectors ? queryResults.Sum(query => query.SelectorOmittedCount) : null,
             limitOmittedCount: hasSelectors ? queryResults.Sum(query => query.LimitOmittedCount) : null,
-            selectors: hasSelectors ? selectors : null);
+            selectors: hasSelectors ? selectors : null,
+            terminalMetadata: new JsonObject
+            {
+                ["scope"] = BuildSearchRecipeScopeNodeForByteBudget(
+                    scope,
+                    ndjsonOptions,
+                    omitCoveragePathSamples: options.MaxJsonBytes.HasValue),
+            },
+            terminalMetadataFallback: new JsonObject
+            {
+                ["scope"] = new JsonObject
+                {
+                    ["name"] = scope.Name,
+                    ["coverage_omitted_reason"] = "response_byte_budget",
+                },
+            });
     }
 
     private static List<SearchRowSelectorJsonResult> AggregateSearchRowSelectors(
@@ -1859,7 +1973,7 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.UsageError;
         }
         var recipe = selection.Recipe;
-        var scope = BuildSearchRecipeScope(recipe, options);
+        var scope = BuildSearchRecipeScope(recipe, options, selection.Queries);
         var preflightResult = IssueDuplicatePreflight.TryLoadAsync(
                 options.OpenIssuesPath,
                 options.OpenIssuesRepository,
@@ -2083,7 +2197,7 @@ public static partial class QueryCommandRunner
         }
 
         var recipe = selection.Recipe;
-        var scope = BuildSearchRecipeScope(recipe, options);
+        var scope = BuildSearchRecipeScope(recipe, options, selection.Queries);
         return WithDb(options, jsonOptions, reader =>
         {
             var freshnessContext = options.SummaryOnly
@@ -2120,6 +2234,7 @@ public static partial class QueryCommandRunner
                             selection.Queries.Count,
                             total,
                             fileCount,
+                            scope.Coverage!,
                             BuildSearchRecipeQueryFreshness(
                                 requiredFreshnessContext,
                                 freshnessObservations),
@@ -4711,7 +4826,10 @@ public static partial class QueryCommandRunner
         string? ExecutedRecipeVersion,
         IReadOnlyList<SearchQueryFreshnessExpectedQuery> ExpectedQueries);
 
-    private static SearchRecipeScopeJsonResult BuildSearchRecipeScope(SearchAuditRecipe recipe, QueryCommandOptions options)
+    private static SearchRecipeScopeJsonResult BuildSearchRecipeScope(
+        SearchAuditRecipe recipe,
+        QueryCommandOptions options,
+        IReadOnlyList<SearchAuditRecipeQuery>? selectedQueries = null)
     {
         var scopeName = options.AuditScopeExplicit ? options.AuditScope : recipe.DefaultScope;
         var pathPatterns = new List<string>(options.PathPatterns);
@@ -4725,6 +4843,13 @@ public static partial class QueryCommandRunner
             AddDistinct(excludePaths, recipe.DefaultExcludePaths);
             excludeTests = true;
         }
+        else if (string.Equals(scopeName, SearchAuditRecipes.ProductionAndToolingAuditScope, StringComparison.OrdinalIgnoreCase))
+        {
+            if (pathPatterns.Count == 0)
+                AddDistinct(pathPatterns, ProductionAndToolingScopeDefaults.IncludePaths);
+            AddDistinct(excludePaths, ProductionAndToolingScopeDefaults.ExcludePaths);
+            excludeTests = true;
+        }
 
         return new SearchRecipeScopeJsonResult(
             scopeName,
@@ -4733,18 +4858,30 @@ public static partial class QueryCommandRunner
             excludeTests,
             [.. recipe.DefaultPathPatterns],
             [.. recipe.DefaultExcludePaths],
-            options.ShowExcluded ? BuildSearchRecipeExcludedDiagnostics(recipe, options, scopeName, excludeTests) : null);
+            options.ShowExcluded ? BuildSearchRecipeExcludedDiagnostics(recipe, options, scopeName, excludeTests) : null)
+        {
+            Coverage = CreateSearchRecipeCoverage(selectedQueries ?? recipe.Queries),
+        };
     }
 
     private static SearchRecipeScopeJsonResult BuildSearchRecipeQueryScope(
         SearchRecipeScopeJsonResult scope,
         SearchAuditRecipeQuery query)
     {
-        var pathPatterns = query.PathPatterns.Count > 0
+        var productionAndTooling = string.Equals(
+            scope.Name,
+            SearchAuditRecipes.ProductionAndToolingAuditScope,
+            StringComparison.Ordinal);
+        var queryUsesSourceDefaultPaths = productionAndTooling
+            && query.PathPatterns.SequenceEqual(SourceScopeDefaults.IncludePaths, StringComparer.Ordinal);
+        var pathPatterns = query.PathPatterns.Count > 0 && !queryUsesSourceDefaultPaths
             ? [.. query.PathPatterns]
             : new List<string>(scope.PathPatterns);
         var excludePaths = new List<string>(scope.ExcludePaths);
-        AddDistinct(excludePaths, query.ExcludePaths);
+        var queryUsesSourceDefaultExcludes = productionAndTooling
+            && query.ExcludePaths.SequenceEqual(SourceScopeDefaults.ExcludePaths, StringComparer.Ordinal);
+        if (!queryUsesSourceDefaultExcludes)
+            AddDistinct(excludePaths, query.ExcludePaths);
 
         return scope with
         {
@@ -4761,6 +4898,10 @@ public static partial class QueryCommandRunner
     {
         var diagnostics = new List<SearchRecipeExcludedDiagnosticJsonResult>();
         var sourceScope = string.Equals(scopeName, SearchAuditRecipes.DefaultAuditScope, StringComparison.OrdinalIgnoreCase);
+        var productionAndToolingScope = string.Equals(
+            scopeName,
+            SearchAuditRecipes.ProductionAndToolingAuditScope,
+            StringComparison.OrdinalIgnoreCase);
         diagnostics.Add(new SearchRecipeExcludedDiagnosticJsonResult(
             "recipe_default_path_patterns",
             sourceScope && options.PathPatterns.Count == 0 && recipe.DefaultPathPatterns.Count > 0,
@@ -4771,6 +4912,11 @@ public static partial class QueryCommandRunner
             sourceScope && recipe.DefaultExcludePaths.Count > 0,
             [.. recipe.DefaultExcludePaths],
             "Default source-scope exclusions suppress recipe definitions, tests, docs, changelog text, and agent/workflow metadata."));
+        diagnostics.Add(new SearchRecipeExcludedDiagnosticJsonResult(
+            "production_and_tooling_exclude_paths",
+            productionAndToolingScope && ProductionAndToolingScopeDefaults.ExcludePaths.Count > 0,
+            [.. ProductionAndToolingScopeDefaults.ExcludePaths],
+            "Production-and-tooling exclusions suppress documentation and recipe definitions while retaining executable automation regardless of directory name."));
         if (options.ExcludePaths.Count > 0)
         {
             diagnostics.Add(new SearchRecipeExcludedDiagnosticJsonResult(

@@ -1625,6 +1625,37 @@ Recovery metadata returns at most three commands and explicitly reports its
 limit, omitted command count, and truncation state. Each command preserves the
 active shared search filters so the individual retry reproduces the bounded run.
 
+Use `--audit-scope production-and-tooling` when an audit must cover production
+code plus repository automation such as hidden CI configuration, installer
+modules, release/build scripts, and tooling stored in custom directories. This
+scope starts from all indexed paths and applies format/conventional-directory
+documentation exclusions, shared test classification, conventional fixture
+exclusions, and the built-in recipe-definition exclusion; it does not assume
+that tooling lives under this repository's directory names. Explicit
+`--path` and `--exclude-path` filters still narrow that scope. `source` and `all`
+retain their existing behavior.
+
+Recipe scope output includes a bounded `coverage` summary. `included` and
+`excluded` are exact counts and bounded path samples for the common scope before
+any child-query-specific filters narrow the indexed file set.
+`generated_code_policy` states whether the invocation included or excluded
+indexed generated files.
+`unindexed` reuses the persisted unknown-extension inventory instead of starting
+a second filesystem scan; when that inventory was truncated before custom scope
+filters, the response reports lower/upper bounds, non-authoritative omitted-path
+metadata, and an uncertainty reason. `unexecuted` lists bounded child-query
+names that did not complete. Successful query execution only means that each
+selected query ran against its eligible indexed files; it does not claim that
+every file was read by a human. `human_review.state` therefore remains
+`not_declared` for the recipe run; record any human decision separately with an
+explicit `audit baseline-review` annotation. When a bounded SARIF response must
+drop coverage path samples and duplicated descriptive scope metadata to fit
+`--max-json-bytes`, it keeps the counts, authority fields, human-review state,
+and explicit byte-budget omission reasons.
+If even the coverage counts cannot fit in a very small bounded SARIF or NDJSON
+record, the record keeps the scope name and reports
+`coverage_omitted_reason=response_byte_budget`.
+
 Accumulation is bounded to 10,000 candidate rows per query, 512 returned query
 details, 32 returned errors, a five-minute deadline enforced within each query,
 and a 4 MiB JSON response when no explicit `--max-json-bytes` is supplied.
@@ -2530,7 +2561,7 @@ same source location.
 | `--recipe <name>` | `search` | Run a reusable audit recipe such as `risky-code`, `json-parse-apis`, `dotnet-risk-patterns`, `unsupported-operation-boundaries`, `nullable-contracts`, `xml-parser-security`, `filesystem-traversal`, `bounded-read-evidence`, `resource-materialization-audit`, or `concurrency-state-audit`. Use `recipe/query` form, such as `risky-code/raw-diagnostic-echo`, to run one child query directly. An unknown recipe is compared with recipe names; an unknown child query is compared only with canonical names and aliases from the active recipe, and its safely quoted replay preserves that recipe and normalized filters. Recipe runs default to `--audit-scope source`, applying recipe production-code path and exclusion metadata before normal search filters and snippet controls; `--limit` / `--top` is per child query. Text, `--json` / `--format json`, `--format compact`, `--format sarif`, and `--format issue-drafts` are supported, and issue drafts include a replay command. |
 | `--include-query <name>` / `--exclude-query <name>` | `search --recipe <name>` | Include or exclude child recipe queries by name. Repeatable and comma-separated; names are listed by `cdidx search --list-recipes`. |
 | `--cursor <cursor>` | `search --recipe <name/query>`, `outline`, `unused` | Fetch the next page for one selected recipe child query, outline result, or unused-symbol page. Use the `next_cursor` returned by the previous JSON or compact output; uncapped outline cursors use `outline:<offset>`, while `outline --max-json-bytes` returns an opaque `response:v2` cursor. |
-| `--audit-scope <source\|all>` | `search`, `unused` | Choose audit path scope. For recipe search, `source` applies recipe production-code path and exclusion metadata. For ad hoc and named-query searches, `source` adds `src/**` when no user path was supplied, and applies default doc/test/changelog exclusions, `--exclude-tests`, and default comment / CLI help-text origin exclusions. `all` intentionally searches every indexed path unless other filters exclude it. JSON output reports the effective scope, path filters, and exclusions where applicable. |
+| `--audit-scope <source\|production-and-tooling\|all>` | `search`, `unused` | Choose audit path scope. For recipe search, `source` applies recipe production-code path and exclusion metadata. `production-and-tooling` adds indexed automation, installers, build/release scripts, hidden CI configuration, and custom tooling locations while excluding tests, fixtures, docs, and recipe definitions. For ad hoc and named-query searches, the same named scopes apply their defaults before user filters. `all` intentionally searches every indexed path unless other filters exclude it. Recipe output reports effective filters plus bounded included, excluded, unindexed, and unexecuted coverage with explicit authority/uncertainty metadata. |
 | `--source-only` | `search` | Shorthand for `--audit-scope source` on ad hoc and named searches. Use it for implementation-code searches without selecting a recipe. It also excludes comment and CLI help-text origins by default; use `--origin comment` or `--origin help_text` when those documentation-like matches are intentional evidence. |
 | `--show-excluded` | `search --recipe <name>` | Include `scope.excluded_diagnostics` in recipe output so broad audits can see which default include patterns, default exclusions, user exclusions, and test filtering were applied. |
 | `--list-recipes` | `search` | List available search audit recipes with query text, recommended labels, exact-match mode, false-positive guidance, query-specific audit taxonomy metadata, supported formats, filter support, and limit semantics. Add `--query <filter>` to filter by recipe/query names, query text, labels, severity, path metadata, or descriptions. Use `--names --json` for the smallest deterministic recipe-name payload or `--summary-only --json` for compact recipe metadata. |
@@ -5494,6 +5525,30 @@ recovery metadata は最大3件の command を返し、上限、省略 command �
 明示します。各 command は有効な共通 search filter を保持するため、個別 retry でも上限付き実行を
 再現できます。
 
+本番コードに加えて hidden CI 設定、installer module、release/build script、独自 directory
+内の tooling まで監査する場合は `--audit-scope production-and-tooling` を使います。この scope は
+全 indexed path を起点とし、file format／慣例的 directory による documentation 除外、共通 test
+判定、慣例的 fixture 除外、built-in recipe definition 除外を適用します。この repository 固有の
+directory 名を tooling の一般規則として仮定しません。
+明示した `--path` と `--exclude-path` は引き続き scope を絞り込みます。`source` と `all` の
+既存動作は変わりません。
+
+Recipe の scope 出力には上限付き `coverage` summary が含まれます。`included` と `excluded` は、
+child query 固有 filter でさらに絞り込む前の共通 scope に対する厳密な件数と上限付き path sample です。
+`generated_code_policy` は、その実行が indexed generated file を含めたか除外したかを示します。
+`unindexed` は2回目の filesystem
+scan を始めず、保存済み unknown-extension inventory を再利用します。custom scope filter の適用前に
+inventory が切り詰められていた場合は lower/upper bound、省略 path 件数が非 authoritative であること、
+uncertainty reason を返します。`unexecuted` は完了しなかった child query 名を上限付きで示します。
+query が成功したことは、選択 query が対象の indexed file に対して実行されたことだけを意味し、
+人が全 file を読んだという主張ではありません。このため recipe run の
+`human_review.state` は `not_declared` のままです。人の判断は、別途明示的な
+`audit baseline-review` annotation で記録してください。上限付き SARIF response が
+`--max-json-bytes` に収めるため coverage path sample と重複する説明用 scope metadata を省略する
+場合も、件数、authority field、human-review state、byte-budget による省略理由は保持します。
+非常に小さい上限付き SARIF または NDJSON record に coverage の件数自体も収まらない場合は、scope 名を
+保持し、`coverage_omitted_reason=response_byte_budget` を返します。
+
 accumulation は query ごとに最大 10,000 candidate row、返却する query detail は 512 件、error は
 32 件、各 query 内でも強制される実行 deadline は5分、明示的な `--max-json-bytes` がない JSON response は
 4 MiB に制限されます。structured row はこの byte budget に対して逐次受理され、scope 付き deadline が
@@ -6334,7 +6389,7 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--recipe <name>` | `search` | `risky-code`、`json-parse-apis`、`dotnet-risk-patterns`、`unsupported-operation-boundaries`、`nullable-contracts`、`xml-parser-security`、`filesystem-traversal`、`bounded-read-evidence`、`resource-materialization-audit`、`concurrency-state-audit` などの再利用可能な audit recipe を実行する。`risky-code/raw-diagnostic-echo` のような `recipe/query` 形式で child query を1つだけ直接実行できる。未知の recipe は recipe 名と比較し、未知の child query は active recipe 内の canonical 名と alias だけを比較する。安全に引用された再実行コマンドは同じ recipe と正規化済み filter を保持する。Recipe 実行は既定で `--audit-scope source` になり、recipe の本番コード向け path / exclusion metadata を適用したうえで、通常の search filter と snippet control を選択された各 query に適用する。`--limit` / `--top` は child query ごとの上限になる。text、`--json` / `--format json`、`--format compact`、`--format sarif`、`--format issue-drafts` に対応し、issue draft には再実行コマンドを含める。 |
 | `--include-query <name>` / `--exclude-query <name>` | `search --recipe <name>` | recipe 内の child query を名前で含める、または除外する。繰り返し指定とカンマ区切りに対応し、名前は `cdidx search --list-recipes` で確認できる。 |
 | `--cursor <cursor>` | `search --recipe <name/query>`、`outline`、`unused` | 選択した recipe child query、outline 結果、unused-symbol page の次ページを取得する。直前の JSON または compact output が返す `next_cursor` を指定する。上限なしの outline cursor は `outline:<offset>` 形式を使い、`outline --max-json-bytes` は opaque な `response:v2` cursor を返す。 |
-| `--audit-scope <source\|all>` | `search`, `unused` | audit path scope を選ぶ。Recipe search の `source` は recipe の本番コード向け path / exclusion metadata を適用する。Ad hoc / named-query search の `source` は user path がない場合に `src/**` を追加し、既定の docs/tests/changelog exclusion、`--exclude-tests`、コメント / CLI ヘルプ文言 origin の既定除外を適用する。`all` は他の filter で除外しない限り、すべての indexed path を意図的に検索する。JSON 出力には該当する場合、有効な scope、path filter、exclusion が含まれる。 |
+| `--audit-scope <source\|production-and-tooling\|all>` | `search`, `unused` | audit path scope を選ぶ。Recipe search の `source` は本番コード向け path / exclusion metadata を適用する。`production-and-tooling` は test、fixture、docs、recipe definition を除外しつつ、indexed automation、installer、build/release script、hidden CI 設定、独自配置の tooling を追加する。Ad hoc / named-query search にも user filter より前に同じ named scope の既定値を適用する。`all` は他の filter で除外しない限り、すべての indexed path を検索する。Recipe output は有効な filter に加え、included / excluded / unindexed / unexecuted の上限付き coverage と authority / uncertainty metadata を返す。 |
 | `--source-only` | `search` | ad hoc / named search で `--audit-scope source` を指定する shorthand。recipe を選ばずに実装コードだけを検索したい場合に使う。コメントと CLI ヘルプ文言の origin も既定で除外し、これらのドキュメント的な一致を意図的な根拠にしたい場合は `--origin comment` または `--origin help_text` を指定する。 |
 | `--show-excluded` | `search --recipe <name>` | recipe output に `scope.excluded_diagnostics` を含め、広い audit で default include pattern、default exclusion、user exclusion、test filter の適用状況を確認できるようにする。 |
 | `--list-recipes` | `search` | 利用可能な search audit recipe を query text、推奨 label、exact-match mode、false-positive guidance、query 固有の audit taxonomy metadata、対応 format、filter support、limit semantics 付きで一覧表示する。`--query <filter>` を追加すると recipe/query 名、query text、label、severity、path metadata、説明で絞り込める。最小の決定的な recipe 名 payload には `--names --json`、compact recipe metadata には `--summary-only --json` を使う。 |

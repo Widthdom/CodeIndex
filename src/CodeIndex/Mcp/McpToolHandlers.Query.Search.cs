@@ -251,6 +251,7 @@ public partial class McpServer
         if (!TryReadSinceArgument(args, out var since, out var sinceError))
             return CreateToolErrorResponse(id, sinceError!);
         var deduplicate = !(args?["noDedup"]?.GetValue<bool>() ?? false);
+        var includeGenerated = args?["includeGenerated"]?.GetValue<bool>() ?? false;
         if (args?["tokenBoundary"]?.GetValue<bool>() ?? false)
             return CreateToolErrorResponse(id, "'tokenBoundary' is only supported for ad hoc search, not recipe execution.");
         if (!TryResolveSearchExactArgument(args, out var userExact, out var exactError))
@@ -268,8 +269,21 @@ public partial class McpServer
         if (guardWindow < 0 || guardWindow > DbReader.MaxSearchGuardWindow)
             return CreateToolErrorResponse(id, $"'guardWindow' must be between 0 and {DbReader.MaxSearchGuardWindow}; got {guardWindow}.");
 
+        var scope = new SearchRecipeScopeJsonResult(
+            auditScope,
+            pathPatterns is null ? [] : [.. pathPatterns],
+            [.. excludePaths],
+            excludeTests,
+            [.. recipe.DefaultPathPatterns],
+            [.. recipe.DefaultExcludePaths],
+            null)
+        {
+            Coverage = QueryCommandRunner.CreateSearchRecipeCoverage(recipe.Queries),
+        };
+
         return WithDbReader(id, args, reader =>
         {
+            QueryCommandRunner.EnsureSearchRecipeCoverage(reader, scope, lang, since, includeGenerated);
             var queryResults = new JsonArray();
             var total = 0;
             foreach (var recipeQuery in recipe.Queries)
@@ -277,6 +291,7 @@ public partial class McpServer
                 var exact = hasExactOverride ? userExact : recipeQuery.ExactSubstring;
                 ResolveMcpRecipeQueryScope(
                     recipeQuery,
+                    auditScope,
                     pathPatterns,
                     excludePaths,
                     out var queryPathPatterns,
@@ -320,6 +335,7 @@ public partial class McpServer
                 var truncated = TrimToRequestedLimit(compactResults, limit);
                 foreach (var compact in compactResults)
                     SearchSnippetFormatter.ApplyOutputMetadata(compact, snippetLines, maxLineWidth, exact, rawFts: false);
+                QueryCommandRunner.MarkSearchRecipeQueryExecuted(scope, recipeQuery.Name);
                 total += compactResults.Count;
                 queryResults.Add(new JsonObject
                 {
@@ -349,6 +365,9 @@ public partial class McpServer
                 ["maxLineWidth"] = maxLineWidth,
                 ["lang"] = lang,
                 ["audit_scope"] = auditScope,
+                ["scope"] = JsonSerializer.SerializeToNode(
+                    scope,
+                    CliJsonSerializerContext.Default.SearchRecipeScopeJsonResult),
                 ["path"] = PathEcho(pathPatterns),
                 ["excludePaths"] = PathEcho(excludePaths),
                 ["excludeTests"] = excludeTests,
@@ -379,10 +398,9 @@ public partial class McpServer
             : requestedScope.Trim();
         error = null;
 
-        if (!string.Equals(auditScope, SearchAuditRecipes.DefaultAuditScope, StringComparison.Ordinal)
-            && !string.Equals(auditScope, SearchAuditRecipes.AllAuditScope, StringComparison.Ordinal))
+        if (!QueryCommandRunner.TryNormalizeSearchAuditScope(auditScope, out auditScope))
         {
-            error = "'auditScope' must be either 'source' or 'all'.";
+            error = "'auditScope' must be 'source', 'production-and-tooling', or 'all'.";
             return false;
         }
 
@@ -393,22 +411,39 @@ public partial class McpServer
             AddDistinct(excludePaths, recipe.DefaultExcludePaths);
             excludeTests = true;
         }
+        else if (string.Equals(auditScope, SearchAuditRecipes.ProductionAndToolingAuditScope, StringComparison.Ordinal))
+        {
+            if ((pathPatterns is null || pathPatterns.Count == 0) && ProductionAndToolingScopeDefaults.IncludePaths.Count > 0)
+                pathPatterns = [.. ProductionAndToolingScopeDefaults.IncludePaths];
+            AddDistinct(excludePaths, ProductionAndToolingScopeDefaults.ExcludePaths);
+            excludeTests = true;
+        }
 
         return true;
     }
 
     private static void ResolveMcpRecipeQueryScope(
         SearchAuditRecipeQuery query,
+        string auditScope,
         List<string>? recipePathPatterns,
         List<string> recipeExcludePaths,
         out List<string>? queryPathPatterns,
         out List<string> queryExcludePaths)
     {
-        queryPathPatterns = query.PathPatterns.Count > 0
+        var productionAndTooling = string.Equals(
+            auditScope,
+            SearchAuditRecipes.ProductionAndToolingAuditScope,
+            StringComparison.Ordinal);
+        var queryUsesSourceDefaultPaths = productionAndTooling
+            && query.PathPatterns.SequenceEqual(SourceScopeDefaults.IncludePaths, StringComparer.Ordinal);
+        queryPathPatterns = query.PathPatterns.Count > 0 && !queryUsesSourceDefaultPaths
             ? [.. query.PathPatterns]
             : recipePathPatterns is null ? null : [.. recipePathPatterns];
         queryExcludePaths = [.. recipeExcludePaths];
-        AddDistinct(queryExcludePaths, query.ExcludePaths);
+        var queryUsesSourceDefaultExcludes = productionAndTooling
+            && query.ExcludePaths.SequenceEqual(SourceScopeDefaults.ExcludePaths, StringComparer.Ordinal);
+        if (!queryUsesSourceDefaultExcludes)
+            AddDistinct(queryExcludePaths, query.ExcludePaths);
     }
 
     private static IReadOnlyList<string>? GetMcpSearchRecipeRequiredPathPatterns(

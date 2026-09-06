@@ -918,6 +918,7 @@ public partial class McpServerTests
         env.Set("CDIDX_SEARCH_RECIPE_PATHS", null);
         InsertIndexedFile("src/json.cs", "csharp", "var doc = JsonDocument.Parse(payload);\n");
         InsertIndexedFile("src/json-extra.cs", "csharp", "var doc = JsonDocument.Parse(otherPayload);\n");
+        InsertIndexedFile(".github/workflows/json.yml", "yaml", "run: JsonDocument.Parse(payload)\n");
         InsertIndexedFile("docs/json.md", "markdown", "Document JsonDocument.Parse usage.\n");
         InsertIndexedFile("tests/JsonTests.cs", "csharp", "var doc = JsonDocument.Parse(payload);\n");
 
@@ -941,6 +942,23 @@ public partial class McpServerTests
         Assert.Equal(1, sourceQuery["count"]!.GetValue<int>());
         Assert.True(sourceQuery["truncated"]!.GetValue<bool>());
         Assert.Equal(sourcePath, sourceQuery["top_files"]![0]!["path"]!.GetValue<string>());
+
+        var toolingRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"search","arguments":{"recipe":"json-parse-apis","auditScope":"production-and-tooling","limit":10}}}""")!;
+        var toolingResponse = _server.HandleMessage(toolingRequest)!;
+
+        Assert.Null(toolingResponse["error"]);
+        var toolingStructured = toolingResponse["result"]!["structuredContent"]!;
+        var toolingPaths = toolingStructured["queries"]!.AsArray()
+            .Single(query => query!["name"]!.GetValue<string>() == "json-document-parse")!["results"]!.AsArray()
+            .Select(result => result!["path"]!.GetValue<string>())
+            .ToList();
+        var toolingCoverage = toolingStructured["scope"]!["coverage"]!;
+        Assert.Equal("production-and-tooling", toolingStructured["audit_scope"]!.GetValue<string>());
+        Assert.Contains(".github/workflows/json.yml", toolingPaths);
+        Assert.DoesNotContain("tests/JsonTests.cs", toolingPaths);
+        Assert.True(toolingCoverage["included"]!["count_authoritative"]!.GetValue<bool>());
+        Assert.Equal(0, toolingCoverage["unexecuted"]!["count"]!.GetValue<int>());
+        Assert.Equal("not_declared", toolingCoverage["human_review"]!["state"]!.GetValue<string>());
 
         var allRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"search","arguments":{"recipe":"json-parse-apis","auditScope":"all","limit":10}}}""")!;
         var allResponse = _server.HandleMessage(allRequest)!;

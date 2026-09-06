@@ -105,7 +105,7 @@ public static partial class QueryCommandRunner
                     }
                     else
                     {
-                        AddParseError($"Error: unsupported --audit-scope value '{ConsoleUi.FormatBoundedValue(auditScopeValue)}'. Use source or all.");
+                        AddParseError($"Error: unsupported --audit-scope value '{ConsoleUi.FormatBoundedValue(auditScopeValue)}'. Use source, production-and-tooling, or all.");
                     }
                     break;
                 case "--repo":

@@ -385,19 +385,37 @@ public static partial class QueryCommandRunner
 
         private void ApplySearchSourceOptionDefaults()
         {
+            var sourceScope = string.Equals(
+                auditScope,
+                SearchAuditRecipes.DefaultAuditScope,
+                StringComparison.OrdinalIgnoreCase);
+            var productionAndToolingScope = string.Equals(
+                auditScope,
+                SearchAuditRecipes.ProductionAndToolingAuditScope,
+                StringComparison.OrdinalIgnoreCase);
             if (parseErrors != null
                 || !applySearchSourceDefaults
                 || !auditScopeExplicit
                 || recipeName != null
                 || listRecipes
-                || !string.Equals(auditScope, SearchAuditRecipes.DefaultAuditScope, StringComparison.OrdinalIgnoreCase))
+                || (!sourceScope && !productionAndToolingScope))
             {
                 return;
             }
 
             if (pathPatterns.Count == 0)
-                AddDistinct(pathPatterns, SourceScopeDefaults.IncludePaths);
-            AddDistinct(excludePaths, SourceScopeDefaults.ExcludePaths);
+            {
+                AddDistinct(
+                    pathPatterns,
+                    sourceScope
+                        ? SourceScopeDefaults.IncludePaths
+                        : ProductionAndToolingScopeDefaults.IncludePaths);
+            }
+            AddDistinct(
+                excludePaths,
+                sourceScope
+                    ? SourceScopeDefaults.ExcludePaths
+                    : ProductionAndToolingScopeDefaults.ExcludePaths);
             AddSourceOnlyDefaultExcludeOrigin(excludeOrigins, matchOrigins, SearchMatchClassifier.Comment);
             AddSourceOnlyDefaultExcludeOrigin(excludeOrigins, matchOrigins, SearchMatchClassifier.HelpText);
             AddSourceOnlyDefaultExcludeOrigin(excludeOrigins, matchOrigins, SearchMatchClassifier.SchemaDescription);

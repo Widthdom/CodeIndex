@@ -370,6 +370,7 @@ public static partial class QueryCommandRunner
         var completedRecipes = 0;
         long completedQueries = 0;
         long failedQueries = 0;
+        var coverageCache = new SearchRecipeFileCoverageCache();
         progress?.Start();
         try
         {
@@ -389,6 +390,13 @@ public static partial class QueryCommandRunner
                 state.Recipes.Add(recipeRun);
                 var scope = BuildSearchRecipeScope(recipe, options);
                 recipeRun.Scope = scope;
+                EnsureSearchRecipeCoverage(
+                    reader,
+                    scope,
+                    options.Lang,
+                    options.Since,
+                    options.IncludeGenerated,
+                    coverageCache);
                 var freshnessContext = BuildSearchRecipeFreshnessContext(
                     recipe,
                     recipe.Queries,
@@ -399,6 +407,7 @@ public static partial class QueryCommandRunner
                     var position = recipeOffset + queryIndex;
                     if (state.InitialOffsets is { } offsets && offsets[position] < 0)
                     {
+                        MarkSearchRecipeQueryExecuted(scope, recipe.Queries[queryIndex].Name);
                         recipeRun.Queries.Add(new AuditAllQueryRun(recipe.Queries[queryIndex])
                         {
                             Position = position,

@@ -182,6 +182,9 @@ public partial class QueryCommandRunnerTests
             {
                 Assert.False(terminal.RootElement.GetProperty("done").GetBoolean());
                 Assert.Equal("max_json_bytes_exceeded", terminal.RootElement.GetProperty("truncation_reason").GetString());
+                Assert.Equal(
+                    "response_byte_budget",
+                    terminal.RootElement.GetProperty("scope").GetProperty("coverage_omitted_reason").GetString());
             }
 
             var (allowedExitCode, allowedStdout, allowedStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(

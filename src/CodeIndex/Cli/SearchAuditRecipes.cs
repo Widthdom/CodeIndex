@@ -10,6 +10,7 @@ namespace CodeIndex.Cli;
 internal static class SearchAuditRecipes
 {
     internal const string DefaultAuditScope = "source";
+    internal const string ProductionAndToolingAuditScope = "production-and-tooling";
     internal const string AllAuditScope = "all";
     internal const string DefaultQuerySeverity = "medium";
     internal const string RecipePathsEnvironmentVariable = "CDIDX_SEARCH_RECIPE_PATHS";
@@ -4745,6 +4746,7 @@ internal sealed record SearchRecipeCountSummaryRunJsonResult(
     [property: JsonPropertyName("query_count")] int QueryCount,
     [property: JsonPropertyName("result_count")] int ResultCount,
     [property: JsonPropertyName("file_count")] int FileCount,
+    [property: JsonPropertyName("coverage")] SearchRecipeCoverageJsonResult Coverage,
     [property: JsonPropertyName("query_freshness")] SearchRecipeQueryFreshnessJsonResult QueryFreshness,
     [property: JsonPropertyName("queries")] List<SearchRecipeCountSummaryQueryJsonResult> Queries);
 
@@ -5042,7 +5044,128 @@ internal sealed record SearchRecipeScopeJsonResult(
     [property: JsonPropertyName("recipe_default_exclude_paths")] List<string> RecipeDefaultExcludePaths,
     [property: JsonPropertyName("excluded_diagnostics")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    List<SearchRecipeExcludedDiagnosticJsonResult>? ExcludedDiagnostics);
+    List<SearchRecipeExcludedDiagnosticJsonResult>? ExcludedDiagnostics)
+{
+    [JsonPropertyName("coverage")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public SearchRecipeCoverageJsonResult? Coverage { get; init; }
+}
+
+internal sealed class SearchRecipeCoverageJsonResult
+{
+    private readonly HashSet<string> _unexecutedQueryNames;
+
+    internal SearchRecipeCoverageJsonResult(IEnumerable<string> selectedQueryNames)
+    {
+        _unexecutedQueryNames = new HashSet<string>(
+            selectedQueryNames.Where(name => !string.IsNullOrWhiteSpace(name)),
+            StringComparer.Ordinal);
+        SelectedQueryCount = _unexecutedQueryNames.Count;
+        Included = SearchRecipeCoverageSetJsonResult.Unavailable("indexed_files", "not_measured");
+        Excluded = SearchRecipeCoverageSetJsonResult.Unavailable("indexed_files", "not_measured");
+        Unindexed = SearchRecipeCoverageSetJsonResult.Unavailable("workspace_files", "unknown_extension_inventory_not_measured");
+        Unexecuted = BuildUnexecutedSummary();
+    }
+
+    [JsonPropertyName("basis")]
+    public string Basis { get; } = "file_eligibility_and_query_execution";
+
+    [JsonPropertyName("included_basis")]
+    public string IncludedBasis { get; } = "common_scope_before_child_query_filters";
+
+    [JsonPropertyName("generated_code_policy")]
+    public string GeneratedCodePolicy { get; internal set; } = "exclude";
+
+    [JsonPropertyName("included")]
+    public SearchRecipeCoverageSetJsonResult Included { get; internal set; }
+
+    [JsonPropertyName("excluded")]
+    public SearchRecipeCoverageSetJsonResult Excluded { get; internal set; }
+
+    [JsonPropertyName("unindexed")]
+    public SearchRecipeCoverageSetJsonResult Unindexed { get; internal set; }
+
+    [JsonPropertyName("unexecuted")]
+    public SearchRecipeUnexecutedScopeJsonResult Unexecuted { get; private set; }
+
+    [JsonPropertyName("selected_query_count")]
+    public int SelectedQueryCount { get; }
+
+    [JsonPropertyName("executed_query_count")]
+    public int ExecutedQueryCount => SelectedQueryCount - _unexecutedQueryNames.Count;
+
+    [JsonPropertyName("execution_complete")]
+    public bool ExecutionComplete => _unexecutedQueryNames.Count == 0;
+
+    [JsonPropertyName("human_review")]
+    public SearchRecipeHumanReviewJsonResult HumanReview { get; } = new(
+        "not_declared",
+        false,
+        "Query execution and file eligibility are not evidence that a human reviewed every eligible file. Use an explicit audit baseline review annotation to record a human decision.");
+
+    [JsonIgnore]
+    internal bool FileCoverageInitialized { get; set; }
+
+    internal void MarkExecuted(string queryName)
+    {
+        if (_unexecutedQueryNames.Remove(queryName))
+            Unexecuted = BuildUnexecutedSummary();
+    }
+
+    private SearchRecipeUnexecutedScopeJsonResult BuildUnexecutedSummary()
+    {
+        const int nameLimit = 20;
+        var names = _unexecutedQueryNames
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .Take(nameLimit)
+            .ToList();
+        return new(
+            "queries",
+            _unexecutedQueryNames.Count,
+            true,
+            names,
+            nameLimit,
+            _unexecutedQueryNames.Count > names.Count,
+            _unexecutedQueryNames.Count - names.Count,
+            true);
+    }
+}
+
+internal sealed record SearchRecipeCoverageSetJsonResult(
+    [property: JsonPropertyName("unit")] string Unit,
+    [property: JsonPropertyName("count")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] long? Count,
+    [property: JsonPropertyName("count_authoritative")] bool CountAuthoritative,
+    [property: JsonPropertyName("count_lower_bound")] long CountLowerBound,
+    [property: JsonPropertyName("count_upper_bound")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] long? CountUpperBound,
+    [property: JsonPropertyName("paths")] List<string> Paths,
+    [property: JsonPropertyName("path_limit")] int PathLimit,
+    [property: JsonPropertyName("paths_truncated")] bool PathsTruncated,
+    [property: JsonPropertyName("omitted_path_count")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] long? OmittedPathCount,
+    [property: JsonPropertyName("omitted_path_count_authoritative")] bool OmittedPathCountAuthoritative,
+    [property: JsonPropertyName("uncertainty_reason")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? UncertaintyReason)
+{
+    internal static SearchRecipeCoverageSetJsonResult Unavailable(string unit, string reason)
+        => new(unit, null, false, 0, null, [], 0, false, null, false, reason);
+}
+
+internal sealed record SearchRecipeUnexecutedScopeJsonResult(
+    [property: JsonPropertyName("unit")] string Unit,
+    [property: JsonPropertyName("count")] int Count,
+    [property: JsonPropertyName("count_authoritative")] bool CountAuthoritative,
+    [property: JsonPropertyName("query_names")] List<string> QueryNames,
+    [property: JsonPropertyName("query_name_limit")] int QueryNameLimit,
+    [property: JsonPropertyName("query_names_truncated")] bool QueryNamesTruncated,
+    [property: JsonPropertyName("omitted_query_name_count")] int OmittedQueryNameCount,
+    [property: JsonPropertyName("omitted_query_name_count_authoritative")] bool OmittedQueryNameCountAuthoritative);
+
+internal sealed record SearchRecipeHumanReviewJsonResult(
+    [property: JsonPropertyName("state")] string State,
+    [property: JsonPropertyName("explicit_annotation_present")] bool ExplicitAnnotationPresent,
+    [property: JsonPropertyName("reason")] string Reason);
 
 internal sealed record SearchRecipeExcludedDiagnosticJsonResult(
     [property: JsonPropertyName("reason")] string Reason,
