@@ -4,6 +4,7 @@ using static CodeIndex.Tests.QueryCommandTestSupport;
 
 namespace CodeIndex.Tests;
 
+[Collection("SQLite pool sensitive")]
 public class QueryCommandRunnerSearchIssue4906Tests
 {
     [Theory]
@@ -13,7 +14,7 @@ public class QueryCommandRunnerSearchIssue4906Tests
         string query,
         string scanFlag)
     {
-        var (exitCode, stdout, stderr) = CaptureConsole(() =>
+        var (exitCode, stdout, stderr) = CaptureIsolatedConsole(() =>
             ProgramRunner.Run(
                 ["search", query, scanFlag],
                 JsonOptions,
@@ -36,7 +37,7 @@ public class QueryCommandRunnerSearchIssue4906Tests
     {
         const string query = "a'b $value; .*";
         const string path = "src/space dir/**";
-        var (exitCode, stdout, stderr) = CaptureConsole(() =>
+        var (exitCode, stdout, stderr) = CaptureIsolatedConsole(() =>
             ProgramRunner.Run(
                 [
                     "search",
@@ -89,6 +90,7 @@ public class QueryCommandRunnerSearchIssue4906Tests
         Assert.Contains("--include-generated", argv);
         Assert.Contains("--json", argv);
         Assert.DoesNotContain("--all", argv);
+        Assert.DoesNotContain("--db", argv);
         Assert.DoesNotContain("--data-dir", argv);
 
         var posix = alternative.GetProperty("posix_sh").GetString()!;
@@ -102,7 +104,7 @@ public class QueryCommandRunnerSearchIssue4906Tests
     [Fact]
     public void RunSearch_StructuredFormatDoesNotInventJsonFlag_Issue4906()
     {
-        var (exitCode, stdout, stderr) = CaptureConsole(() =>
+        var (exitCode, stdout, stderr) = CaptureIsolatedConsole(() =>
             ProgramRunner.Run(
                 ["search", "TODO", "--regex", "--path", "src/**", "--format", "csv"],
                 JsonOptions,
@@ -117,7 +119,7 @@ public class QueryCommandRunnerSearchIssue4906Tests
     [Fact]
     public void RunSearch_FormatCountPreservesStructuredFindOutput_Issue4906()
     {
-        var (exitCode, stdout, stderr) = CaptureConsole(() =>
+        var (exitCode, stdout, stderr) = CaptureIsolatedConsole(() =>
             ProgramRunner.Run(
                 ["search", "TODO", "--regex", "--format", "count"],
                 JsonOptions,
@@ -155,7 +157,7 @@ public class QueryCommandRunnerSearchIssue4906Tests
 
         foreach (var testCase in cases)
         {
-            var (exitCode, stdout, stderr) = CaptureConsole(() =>
+            var (exitCode, stdout, stderr) = CaptureIsolatedConsole(() =>
                 ProgramRunner.Run(testCase.Args, JsonOptions, "1.0.0-test"));
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
@@ -179,7 +181,7 @@ public class QueryCommandRunnerSearchIssue4906Tests
         };
         foreach (var args in consumedOptionCases)
         {
-            var (exitCode, stdout, stderr) = CaptureConsole(() =>
+            var (exitCode, stdout, stderr) = CaptureIsolatedConsole(() =>
                 ProgramRunner.Run(args, JsonOptions, "1.0.0-test"));
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
@@ -227,7 +229,7 @@ public class QueryCommandRunnerSearchIssue4906Tests
 
         foreach (var testCase in cases)
         {
-            var (exitCode, stdout, stderr) = CaptureConsole(() =>
+            var (exitCode, stdout, stderr) = CaptureIsolatedConsole(() =>
                 ProgramRunner.Run(testCase.Args, JsonOptions, "1.0.0-test"));
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
@@ -254,7 +256,7 @@ public class QueryCommandRunnerSearchIssue4906Tests
     [Fact]
     public void RunSearch_FindAlternativeRejectsIncompatibleCompactSnippetOutput_Issue4906()
     {
-        var (exitCode, stdout, stderr) = CaptureConsole(() =>
+        var (exitCode, stdout, stderr) = CaptureIsolatedConsole(() =>
             ProgramRunner.Run(
                 [
                     "search", "TODO", "--regex", "--path", "src/**",
@@ -279,7 +281,7 @@ public class QueryCommandRunnerSearchIssue4906Tests
     public void RunSearch_FindAlternativeHonorsJsonByteBudget_Issue4906()
     {
         const int maxJsonBytes = 200;
-        var (exitCode, stdout, stderr) = CaptureConsole(() =>
+        var (exitCode, stdout, stderr) = CaptureIsolatedConsole(() =>
             ProgramRunner.Run(
                 [
                     "search", "TODO", "--regex", "--path", "src/**",
@@ -322,7 +324,7 @@ public class QueryCommandRunnerSearchIssue4906Tests
 
         foreach (var testCase in cases)
         {
-            var (exitCode, stdout, stderr) = CaptureConsole(() =>
+            var (exitCode, stdout, stderr) = CaptureIsolatedConsole(() =>
                 ProgramRunner.Run(testCase.Args, JsonOptions, "1.0.0-test"));
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
@@ -335,6 +337,31 @@ public class QueryCommandRunnerSearchIssue4906Tests
                 item => item.GetString()!.Contains(testCase.ExpectedBlocker, StringComparison.Ordinal));
         }
     }
+
+    private static (int Result, string Stdout, string Stderr) CaptureIsolatedConsole(Func<int> action)
+        => CaptureConsole(() =>
+        {
+            using var project = TestProjectHelper.CreateTempProjectScope("cdidx_search_alternative");
+            var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+            var previousDirectory = Environment.CurrentDirectory;
+            var previousDataDir = Environment.GetEnvironmentVariable(DbPathResolver.DataDirEnvironmentVariable);
+            var previousConfigDisable = Environment.GetEnvironmentVariable(CdidxConfigFile.DisableEnvVar);
+            try
+            {
+                // Language resolution and compact output can open the DB before rejecting
+                // scan-only flags. Isolate those reads without adding explicit replay flags.
+                Environment.CurrentDirectory = project.Root;
+                Environment.SetEnvironmentVariable(DbPathResolver.DataDirEnvironmentVariable, Path.GetDirectoryName(dbPath));
+                Environment.SetEnvironmentVariable(CdidxConfigFile.DisableEnvVar, "1");
+                return action();
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable(CdidxConfigFile.DisableEnvVar, previousConfigDisable);
+                Environment.SetEnvironmentVariable(DbPathResolver.DataDirEnvironmentVariable, previousDataDir);
+                Environment.CurrentDirectory = previousDirectory;
+            }
+        });
 
     private static string ValueAfterIssue4906(IReadOnlyList<string> argv, string option)
     {

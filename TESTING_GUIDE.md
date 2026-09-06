@@ -10,6 +10,8 @@ If you change test code, test helpers, test execution flow, or testing conventio
 
 `GlobalToolLogTests.TryStart_WritesInvariantUtcTimestampAndStackTrace` (#5264) pins a private, absent `--db` even though its injected exception precedes dispatch: last-failure provenance still resolves database metadata. Its shared theory covers stable and continuously changing ambient WAL databases, proves the latter exhausts snapshot retries with `query_only_wal_changed`, and requires the isolated run to retain the report hint, invariant UTC timestamp, and stack trace without reading that WAL. Keep config discovery disabled, text-log settings and provenance scoped, and restore environment, culture, and the snapshot hook. Finish dogfood index writes before running the full suites; this deterministic interference mechanism does not establish the cause of the historical full-suite failure or prove process-state leakage.
 
+Search-alternative coverage in `QueryCommandRunnerSearchIssue4906Tests` uses an initialized temporary database and project for every invocation (#5266). Keep the suite in the SQLite pool sensitive collection, pin `CDIDX_DATA_DIR` without adding explicit CLI flags, disable ambient config, and restore the environment and current directory in `finally`. Preserve the absent `--db` / `--data-dir` replay assertions and validate both net8.0 and net9.0 while the repository index is updating; language-alias resolution and compact output must not read that live index.
+
 Baseline review regressions also exercise indexing exclusion changes, a different indexed root at the same DB path, contradictory/missing omission metadata, and the partial exit code for empty incomparable snapshots.
 
 `AuditBaselineIssue5261Tests` covers compatible deltas, moved lines, changed reviewed evidence, incomplete/legacy metadata, ambiguous duplicates/renames, bounded counts, private atomic writes, invalid paths and malformed/oversized input, plus actual index/recipe CLI export and compare. Keep human/JSON error identity and contextual help/completion checks on both net8.0 and net9.0. Use the console-sensitive collection for CLI capture and isolated temporary projects for baseline files.
@@ -1187,6 +1189,8 @@ Check the following:
 
 <a id="テストガイド"></a>
 # テストガイド
+
+`QueryCommandRunnerSearchIssue4906Tests` の検索代替案テストは、呼び出しごとに初期化済みの一時DBとプロジェクトを使用します (#5266)。SQLite pool sensitive コレクションで実行し、CLIフラグを追加せずに `CDIDX_DATA_DIR` を固定し、外部の設定読み込みを無効にして、環境変数とカレントディレクトリを `finally` で復元してください。再実行案に `--db` / `--data-dir` が含まれない検証を維持し、リポジトリの索引更新中にも net8.0 と net9.0 の両方で検証します。言語エイリアス解決とcompact出力が作業用索引を参照してはいけません。
 
 baseline レビューの回帰テストでは、索引除外設定の変更、同一 DB パスでの索引ルートの変更、矛盾・欠落した省略メタデータ、空の比較不能スナップショットの部分終了コードも検証します。
 
