@@ -15,7 +15,8 @@ public partial class DbReader
         CancellationToken cancellationToken = default,
         IReadOnlyList<string>? dependencySymbols = null,
         IReadOnlyList<string>? dependencySymbolFamilies = null,
-        bool suppressDependencyNoise = false)
+        bool suppressDependencyNoise = false,
+        DependencyEvidenceFilter? evidenceFilter = null)
     {
         candidateRowCount = 0;
         lang = NormalizeQueryLanguage(lang);
@@ -32,7 +33,8 @@ public partial class DbReader
             reverse,
             dependencySymbols,
             dependencySymbolFamilies,
-            suppressDependencyNoise);
+            suppressDependencyNoise,
+            evidenceFilter);
         return ExecuteDependencyCycleQuery(
             BuildDependencyCycleQueryPlan(request),
             cancellationToken,

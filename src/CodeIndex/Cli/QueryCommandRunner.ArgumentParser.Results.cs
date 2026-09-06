@@ -1,4 +1,5 @@
 using CodeIndex.Database;
+using CodeIndex.Diagnostics;
 using CodeIndex.Indexer;
 using CodeIndex.Models;
 
@@ -86,6 +87,32 @@ public static partial class QueryCommandRunner
                     break;
                 case "--all-cycle-nodes":
                     includeAllDependencyCycleNodes = true;
+                    break;
+                case "--resolution-state":
+                case "--reference-kind":
+                    if (!TryReadStringOptionValue(args, ref i, normalizedArg, inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var evidenceValue, out var evidenceError))
+                        AddParseError(evidenceError!);
+                    else if (evidenceValue!.Length > DependencyEvidenceFilter.MaxCsvCharacters)
+                        AddParseError($"{normalizedArg} accepts at most {DependencyEvidenceFilter.MaxCsvCharacters} characters per occurrence.");
+                    else
+                    {
+                        var values = normalizedArg == "--resolution-state" ? dependencyResolutionValues : dependencyReferenceKindValues;
+                        var additions = evidenceValue.Split(',');
+                        if (values.Count + additions.Length > DependencyEvidenceFilter.MaxValues)
+                            AddParseError($"{normalizedArg} accepts at most {DependencyEvidenceFilter.MaxValues} values.");
+                        else
+                        {
+                            values.AddRange(additions);
+                            try
+                            {
+                                dependencyEvidenceFilter = DependencyEvidenceFilter.Create(dependencyResolutionValues, dependencyReferenceKindValues);
+                            }
+                            catch (ArgumentException ex)
+                            {
+                                AddParseError(DiagnosticSanitizer.ForMessage(ex.Message));
+                            }
+                        }
+                    }
                     break;
                 case "--suppress-noise":
                     dependencySuppressNoise = true;
