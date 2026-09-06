@@ -110,6 +110,9 @@ internal static class SearchMatchClassifier
         if (string.Equals(normalizedLang, "csharp", StringComparison.Ordinal))
             return ClassifyCSharp(path, line, text, index, lineContext);
 
+        if (normalizedLang is "shell" or "bash" or "zsh")
+            return ClassifyShell(path, text, index);
+
         if (string.Equals(normalizedLang, "markdown", StringComparison.Ordinal))
         {
             return string.Equals(enclosingSymbolKind, "code", StringComparison.OrdinalIgnoreCase)
@@ -132,6 +135,114 @@ internal static class SearchMatchClassifier
 
         if (IsLikelySlashRegexLiteral(normalizedLang, text, index))
             return RegexLiteral;
+
+        return Code;
+    }
+
+    private struct ShellFrame
+    {
+        public char Quote;
+        public char Terminator;
+        public bool AnsiQuote;
+        public bool TokenStart;
+        public int Parentheses;
+    }
+
+    private static string ClassifyShell(string path, string text, int index)
+    {
+        // A line-local lexer: nested command substitutions get their own quote state.
+        // Do not guess code/string origins once either bounded parsing budget is exhausted.
+        const int maxCharacters = 65536;
+        if (index >= maxCharacters)
+            return Unknown;
+        var stringOrigin = LooksLikeHelpText(path, text.Length <= maxCharacters ? text : text[..maxCharacters])
+            ? HelpText : StringLiteral;
+        Span<ShellFrame> frames = stackalloc ShellFrame[64];
+        frames.Clear();
+        frames[0].TokenStart = true;
+        var depth = 0;
+        for (var i = 0; i <= index; i++)
+        {
+            ref var frame = ref frames[depth];
+            var ch = text[i];
+            var quotedOrigin = frame.Quote == '\0' ? Code : stringOrigin;
+
+            if (frame.Quote == '\'')
+            {
+                if (ch == '\\' && frame.AnsiQuote && i + 1 < text.Length)
+                {
+                    if (index <= i + 1)
+                        return quotedOrigin;
+                    i++;
+                }
+                else if (ch == '\'')
+                    frame.Quote = '\0';
+                else if (i == index)
+                    return quotedOrigin;
+                continue;
+            }
+
+            if (ch == '\\' && i + 1 < text.Length &&
+                (frame.Quote == '\0' || text[i + 1] is '$' or '`' or '"' or '\\' or '\n'))
+            {
+                if (index <= i + 1)
+                    return quotedOrigin;
+                frame.TokenStart = false;
+                i++;
+                continue;
+            }
+
+            if (ch == '#' && frame.Quote == '\0' && frame.TokenStart)
+                return Comment;
+
+            if (ch == '`' && frame.Terminator == '`')
+            {
+                depth--;
+                continue;
+            }
+
+            if (ch == '`' || (ch == '$' && i + 1 < text.Length && text[i + 1] == '('))
+            {
+                if (depth + 1 == frames.Length)
+                    return Unknown;
+                frame.TokenStart = false;
+                frames[++depth] = new ShellFrame { Terminator = ch == '`' ? '`' : ')', TokenStart = true };
+                if (ch == '$')
+                    i++;
+                continue;
+            }
+
+            if (frame.Quote == '"')
+            {
+                if (ch == '"')
+                    frame.Quote = '\0';
+                else if (i == index)
+                    return quotedOrigin;
+                continue;
+            }
+
+            if (ch == '$' && i + 1 < text.Length && text[i + 1] == '\'')
+            {
+                frame.Quote = '\'';
+                frame.AnsiQuote = true;
+                i++;
+            }
+            else if (ch is '\'' or '"')
+            {
+                frame.Quote = ch;
+                frame.AnsiQuote = false;
+            }
+            else if (ch == '(')
+                frame.Parentheses++;
+            else if (ch == ')')
+            {
+                if (frame.Parentheses > 0)
+                    frame.Parentheses--;
+                else if (frame.Terminator == ')')
+                    depth--;
+            }
+            frame.TokenStart = char.IsWhiteSpace(ch) || ch is ';' or '|' or '&' or '(' or ')' or '<' or '>';
+        }
 
         return Code;
     }
