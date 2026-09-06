@@ -8,6 +8,8 @@ If you change test code, test helpers, test execution flow, or testing conventio
 
 ## Quick Start
 
+`DiffCommandRunnerTests.Run_ComparisonBudgetProvenanceAndRecovery_Issue5279` shares isolated databases across human/JSON diff and import checks. Inject small row and row-byte budgets independently on each side; retain one-file archive versus larger destination coverage, metadata filter limitations, lower-bound counters, output bounds/control and path privacy, and byte-for-byte destination/artifact preservation. Restore static budgets in `finally` in the console-sensitive collection and run both net8.0 and net9.0.
+
 Issue #5278 review regressions also cover 10,000 overlapping raw chunks with a later hidden match, the only matching child beyond the 512-query JSON detail cap (with NDJSON parity), and short projected NDJSON rows whose complete response fits while a partial envelope grows. Preserve these fixtures when changing candidate or byte admission.
 
 `QueryCommandRunnerAuditContinuationIssue5278Tests` verifies small-budget traversal without missing or duplicate attributed observations, exact final boundaries, independent execution/emission/selector completeness, opt-in exit semantics, and stale/scope/recipe/corrupt/oversized token rejection before child execution. Keep audit-all JSON/NDJSON byte tests coordinated with the continuation cursor after final output trimming, and run the audit, progress, baseline, help, and completion regressions on net8.0 and net9.0.
@@ -1205,6 +1207,8 @@ Check the following:
 
 <a id="テストガイド"></a>
 # テストガイド
+
+`DiffCommandRunnerTests.Run_ComparisonBudgetProvenanceAndRecovery_Issue5279` は、隔離したDBを通常表示／JSONのdiffとimport検証で共有します。左右それぞれに小さな行数・1行のバイト上限を注入し、1ファイルのアーカイブと大きな宛先、メタデータの絞り込み制約、観測値の下限、出力サイズ・制御文字・パスの秘匿、宛先と関連ファイルのバイト単位の不変性を検証します。コンソール依存のコレクションで静的上限を `finally` で復元し、net8.0とnet9.0で実行してください。
 
 Issue #5278 のレビュー回帰テストでは、10,000件の重複 raw chunk とその先の未走査 match、JSON の512件 detail 上限より後にだけ match がある子 query（NDJSON との比較を含む）、全件応答は収まる一方で部分応答の metadata が増える短い投影 NDJSON 行も検証します。候補枠や byte 判定を変更する際はこれらの fixture を維持してください。
 

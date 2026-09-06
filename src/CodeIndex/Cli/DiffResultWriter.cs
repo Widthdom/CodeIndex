@@ -23,12 +23,13 @@ internal static class DiffResultWriter
         int exitCode,
         string? hint = null,
         string? errorCode = null,
-        int? maxJsonBytes = null)
+        int? maxJsonBytes = null,
+        DiffComparisonBudgetResult? comparisonBudget = null)
     {
         if (json)
         {
             var serialized = JsonSerializer.Serialize(
-                new CommandErrorJsonResult("error", message, hint, errorCode),
+                new CommandErrorJsonResult("error", message, hint, errorCode, ComparisonBudget: comparisonBudget),
                 CliJsonSerializerContextFactory.Create(jsonOptions).CommandErrorJsonResult);
             if (maxJsonBytes.HasValue && !FitsJsonLine(serialized, maxJsonBytes.Value))
             {

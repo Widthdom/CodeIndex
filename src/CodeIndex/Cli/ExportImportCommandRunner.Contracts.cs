@@ -51,8 +51,9 @@ internal static partial class ExportImportCommandRunner
         string usage,
         int exitCode = CommandExitCodes.UsageError,
         IReadOnlyList<ExportImportDiagnosticResult>? diagnostics = null,
-        string? rootCause = null)
-        => WriteStructuredError(json, jsonOptions, ImportCommandName, phase, errorCode, message, hint, usage, exitCode, diagnostics, rootCause);
+        string? rootCause = null,
+        DiffComparisonBudgetResult? comparisonBudget = null)
+        => WriteStructuredError(json, jsonOptions, ImportCommandName, phase, errorCode, message, hint, usage, exitCode, diagnostics, rootCause, comparisonBudget);
 
     private static int WriteExportError(
         bool json,
@@ -77,12 +78,13 @@ internal static partial class ExportImportCommandRunner
         string usage,
         int exitCode,
         IReadOnlyList<ExportImportDiagnosticResult>? diagnostics,
-        string? rootCause = null)
+        string? rootCause = null,
+        DiffComparisonBudgetResult? comparisonBudget = null)
     {
         if (json)
         {
             Console.WriteLine(JsonSerializer.Serialize(
-                new ExportImportErrorResult("1", "error", command, phase, errorCode, message, hint, usage, rootCause, diagnostics),
+                new ExportImportErrorResult("1", "error", command, phase, errorCode, message, hint, usage, rootCause, diagnostics, comparisonBudget),
                 CliJsonSerializerContextFactory.Create(jsonOptions).ExportImportErrorResult));
             return exitCode;
         }
@@ -189,7 +191,10 @@ internal static partial class ExportImportCommandRunner
         string? RootCause = null,
         [property: JsonPropertyName("diagnostics")]
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        IReadOnlyList<ExportImportDiagnosticResult>? Diagnostics = null);
+        IReadOnlyList<ExportImportDiagnosticResult>? Diagnostics = null,
+        [property: JsonPropertyName("comparison_budget")]
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        DiffComparisonBudgetResult? ComparisonBudget = null);
     internal sealed record ExportImportDiagnosticResult(
         [property: JsonPropertyName("code")] string Code,
         [property: JsonPropertyName("message")] string Message,

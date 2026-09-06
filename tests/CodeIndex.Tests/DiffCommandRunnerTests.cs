@@ -1248,7 +1248,7 @@ public class DiffCommandRunnerTests
                     "comparison_budget_exceeded",
                     importError.GetProperty("root_cause").GetString());
                 Assert.Contains("destination was left unchanged", importError.GetProperty("hint").GetString(), StringComparison.Ordinal);
-                Assert.Contains("cdidx export", importError.GetProperty("hint").GetString(), StringComparison.Ordinal);
+                Assert.Contains("current destination cannot complete", importError.GetProperty("hint").GetString(), StringComparison.Ordinal);
             }
 
             var (importTextExitCode, importTextStdout, importTextStderr) = ConsoleCapture.Capture(() =>
@@ -1260,13 +1260,131 @@ public class DiffCommandRunnerTests
             Assert.Equal(string.Empty, importTextStdout);
             Assert.Contains("destination comparison could not complete", importTextStderr, StringComparison.Ordinal);
             Assert.Contains("destination was left unchanged", importTextStderr, StringComparison.Ordinal);
-            Assert.Contains("cdidx export", importTextStderr, StringComparison.Ordinal);
+            Assert.Contains("current destination cannot complete", importTextStderr, StringComparison.Ordinal);
         }
         finally
         {
             DiffCommandRunner.MaxDiffComparedRowsPerSideForTesting = originalRowBudget;
             TestProjectHelper.DeleteDirectory(leftRoot);
             TestProjectHelper.DeleteDirectory(rightRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData("left", "files", false)]
+    [InlineData("right", "files", false)]
+    [InlineData("left", "chunks", true)]
+    [InlineData("right", "chunks", true)]
+    [InlineData("left", "codeindex_meta", true)]
+    [InlineData("right", "codeindex_meta", true)]
+    [InlineData("left", "codeindex_meta", false)]
+    [InlineData("right", "codeindex_meta", false)]
+    public void Run_ComparisonBudgetProvenanceAndRecovery_Issue5279(string side, string table, bool byteBudget)
+    {
+        var root = TestProjectHelper.CreateTempProject("cdidx_budget_provenance");
+        var originalRows = DiffCommandRunner.MaxDiffComparedRowsPerSideForTesting;
+        var originalBytes = DiffCommandRunner.MaxDiffComparedRowBytesForTesting;
+        try
+        {
+            var leftDb = TestProjectHelper.CreateProjectDb(Path.Combine(root, "left"));
+            var rightDb = TestProjectHelper.CreateProjectDb(Path.Combine(root, "right"));
+            foreach (var db in new[] { leftDb, rightDb })
+                TestProjectHelper.InsertIndexedFile(db, "src/A.cs", "csharp", "public class A { }");
+            var exhaustedDb = side == "left" ? leftDb : rightDb;
+            const string canary = "private_canary_5279";
+            if (table == "files")
+            {
+                for (var i = 0; i < 2; i++)
+                    TestProjectHelper.InsertIndexedFile(exhaustedDb, $"src/Extra{i}.cs", "csharp", "class Extra { }");
+            }
+            else if (table == "chunks")
+                ExecuteNonQuery(exhaustedDb, $"UPDATE chunks SET content = '{canary}' || char(27) || char(10) || hex(zeroblob(600));");
+            else if (byteBudget)
+                ExecuteNonQuery(exhaustedDb, $"INSERT INTO codeindex_meta(key, value) VALUES ('{canary}', char(27) || char(10) || hex(zeroblob(600)));");
+            else
+                for (var i = 0; i < 65; i++)
+                    ExecuteNonQuery(exhaustedDb, $"INSERT INTO codeindex_meta(key, value) VALUES ('{canary}_{i}', 'x');");
+
+            var archive = Path.Combine(root, "incoming.zip");
+            var export = ConsoleCapture.Capture(() => ExportImportCommandRunner.RunExport(
+                [archive, "--db", rightDb], _jsonOptions, "test"));
+            Assert.Equal(0, export.Item1);
+            SqliteConnection.ClearAllPools();
+            var beforeLeft = File.ReadAllBytes(leftDb);
+            var beforeRight = File.ReadAllBytes(rightDb);
+            var beforeArtifacts = Directory.GetFileSystemEntries(Path.GetDirectoryName(leftDb)!).Order().ToArray();
+            var limit = byteBudget ? 512 : table == "files" ? 2 : 64;
+            DiffCommandRunner.MaxDiffComparedRowsPerSideForTesting = byteBudget ? null : limit;
+            DiffCommandRunner.MaxDiffComparedRowBytesForTesting = byteBudget ? limit : null;
+            var kind = byteBudget ? "row_bytes" : "rows_per_table_per_side";
+            foreach (var import in new[] { false, true })
+                foreach (var json in new[] { false, true })
+                {
+                    string[] args = import
+                        ? [archive, "--db", leftDb, "--check", "--limit", "0"]
+                        : [leftDb, rightDb, "--detailed", "--limit", "0"];
+                    if (json)
+                        args = [.. args, "--json"];
+                    if (json && !import)
+                        args = [.. args, "--max-json-bytes", "4096"];
+                    var (exit, stdout, stderr) = ConsoleCapture.Capture(() => import
+                        ? ExportImportCommandRunner.RunImport(args, _jsonOptions)
+                        : DiffCommandRunner.Run(args, _jsonOptions));
+                    Assert.Equal(3, exit);
+                    var output = json ? stdout : stderr;
+                    Assert.Equal(string.Empty, json ? stderr : stdout);
+                    Assert.DoesNotContain(canary, output);
+                    Assert.DoesNotContain(root, output);
+                    Assert.DoesNotContain('\u001b', output);
+                    Assert.True(Encoding.UTF8.GetByteCount(output) < 4096);
+                    string hint;
+                    if (json)
+                    {
+                        using var document = JsonDocument.Parse(output);
+                        var error = document.RootElement;
+                        Assert.Equal("1", error.GetProperty("api_version").GetString());
+                        Assert.Equal("error", error.GetProperty("status").GetString());
+                        var budget = error.GetProperty("comparison_budget");
+                        Assert.Equal(side, budget.GetProperty("side").GetString());
+                        Assert.Equal(import ? side == "left" ? "destination" : "archive" : side, budget.GetProperty("role").GetString());
+                        Assert.Equal(table, budget.GetProperty("table").GetString());
+                        Assert.Equal(kind, budget.GetProperty("kind").GetString());
+                        Assert.Equal(limit, budget.GetProperty("limit").GetInt64());
+                        Assert.True(budget.GetProperty("observed").GetInt64() > limit);
+                        Assert.True(budget.GetProperty("observed_is_lower_bound").GetBoolean());
+                        if (import)
+                        {
+                            Assert.Equal("import_destination_comparison_budget_exceeded", error.GetProperty("error_code").GetString());
+                            Assert.Equal("comparison_budget_exceeded", error.GetProperty("root_cause").GetString());
+                        }
+                        hint = error.GetProperty("hint").GetString()!;
+                    }
+                    else
+                    {
+                        Assert.Contains($"table={table}", output);
+                        Assert.Contains($"kind={kind}", output);
+                        hint = output;
+                    }
+                    if (import && side == "left")
+                    {
+                        Assert.Contains("current destination cannot complete", hint);
+                        Assert.Contains("Shrinking the incoming archive cannot reduce", hint);
+                        Assert.DoesNotContain("Re-export", hint);
+                    }
+                    else if (table == "codeindex_meta")
+                        Assert.Contains("File filters cannot reduce", hint);
+                    else if (import)
+                        Assert.Contains(byteBudget ? "oversized row" : "fewer rows", hint);
+                    Assert.Equal(beforeLeft, File.ReadAllBytes(leftDb));
+                    Assert.Equal(beforeRight, File.ReadAllBytes(rightDb));
+                    Assert.Equal(beforeArtifacts, Directory.GetFileSystemEntries(Path.GetDirectoryName(leftDb)!).Order().ToArray());
+                }
+        }
+        finally
+        {
+            DiffCommandRunner.MaxDiffComparedRowsPerSideForTesting = originalRows;
+            DiffCommandRunner.MaxDiffComparedRowBytesForTesting = originalBytes;
+            TestProjectHelper.DeleteDirectory(root);
         }
     }
 

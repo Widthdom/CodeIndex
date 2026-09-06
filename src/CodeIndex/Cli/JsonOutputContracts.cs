@@ -97,7 +97,10 @@ internal sealed record CommandErrorJsonResult(
     [property: JsonPropertyName("command")] string? Command = null,
     [property: JsonPropertyName("exit_code")] int? ExitCode = null,
     [property: JsonPropertyName("usage")] string? Usage = null,
-    [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion) : IVersionedJsonResult;
+    [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion,
+    [property: JsonPropertyName("comparison_budget")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    DiffComparisonBudgetResult? ComparisonBudget = null) : IVersionedJsonResult;
 
 internal sealed record MaintenanceDatabaseErrorJsonResult(
     [property: JsonPropertyName("status")] string Status,
