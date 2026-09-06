@@ -157,6 +157,7 @@ internal static class SearchMatchClassifier
     {
         public ShellCasePhase Phase;
         public int Parentheses;
+        public bool PatternStarted;
     }
 
     private static string ClassifyShell(string path, string text, int index)
@@ -227,13 +228,16 @@ internal static class SearchMatchClassifier
 
             if (frame.Quote == '\0' && frame.TokenStart && !char.IsWhiteSpace(ch))
             {
+                var patternCaseCount = caseCount > frame.CaseBase && cases[caseCount - 1].Phase == ShellCasePhase.Pattern
+                    ? caseCount : -1;
                 if (caseCount > frame.CaseBase && cases[caseCount - 1].Phase == ShellCasePhase.Word)
                     cases[caseCount - 1].Phase = ShellCasePhase.In;
                 else if (caseCount > frame.CaseBase && cases[caseCount - 1].Phase == ShellCasePhase.In &&
                     IsShellKeyword(text, removed, i, "in"))
                     cases[caseCount - 1].Phase = ShellCasePhase.Pattern;
                 else if (caseCount > frame.CaseBase &&
-                    (frame.CommandStart || cases[caseCount - 1].Phase == ShellCasePhase.Pattern) &&
+                    ((frame.CommandStart && cases[caseCount - 1].Phase == ShellCasePhase.Body) ||
+                     (cases[caseCount - 1].Phase == ShellCasePhase.Pattern && !cases[caseCount - 1].PatternStarted)) &&
                     IsShellKeyword(text, removed, i, "esac"))
                     caseCount--;
                 else if (frame.CommandStart &&
@@ -244,6 +248,8 @@ internal static class SearchMatchClassifier
                         return Unknown;
                     cases[caseCount++] = new ShellCase { Phase = ShellCasePhase.Word };
                 }
+                if (caseCount == patternCaseCount && ch is not (';' or '&'))
+                    cases[caseCount - 1].PatternStarted = true;
                 frame.CommandStart = frame.CommandStart &&
                     (IsShellKeyword(text, removed, i, "then") || IsShellKeyword(text, removed, i, "do") ||
                      IsShellKeyword(text, removed, i, "else") || IsShellKeyword(text, removed, i, "if") ||
@@ -327,7 +333,10 @@ internal static class SearchMatchClassifier
             }
             else if (ch == ';' && next < text.Length && text[next] is ';' or '&' &&
                 caseCount > frame.CaseBase && cases[caseCount - 1].Phase == ShellCasePhase.Body)
+            {
                 cases[caseCount - 1].Phase = ShellCasePhase.Pattern;
+                cases[caseCount - 1].PatternStarted = false;
+            }
             frame.TokenStart = char.IsWhiteSpace(ch) || ch is ';' or '|' or '&' or '(' or ')' or '<' or '>';
             if (ch is ';' or '|' or '&' or '(' or ')' or '\n')
                 frame.CommandStart = true;
