@@ -2,6 +2,12 @@
 
 > **[日本語版はこちら / Japanese version](#開発者ガイド)**
 
+## Import and diff comparison limits
+
+`import --check` / `--dry-run` and `diff` return exit `3` when comparison exceeds the fixed safety budget: 1,000,000 rows per table per side, or 4 MiB per compared row. JSON errors add `comparison_budget` with `side` (`left`/`right`), `role` (`destination`/`archive` for import, otherwise `left`/`right`), `table`, `kind` (`rows_per_table_per_side`/`row_bytes`), `limit`, `observed`, and `observed_is_lower_bound=true`. The observed value is the count or accumulated row bytes at failure, not a complete table/row size. `table` identifies the primary comparison table; row counts refer to its comparison query, including joined reference candidates and any metadata-category selection, rather than raw stored row counts. Diagnostics contain fixed identities and counters, never row contents or database paths. Import retains `error_code=import_destination_comparison_budget_exceeded` and `root_cause=comparison_budget_exceeded`; diff retains its database error code.
+
+A destination-side failure means comparison against the current destination cannot complete under the existing budget. Shrinking the incoming archive cannot remedy it. A separately prepared smaller destination snapshot can support a reduced-scope comparison, but cannot validate replacement of the current destination. For archive-side file-backed tables, re-export a scope with fewer rows, or exclude the file contributing an oversized row; other constraints may still fail. File filters cannot shrink `codeindex_meta`. `--limit`, `--offset`, and `--max-json-bytes` control output, not comparison safety budgets. Both human and JSON diagnostics explain the exhausted constraint; the destination remains unchanged.
+
 ## Audit baseline contract
 
 Workspace identity comes from the indexed project root, independently of the database location. Saved size/symlink policy participates in scope comparison. For prior paths that no longer have indexed rows, reuse indexing path filters and sparse-checkout evidence: only verified physical deletions within the current indexing scope may resolve. Existing excluded files and unverifiable paths make comparison unknown. Reject contradictory truncation/count metadata; missing coverage fields and empty incomparable comparisons remain partial (exit `11`).
@@ -4359,6 +4365,12 @@ For symmetry, the MCP server no longer echoes raw `Exception.Message` content in
 
 <a id="開発者ガイド"></a>
 # 開発者ガイド
+
+## import と diff の比較上限
+
+`import --check` / `--dry-run` と `diff` は、固定の安全上限（テーブルごと・片側ごとに100万行、比較する1行あたり4 MiB）を超えると終了コード `3` を返します。JSONエラーの `comparison_budget` は、`side`（`left`/`right`）、`role`（importでは `destination`/`archive`、diffでは `left`/`right`）、`table`、`kind`（`rows_per_table_per_side`/`row_bytes`）、`limit`、`observed`、`observed_is_lower_bound=true` を持ちます。観測値は失敗時点の行数または行内の累積バイト数であり、テーブルや行全体の大きさではありません。`table` は比較の主テーブルを示し、行数は参照候補の結合やメタデータ分類の選択を含む比較クエリの行数で、保存された生の行数とは異なります。診断には固定の識別子と数値だけを含め、行の内容やDBパスは含めません。importは `error_code=import_destination_comparison_budget_exceeded` と `root_cause=comparison_budget_exceeded`、diffは既存のDBエラーコードを維持します。
+
+宛先側の上限超過では、現在の宛先との比較は既存上限内で完了できません。入力アーカイブの縮小では解消しません。別途用意した小さな宛先スナップショットで範囲を縮小して比較できますが、現在の宛先の置換を検証したことにはなりません。アーカイブ側のファイルに紐づくテーブルなら、行数を減らした範囲で再エクスポートするか、巨大な行の原因ファイルを除外します。ただし別の制約に到達する可能性があります。ファイルの絞り込みでは `codeindex_meta` を縮小できません。`--limit`、`--offset`、`--max-json-bytes` は出力を制御するもので、比較の安全上限は変更しません。通常表示とJSONの両方で制約を説明し、宛先を変更しません。
 
 ## 監査 baseline 契約
 
