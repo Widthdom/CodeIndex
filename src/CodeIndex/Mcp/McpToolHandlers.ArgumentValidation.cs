@@ -244,7 +244,7 @@ public partial class McpServer
 
     private static bool TryGetExpectedJsonType(string toolName, string argumentName, out string expected)
     {
-        if (argumentName is "names" or "sections")
+        if (argumentName is "names" or "sections" || (toolName == "deps" && argumentName is "resolutionStates" or "referenceKinds"))
         {
             expected = "array";
             return true;

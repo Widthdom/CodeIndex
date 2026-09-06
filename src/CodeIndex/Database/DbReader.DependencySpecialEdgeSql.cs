@@ -36,6 +36,7 @@ public partial class DbReader
                        snc.ref_count,
                        snc.source_lang,
                        'markdown_explicit_link',
+                       snc.evidence_resolution_state,
                        snc.raw_reference_kind,
                        'file'
                 FROM bounded_source_name_counts snc
@@ -68,6 +69,7 @@ public partial class DbReader
                        snc.ref_count,
                        snc.source_lang,
                        'docker_stage_reference',
+                       snc.evidence_resolution_state,
                        snc.raw_reference_kind,
                        'stage'
                 FROM source_name_counts snc
@@ -118,6 +120,7 @@ public partial class DbReader
                        snc.ref_count,
                        snc.source_lang,
                        'explicit_path_reference',
+                       snc.evidence_resolution_state,
                        snc.raw_reference_kind,
                        'file'
                 FROM bounded_source_name_counts snc

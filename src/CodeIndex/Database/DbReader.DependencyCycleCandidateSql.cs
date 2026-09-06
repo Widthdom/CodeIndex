@@ -23,6 +23,7 @@ public partial class DbReader
         {
             AppendCandidateEdgeQuery();
             AppendCandidateScope();
+            _sql.Append(_reader.BuildDependencyEvidenceFilter(_request.EvidenceFilter, "cycleCandidateEvidence"));
             AppendCandidateFilters();
             return _sql.Build();
         }

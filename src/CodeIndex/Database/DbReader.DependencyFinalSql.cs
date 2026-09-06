@@ -47,6 +47,7 @@ public partial class DbReader
                        edges.target_path,
                        edges.source_lang,
                        edges.origin,
+                       edges.evidence_resolution_state,
                        edges.raw_reference_kind,
                        edges.target_kind,
                        SUM(edges.ref_count) AS evidence_reference_count
@@ -58,6 +59,7 @@ public partial class DbReader
                          edges.target_path,
                          edges.source_lang,
                          edges.origin,
+                         edges.evidence_resolution_state,
                          edges.raw_reference_kind,
                          edges.target_kind
             ),
@@ -66,11 +68,12 @@ public partial class DbReader
                        target_path,
                        source_lang || char(31) ||
                        origin || char(31) ||
+                       evidence_resolution_state || char(31) ||
                        raw_reference_kind || char(31) ||
-                       target_kind || char(31) ||
+                       target_kind || char(31) || char(31) ||
                        evidence_reference_count AS evidence_item
                 FROM edge_evidence_rows
-                ORDER BY source_path, target_path, source_lang, origin, raw_reference_kind, target_kind
+                ORDER BY source_path, target_path, source_lang, origin, evidence_resolution_state, raw_reference_kind, target_kind
             ),
             edge_evidence_payloads AS (
                 SELECT source_path,

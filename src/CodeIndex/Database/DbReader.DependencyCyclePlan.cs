@@ -20,7 +20,7 @@ public partial class DbReader
     {
         var expressions = BuildDependencyCycleQueryExpressions(request);
         var candidates = new DependencyCycleCandidateSqlBuilder(this, request, expressions).Build();
-        var evidence = new DependencyCycleEvidenceSqlBuilder(request, expressions).Build();
+        var evidence = new DependencyCycleEvidenceSqlBuilder(this, request, expressions).Build();
         var builder = new DependencySqlFragmentBuilder();
         builder.Append(candidates.Sql);
         builder.Append(evidence.Sql);
@@ -71,9 +71,7 @@ public partial class DbReader
                 ? " WHERE suppression_reason IS NULL"
                 : string.Empty,
             request.Reverse ? "dst" : "src",
-            hasCurrentReferenceIdentityContract && _referenceColumns.Contains("resolution_state")
-                ? "COALESCE(r.resolution_state, 'unavailable')"
-                : "'unavailable'");
+            DependencyResolutionStateSql());
     }
 
     private static void AppendDependencyCycleTerminalParameters(
