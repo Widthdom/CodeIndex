@@ -2,6 +2,8 @@ using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
 using CodeIndex.Cli;
+using CodeIndex.Database;
+using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Tests;
 
@@ -802,29 +804,82 @@ public class GlobalToolLogTests
         Assert.Equal(string.Empty, fullPath);
     }
 
-    [Fact]
-    public void TryStart_WritesInvariantUtcTimestampAndStackTrace()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void TryStart_WritesInvariantUtcTimestampAndStackTrace(bool changingDefaultDatabase)
     {
-        var logRoot = Path.Combine(Path.GetTempPath(), $"cdidx_global_log_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_global_log_5264");
+        var logRoot = Path.Combine(root, "logs");
+        var defaultDataDirectory = Path.Combine(root, "ambient");
+        Directory.CreateDirectory(defaultDataDirectory);
+        var defaultDbPath = Path.Combine(defaultDataDirectory, "codeindex.db");
         var previousCulture = CultureInfo.CurrentCulture;
+        var previousSnapshotHook = DbConnectionFactory.QueryOnlySnapshotCapturedForTesting;
         try
         {
             CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("de-DE");
+            var sourceVariable = CdidxConfigFile.ConfigSourceEnvironmentVariablePrefix + "CDIDX_GLOBAL_TOOL_LOG_DIR";
             using var env = EnvironmentVariableScope.Capture(
                 "CDIDX_FORCE_GLOBAL_TOOL_LOG",
                 "CDIDX_DISABLE_PERSISTENT_LOG",
-                "CDIDX_GLOBAL_TOOL_LOG_DIR");
+                "CDIDX_GLOBAL_TOOL_LOG_DIR",
+                "CDIDX_LOG_FORMAT",
+                CdidxConfigFile.DisableEnvVar,
+                DbPathResolver.DataDirEnvironmentVariable,
+                sourceVariable);
             env.Set("CDIDX_FORCE_GLOBAL_TOOL_LOG", "1");
             env.Set("CDIDX_DISABLE_PERSISTENT_LOG", null);
             env.Set("CDIDX_GLOBAL_TOOL_LOG_DIR", logRoot);
+            env.Set("CDIDX_LOG_FORMAT", "text");
+            env.Set(CdidxConfigFile.DisableEnvVar, "1");
+            env.Set(DbPathResolver.DataDirEnvironmentVariable, defaultDataDirectory);
+            env.Set(sourceVariable, null);
 
+            using var writer = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = defaultDbPath,
+                Pooling = false,
+            }.ConnectionString);
+            writer.Open();
+            using var mutation = writer.CreateCommand();
+            mutation.CommandText = "PRAGMA journal_mode=WAL; CREATE TABLE changes(value INTEGER); INSERT INTO changes VALUES (0);";
+            mutation.ExecuteNonQuery();
+            mutation.CommandText = "UPDATE changes SET value = value + 1;";
+            var snapshotAttempts = 0;
+            DbConnectionFactory.QueryOnlySnapshotCapturedForTesting = changingDefaultDatabase
+                ? () =>
+                {
+                    snapshotAttempts++;
+                    mutation.ExecuteNonQuery();
+                }
+            : null;
+
+            if (changingDefaultDatabase)
+            {
+                var failure = Assert.Throws<CodeIndexException>(() =>
+                {
+                    using var probe = DbConnectionFactory.CreateArtifactPreservingQueryOnlyConnection(
+                        defaultDbPath, pooling: false, out _, out _);
+                });
+                Assert.Equal("query_only_wal_changed", failure.Code);
+                Assert.Equal(3, snapshotAttempts);
+                snapshotAttempts = 0;
+            }
+
+            // Failure-event provenance resolves a DB even though dispatch never runs.
+            // Pin an absent private DB so a changing ambient WAL cannot suppress the report hint.
+            var isolatedDbPath = Path.Combine(root, "isolated", ".cdidx", "codeindex.db");
             var (exitCode, _, stderr) = ConsoleCapture.Capture(() => ProgramRunner.Run(
-                ["search", "Needle"],
+                ["search", "Needle", "--db", isolatedDbPath],
                 appVersion: "test",
                 beforeDispatchForTesting: ThrowForGlobalToolLogTest));
 
             Assert.Equal(CommandExitCodes.UnhandledException, exitCode);
             Assert.Contains("Run `cdidx report`", stderr);
+            Assert.Equal(0, snapshotAttempts);
+            Assert.False(File.Exists(isolatedDbPath));
+            Assert.True(File.Exists(Path.Combine(logRoot, LastFailureEventStore.FileName)));
             var logPath = Assert.Single(Directory.GetFiles(logRoot, "stderr-*.log"));
             Assert.Matches(
                 $@"^stderr-{DateTime.UtcNow.ToString("yyyyMMdd", CultureInfo.InvariantCulture)}-p\d+-\d{{6}}\.log$",
@@ -836,8 +891,9 @@ public class GlobalToolLogTests
         }
         finally
         {
+            DbConnectionFactory.QueryOnlySnapshotCapturedForTesting = previousSnapshotHook;
             CultureInfo.CurrentCulture = previousCulture;
-            TestProjectHelper.DeleteDirectory(logRoot);
+            TestProjectHelper.DeleteDirectory(root);
         }
     }
 
