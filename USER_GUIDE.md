@@ -1641,6 +1641,8 @@ remain the lower-level discovery and explicit orchestration tools.
 
 #### Audit continuation
 
+When a candidate window is exhausted, `source_total_authoritative` and aggregate `count_authoritative` remain false; `source_total_lower_bound` reports the observed count even if deduplication returned fewer rows than the cap.
+
 Candidate exhaustion is tracked before overlapping-chunk deduplication and includes the reader's bounded guard/context-ranking windows. The all-recipe layer retains at most 10,000 returned candidates per child. JSON rows omitted by the 512-query detail cap remain unaccounted and contribute to `query_details.omitted_result_count`; the bounded fallback targets the omitted child. NDJSON still emits attributed rows beyond the detail cap. Byte admission checks complete-query boundaries separately because adding continuation metadata can make a shorter response larger.
 
 `summary.execution_complete` means every selected child query was successfully evaluated (or accounted for on an earlier page). `summary.observation_emission_complete` additionally requires no remaining rows or unverifiable child coverage. `summary.truncated` reports either form of incompleteness. Intentional `--sample` / `--first-per-file` selection is reported separately through `intentional_selection_omitted_count`; it does not itself fail execution. Count/summary modes intentionally suppress rows. Counts describe this page's evaluated candidate windows, not cumulative unique findings; preserve recipe/query attribution when combining pages.
@@ -5505,6 +5507,8 @@ child-query cursor、recipe 固有 aggregation が必要な場合は個別の `c
 `cdidx recipes` と `cdidx batch` は lower-level の discovery / 明示的 orchestration tool として維持されます。
 
 #### Audit の再開
+
+候補枠の上限に達した場合、重複除去後の返却行数が上限より少なくても `source_total_authoritative` と集計の `count_authoritative` は false のままとし、`source_total_lower_bound` に観測済み件数の下限を示します。
 
 候補枠の終了は重複チャンク除去前に追跡し、reader が持つ上限付き guard／context-ranking の候補枠も含めて判定します。全レシピ層は子 query ごとに最大10,000件の返却候補を保持します。512件の query detail 上限で JSON に出なかった行は未処理のまま `query_details.omitted_result_count` に加算し、省略された子 query を上限付き fallback の対象にします。NDJSON は detail 上限を超えた帰属付き行も出力します。再開メタデータを加えると行の少ない応答が大きくなる場合があるため、byte 判定では子 query が完了する境界を別に確認します。
 

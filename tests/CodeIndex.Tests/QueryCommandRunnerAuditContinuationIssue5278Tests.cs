@@ -247,6 +247,13 @@ public sealed class QueryCommandRunnerAuditContinuationIssue5278Tests
         using var result = JsonDocument.Parse(stdout);
         Assert.Equal(CommandExitCodes.PartialResult, exit);
         Assert.Equal(1, result.RootElement.GetProperty("summary").GetProperty("emitted_result_count").GetInt32());
+        var recipe = result.RootElement.GetProperty("recipes")[0];
+        var query = recipe.GetProperty("queries")[0];
+        Assert.False(query.GetProperty("source_total_authoritative").GetBoolean());
+        Assert.True(query.GetProperty("count_approximate").GetBoolean());
+        Assert.Equal(1, query.GetProperty("source_total_lower_bound").GetInt32());
+        Assert.False(recipe.GetProperty("count_authoritative").GetBoolean());
+        Assert.False(result.RootElement.GetProperty("summary").GetProperty("count_authoritative").GetBoolean());
         Assert.True(result.RootElement.GetProperty("recipes")[0].GetProperty("queries")[0].GetProperty("candidate_window_exhausted").GetBoolean());
         Assert.False(result.RootElement.GetProperty("summary").GetProperty("observation_emission_complete").GetBoolean());
         Assert.Equal(1, result.RootElement.GetProperty("continuation").GetProperty("fallback_count").GetInt32());

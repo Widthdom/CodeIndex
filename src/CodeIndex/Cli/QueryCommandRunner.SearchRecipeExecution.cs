@@ -54,6 +54,7 @@ public static partial class QueryCommandRunner
                 : SearchResultRanking.Default,
             candidateWindowObserver: exhausted => candidateWindowExhausted = exhausted);
         var sourceTotalAuthoritative = request.ResultLimit.HasValue
+            && !candidateWindowExhausted
             && IsSearchRecipeSourceTotalAuthoritative(
                 request.Options,
                 request.RecipeQuery,
