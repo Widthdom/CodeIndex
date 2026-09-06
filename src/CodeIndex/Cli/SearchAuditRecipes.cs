@@ -4028,7 +4028,9 @@ internal static class SearchAuditRecipes
         }
 
         var normalized = raw.Trim().ToLowerInvariant();
-        if (StringComparer.Ordinal.Equals(normalized, DefaultAuditScope) || StringComparer.Ordinal.Equals(normalized, AllAuditScope))
+        if (StringComparer.Ordinal.Equals(normalized, DefaultAuditScope)
+            || StringComparer.Ordinal.Equals(normalized, ProductionAndToolingAuditScope)
+            || StringComparer.Ordinal.Equals(normalized, AllAuditScope))
         {
             scope = normalized;
             return true;

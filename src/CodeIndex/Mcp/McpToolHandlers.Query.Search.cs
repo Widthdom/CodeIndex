@@ -291,7 +291,6 @@ public partial class McpServer
                 var exact = hasExactOverride ? userExact : recipeQuery.ExactSubstring;
                 ResolveMcpRecipeQueryScope(
                     recipeQuery,
-                    auditScope,
                     pathPatterns,
                     excludePaths,
                     out var queryPathPatterns,
@@ -424,26 +423,16 @@ public partial class McpServer
 
     private static void ResolveMcpRecipeQueryScope(
         SearchAuditRecipeQuery query,
-        string auditScope,
         List<string>? recipePathPatterns,
         List<string> recipeExcludePaths,
         out List<string>? queryPathPatterns,
         out List<string> queryExcludePaths)
     {
-        var productionAndTooling = string.Equals(
-            auditScope,
-            SearchAuditRecipes.ProductionAndToolingAuditScope,
-            StringComparison.Ordinal);
-        var queryUsesSourceDefaultPaths = productionAndTooling
-            && query.PathPatterns.SequenceEqual(SourceScopeDefaults.IncludePaths, StringComparer.Ordinal);
-        queryPathPatterns = query.PathPatterns.Count > 0 && !queryUsesSourceDefaultPaths
+        queryPathPatterns = query.PathPatterns.Count > 0
             ? [.. query.PathPatterns]
             : recipePathPatterns is null ? null : [.. recipePathPatterns];
         queryExcludePaths = [.. recipeExcludePaths];
-        var queryUsesSourceDefaultExcludes = productionAndTooling
-            && query.ExcludePaths.SequenceEqual(SourceScopeDefaults.ExcludePaths, StringComparer.Ordinal);
-        if (!queryUsesSourceDefaultExcludes)
-            AddDistinct(queryExcludePaths, query.ExcludePaths);
+        AddDistinct(queryExcludePaths, query.ExcludePaths);
     }
 
     private static IReadOnlyList<string>? GetMcpSearchRecipeRequiredPathPatterns(

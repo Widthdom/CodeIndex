@@ -12,7 +12,9 @@ If you change test code, test helpers, test execution flow, or testing conventio
 coverage contract. Keep mixed production/tooling paths, hidden CI, installer
 self-test naming, nested tests/fixtures, docs, recipe definitions, exact and
 truncated unknown-extension inventories, custom include/exclude filters, and
-authoritative versus bounded uncertainty assertions together. Pair it with the
+authoritative versus bounded uncertainty assertions together. Also cover legacy
+generated-filter availability, configured recipe defaults, child-filter
+preservation, and full-versus-pruned NDJSON coverage metadata. Pair it with the
 MCP recipe-scope test and the audit-all deadline test so normal completion and
 unexecuted-query reporting remain aligned on net8.0 and net9.0.
 
@@ -1219,7 +1221,9 @@ Check the following:
 `AuditScopeIssue5281Tests` は production-and-tooling scope の境界と coverage 契約を担当します。
 本番コードと tooling の混在 path、hidden CI、installer の self-test 命名、nested test / fixture、docs、
 recipe definition、完全版と truncated 版の unknown-extension inventory、custom include/exclude filter、
-authoritative count と上限付き uncertainty の assertion をまとめて維持してください。MCP の recipe scope
+authoritative count と上限付き uncertainty の assertion をまとめて維持してください。legacy DB の
+generated filter 可用性、設定 recipe の既定値、child filter の保持、NDJSON coverage metadata の完全版と
+省略版も検証します。MCP の recipe scope
 test と audit-all deadline test も組み合わせ、通常完了と unexecuted-query report を net8.0 / net9.0 で
 一致させます。
 

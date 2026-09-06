@@ -1918,9 +1918,16 @@ public static partial class QueryCommandRunner
                 ["scope"] = BuildSearchRecipeScopeNodeForByteBudget(
                     scope,
                     ndjsonOptions,
-                    omitCoveragePathSamples: options.MaxJsonBytes.HasValue),
+                    omitCoveragePathSamples: false),
             },
             terminalMetadataFallback: new JsonObject
+            {
+                ["scope"] = BuildSearchRecipeScopeNodeForByteBudget(
+                    scope,
+                    ndjsonOptions,
+                    omitCoveragePathSamples: true),
+            },
+            terminalMetadataMinimalFallback: new JsonObject
             {
                 ["scope"] = new JsonObject
                 {
@@ -4868,20 +4875,11 @@ public static partial class QueryCommandRunner
         SearchRecipeScopeJsonResult scope,
         SearchAuditRecipeQuery query)
     {
-        var productionAndTooling = string.Equals(
-            scope.Name,
-            SearchAuditRecipes.ProductionAndToolingAuditScope,
-            StringComparison.Ordinal);
-        var queryUsesSourceDefaultPaths = productionAndTooling
-            && query.PathPatterns.SequenceEqual(SourceScopeDefaults.IncludePaths, StringComparer.Ordinal);
-        var pathPatterns = query.PathPatterns.Count > 0 && !queryUsesSourceDefaultPaths
+        var pathPatterns = query.PathPatterns.Count > 0
             ? [.. query.PathPatterns]
             : new List<string>(scope.PathPatterns);
         var excludePaths = new List<string>(scope.ExcludePaths);
-        var queryUsesSourceDefaultExcludes = productionAndTooling
-            && query.ExcludePaths.SequenceEqual(SourceScopeDefaults.ExcludePaths, StringComparer.Ordinal);
-        if (!queryUsesSourceDefaultExcludes)
-            AddDistinct(excludePaths, query.ExcludePaths);
+        AddDistinct(excludePaths, query.ExcludePaths);
 
         return scope with
         {

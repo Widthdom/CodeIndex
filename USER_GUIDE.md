@@ -1639,7 +1639,9 @@ Recipe scope output includes a bounded `coverage` summary. `included` and
 `excluded` are exact counts and bounded path samples for the common scope before
 any child-query-specific filters narrow the indexed file set.
 `generated_code_policy` states whether the invocation included or excluded
-indexed generated files.
+indexed generated files. On a legacy database without generated-file metadata,
+requested exclusion is reported as `unavailable` instead of claiming that the
+filter ran.
 `unindexed` reuses the persisted unknown-extension inventory instead of starting
 a second filesystem scan; when that inventory was truncated before custom scope
 filters, the response reports lower/upper bounds, non-authoritative omitted-path
@@ -1926,7 +1928,8 @@ recipe definitions. Set `CDIDX_SEARCH_RECIPE_PATHS` to one or more JSON files
 separated by the platform path separator to add configured recipe sources; each
 file may be a recipe array or `{ "recipes": [...] }`, and invalid sources are
 reported as bounded `recipe_source_diagnostics`. External recipes may declare
-recipe-level `default_scope`, `default_path_patterns`, and
+recipe-level `default_scope` as `source`, `production-and-tooling`, or `all`, plus
+`default_path_patterns` and
 `default_exclude_paths`; each query may declare `severity`, `path_patterns`, and
 `exclude_paths` to narrow a query independently of the recipe default scope.
 External queries may also declare `aliases` and `deprecated_aliases`; both
@@ -5536,6 +5539,8 @@ directory 名を tooling の一般規則として仮定しません。
 Recipe の scope 出力には上限付き `coverage` summary が含まれます。`included` と `excluded` は、
 child query 固有 filter でさらに絞り込む前の共通 scope に対する厳密な件数と上限付き path sample です。
 `generated_code_policy` は、その実行が indexed generated file を含めたか除外したかを示します。
+generated-file metadata がない legacy database で除外を要求した場合は、filter を適用したと主張せず
+`unavailable` と報告します。
 `unindexed` は2回目の filesystem
 scan を始めず、保存済み unknown-extension inventory を再利用します。custom scope filter の適用前に
 inventory が切り詰められていた場合は lower/upper bound、省略 path 件数が非 authoritative であること、
@@ -5784,7 +5789,8 @@ scope を適用します。docs、tests、changelog、recipe definitions を意�
 separator 区切りの JSON file を指定すると、設定済み recipe source を追加できます。各 file は
 recipe array または `{ "recipes": [...] }` を受け付け、不正な source は bounded な
 `recipe_source_diagnostics` として報告されます。外部 recipe は recipe-level の
-`default_scope`、`default_path_patterns`、`default_exclude_paths` を宣言できます。
+`default_scope` に `source`、`production-and-tooling`、`all` のいずれかを指定でき、
+`default_path_patterns` と `default_exclude_paths` も宣言できます。
 各 query は `severity`、`path_patterns`、`exclude_paths` を宣言でき、recipe の既定 scope
 とは独立して query ごとの対象を狭められます。
 外部 query は `aliases` と `deprecated_aliases` も宣言できます。どちらも canonical query 名へ

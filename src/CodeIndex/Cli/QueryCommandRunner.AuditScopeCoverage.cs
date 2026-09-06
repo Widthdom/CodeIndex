@@ -100,7 +100,11 @@ public static partial class QueryCommandRunner
         var coverage = scope.Coverage;
         if (coverage is null || coverage.FileCoverageInitialized)
             return;
-        coverage.GeneratedCodePolicy = includeGenerated ? "include" : "exclude";
+        coverage.GeneratedCodePolicy = includeGenerated
+            ? "include"
+            : reader.GeneratedFileFilterAvailable
+                ? "exclude"
+                : "unavailable";
 
         if (cache?.TryGet(scope, lang, since, includeGenerated, out var cached) == true)
         {

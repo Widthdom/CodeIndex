@@ -94,6 +94,17 @@ public sealed class AuditScopeIssue5281Tests
             0,
             terminal.RootElement.GetProperty("scope").GetProperty("coverage").GetProperty("unexecuted").GetProperty("count").GetInt32());
 
+        var boundedNdjson = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["--recipe", "risky-code/process-start-info", "--db", dbPath, "--json=ndjson", "--limit", "1", "--audit-scope", "production-and-tooling", "--max-json-bytes", "1000000"],
+            JsonOptions));
+        Assert.Equal(CommandExitCodes.Success, boundedNdjson.Result);
+        using var boundedTerminal = JsonDocument.Parse(boundedNdjson.Stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries)[^1]);
+        var boundedCoverage = boundedTerminal.RootElement.GetProperty("scope").GetProperty("coverage");
+        Assert.Contains(
+            boundedCoverage.GetProperty("included").GetProperty("paths").EnumerateArray(),
+            path => path.GetString() == ".agent_harness/audit.py");
+        Assert.False(boundedCoverage.GetProperty("included").TryGetProperty("path_sample_omitted_reason", out _));
+
         var countSummary = CaptureConsole(() => QueryCommandRunner.RunSearch(
             ["--recipe", "risky-code/process-start-info", "--db", dbPath, "--json", "--count", "--summary-only", "--audit-scope", "production-and-tooling"],
             JsonOptions));
@@ -171,6 +182,76 @@ public sealed class AuditScopeIssue5281Tests
         Assert.Equal(
             "unknown_extension_inventory_has_no_language_classification_for_lang_filter",
             languageUnindexed.GetProperty("uncertainty_reason").GetString());
+
+        using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+        {
+            using var command = db.Connection.CreateCommand();
+            command.CommandText = """
+                DROP INDEX idx_files_generated;
+                ALTER TABLE files DROP COLUMN generated;
+                """;
+            command.ExecuteNonQuery();
+        }
+
+        var legacy = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["--recipe", "risky-code/process-start-info", "--db", dbPath, "--json", "--limit", "20", "--audit-scope", "production-and-tooling"],
+            JsonOptions));
+        Assert.Equal(CommandExitCodes.Success, legacy.Result);
+        using var legacyDocument = JsonDocument.Parse(legacy.Stdout);
+        Assert.Equal(
+            "unavailable",
+            legacyDocument.RootElement
+                .GetProperty("scope")
+                .GetProperty("coverage")
+                .GetProperty("generated_code_policy")
+                .GetString());
+    }
+
+    [Fact]
+    public void ExternalToolingDefaultPreservesChildPathAndExcludeFilters()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_external_audit_scope_5281");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        var recipePath = Path.Combine(project.Root, "external-recipes.json");
+        File.WriteAllText(
+            recipePath,
+            """
+            [
+              {
+                "name": "tooling-default",
+                "description": "Exercise the configured production-and-tooling default.",
+                "default_scope": "production-and-tooling",
+                "queries": [
+                  {
+                    "name": "source-child",
+                    "query": "BoundaryNeedle",
+                    "description": "Keep this child query source-scoped.",
+                    "path_patterns": ["src/**"],
+                    "exclude_paths": ["src/private/**"]
+                  }
+                ]
+              }
+            ]
+            """);
+        TestProjectHelper.InsertIndexedFile(dbPath, "src/public.cs", "csharp", "BoundaryNeedle");
+        TestProjectHelper.InsertIndexedFile(dbPath, "src/private/secret.cs", "csharp", "BoundaryNeedle");
+        TestProjectHelper.InsertIndexedFile(dbPath, "tools/release.sh", "shell", "BoundaryNeedle");
+
+        using var env = EnvironmentVariableScope.Capture(SearchAuditRecipes.RecipePathsEnvironmentVariable);
+        env.Set(SearchAuditRecipes.RecipePathsEnvironmentVariable, recipePath);
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["--recipe", "tooling-default", "--db", dbPath, "--json", "--limit", "20"],
+            JsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = JsonDocument.Parse(stdout);
+        Assert.Equal("production-and-tooling", document.RootElement.GetProperty("scope").GetProperty("name").GetString());
+        var query = Assert.Single(document.RootElement.GetProperty("queries").EnumerateArray());
+        Assert.Contains(query.GetProperty("path_patterns").EnumerateArray(), path => path.GetString() == "src/**");
+        Assert.Contains(query.GetProperty("exclude_paths").EnumerateArray(), path => path.GetString() == "src/private/**");
+        var result = Assert.Single(query.GetProperty("results").EnumerateArray());
+        Assert.Equal("src/public.cs", result.GetProperty("path").GetString());
     }
 
     private static void SetUnknownExtensionInventory(

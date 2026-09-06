@@ -54,7 +54,8 @@ public static partial class QueryCommandRunner
         int? limitOmittedCount = null,
         List<SearchRowSelectorJsonResult>? selectors = null,
         JsonObject? terminalMetadata = null,
-        JsonObject? terminalMetadataFallback = null)
+        JsonObject? terminalMetadataFallback = null,
+        JsonObject? terminalMetadataMinimalFallback = null)
     {
         if (options.ResultsOnly)
             return WriteResultOnlyNdjson(records, options, jsonOptions, commandName);
@@ -80,7 +81,7 @@ public static partial class QueryCommandRunner
             int omittedRecordCount,
             string? recoveryGuidance,
             bool includeSelectionAccounting,
-            bool useFallbackMetadata = false)
+            int metadataFallbackLevel = 0)
         {
             var hasMore = truncated || interrupted;
             if (hasMore && totalCountAuthoritative)
@@ -121,9 +122,12 @@ public static partial class QueryCommandRunner
                 nextCursor: nextCursor,
                 nextCursorUnavailableReason: unavailableReason,
                 hasMore: hasMore);
-            var selectedTerminalMetadata = useFallbackMetadata
-                ? terminalMetadataFallback ?? terminalMetadata
-                : terminalMetadata;
+            var selectedTerminalMetadata = metadataFallbackLevel switch
+            {
+                >= 2 => terminalMetadataMinimalFallback ?? terminalMetadataFallback ?? terminalMetadata,
+                1 => terminalMetadataFallback ?? terminalMetadata,
+                _ => terminalMetadata,
+            };
             if (selectedTerminalMetadata is null)
                 return terminalLine;
 
@@ -178,7 +182,7 @@ public static partial class QueryCommandRunner
                         Math.Max(0, records.Count - candidate),
                         candidateRecoveryGuidance,
                         includeSelectionAccounting: true,
-                        useFallbackMetadata: true);
+                        metadataFallbackLevel: 1);
                 }
                 if (candidatePrefixBytes + JsonLineBytes(candidateTerminal) > options.MaxJsonBytes.Value
                     && sourceTotal.HasValue
@@ -193,7 +197,36 @@ public static partial class QueryCommandRunner
                         Math.Max(0, records.Count - candidate),
                         candidateRecoveryGuidance,
                         includeSelectionAccounting: false,
-                        useFallbackMetadata: true);
+                        metadataFallbackLevel: 1);
+                }
+                if (candidatePrefixBytes + JsonLineBytes(candidateTerminal) > options.MaxJsonBytes.Value
+                    && terminalMetadataMinimalFallback != null)
+                {
+                    candidateTerminal = BuildTerminal(
+                        candidateReturnedCount,
+                        candidateInterrupted,
+                        limitTruncated || candidateInterrupted,
+                        candidateFirstOmittedBytes,
+                        Math.Max(0, totalCount - candidateReturnedCount),
+                        Math.Max(0, records.Count - candidate),
+                        candidateRecoveryGuidance,
+                        includeSelectionAccounting: true,
+                        metadataFallbackLevel: 2);
+                }
+                if (candidatePrefixBytes + JsonLineBytes(candidateTerminal) > options.MaxJsonBytes.Value
+                    && sourceTotal.HasValue
+                    && terminalMetadataMinimalFallback != null)
+                {
+                    candidateTerminal = BuildTerminal(
+                        candidateReturnedCount,
+                        candidateInterrupted,
+                        limitTruncated || candidateInterrupted,
+                        candidateFirstOmittedBytes,
+                        Math.Max(0, totalCount - candidateReturnedCount),
+                        Math.Max(0, records.Count - candidate),
+                        candidateRecoveryGuidance,
+                        includeSelectionAccounting: false,
+                        metadataFallbackLevel: 2);
                 }
                 if (candidatePrefixBytes + JsonLineBytes(candidateTerminal) > options.MaxJsonBytes.Value)
                     continue;
@@ -239,7 +272,21 @@ public static partial class QueryCommandRunner
                         records.Count,
                         "Increase --max-json-bytes so the bounded NDJSON terminal record fits before streaming begins.",
                         includeSelectionAccounting: false,
-                        useFallbackMetadata: true);
+                        metadataFallbackLevel: 1);
+                }
+                if (JsonLineBytes(requiredTerminal) > options.MaxJsonBytes.Value
+                    && terminalMetadataMinimalFallback != null)
+                {
+                    requiredTerminal = BuildTerminal(
+                        0,
+                        records.Count > 0,
+                        limitTruncated || records.Count > 0,
+                        records.Count > 0 ? JsonLineBytes(records[0].Line) : null,
+                        totalCount,
+                        records.Count,
+                        "Increase --max-json-bytes so the bounded NDJSON terminal record fits before streaming begins.",
+                        includeSelectionAccounting: false,
+                        metadataFallbackLevel: 2);
                 }
                 var requiredTerminalBytes = JsonLineBytes(requiredTerminal);
                 if (requiredTerminalBytes <= options.MaxJsonBytes.Value)

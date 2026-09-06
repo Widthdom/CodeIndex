@@ -989,14 +989,17 @@ public partial class McpServerTests
                 {
                   "name": "local-audit",
                   "description": "Local audit recipe",
+                  "default_scope": "production-and-tooling",
                   "queries": [
                     {
                       "name": "todo-comments",
-                      "query": "TODO",
+                      "query": "McpBoundaryNeedle",
                       "description": "Find local TODO markers",
                       "recommendedLabels": ["audit"],
                       "falsePositiveGuidance": "Ignore deliberate test fixtures.",
-                      "exactSubstring": true
+                      "exactSubstring": true,
+                      "pathPatterns": ["src/**"],
+                      "excludePaths": ["src/private/**"]
                     }
                   ]
                 }
@@ -1005,6 +1008,9 @@ public partial class McpServerTests
             """);
         using var env = EnvironmentVariableScope.Capture("CDIDX_SEARCH_RECIPE_PATHS");
         env.Set("CDIDX_SEARCH_RECIPE_PATHS", recipePath);
+        InsertIndexedFile("src/mcp-boundary.cs", "csharp", "McpBoundaryNeedle\n");
+        InsertIndexedFile("src/private/mcp-boundary.cs", "csharp", "McpBoundaryNeedle\n");
+        InsertIndexedFile("tools/mcp-boundary.sh", "shell", "McpBoundaryNeedle\n");
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"listRecipes":true}}}""")!;
         var response = _server.HandleMessage(request)!;
 
@@ -1013,7 +1019,18 @@ public partial class McpServerTests
         var recipes = structured["recipes"]!.AsArray();
         var local = recipes.Single(recipe => recipe!["name"]!.GetValue<string>() == "local-audit")!;
         Assert.Equal("todo-comments", local["queries"]![0]!["name"]!.GetValue<string>());
+        Assert.Equal("production-and-tooling", local["default_scope"]!.GetValue<string>());
         Assert.Null(structured["recipe_source_diagnostics"]);
+
+        var runRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"search","arguments":{"recipe":"local-audit","limit":10}}}""")!;
+        var runResponse = _server.HandleMessage(runRequest)!;
+
+        Assert.Null(runResponse["error"]);
+        var runStructured = runResponse["result"]!["structuredContent"]!;
+        Assert.Equal("production-and-tooling", runStructured["audit_scope"]!.GetValue<string>());
+        var query = Assert.Single(runStructured["queries"]!.AsArray())!;
+        var result = Assert.Single(query["results"]!.AsArray())!;
+        Assert.Equal("src/mcp-boundary.cs", result["path"]!.GetValue<string>());
     }
 
     [Fact]
