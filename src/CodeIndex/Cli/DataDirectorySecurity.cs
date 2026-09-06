@@ -249,19 +249,30 @@ internal static class DataDirectorySecurity
 
         var ioPath = LongPath.EnsureWindowsPrefix(path);
         using var stream = File.Open(ioPath, FileMode.Open, FileAccess.Read, share);
+        return ReadBytesWithinLimit(stream, maxBytes);
+    }
+
+    internal static byte[]? ReadBytesWithinLimit(Stream stream, int maxBytes, CancellationToken cancellationToken = default)
+    {
+        if (maxBytes <= 0)
+            throw new ArgumentOutOfRangeException(nameof(maxBytes), maxBytes, "Maximum byte count must be positive.");
+
         using var output = new MemoryStream(capacity: Math.Min(maxBytes, 8192));
         var buffer = new byte[Math.Min(maxBytes, 8192)];
         var total = 0;
         while (true)
         {
-            var read = stream.Read(buffer, 0, buffer.Length);
+            cancellationToken.ThrowIfCancellationRequested();
+            // Consume at most the budget plus one overflow-detection byte.
+            var read = stream.Read(buffer, 0, (int)Math.Min(buffer.Length, (long)maxBytes - total + 1));
+            cancellationToken.ThrowIfCancellationRequested();
             if (read == 0)
                 break;
 
-            total += read;
-            if (total > maxBytes)
+            if (read > maxBytes - total)
                 return null;
 
+            total += read;
             output.Write(buffer, 0, read);
         }
 
@@ -271,6 +282,12 @@ internal static class DataDirectorySecurity
     public static string? ReadTextWithinLimit(string path, int maxBytes, FileShare share = FileShare.Read)
     {
         var bytes = ReadBytesWithinLimit(path, maxBytes, share);
+        return bytes is null ? null : DecodeText(bytes);
+    }
+
+    internal static string? ReadTextWithinLimit(Stream stream, int maxBytes, CancellationToken cancellationToken = default)
+    {
+        var bytes = ReadBytesWithinLimit(stream, maxBytes, cancellationToken);
         return bytes is null ? null : DecodeText(bytes);
     }
 
