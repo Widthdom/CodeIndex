@@ -233,7 +233,8 @@ public partial class DbReader
         CancellationToken cancellationToken = default,
         IReadOnlyList<string>? dependencySymbols = null,
         IReadOnlyList<string>? dependencySymbolFamilies = null,
-        bool suppressDependencyNoise = false)
+        bool suppressDependencyNoise = false,
+        DependencyEvidenceFilter? evidenceFilter = null)
     {
         lang = NormalizeQueryLanguage(lang);
         if (!_hasReferencesTable) return new List<FileDependencyResult>();
@@ -248,7 +249,8 @@ public partial class DbReader
             reverse,
             dependencySymbols,
             dependencySymbolFamilies,
-            suppressDependencyNoise);
+            suppressDependencyNoise,
+            evidenceFilter);
         return ExecuteDependencyQuery(BuildDependencyQueryPlan(request), cancellationToken);
     }
 

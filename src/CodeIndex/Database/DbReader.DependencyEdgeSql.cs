@@ -43,6 +43,7 @@ public partial class DbReader
                                THEN 'markdown_heading_name_match'
                            ELSE 'symbol_name_match'
                        END AS origin,
+                       snc.evidence_resolution_state,
                        snc.raw_reference_kind,
                        CASE WHEN tf.has_heading_kind = 1 THEN 'heading' ELSE 'symbol' END AS target_kind
                 FROM bounded_source_name_counts snc

@@ -306,6 +306,8 @@ public static partial class QueryCommandRunner
                 query["offset"] = options.DependencyCycleCursor.Value.Offset;
             }
         }
+        if (options.DependencyEvidenceFilter.IsActive)
+            query["dependency_evidence_filter"] = BuildDependencyEvidenceFilterJson(options.DependencyEvidenceFilter);
         if (options.DependencySuppressNoise)
             query["suppress_noise"] = true;
         if (options.DependencySymbols.Count > 0)

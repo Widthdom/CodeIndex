@@ -4,14 +4,17 @@ public partial class DbReader
 {
     private sealed class DependencyCycleEvidenceSqlBuilder
     {
+        private readonly DbReader _reader;
         private readonly DependencyQueryRequest _request;
         private readonly DependencyCycleQueryExpressions _expressions;
         private readonly DependencySqlFragmentBuilder _sql = new();
 
         internal DependencyCycleEvidenceSqlBuilder(
+            DbReader reader,
             DependencyQueryRequest request,
             DependencyCycleQueryExpressions expressions)
         {
+            _reader = reader;
             _request = request;
             _expressions = expressions;
         }
@@ -59,6 +62,7 @@ public partial class DbReader
                  AND dst.path = candidate_edges.target_path
                 WHERE src.path != dst.path
                   AND src.lang = dst.lang");
+            _sql.Append(_reader.BuildDependencyEvidenceFilter(_request.EvidenceFilter, "cycleAggregateEvidence"));
             _sql.Append(BuildDependencySymbolFilter(
                 "r.symbol_name",
                 _request.DependencySymbols,

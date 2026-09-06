@@ -15,7 +15,8 @@ public partial class DbReader
         bool Reverse,
         IReadOnlyList<string>? DependencySymbols,
         IReadOnlyList<string>? DependencySymbolFamilies,
-        bool SuppressDependencyNoise);
+        bool SuppressDependencyNoise,
+        DependencyEvidenceFilter? EvidenceFilter = null);
 
     private sealed record DependencyQueryPlan(
         DependencyQueryRequest Request,

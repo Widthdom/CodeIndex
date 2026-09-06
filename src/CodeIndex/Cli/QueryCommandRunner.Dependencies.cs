@@ -1702,6 +1702,11 @@ public static partial class QueryCommandRunner
         AppendCursorFingerprintValue(builder, "families", string.Join('\u001f', options.DependencySymbolFamilies));
         AppendCursorFingerprintValue(builder, "suppressNoise", options.DependencySuppressNoise ? "1" : "0");
         AppendCursorFingerprintValue(builder, "graphBudget", options.DependencyCycleGraphBudget.ToString(CultureInfo.InvariantCulture));
+        if (options.DependencyEvidenceFilter.IsActive)
+        {
+            AppendCursorFingerprintValue(builder, "resolutionStates", string.Join(',', options.DependencyEvidenceFilter.Resolutions));
+            AppendCursorFingerprintValue(builder, "referenceKinds", string.Join(',', options.DependencyEvidenceFilter.Kinds));
+        }
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(builder.ToString()));
         return Convert.ToHexString(hash.AsSpan(0, 16)).ToLowerInvariant();
     }
@@ -2193,7 +2198,8 @@ public static partial class QueryCommandRunner
             cancellationToken,
             options.DependencySymbols,
             options.DependencySymbolFamilies,
-            options.DependencySuppressNoise);
+            options.DependencySuppressNoise,
+            options.DependencyEvidenceFilter);
         cancellationToken.ThrowIfCancellationRequested();
         if (options.WorkspaceDbPaths.Count == 0)
             return results;
@@ -2216,7 +2222,8 @@ public static partial class QueryCommandRunner
                 cancellationToken,
                 options.DependencySymbols,
                 options.DependencySymbolFamilies,
-                options.DependencySuppressNoise);
+                options.DependencySuppressNoise,
+                options.DependencyEvidenceFilter);
             TagFileDependencyResults(memberResults, normalizedDbPath);
             results.AddRange(memberResults);
         }
@@ -2261,7 +2268,8 @@ public static partial class QueryCommandRunner
             cancellationToken,
             options.DependencySymbols,
             options.DependencySymbolFamilies,
-            options.DependencySuppressNoise);
+            options.DependencySuppressNoise,
+            options.DependencyEvidenceFilter);
         candidateRowCount += primaryCandidateRows;
         if (options.WorkspaceDbPaths.Count == 0)
         {
@@ -2314,7 +2322,8 @@ public static partial class QueryCommandRunner
                 cancellationToken,
                 options.DependencySymbols,
                 options.DependencySymbolFamilies,
-                options.DependencySuppressNoise);
+                options.DependencySuppressNoise,
+                options.DependencyEvidenceFilter);
             TagFileDependencyResults(memberResults, normalizedDbPath);
             if (options.DependencySuppressNoise)
             {
@@ -2548,6 +2557,7 @@ public static partial class QueryCommandRunner
                            THEN 'markdown_heading_name_match'
                        ELSE 'cross_database_symbol_name_match'
                    END AS origin,
+                   {sourceReader.DependencyResolutionStateSql()} AS evidence_resolution_state,
                    r.reference_kind AS raw_reference_kind,
                    CASE WHEN s.kind = 'heading' THEN 'heading' ELSE 'symbol' END AS target_kind
             FROM symbol_references r
@@ -2587,6 +2597,7 @@ public static partial class QueryCommandRunner
             parameterPrefix: "crossDependencyNoise",
             filterScopeSql: $"NOT {crossMarkdownNoiseEvidenceSql}");
         cmd.CommandText = crossDatabaseSql;
+        sourceReader.AppendDependencyEvidenceFilter(cmd, options.DependencyEvidenceFilter);
         cmd.CommandText += @"
             ),
             edge_totals AS (
@@ -2602,6 +2613,7 @@ public static partial class QueryCommandRunner
                        target_path,
                        source_lang,
                        origin,
+                       evidence_resolution_state,
                        raw_reference_kind,
                        target_kind,
                        COUNT(*) AS evidence_reference_count
@@ -2610,6 +2622,7 @@ public static partial class QueryCommandRunner
                          target_path,
                          source_lang,
                          origin,
+                         evidence_resolution_state,
                          raw_reference_kind,
                          target_kind
             ),
@@ -2618,11 +2631,12 @@ public static partial class QueryCommandRunner
                        target_path,
                        source_lang || char(31) ||
                        origin || char(31) ||
+                       evidence_resolution_state || char(31) ||
                        raw_reference_kind || char(31) ||
-                       target_kind || char(31) ||
+                       target_kind || char(31) || char(31) ||
                        evidence_reference_count AS evidence_item
                 FROM edge_evidence_rows
-                ORDER BY source_path, target_path, source_lang, origin, raw_reference_kind, target_kind
+                ORDER BY source_path, target_path, source_lang, origin, evidence_resolution_state, raw_reference_kind, target_kind
             ),
             edge_evidence_payloads AS (
                 SELECT source_path,

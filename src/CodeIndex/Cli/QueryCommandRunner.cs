@@ -218,6 +218,7 @@ public sealed class QueryCommandOptions
     public bool DependencyCycles { get; init; }
     public int DependencyCycleGraphBudget { get; init; } = QueryCommandRunner.DefaultDependencyCycleGraphBudget;
     public bool IncludeAllDependencyCycleNodes { get; init; }
+    public DependencyEvidenceFilter DependencyEvidenceFilter { get; init; } = DependencyEvidenceFilter.Empty;
     public bool DependencySuppressNoise { get; init; }
     public List<string> DependencySymbols { get; init; } = [];
     public List<string> DependencySymbolFamilies { get; init; } = [];

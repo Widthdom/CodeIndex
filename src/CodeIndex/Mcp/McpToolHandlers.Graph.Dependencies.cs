@@ -50,6 +50,18 @@ public partial class McpServer
         if (cursorValue != null && !QueryCommandRunner.TryParseDependencyCycleCursor(cursorValue, out _))
             return CreateToolErrorResponse(id, "'cursor' must be an opaque dependency-cycle next_cursor returned by deps.");
 
+        DependencyEvidenceFilter evidenceFilter;
+        try
+        {
+            evidenceFilter = DependencyEvidenceFilter.Create(
+                ReadDependencyEvidenceValues(args, "resolutionStates"),
+                ReadDependencyEvidenceValues(args, "referenceKinds"));
+        }
+        catch (ArgumentException ex)
+        {
+            return CreateToolErrorResponse(id, DiagnosticSanitizer.ForMessage(ex.Message));
+        }
+
         var cursorOptions = new QueryCommandOptions
         {
             Lang = lang,
@@ -58,6 +70,7 @@ public partial class McpServer
             ExcludeTests = excludeTests,
             IncludeGenerated = includeGenerated,
             DependencyCycleGraphBudget = graphBudget,
+            DependencyEvidenceFilter = evidenceFilter,
             DependencySuppressNoise = suppressNoise,
             IncludeAllDependencyCycleNodes = includeAllCycleNodes,
         };
@@ -82,8 +95,9 @@ public partial class McpServer
                     excludeTests,
                     reverse,
                     cancellationToken: reader.Cancellation,
-                    suppressDependencyNoise: suppressNoise)
-                : reader.GetFileDependencies(limit, lang, pathPatterns, excludePaths, excludeTests, reverse);
+                    suppressDependencyNoise: suppressNoise,
+                    evidenceFilter: evidenceFilter)
+                : reader.GetFileDependencies(limit, lang, pathPatterns, excludePaths, excludeTests, reverse, evidenceFilter: evidenceFilter);
             if (cyclesOnly && suppressNoise)
                 cycleCandidateRowCount = results.Count(QueryCommandRunner.HasRetainedDependencyEvidence);
             var rawCycleCandidates = cyclesOnly
@@ -161,6 +175,11 @@ public partial class McpServer
                 if (summaryOnly)
                     payload["summary_only"] = true;
             }
+            if (evidenceFilter.IsActive)
+                payload["query_context"] = new JsonObject
+                {
+                    ["dependency_evidence_filter"] = QueryCommandRunner.BuildDependencyEvidenceFilterJson(evidenceFilter),
+                };
             payload["format"] = format;
             payload["includeGenerated"] = includeGenerated;
             payload["generated_code_filter_supported"] = true;
@@ -181,6 +200,37 @@ public partial class McpServer
             adjustments.ApplyTo(payload);
             return CreateToolResult(id, summary, payload);
         });
+    }
+
+    private static JsonObject DependencyEvidenceValuesSchema(IReadOnlyList<string> domain, string description)
+        => new()
+        {
+            ["type"] = "array",
+            ["minItems"] = 1,
+            ["maxItems"] = DependencyEvidenceFilter.MaxValues,
+            ["items"] = new JsonObject
+            {
+                ["type"] = "string",
+                ["maxLength"] = DependencyEvidenceFilter.MaxValueCharacters,
+                ["enum"] = new JsonArray(domain.Select(static value => (JsonNode?)JsonValue.Create(value)).ToArray()),
+            },
+            ["description"] = description,
+        };
+
+    private static IReadOnlyList<string>? ReadDependencyEvidenceValues(JsonNode? args, string name)
+    {
+        if (args?[name] == null)
+            return null;
+        if (args[name] is not JsonArray values || values.Count is < 1 or > DependencyEvidenceFilter.MaxValues)
+            throw new ArgumentException($"'{name}' requires an array of 1–{DependencyEvidenceFilter.MaxValues} strings.");
+        var result = new List<string>(values.Count);
+        foreach (var value in values)
+        {
+            if (value is not JsonValue scalar || !scalar.TryGetValue<string>(out var text))
+                throw new ArgumentException($"'{name}' requires string values.");
+            result.Add(text);
+        }
+        return result;
     }
 
     private static JsonObject BuildJsonGraphPayload(

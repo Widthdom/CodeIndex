@@ -15,6 +15,7 @@ public partial class DbReader
                        COUNT(*) AS ref_count,
                        resolved.source_lang,
                        'resolved_identity' AS origin,
+                       resolved.evidence_resolution_state,
                        resolved.raw_reference_kind,
                        resolved.target_kind
                 FROM (
@@ -23,6 +24,7 @@ public partial class DbReader
                            lrp.symbol_name,
                            lrp.reference_id,
                            lrp.source_lang,
+                           lrp.evidence_resolution_state,
                            lrp.raw_reference_kind,
                            target.kind AS target_kind
                     FROM logical_references_primary lrp
@@ -47,7 +49,7 @@ public partial class DbReader
                      ORDER BY lrp.source_path, lrp.symbol_name, lrp.reference_id" + limitSql + @"
                 ) resolved
                 GROUP BY resolved.source_path, resolved.target_path, resolved.symbol_name,
-                         resolved.source_lang, resolved.raw_reference_kind, resolved.target_kind
+                         resolved.source_lang, resolved.evidence_resolution_state, resolved.raw_reference_kind, resolved.target_kind
                 UNION ALL
                 ");
         return builder.Build();
