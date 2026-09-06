@@ -4868,6 +4868,7 @@ public static partial class QueryCommandRunner
             options.ShowExcluded ? BuildSearchRecipeExcludedDiagnostics(recipe, options, scopeName, excludeTests) : null)
         {
             Coverage = CreateSearchRecipeCoverage(selectedQueries ?? recipe.Queries),
+            RecipeSourcePath = recipe.SourcePath,
         };
     }
 

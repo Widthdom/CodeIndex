@@ -279,11 +279,13 @@ public partial class McpServer
             null)
         {
             Coverage = QueryCommandRunner.CreateSearchRecipeCoverage(recipe.Queries),
+            RecipeSourcePath = recipe.SourcePath,
         };
 
         return WithDbReader(id, args, reader =>
         {
             QueryCommandRunner.EnsureSearchRecipeCoverage(reader, scope, lang, since, includeGenerated);
+            AddDistinct(excludePaths, scope.ExcludePaths);
             var queryResults = new JsonArray();
             var total = 0;
             foreach (var recipeQuery in recipe.Queries)

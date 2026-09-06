@@ -983,7 +983,7 @@ public partial class McpServerTests
     public void ToolsCall_Search_ListRecipesIncludesConfiguredSources_Issue3545()
     {
         var recipePath = Path.Combine(_projectRoot, "search-recipes.json");
-        File.WriteAllText(recipePath, """
+        const string recipeJson = """
             {
               "recipes": [
                 {
@@ -1000,17 +1000,24 @@ public partial class McpServerTests
                       "exactSubstring": true,
                       "pathPatterns": ["src/**"],
                       "excludePaths": ["src/private/**"]
+                    },
+                    {
+                      "name": "definition-only",
+                      "query": "McpRecipeDefinitionNeedle5281",
+                      "description": "Do not match this loaded definition."
                     }
                   ]
                 }
               ]
             }
-            """);
+            """;
+        File.WriteAllText(recipePath, recipeJson);
         using var env = EnvironmentVariableScope.Capture("CDIDX_SEARCH_RECIPE_PATHS");
         env.Set("CDIDX_SEARCH_RECIPE_PATHS", recipePath);
         InsertIndexedFile("src/mcp-boundary.cs", "csharp", "McpBoundaryNeedle\n");
         InsertIndexedFile("src/private/mcp-boundary.cs", "csharp", "McpBoundaryNeedle\n");
         InsertIndexedFile("tools/mcp-boundary.sh", "shell", "McpBoundaryNeedle\n");
+        InsertIndexedFile("search-recipes.json", "json", recipeJson);
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"listRecipes":true}}}""")!;
         var response = _server.HandleMessage(request)!;
 
@@ -1028,9 +1035,14 @@ public partial class McpServerTests
         Assert.Null(runResponse["error"]);
         var runStructured = runResponse["result"]!["structuredContent"]!;
         Assert.Equal("production-and-tooling", runStructured["audit_scope"]!.GetValue<string>());
-        var query = Assert.Single(runStructured["queries"]!.AsArray())!;
+        Assert.Contains(
+            runStructured["scope"]!["exclude_paths"]!.AsArray(),
+            path => path!.GetValue<string>() == "search-recipes.json");
+        var queries = runStructured["queries"]!.AsArray();
+        var query = queries.Single(item => item!["name"]!.GetValue<string>() == "todo-comments")!;
         var result = Assert.Single(query["results"]!.AsArray())!;
         Assert.Equal("src/mcp-boundary.cs", result["path"]!.GetValue<string>());
+        Assert.Empty(queries.Single(item => item!["name"]!.GetValue<string>() == "definition-only")!["results"]!.AsArray());
     }
 
     [Fact]

@@ -1630,14 +1630,19 @@ code plus repository automation such as hidden CI configuration, installer
 modules, release/build scripts, and tooling stored in custom directories. This
 scope starts from all indexed paths and applies format/conventional-directory
 documentation exclusions, shared test classification, conventional fixture
-exclusions, and the built-in recipe-definition exclusion; it does not assume
-that tooling lives under this repository's directory names. Explicit
+exclusions, and built-in plus loaded external recipe-definition exclusions; it
+does not assume that tooling lives under this repository's directory names. Explicit
 `--path` and `--exclude-path` filters still narrow that scope. `source` and `all`
 retain their existing behavior.
 
 Recipe scope output includes a bounded `coverage` summary. `included` and
 `excluded` are exact counts and bounded path samples for the common scope before
-any child-query-specific filters narrow the indexed file set.
+any child-query-specific filters narrow the indexed file set when the index
+generation is complete. If persisted completion metadata reports an incomplete
+generation, the counts become non-authoritative with
+`uncertainty_reason=index_generation_incomplete`; known oversized files are
+removed from indexed inclusion and contribute to the bounded `unindexed` lower
+bound instead.
 `generated_code_policy` states whether the invocation included or excluded
 indexed generated files. On a legacy database without generated-file metadata,
 requested exclusion is reported as `unavailable` instead of claiming that the
@@ -1659,8 +1664,9 @@ record, the record keeps the scope name and reports
 `coverage_omitted_reason=response_byte_budget`.
 
 Accumulation is bounded to 10,000 candidate rows per query, 512 returned query
-details, 32 returned errors, a five-minute deadline enforced within each query,
-and a 4 MiB JSON response when no explicit `--max-json-bytes` is supplied.
+details, 32 returned errors, a five-minute deadline enforced during coverage
+scans and within each query, and a 4 MiB JSON response when no explicit
+`--max-json-bytes` is supplied.
 Structured rows are admitted incrementally against that byte budget, and an
 active SQLite read is interrupted when its scoped deadline is cancelled.
 Interactive terminals show progress on stderr (see below), and machine-readable stdout remains clean. Interrupted execution or un-emitted observations
@@ -5531,13 +5537,17 @@ recovery metadata は最大3件の command を返し、上限、省略 command �
 本番コードに加えて hidden CI 設定、installer module、release/build script、独自 directory
 内の tooling まで監査する場合は `--audit-scope production-and-tooling` を使います。この scope は
 全 indexed path を起点とし、file format／慣例的 directory による documentation 除外、共通 test
-判定、慣例的 fixture 除外、built-in recipe definition 除外を適用します。この repository 固有の
-directory 名を tooling の一般規則として仮定しません。
+判定、慣例的 fixture 除外、built-in および読み込み済み external recipe definition の除外を適用します。
+この repository 固有の directory 名を tooling の一般規則として仮定しません。
 明示した `--path` と `--exclude-path` は引き続き scope を絞り込みます。`source` と `all` の
 既存動作は変わりません。
 
 Recipe の scope 出力には上限付き `coverage` summary が含まれます。`included` と `excluded` は、
 child query 固有 filter でさらに絞り込む前の共通 scope に対する厳密な件数と上限付き path sample です。
+ただし厳密な件数になるのは index generation が complete の場合です。保存済み completeness metadata が
+incomplete generation を示す場合は、件数を非 authoritative とし、
+`uncertainty_reason=index_generation_incomplete` を返します。既知の oversized file は indexed inclusion
+から除き、上限付き `unindexed` lower bound に加算します。
 `generated_code_policy` は、その実行が indexed generated file を含めたか除外したかを示します。
 generated-file metadata がない legacy database で除外を要求した場合は、filter を適用したと主張せず
 `unavailable` と報告します。
@@ -5555,8 +5565,8 @@ query が成功したことは、選択 query が対象の indexed file に対�
 保持し、`coverage_omitted_reason=response_byte_budget` を返します。
 
 accumulation は query ごとに最大 10,000 candidate row、返却する query detail は 512 件、error は
-32 件、各 query 内でも強制される実行 deadline は5分、明示的な `--max-json-bytes` がない JSON response は
-4 MiB に制限されます。structured row はこの byte budget に対して逐次受理され、scope 付き deadline が
+32 件、coverage scan と各 query 内で強制される実行 deadline は5分、明示的な `--max-json-bytes` がない
+JSON response は4 MiB に制限されます。structured row はこの byte budget に対して逐次受理され、scope 付き deadline が
 cancel されると実行中の SQLite read も interrupt されます。interactive terminal の progress は stderr
 へ出力されます（下記参照）。機械可読な stdout は progress と混在しません。
 実行の中断または未出力の observation がある場合は、`--total-limit` による truncation を含め partial exit code 11 を返します。query failure が起きても

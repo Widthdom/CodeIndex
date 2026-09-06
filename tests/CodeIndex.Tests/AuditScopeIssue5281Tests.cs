@@ -1,6 +1,7 @@
 using System.Text.Json;
 using CodeIndex.Cli;
 using CodeIndex.Database;
+using CodeIndex.Models;
 using static CodeIndex.Tests.QueryCommandTestSupport;
 
 namespace CodeIndex.Tests;
@@ -213,9 +214,7 @@ public sealed class AuditScopeIssue5281Tests
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_external_audit_scope_5281");
         var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
         var recipePath = Path.Combine(project.Root, "external-recipes.json");
-        File.WriteAllText(
-            recipePath,
-            """
+        const string recipeJson = """
             [
               {
                 "name": "tooling-default",
@@ -228,14 +227,21 @@ public sealed class AuditScopeIssue5281Tests
                     "description": "Keep this child query source-scoped.",
                     "path_patterns": ["src/**"],
                     "exclude_paths": ["src/private/**"]
+                  },
+                  {
+                    "name": "definition-only",
+                    "query": "RecipeDefinitionNeedle5281",
+                    "description": "Do not match the loaded recipe definition itself."
                   }
                 ]
               }
             ]
-            """);
+            """;
+        File.WriteAllText(recipePath, recipeJson);
         TestProjectHelper.InsertIndexedFile(dbPath, "src/public.cs", "csharp", "BoundaryNeedle");
         TestProjectHelper.InsertIndexedFile(dbPath, "src/private/secret.cs", "csharp", "BoundaryNeedle");
         TestProjectHelper.InsertIndexedFile(dbPath, "tools/release.sh", "shell", "BoundaryNeedle");
+        TestProjectHelper.InsertIndexedFile(dbPath, "external-recipes.json", "json", recipeJson);
 
         using var env = EnvironmentVariableScope.Capture(SearchAuditRecipes.RecipePathsEnvironmentVariable);
         env.Set(SearchAuditRecipes.RecipePathsEnvironmentVariable, recipePath);
@@ -246,12 +252,123 @@ public sealed class AuditScopeIssue5281Tests
         Assert.Equal(CommandExitCodes.Success, exitCode);
         Assert.Equal(string.Empty, stderr);
         using var document = JsonDocument.Parse(stdout);
-        Assert.Equal("production-and-tooling", document.RootElement.GetProperty("scope").GetProperty("name").GetString());
-        var query = Assert.Single(document.RootElement.GetProperty("queries").EnumerateArray());
+        var scope = document.RootElement.GetProperty("scope");
+        Assert.Equal("production-and-tooling", scope.GetProperty("name").GetString());
+        Assert.Contains(scope.GetProperty("exclude_paths").EnumerateArray(), path => path.GetString() == "external-recipes.json");
+        var queries = document.RootElement.GetProperty("queries").EnumerateArray().ToList();
+        var query = queries.Single(item => item.GetProperty("name").GetString() == "source-child");
         Assert.Contains(query.GetProperty("path_patterns").EnumerateArray(), path => path.GetString() == "src/**");
         Assert.Contains(query.GetProperty("exclude_paths").EnumerateArray(), path => path.GetString() == "src/private/**");
         var result = Assert.Single(query.GetProperty("results").EnumerateArray());
         Assert.Equal("src/public.cs", result.GetProperty("path").GetString());
+        Assert.Empty(queries.Single(item => item.GetProperty("name").GetString() == "definition-only")
+            .GetProperty("results")
+            .EnumerateArray());
+    }
+
+    [Fact]
+    public void IncompleteIndexDowngradesCoverageAndAccountsForOversizedFiles()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_incomplete_audit_scope_5281");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        TestProjectHelper.InsertIndexedFile(dbPath, "src/Searchable.cs", "csharp", "ProcessStartInfo");
+        using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+        {
+            var writer = new DbWriter(db.Connection);
+            var fileId = writer.UpsertFile(new FileRecord
+            {
+                Path = "src/Huge.cs",
+                Lang = "csharp",
+                Size = 1_000_000,
+                Lines = 1,
+                Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                Checksum = "oversized-5281",
+            });
+            writer.InsertIssues(fileId,
+            [
+                new FileIssue
+                {
+                    Path = "src/Huge.cs",
+                    Kind = "file_too_large",
+                    Line = 0,
+                    Message = "Skipped because the file exceeds the configured content limit.",
+                }
+            ]);
+        }
+        SetUnknownExtensionInventory(dbPath, 0, [], truncated: false);
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["--recipe", "risky-code/process-start-info", "--db", dbPath, "--json", "--limit", "20", "--audit-scope", "production-and-tooling"],
+            JsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = JsonDocument.Parse(stdout);
+        var coverage = document.RootElement.GetProperty("scope").GetProperty("coverage");
+        var included = coverage.GetProperty("included");
+        Assert.False(included.TryGetProperty("count", out _));
+        Assert.False(included.GetProperty("count_authoritative").GetBoolean());
+        Assert.Equal("index_generation_incomplete", included.GetProperty("uncertainty_reason").GetString());
+        Assert.DoesNotContain(
+            included.GetProperty("paths").EnumerateArray(),
+            path => path.GetString() == "src/Huge.cs");
+
+        var unindexed = coverage.GetProperty("unindexed");
+        Assert.False(unindexed.TryGetProperty("count", out _));
+        Assert.False(unindexed.GetProperty("count_authoritative").GetBoolean());
+        Assert.True(unindexed.GetProperty("count_lower_bound").GetInt64() >= 1);
+        Assert.Equal("index_generation_incomplete", unindexed.GetProperty("uncertainty_reason").GetString());
+        Assert.Contains(
+            unindexed.GetProperty("paths").EnumerateArray(),
+            path => path.GetString() == "src/Huge.cs");
+    }
+
+    [Fact]
+    public void AuditAllCoverageInitializationHonorsTimeBudget()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_audit_coverage_time_5281");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        TestProjectHelper.InsertIndexedFile(dbPath, "src/One.cs", "csharp", "CoverageDeadlineNeedle5281");
+        var recipe = new SearchAuditRecipe(
+            "coverage-deadline",
+            "Verify coverage scans share the audit deadline.",
+            [
+                new SearchAuditRecipeQuery(
+                    "deadline-query",
+                    "CoverageDeadlineNeedle5281",
+                    "Exercise the bounded coverage stage.",
+                    [],
+                    "No false-positive guidance needed for this fixture.")
+            ]);
+        QueryCommandRunner.AuditAllTimeBudgetForTesting = TimeSpan.FromSeconds(2);
+        try
+        {
+            var enteredCoverage = false;
+            var (exitCode, stdout, _) = CaptureConsole(() => QueryCommandRunner.RunAuditAllForTesting(
+                ["--all", "--db", dbPath, "--format", "compact"],
+                JsonOptions,
+                [recipe],
+                beforeCoverageForTesting: reader =>
+                {
+                    enteredCoverage = true;
+                    Assert.True(reader.Cancellation.WaitHandle.WaitOne(TimeSpan.FromSeconds(5)));
+                    reader.ThrowIfCancellationRequested();
+                }));
+
+            Assert.True(enteredCoverage);
+            Assert.Equal(CommandExitCodes.PartialResult, exitCode);
+            using var document = JsonDocument.Parse(stdout);
+            Assert.True(document.RootElement.GetProperty("summary").GetProperty("time_budget_exceeded").GetBoolean());
+            var recipeResult = Assert.Single(document.RootElement.GetProperty("recipes").EnumerateArray());
+            Assert.Equal("time_budget", recipeResult.GetProperty("omitted_reason").GetString());
+            Assert.Equal(
+                1,
+                recipeResult.GetProperty("scope").GetProperty("coverage").GetProperty("unexecuted").GetProperty("count").GetInt32());
+        }
+        finally
+        {
+            QueryCommandRunner.AuditAllTimeBudgetForTesting = null;
+        }
     }
 
     private static void SetUnknownExtensionInventory(

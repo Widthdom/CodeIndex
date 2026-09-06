@@ -97,6 +97,7 @@ public static partial class QueryCommandRunner
         bool includeGenerated,
         SearchRecipeFileCoverageCache? cache)
     {
+        AddExternalRecipeSourceExclusion(reader, scope);
         var coverage = scope.Coverage;
         if (coverage is null || coverage.FileCoverageInitialized)
             return;
@@ -112,6 +113,7 @@ public static partial class QueryCommandRunner
             return;
         }
 
+        var indexCompletion = reader.GetPersistedIndexCompletion();
         var indexed = reader.GetAuditScopeIndexedFileCoverage(
             lang,
             scope.PathPatterns,
@@ -119,20 +121,80 @@ public static partial class QueryCommandRunner
             scope.ExcludeTests,
             since,
             AuditScopeCoveragePathLimit);
+        var knownUnindexed = reader.GetAuditScopeKnownUnindexedFileCoverage(
+            lang,
+            scope.PathPatterns,
+            scope.ExcludePaths,
+            scope.ExcludeTests,
+            since,
+            AuditScopeCoveragePathLimit);
         var snapshot = new SearchRecipeFileCoverageSnapshot(
-            ExactCoverageSet(
-                "indexed_files",
-                indexed.IncludedCount,
-                indexed.IncludedPaths,
-                AuditScopeCoveragePathLimit),
-            ExactCoverageSet(
-                "indexed_files",
-                indexed.ExcludedCount,
-                indexed.ExcludedPaths,
-                AuditScopeCoveragePathLimit),
-            BuildUnindexedCoverage(reader, scope, lang, since));
+            indexCompletion.IndexComplete
+                ? ExactCoverageSet(
+                    "indexed_files",
+                    indexed.IncludedCount,
+                    indexed.IncludedPaths,
+                    AuditScopeCoveragePathLimit)
+                : IncompleteIndexCoverageSet(indexed.IncludedPaths),
+            indexCompletion.IndexComplete
+                ? ExactCoverageSet(
+                    "indexed_files",
+                    indexed.ExcludedCount,
+                    indexed.ExcludedPaths,
+                    AuditScopeCoveragePathLimit)
+                : IncompleteIndexCoverageSet(indexed.ExcludedPaths),
+            BuildUnindexedCoverage(
+                reader,
+                scope,
+                lang,
+                since,
+                knownUnindexed,
+                indexCompletion.IndexComplete));
         ApplyFileCoverage(coverage, snapshot);
         cache?.Add(scope, lang, since, includeGenerated, snapshot);
+    }
+
+    private static void AddExternalRecipeSourceExclusion(
+        DbReader reader,
+        SearchRecipeScopeJsonResult scope)
+    {
+        if (string.IsNullOrWhiteSpace(scope.RecipeSourcePath)
+            || string.Equals(scope.Name, SearchAuditRecipes.AllAuditScope, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        var projectRoot = reader.GetIndexedProjectRoot();
+        if (string.IsNullOrWhiteSpace(projectRoot))
+            return;
+
+        try
+        {
+            var relativePath = Path.GetRelativePath(
+                Path.GetFullPath(projectRoot),
+                Path.GetFullPath(scope.RecipeSourcePath));
+            if (Path.IsPathRooted(relativePath)
+                || string.Equals(relativePath, "..", StringComparison.Ordinal)
+                || relativePath.StartsWith($"..{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
+                || relativePath.StartsWith($"..{Path.AltDirectorySeparatorChar}", StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            var normalizedPath = relativePath
+                .Replace(Path.DirectorySeparatorChar, '/')
+                .Replace(Path.AltDirectorySeparatorChar, '/');
+            if (!string.IsNullOrWhiteSpace(normalizedPath)
+                && !string.Equals(normalizedPath, ".", StringComparison.Ordinal))
+            {
+                AddDistinct(scope.ExcludePaths, [normalizedPath]);
+            }
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            // The recipe loader already bounded and diagnosed invalid source paths. If the indexed
+            // root cannot be related safely, retain the declared scope instead of broadening it.
+        }
     }
 
     private static void ApplyFileCoverage(
@@ -151,6 +213,60 @@ public static partial class QueryCommandRunner
         => scope.Coverage?.MarkExecuted(queryName);
 
     private static SearchRecipeCoverageSetJsonResult BuildUnindexedCoverage(
+        DbReader reader,
+        SearchRecipeScopeJsonResult scope,
+        string? lang,
+        DateTime? since,
+        AuditScopeKnownUnindexedFileCoverageSnapshot knownUnindexed,
+        bool indexComplete)
+    {
+        var unknownExtensions = BuildUnknownExtensionCoverage(reader, scope, lang, since);
+        var paths = knownUnindexed.Paths
+            .Concat(unknownExtensions.Paths)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .Take(AuditScopeCoveragePathLimit)
+            .ToList();
+
+        if (indexComplete
+            && knownUnindexed.Available
+            && unknownExtensions.CountAuthoritative
+            && unknownExtensions.Count.HasValue)
+        {
+            return ExactCoverageSet(
+                "workspace_files",
+                checked(knownUnindexed.Count + unknownExtensions.Count.Value),
+                paths,
+                AuditScopeCoveragePathLimit);
+        }
+
+        var lowerBound = checked(
+            (knownUnindexed.Available ? knownUnindexed.Count : 0L)
+            + unknownExtensions.CountLowerBound);
+        long? upperBound = null;
+        if (indexComplete && knownUnindexed.Available && unknownExtensions.CountUpperBound.HasValue)
+            upperBound = checked(knownUnindexed.Count + unknownExtensions.CountUpperBound.Value);
+
+        var uncertaintyReason = !indexComplete
+            ? "index_generation_incomplete"
+            : !knownUnindexed.Available
+                ? "known_unindexed_file_diagnostics_unavailable"
+                : unknownExtensions.UncertaintyReason ?? "unknown_extension_inventory_uncertain";
+        return new SearchRecipeCoverageSetJsonResult(
+            "workspace_files",
+            null,
+            false,
+            lowerBound,
+            upperBound,
+            paths,
+            AuditScopeCoveragePathLimit,
+            true,
+            null,
+            false,
+            uncertaintyReason);
+    }
+
+    private static SearchRecipeCoverageSetJsonResult BuildUnknownExtensionCoverage(
         DbReader reader,
         SearchRecipeScopeJsonResult scope,
         string? lang,
@@ -223,6 +339,20 @@ public static partial class QueryCommandRunner
             false,
             "unknown_extension_path_inventory_truncated_before_scope_filtering");
     }
+
+    private static SearchRecipeCoverageSetJsonResult IncompleteIndexCoverageSet(List<string> paths)
+        => new(
+            "indexed_files",
+            null,
+            false,
+            paths.Count,
+            null,
+            paths,
+            AuditScopeCoveragePathLimit,
+            true,
+            null,
+            false,
+            "index_generation_incomplete");
 
     private static SearchRecipeCoverageSetJsonResult ExactCoverageSet(
         string unit,

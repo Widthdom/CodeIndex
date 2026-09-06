@@ -3844,7 +3844,7 @@ internal static class SearchAuditRecipes
             for (var i = 0; i < recipeArray.Count && i < MaxExternalRecipesPerFile; i++)
             {
                 if (TryParseRecipe(recipeArray[i], sourceLabel, i, diagnostics, out var recipe))
-                    recipes.Add(recipe);
+                    recipes.Add(recipe with { SourcePath = fullPath });
             }
 
             if (recipeArray.Count > MaxExternalRecipesPerFile)
@@ -4354,6 +4354,7 @@ internal sealed record SearchAuditRecipe(
     string Description,
     List<SearchAuditRecipeQuery> Queries)
 {
+    internal string? SourcePath { get; init; }
     public string DefaultScope { get; init; } = SearchAuditRecipes.DefaultAuditScope;
     public List<string> DefaultPathPatterns { get; init; } = [];
     public List<string> DefaultExcludePaths { get; init; } = [];
@@ -5048,6 +5049,9 @@ internal sealed record SearchRecipeScopeJsonResult(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     List<SearchRecipeExcludedDiagnosticJsonResult>? ExcludedDiagnostics)
 {
+    [JsonIgnore]
+    internal string? RecipeSourcePath { get; init; }
+
     [JsonPropertyName("coverage")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public SearchRecipeCoverageJsonResult? Coverage { get; init; }
