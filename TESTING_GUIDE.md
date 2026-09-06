@@ -8,6 +8,8 @@ If you change test code, test helpers, test execution flow, or testing conventio
 
 ## Quick Start
 
+`ExportImportCommandRunnerIssue5274Tests` shares a disposable multi-segment FTS fixture across path, language, project, exclusion, empty, and all-file scopes, with and without path redaction and with a legacy database missing trigram support. Verify excluded and previously deleted artificial canaries against raw extracted DB bytes, retained ordinary/trigram searches, size reduction, manifest counts/hashes/partial readiness, import validation, source non-mutation, and private archive permissions. Use the existing FTS completion hook to cancel after either index rebuild and verify that absent or existing archive destinations remain untouched. Run on both net8.0 and net9.0 in the SQLite pool sensitive collection.
+
 Raw JSON envelope fixtures in `JsonEnvelopeWrapperTests` share `CaptureRawEnvelope`, which pins an initialized temporary project database with explicit `--db` (#5270). Keep the capture, line-size, item-count, node-count, depth, malformed-line, and mixed-line assertions independent of the live repository index. The deterministic regression commits an ambient database change inside the inner callback: an unpinned response must still fail the production snapshot guard, while the isolated item-limit fixture must retain exit 7 and `max_items`. Keep environment/current-directory changes restored in `finally` inside the non-parallel console collection, and validate net8.0 and net9.0 with an unrelated index writer active.
 
 `GlobalToolLogTests.TryStart_WritesInvariantUtcTimestampAndStackTrace` (#5264) pins a private, absent `--db` even though its injected exception precedes dispatch: last-failure provenance still resolves database metadata. Its shared theory covers stable and continuously changing ambient WAL databases, proves the latter exhausts snapshot retries with `query_only_wal_changed`, and requires the isolated run to retain the report hint, invariant UTC timestamp, and stack trace without reading that WAL. Keep config discovery disabled, text-log settings and provenance scoped, and restore environment, culture, and the snapshot hook. Finish dogfood index writes before running the full suites; this deterministic interference mechanism does not establish the cause of the historical full-suite failure or prove process-state leakage.
@@ -1209,6 +1211,8 @@ Issue #5260 の `QueryCommandRunnerAuditProgressIssue5260Tests` は子 query を
 テストコード、テストヘルパー、テストの実行フロー、またはテスト規約を変更した場合は、このドキュメントも同じコミットで更新してください。
 
 ## クイックスタート
+
+`ExportImportCommandRunnerIssue5274Tests` は複数の FTS segment を持つ一時 fixture を共有し、path・language・project・除外・0件・全件の scope を、path redaction の有無および trigram 未対応の旧 DB と組み合わせて検証します。除外済み・削除済みの人工 canary を展開後 DB の生バイトで検査し、残した通常／trigram 検索、サイズ縮小、manifest の件数・hash・partial readiness、import 検証、source 非変更、archive の private permission を確認してください。既存の FTS 完了 hook で各 index の再構築直後に cancel し、未作成／既存の archive destination が変更されないことも検証します。SQLite pool sensitive collection 内で net8.0 と net9.0 の両方を実行してください。
 
 `JsonEnvelopeWrapperTests` の raw JSON envelope フィクスチャは、初期化済みの一時プロジェクトDBを明示的な `--db` で固定する `CaptureRawEnvelope` を共有します（#5270）。キャプチャ量、行サイズ、項目数、ノード数、深さ、不正な行、混在する行の検証を、リポジトリの実インデックスから分離してください。決定的な回帰テストでは内部コールバック内で環境側のDB変更をコミットし、DB未指定の応答では本番のsnapshotガードが引き続き失敗を返し、分離済みの項目数上限テストでは終了コード7と `max_items` が維持されることを確認します。環境変数とカレントディレクトリの変更は非並列consoleコレクション内で行い、`finally` で復元してください。無関係なインデックスwriterの実行中にもnet8.0とnet9.0で検証します。
 
