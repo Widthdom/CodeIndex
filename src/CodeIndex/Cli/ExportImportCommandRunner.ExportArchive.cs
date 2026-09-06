@@ -14,6 +14,13 @@ namespace CodeIndex.Cli;
 
 internal static partial class ExportImportCommandRunner
 {
+    private static readonly AsyncLocal<Action<SqliteConnection>?> ScopedExportSnapshotOpenedForTesting = new();
+    internal static Action<SqliteConnection>? ExportSnapshotOpenedForTesting
+    {
+        get => ScopedExportSnapshotOpenedForTesting.Value;
+        set => ScopedExportSnapshotOpenedForTesting.Value = value;
+    }
+
     private static int RunExportArchive(string[] args, JsonSerializerOptions jsonOptions, string appVersion, CancellationToken cancellationToken)
     {
         string? outputPath = null;
@@ -169,7 +176,10 @@ internal static partial class ExportImportCommandRunner
             ExportManifest manifest;
             if (scopeOptions.IsScoped)
             {
-                using var snapshotContext = new DbContext(DbOpenIntent.Migration, snapshotPath, cancellationToken);
+                // Cancellation bypasses success-only pool clearing. Close this private
+                // snapshot's native handle on disposal so Windows can delete it too.
+                using var snapshotContext = DbContext.CreateUnpooled(DbOpenIntent.Migration, snapshotPath, cancellationToken);
+                ExportSnapshotOpenedForTesting?.Invoke(snapshotContext.Connection);
                 cancellationToken.ThrowIfCancellationRequested();
                 snapshotContext.TryMigrateForRead();
                 if (snapshotContext.LastMigrationFailure is { } migrationFailure)

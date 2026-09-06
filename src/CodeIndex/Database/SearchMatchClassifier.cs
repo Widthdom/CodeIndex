@@ -110,6 +110,9 @@ internal static class SearchMatchClassifier
         if (string.Equals(normalizedLang, "csharp", StringComparison.Ordinal))
             return ClassifyCSharp(path, line, text, index, lineContext);
 
+        if (normalizedLang is "shell" or "bash" or "zsh")
+            return ClassifyShell(path, text, index);
+
         if (string.Equals(normalizedLang, "markdown", StringComparison.Ordinal))
         {
             return string.Equals(enclosingSymbolKind, "code", StringComparison.OrdinalIgnoreCase)
@@ -134,6 +137,251 @@ internal static class SearchMatchClassifier
             return RegexLiteral;
 
         return Code;
+    }
+
+    private struct ShellFrame
+    {
+        public char Quote;
+        public char Terminator;
+        public bool AnsiQuote;
+        public bool TokenStart;
+        public bool CommandStart;
+        public int Parentheses;
+        public int BacktickEnd;
+        public int CaseBase;
+    }
+
+    private enum ShellCasePhase { Word, In, Pattern, Body }
+
+    private struct ShellCase
+    {
+        public ShellCasePhase Phase;
+        public int Parentheses;
+        public bool PatternStarted;
+    }
+
+    private static string ClassifyShell(string path, string text, int index)
+    {
+        // A line-local lexer: nested command substitutions get their own quote state.
+        // Do not guess code/string origins once either bounded parsing budget is exhausted.
+        const int maxCharacters = 65536;
+        if (index >= maxCharacters)
+            return Unknown;
+        var stringOrigin = LooksLikeHelpText(path, text.Length <= maxCharacters ? text : text[..maxCharacters])
+            ? HelpText : StringLiteral;
+        Span<ShellFrame> frames = stackalloc ShellFrame[64];
+        frames.Clear();
+        frames[0].TokenStart = true;
+        frames[0].CommandStart = true;
+        Span<ShellCase> cases = stackalloc ShellCase[64];
+        var caseCount = 0;
+        // Backtick unescaping removes characters without shifting source coordinates.
+        bool[]? removed = null;
+        var workRemaining = maxCharacters * 4;
+        var depth = 0;
+        for (var i = 0; i <= index; i++)
+        {
+            if (--workRemaining < 0)
+                return Unknown;
+            if (removed is not null && removed[i])
+                continue;
+            ref var frame = ref frames[depth];
+            var ch = text[i];
+            var next = NextShellCharacter(removed, i + 1, Math.Min(text.Length, maxCharacters));
+            var quotedOrigin = frame.Quote == '\0' ? Code : stringOrigin;
+
+            if (frame.Quote == '\'')
+            {
+                if (ch == '\\' && frame.AnsiQuote && next < text.Length)
+                {
+                    if (index <= next)
+                        return quotedOrigin;
+                    i = next;
+                }
+                else if (ch == '\'')
+                    frame.Quote = '\0';
+                else if (i == index)
+                    return quotedOrigin;
+                continue;
+            }
+
+            if (ch == '\\' && next < text.Length &&
+                (frame.Quote == '\0' || text[next] is '$' or '`' or '"' or '\\' or '\n'))
+            {
+                if (index <= next)
+                    return quotedOrigin;
+                frame.TokenStart = false;
+                frame.CommandStart = false;
+                i = next;
+                continue;
+            }
+
+            if (ch == '#' && frame.Quote == '\0' && frame.TokenStart)
+                return Comment;
+
+            if (ch == '`' && frame.Terminator == '`' && i == frame.BacktickEnd)
+            {
+                caseCount = frame.CaseBase;
+                depth--;
+                continue;
+            }
+
+            if (frame.Quote == '\0' && frame.TokenStart && !char.IsWhiteSpace(ch))
+            {
+                var patternCaseCount = caseCount > frame.CaseBase && cases[caseCount - 1].Phase == ShellCasePhase.Pattern
+                    ? caseCount : -1;
+                if (caseCount > frame.CaseBase && cases[caseCount - 1].Phase == ShellCasePhase.Word)
+                    cases[caseCount - 1].Phase = ShellCasePhase.In;
+                else if (caseCount > frame.CaseBase && cases[caseCount - 1].Phase == ShellCasePhase.In &&
+                    IsShellKeyword(text, removed, i, "in"))
+                    cases[caseCount - 1].Phase = ShellCasePhase.Pattern;
+                else if (caseCount > frame.CaseBase &&
+                    ((frame.CommandStart && cases[caseCount - 1].Phase == ShellCasePhase.Body) ||
+                     (cases[caseCount - 1].Phase == ShellCasePhase.Pattern && !cases[caseCount - 1].PatternStarted)) &&
+                    IsShellKeyword(text, removed, i, "esac"))
+                    caseCount--;
+                else if (frame.CommandStart &&
+                    (caseCount == frame.CaseBase || cases[caseCount - 1].Phase != ShellCasePhase.Pattern) &&
+                    IsShellKeyword(text, removed, i, "case"))
+                {
+                    if (caseCount == cases.Length)
+                        return Unknown;
+                    cases[caseCount++] = new ShellCase { Phase = ShellCasePhase.Word };
+                }
+                if (caseCount == patternCaseCount && ch is not (';' or '&'))
+                    cases[caseCount - 1].PatternStarted = true;
+                frame.CommandStart = frame.CommandStart &&
+                    (IsShellKeyword(text, removed, i, "then") || IsShellKeyword(text, removed, i, "do") ||
+                     IsShellKeyword(text, removed, i, "else") || IsShellKeyword(text, removed, i, "if") ||
+                     IsShellKeyword(text, removed, i, "elif") || IsShellKeyword(text, removed, i, "while") ||
+                     IsShellKeyword(text, removed, i, "until") || IsShellKeyword(text, removed, i, "!") ||
+                     IsShellKeyword(text, removed, i, "{"));
+            }
+
+            if (ch == '`' || (ch == '$' && next < text.Length && text[next] == '('))
+            {
+                if (depth + 1 == frames.Length)
+                    return Unknown;
+                var backtickEnd = -1;
+                if (ch == '`')
+                {
+                    removed ??= new bool[Math.Min(text.Length, maxCharacters)];
+                    backtickEnd = UnescapeShellBacktick(text, removed, next, ref workRemaining);
+                    if (workRemaining < 0)
+                        return Unknown;
+                }
+                frame.TokenStart = false;
+                frames[++depth] = new ShellFrame
+                {
+                    Terminator = ch == '`' ? '`' : ')',
+                    TokenStart = true,
+                    CommandStart = true,
+                    BacktickEnd = backtickEnd,
+                    CaseBase = caseCount,
+                };
+                if (ch == '$')
+                    i = next;
+                continue;
+            }
+
+            if (frame.Quote == '"')
+            {
+                if (ch == '"')
+                    frame.Quote = '\0';
+                else if (i == index)
+                    return quotedOrigin;
+                continue;
+            }
+
+            if (ch == '$' && next < text.Length && text[next] == '\'')
+            {
+                frame.Quote = '\'';
+                frame.AnsiQuote = true;
+                i = next;
+            }
+            else if (ch is '\'' or '"')
+            {
+                frame.Quote = ch;
+                frame.AnsiQuote = false;
+            }
+            else if (ch == '(')
+            {
+                if (caseCount > frame.CaseBase && cases[caseCount - 1].Phase == ShellCasePhase.Pattern)
+                {
+                    if (!frame.TokenStart)
+                        cases[caseCount - 1].Parentheses++;
+                }
+                else
+                    frame.Parentheses++;
+            }
+            else if (ch == ')')
+            {
+                if (caseCount > frame.CaseBase && cases[caseCount - 1].Phase == ShellCasePhase.Pattern)
+                {
+                    if (cases[caseCount - 1].Parentheses > 0)
+                        cases[caseCount - 1].Parentheses--;
+                    else
+                        cases[caseCount - 1].Phase = ShellCasePhase.Body;
+                }
+                else if (frame.Parentheses > 0)
+                    frame.Parentheses--;
+                else if (frame.Terminator == ')')
+                {
+                    caseCount = frame.CaseBase;
+                    depth--;
+                }
+            }
+            else if (ch == ';' && next < text.Length && text[next] is ';' or '&' &&
+                caseCount > frame.CaseBase && cases[caseCount - 1].Phase == ShellCasePhase.Body)
+            {
+                cases[caseCount - 1].Phase = ShellCasePhase.Pattern;
+                cases[caseCount - 1].PatternStarted = false;
+            }
+            frame.TokenStart = char.IsWhiteSpace(ch) || ch is ';' or '|' or '&' or '(' or ')' or '<' or '>';
+            if (ch is ';' or '|' or '&' or '(' or ')' or '\n')
+                frame.CommandStart = true;
+        }
+
+        return Code;
+    }
+
+    private static int NextShellCharacter(bool[]? removed, int index, int end)
+    {
+        while (index < end && removed is not null && removed[index])
+            index++;
+        return index;
+    }
+
+    private static int UnescapeShellBacktick(string text, bool[] removed, int start, ref int workRemaining)
+    {
+        for (var i = start; i < removed.Length; i++)
+        {
+            if (--workRemaining < 0)
+                return -1;
+            if (removed[i])
+                continue;
+            if (text[i] == '`')
+                return i;
+            var next = NextShellCharacter(removed, i + 1, removed.Length);
+            if (text[i] == '\\' && next < removed.Length && text[next] is '\\' or '$' or '`')
+            {
+                removed[i] = true;
+                i = next;
+            }
+        }
+        return -1;
+    }
+
+    private static bool IsShellKeyword(string text, bool[]? removed, int start, string keyword)
+    {
+        var i = start;
+        foreach (var ch in keyword)
+        {
+            if (i >= text.Length || text[i] != ch)
+                return false;
+            i = NextShellCharacter(removed, i + 1, removed?.Length ?? text.Length);
+        }
+        return i == text.Length || char.IsWhiteSpace(text[i]) || text[i] is ';' or '|' or '&' or '(' or ')' or '<' or '>';
     }
 
     private static string ClassifyCSharp(

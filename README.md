@@ -18,6 +18,10 @@
 agents, MCP clients, and LSP-native editors can run fast full-text, symbol,
 dependency, and inspection queries without rescanning the same tree for every query.
 
+## Shell search origins
+
+Shell search origins distinguish executable `$()` and backtick command substitutions inside double quotes from the surrounding literal text. Ordinary, named, and recipe searches share these facets: `--origin code` retains the executable spans, and `--exclude-strings` removes the literal spans. Backtick unescaping is applied before interpreting its nested commands, and `case` pattern delimiters do not close substitutions. Single-quoted and escaped literal examples remain strings or help text; match/highlight coordinates are unchanged. This is a line-local heuristic, not a full Shell parser: it examines a prefix of at most 65,536 characters with limits of 63 nested substitutions, 64 active `case` constructs, and 262,144 scan/preprocessing iterations. Matches beyond the prefix or exhausted parsing budgets report `unknown`. Multiline Shell syntax is outside this guarantee.
+
 ## Local audit baselines
 
 Changing index exclusions cannot turn an existing excluded file into a resolution. Comparison verifies prior path coverage, distinguishes physical deletion from sparse/ignored paths, and detects when the same database location now indexes another project. Empty incomparable comparisons also return exit `11`.
@@ -302,6 +306,10 @@ For commercial use, integration, and naming guidance, see
 [TRADEMARKS.md](TRADEMARKS.md).
 
 # cdidx（日本語）
+
+### Shell検索の由来分類
+
+Shell検索の由来分類は、二重引用符内で実行される `$()` やバッククォートによるコマンド置換と、その周囲のリテラルを区別します。通常・名前付き・recipe検索は同じ分類を共有し、`--origin code` は実行部分を保持し、`--exclude-strings` はリテラル部分を除外します。バッククォート内はエスケープ解除後に入れ子のコマンドを解釈し、`case` のパターン区切りを置換の終端と誤認しません。単一引用符内やエスケープされたリテラル例は文字列またはヘルプとして扱い、一致・ハイライト位置は変えません。これは完全なShellパーサーではなく、1行単位のヒューリスティックです。行頭から最大65,536文字を調べ、置換の入れ子は63段、同時に扱う `case` は64個、走査・前処理の反復は262,144回を上限とします。範囲外の一致や解析上限の超過時は `unknown` を返します。複数行のShell構文はこの保証の対象外です。
 
 ### ローカル監査 baseline
 

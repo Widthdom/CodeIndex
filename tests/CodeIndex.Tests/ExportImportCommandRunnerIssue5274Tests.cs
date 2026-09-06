@@ -1,4 +1,5 @@
 using System.IO.Compression;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -109,9 +110,11 @@ public sealed class ExportImportCommandRunnerIssue5274Tests
     }
 
     [Theory]
-    [InlineData("fts_chunks", false)]
-    [InlineData("fts_chunks_trigram", true)]
-    public void ScopedExport_CancellationDuringSanitizationCannotPublish(string cancelAfterTable, bool redact)
+    [InlineData("fts_chunks", false, false)]
+    [InlineData("fts_chunks_trigram", true, false)]
+    [InlineData("fts_chunks", false, true)]
+    [InlineData("fts_chunks_trigram", true, true)]
+    public void ScopedExport_InterruptedSanitizationClosesSnapshotAndCannotPublish(string cancelAfterTable, bool redact, bool fail)
     {
         using var project = TestProjectHelper.CreateTempProjectScope("export_fts_cancel_5274");
         var dbPath = CreateResidualFixture(project.Root, false);
@@ -123,14 +126,26 @@ public sealed class ExportImportCommandRunnerIssue5274Tests
                 File.WriteAllText(archive, "original destination");
             using var cancellation = new CancellationTokenSource();
             var reached = false;
+            SafeHandle? snapshotHandle = null;
+            string? snapshotPath = null;
+            var previousOpenedHook = ExportImportCommandRunner.ExportSnapshotOpenedForTesting;
             var previousHook = DbWriter.FtsTableRebuildStatementCompletedBeforeAutomergeRestoreForTesting;
             try
             {
+                ExportImportCommandRunner.ExportSnapshotOpenedForTesting = connection =>
+                {
+                    snapshotHandle = connection.Handle;
+                    snapshotPath = connection.DataSource;
+                    Assert.NotNull(snapshotHandle);
+                    Assert.False(snapshotHandle.IsClosed);
+                };
                 DbWriter.FtsTableRebuildStatementCompletedBeforeAutomergeRestoreForTesting = table =>
                 {
                     if (table != cancelAfterTable)
                         return;
                     reached = true;
+                    if (fail)
+                        throw new IOException("Injected export reconstruction failure.");
                     cancellation.Cancel();
                 };
                 var options = new List<string> { archive, "--db", dbPath, "--path", "src/App/*", "--json" };
@@ -141,7 +156,15 @@ public sealed class ExportImportCommandRunnerIssue5274Tests
                 var result = ConsoleCapture.Capture(() => ExportImportCommandRunner.RunExport(
                     options.ToArray(), JsonOptions, "test", cancellation.Token));
                 Assert.True(reached);
-                Assert.Equal(CommandExitCodes.CancelledBySignal, result.ExitCode);
+                Assert.Equal(fail ? CommandExitCodes.UsageError : CommandExitCodes.CancelledBySignal, result.ExitCode);
+                Assert.NotNull(snapshotHandle);
+                // Unix permits unlinking open files, so deletion alone cannot detect pooling.
+                Assert.True(snapshotHandle.IsClosed, "The private snapshot's native SQLite handle must close before cleanup.");
+                Assert.NotNull(snapshotPath);
+                Assert.False(File.Exists(snapshotPath));
+                Assert.False(File.Exists(snapshotPath + "-wal"));
+                Assert.False(File.Exists(snapshotPath + "-shm"));
+                Assert.False(Directory.Exists(Path.GetDirectoryName(snapshotPath)));
                 Assert.Equal(string.Empty, result.Stderr);
                 using var json = JsonDocument.Parse(result.Stdout);
                 Assert.Equal("scope_archive", json.RootElement.GetProperty("phase").GetString());
@@ -154,6 +177,7 @@ public sealed class ExportImportCommandRunnerIssue5274Tests
             }
             finally
             {
+                ExportImportCommandRunner.ExportSnapshotOpenedForTesting = previousOpenedHook;
                 DbWriter.FtsTableRebuildStatementCompletedBeforeAutomergeRestoreForTesting = previousHook;
             }
         }

@@ -86,6 +86,10 @@ without the optional trigram table keep that schema and rebuild ordinary FTS onl
 vacuum and hash calculation. Apply this to every scope selector, even when all
 or no files survive, independently of path redaction. Keep default full exports
 unchanged; never rebuild the source DB or publish after cancellation.
+Open the scoped snapshot with `DbContext.CreateUnpooled` so disposing its context
+closes the native SQLite handle on every exit, including cancellation and failures,
+before deleting the snapshot and sidecars. Success-only pool clearing is insufficient
+on Windows, where an open pooled handle prevents deletion.
 
 Portable archive path privacy is opt-in for compatibility. Default exports retain
 `manifest.project_root`, the snapshot's `indexed_project_root`, requested scope
@@ -4427,6 +4431,9 @@ live segment に除外 term を残す場合があり、`VACUUM` だけでは除�
 行います。path redaction の有無によらず、全件残存・0件残存を含むすべての scope selector
 を対象とします。既定の full export は維持し、source DB の再構築や cancellation 後の
 公開を行ってはいけません。
+scoped snapshot は `DbContext.CreateUnpooled` で開き、cancel・失敗を含むすべての終了経路で
+context の破棄により native SQLite handle を閉じてから snapshot と sidecar を削除します。
+Windows では開いた pooled handle が削除を妨げるため、成功時だけの pool 解放では不十分です。
 
 portable archive の path privacy は互換性のため opt-in です。既定 export は
 `manifest.project_root`、snapshot の `indexed_project_root`、指定 scope value、解決済み
