@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using CodeIndex.Cli;
 using CodeIndex.Database;
+using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Tests;
 
@@ -375,6 +376,81 @@ public partial class QueryCommandRunnerTests
         {
             DbCommandRunner.IntegrityCheckCommandTextForTesting = null;
             DbCommandRunner.MaintenanceProgressForTesting = null;
+        }
+    }
+
+    [Fact]
+    public void RunBatch_DbDiagnosticsInterruptBusyWait_Issue5282()
+    {
+        using var parent = TestProjectHelper.CreateTempProjectScope("cdidx_batch_db_busy_parent_5282");
+        using var child = TestProjectHelper.CreateTempProjectScope("cdidx_batch_db_busy_child_5282");
+        using var env = EnvironmentVariableScope.Capture(DbContext.BusyTimeoutEnvironmentVariable);
+        env.Set(DbContext.BusyTimeoutEnvironmentVariable, "3000");
+        var parentDbPath = TestProjectHelper.CreateProjectDb(parent.Root);
+        var childDbPath = TestProjectHelper.CreateProjectDb(child.Root);
+        SqliteConnection.ClearAllPools();
+        using var lockConnection = new SqliteConnection(
+            DbPathResolver.BuildSqliteConnectionString(childDbPath, SqliteOpenMode.ReadWrite));
+        lockConnection.Open();
+        using (var lockCommand = lockConnection.CreateCommand())
+        {
+            lockCommand.CommandText = "PRAGMA journal_mode=DELETE; BEGIN EXCLUSIVE;";
+            lockCommand.ExecuteNonQuery();
+        }
+
+        try
+        {
+            foreach (var (command, cancellationPhase) in new[]
+                     {
+                         ("schema", "read_version"),
+                         ("integrity", "read_rows"),
+                     })
+            {
+                using var cancellation = new CancellationTokenSource();
+                DbCommandRunner.MaintenanceProgressForTesting = (operation, phase) =>
+                {
+                    if (operation == (command == "schema" ? "schema" : "integrity_check")
+                        && phase == cancellationPhase)
+                    {
+                        cancellation.CancelAfter(TimeSpan.FromMilliseconds(100));
+                    }
+                };
+                var input = JsonSerializer.Serialize(new[] { "db", command, "--db", childDbPath, "--json" }) + "\n";
+                var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+                var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
+                    input,
+                    () => QueryCommandRunner.RunBatch(
+                        ["--db", parentDbPath, "--json-summary"],
+                        _jsonOptions,
+                        cancellationToken: cancellation.Token));
+                stopwatch.Stop();
+                var lines = ParseJsonLines(stdout);
+                try
+                {
+                    Assert.True(cancellation.IsCancellationRequested);
+                    Assert.Equal(CommandExitCodes.CancelledBySignal, exitCode);
+                    Assert.Equal(string.Empty, stderr);
+                    Assert.Equal(2, lines.Count);
+                    Assert.Equal(
+                        CommandErrorCodes.Interrupted,
+                        lines[0].RootElement.GetProperty("error").GetProperty("error_code").GetString());
+                    Assert.True(
+                        stopwatch.Elapsed < TimeSpan.FromSeconds(2),
+                        $"The {command} busy wait took {stopwatch.Elapsed}.");
+                }
+                finally
+                {
+                    foreach (var document in lines)
+                        document.Dispose();
+                }
+            }
+        }
+        finally
+        {
+            DbCommandRunner.MaintenanceProgressForTesting = null;
+            using var rollback = lockConnection.CreateCommand();
+            rollback.CommandText = "ROLLBACK;";
+            rollback.ExecuteNonQuery();
         }
     }
 
