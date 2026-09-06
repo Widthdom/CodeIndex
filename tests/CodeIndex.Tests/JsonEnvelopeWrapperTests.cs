@@ -754,16 +754,12 @@ public class JsonEnvelopeWrapperTests
     [Fact]
     public void RunWrapped_CapturedOutputExceedsLimit_ReturnsJsonErrorEnvelope_Issue2901()
     {
-        var (exitCode, stdout, stderr) = CaptureConsole(() => JsonEnvelopeWrapper.RunWrapped(
-            "search",
-            ["Needle", "--json-envelope"],
-            "1.0.0",
-            _jsonOptions,
+        var (exitCode, stdout, stderr) = CaptureRawEnvelope(
             _ =>
             {
                 Console.Write(new string('x', JsonEnvelopeWrapper.MaxCapturedOutputChars + 1));
                 return CommandExitCodes.Success;
-            }));
+            });
 
         Assert.Equal(CommandExitCodes.InvalidArgument, exitCode);
         Assert.Contains("--json-envelope captured output exceeded", stderr);
@@ -779,16 +775,12 @@ public class JsonEnvelopeWrapperTests
     public void RunWrapped_TooDeepRawJsonItem_KeepsLineAsString_Issue3016()
     {
         var rawLine = BuildNestedRawJson(JsonEnvelopeWrapper.MaxRawJsonItemDepth + 1);
-        var (exitCode, stdout, stderr) = CaptureConsole(() => JsonEnvelopeWrapper.RunWrapped(
-            "search",
-            ["Needle", "--json-envelope"],
-            "1.0.0",
-            _jsonOptions,
+        var (exitCode, stdout, stderr) = CaptureRawEnvelope(
             _ =>
             {
                 Console.WriteLine(rawLine);
                 return CommandExitCodes.Success;
-            }));
+            });
 
         Assert.Equal(CommandExitCodes.Success, exitCode);
         Assert.Equal(string.Empty, stderr);
@@ -802,16 +794,12 @@ public class JsonEnvelopeWrapperTests
     public void RunWrapped_MalformedRawJsonItem_KeepsLineAsString_Issue3711()
     {
         const string rawLine = """{"path":"src/App.cs","score":""";
-        var (exitCode, stdout, stderr) = CaptureConsole(() => JsonEnvelopeWrapper.RunWrapped(
-            "search",
-            ["Needle", "--json-envelope"],
-            "1.0.0",
-            _jsonOptions,
+        var (exitCode, stdout, stderr) = CaptureRawEnvelope(
             _ =>
             {
                 Console.WriteLine(rawLine);
                 return CommandExitCodes.Success;
-            }));
+            });
 
         Assert.Equal(CommandExitCodes.Success, exitCode);
         Assert.Equal(string.Empty, stderr);
@@ -825,16 +813,12 @@ public class JsonEnvelopeWrapperTests
     public void RunWrapped_OversizedRawJsonItem_ReturnsStructuredEnvelopeError_Issue3454()
     {
         var rawLine = new string('x', JsonEnvelopeWrapper.MaxRawJsonItemChars + 1);
-        var (exitCode, stdout, stderr) = CaptureConsole(() => JsonEnvelopeWrapper.RunWrapped(
-            "search",
-            ["Needle", "--json-envelope"],
-            "1.0.0",
-            _jsonOptions,
+        var (exitCode, stdout, stderr) = CaptureRawEnvelope(
             _ =>
             {
                 Console.WriteLine(rawLine);
                 return CommandExitCodes.Success;
-            }));
+            });
 
         Assert.Equal(CommandExitCodes.InvalidArgument, exitCode);
         Assert.Contains("--json-envelope raw JSON item line exceeded", stderr);
@@ -851,17 +835,7 @@ public class JsonEnvelopeWrapperTests
     [Fact]
     public void RunWrapped_ManyRawJsonItems_ReturnsStructuredEnvelopeError_Issue3779()
     {
-        var (exitCode, stdout, stderr) = CaptureConsole(() => JsonEnvelopeWrapper.RunWrapped(
-            "search",
-            ["Needle", "--json-envelope"],
-            "1.0.0",
-            _jsonOptions,
-            _ =>
-            {
-                for (var i = 0; i <= JsonEnvelopeWrapper.MaxRawJsonItems; i++)
-                    Console.WriteLine("0");
-                return CommandExitCodes.Success;
-            }));
+        var (exitCode, stdout, stderr) = CaptureRawEnvelope(WriteTooManyRawJsonItems);
 
         Assert.Equal(CommandExitCodes.InvalidArgument, exitCode);
         Assert.Contains("--json-envelope raw JSON item count exceeded", stderr);
@@ -876,19 +850,76 @@ public class JsonEnvelopeWrapperTests
     }
 
     [Fact]
+    public void RunWrapped_RawItemLimitWithAmbientGenerationChange_IsolatesFixtureAndPreservesSnapshotGuard_Issue5270()
+    {
+        using var ambientProject = TestProjectHelper.CreateTempProjectScope("envelope_ambient");
+        var ambientDbPath = TestProjectHelper.CreateProjectDb(ambientProject.Root);
+        var previousDirectory = Environment.CurrentDirectory;
+        var previousDataDir = Environment.GetEnvironmentVariable(DbPathResolver.DataDirEnvironmentVariable);
+        var previousConfigDisable = Environment.GetEnvironmentVariable(CdidxConfigFile.DisableEnvVar);
+        try
+        {
+            Environment.CurrentDirectory = ambientProject.Root;
+            Environment.SetEnvironmentVariable(DbPathResolver.DataDirEnvironmentVariable, Path.GetDirectoryName(ambientDbPath));
+            Environment.SetEnvironmentVariable(CdidxConfigFile.DisableEnvVar, "1");
+
+            foreach (var isolated in new[] { false, true })
+            {
+                int WriteDuringResponse(string[] innerArgs)
+                {
+                    // Commit between the wrapper's two snapshot reads, without a timing race.
+                    TestProjectHelper.InsertIndexedFile(
+                        ambientDbPath, $"src/Changed{isolated}.cs", "csharp", "class Changed {}\n");
+                    return WriteTooManyRawJsonItems(innerArgs);
+                }
+
+                var (exitCode, stdout, stderr) = isolated
+                    ? CaptureRawEnvelope(WriteDuringResponse)
+                    : CaptureConsole(() => JsonEnvelopeWrapper.RunWrapped(
+                        "search", ["Needle", "--json-envelope"], "1.0.0", _jsonOptions, WriteDuringResponse));
+
+                var expectedExitCode = isolated ? CommandExitCodes.InvalidArgument : CommandExitCodes.UsageError;
+                Assert.Equal(expectedExitCode, exitCode);
+                Assert.Contains("--json-envelope raw JSON item count exceeded", stderr);
+                using var document = JsonDocument.Parse(stdout);
+                var metadata = document.RootElement.GetProperty("metadata");
+                Assert.Equal(expectedExitCode, metadata.GetProperty("exit_code").GetInt32());
+                Assert.Equal(0, metadata.GetProperty("result_count").GetInt32());
+                Assert.Empty(document.RootElement.GetProperty("results").EnumerateArray());
+                var error = metadata.GetProperty("error");
+                Assert.Equal(CommandErrorCodes.UsageError, error.GetProperty("error_code").GetString());
+                if (isolated)
+                {
+                    Assert.Equal(JsonEnvelopeWrapper.MaxRawJsonItems, error.GetProperty("max_items").GetInt32());
+                    Assert.DoesNotContain("generation changed", stderr);
+                }
+                else
+                {
+                    Assert.Equal(ambientDbPath, metadata.GetProperty("db_path").GetString());
+                    Assert.Contains("generation changed", error.GetProperty("message").GetString());
+                    Assert.Contains("generation changed", stderr);
+                    Assert.False(error.TryGetProperty("max_items", out _));
+                }
+            }
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(CdidxConfigFile.DisableEnvVar, previousConfigDisable);
+            Environment.SetEnvironmentVariable(DbPathResolver.DataDirEnvironmentVariable, previousDataDir);
+            Environment.CurrentDirectory = previousDirectory;
+        }
+    }
+
+    [Fact]
     public void RunWrapped_NestedRawJsonNodes_ReturnsStructuredEnvelopeError_Issue3779()
     {
         var rawLine = BuildWideRawJsonArray(JsonEnvelopeWrapper.MaxRawJsonNodes);
-        var (exitCode, stdout, stderr) = CaptureConsole(() => JsonEnvelopeWrapper.RunWrapped(
-            "search",
-            ["Needle", "--json-envelope"],
-            "1.0.0",
-            _jsonOptions,
+        var (exitCode, stdout, stderr) = CaptureRawEnvelope(
             _ =>
             {
                 Console.WriteLine(rawLine);
                 return CommandExitCodes.Success;
-            }));
+            });
 
         Assert.Equal(CommandExitCodes.InvalidArgument, exitCode);
         Assert.Contains("--json-envelope raw JSON node count exceeded", stderr);
@@ -905,18 +936,14 @@ public class JsonEnvelopeWrapperTests
     [Fact]
     public void RunWrapped_MixedRawLines_ParsesWithoutMaterializingSplitArray_Issue3015()
     {
-        var (exitCode, stdout, stderr) = CaptureConsole(() => JsonEnvelopeWrapper.RunWrapped(
-            "search",
-            ["Needle", "--json-envelope"],
-            "1.0.0",
-            _jsonOptions,
+        var (exitCode, stdout, stderr) = CaptureRawEnvelope(
             _ =>
             {
                 Console.Write("{\"path\":\"src/App.cs\"}\r\n");
                 Console.Write("not-json\r\n");
                 Console.Write("{\"done\":true,\"interrupted\":false,\"count\":2}\r\n");
                 return CommandExitCodes.Success;
-            }));
+            });
 
         Assert.Equal(CommandExitCodes.Success, exitCode);
         Assert.Equal(string.Empty, stderr);
@@ -958,6 +985,30 @@ public class JsonEnvelopeWrapperTests
 
     private static (int ExitCode, string Stdout, string Stderr) CaptureConsole(Func<int> action)
         => ConsoleCapture.Capture(action);
+
+    private static int WriteTooManyRawJsonItems(string[] _)
+    {
+        for (var i = 0; i <= JsonEnvelopeWrapper.MaxRawJsonItems; i++)
+            Console.WriteLine("0");
+        return CommandExitCodes.Success;
+    }
+
+    private (int ExitCode, string Stdout, string Stderr) CaptureRawEnvelope(Func<string[], int> runInner)
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("envelope_raw");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        // Even synthetic raw output is bracketed by production DB-generation reads.
+        // Pin a real, private DB so an unrelated index writer cannot replace the error.
+        var result = CaptureConsole(() => JsonEnvelopeWrapper.RunWrapped(
+            "search",
+            ["Needle", "--db", dbPath, "--json-envelope"],
+            "1.0.0",
+            _jsonOptions,
+            runInner));
+        using var document = JsonDocument.Parse(result.Stdout);
+        Assert.Equal(dbPath, document.RootElement.GetProperty("metadata").GetProperty("db_path").GetString());
+        return result;
+    }
 
     private static string BuildNestedRawJson(int nestedObjectCount)
     {
