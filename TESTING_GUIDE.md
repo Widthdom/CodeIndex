@@ -8,7 +8,7 @@ If you change test code, test helpers, test execution flow, or testing conventio
 
 ## Quick Start
 
-Shell search-origin regression coverage in `QueryCommandRunnerSearchIssue5275Tests.cs` pairs executable direct, quoted, nested, and backtick substitutions with literal, escaped, and help/comment controls. Keep quote restoration, depth/character budgets, C#/JavaScript controls, and ordinary/named/recipe filter and coordinate parity on both net8.0 and net9.0. The CLI variants share one isolated database and restore the external-recipe environment setting.
+Shell search-origin regression coverage in `QueryCommandRunnerSearchIssue5275Tests.cs` pairs executable direct, quoted, nested, and backtick substitutions with literal, escaped, and help/comment controls. Keep backtick unescaping, nested `case` patterns, quote restoration, depth/character/work budgets, C#/JavaScript controls, and ordinary/named/recipe filter and coordinate parity on both net8.0 and net9.0. The CLI variants share one isolated database and restore the external-recipe environment setting.
 
 Raw JSON envelope fixtures in `JsonEnvelopeWrapperTests` share `CaptureRawEnvelope`, which pins an initialized temporary project database with explicit `--db` (#5270). Keep the capture, line-size, item-count, node-count, depth, malformed-line, and mixed-line assertions independent of the live repository index. The deterministic regression commits an ambient database change inside the inner callback: an unpinned response must still fail the production snapshot guard, while the isolated item-limit fixture must retain exit 7 and `max_items`. Keep environment/current-directory changes restored in `finally` inside the non-parallel console collection, and validate net8.0 and net9.0 with an unrelated index writer active.
 
@@ -1212,7 +1212,7 @@ Issue #5260 の `QueryCommandRunnerAuditProgressIssue5260Tests` は子 query を
 
 ## クイックスタート
 
-`QueryCommandRunnerSearchIssue5275Tests.cs` のShell検索由来テストは、直接実行・引用符内・入れ子・バッククォートによる置換と、リテラル・エスケープ・ヘルプ・コメントの対照例を組み合わせます。引用符状態の復元、深さ・文字数の上限、C#/JavaScriptの対照例、通常・名前付き・recipe検索のフィルターと位置情報の一致をnet8.0とnet9.0の両方で維持してください。CLIの各変種は分離したDBを共有し、外部recipeの環境変数を復元します。
+`QueryCommandRunnerSearchIssue5275Tests.cs` のShell検索由来テストは、直接実行・引用符内・入れ子・バッククォートによる置換と、リテラル・エスケープ・ヘルプ・コメントの対照例を組み合わせます。バッククォートのエスケープ解除、入れ子の `case` パターン、引用符状態の復元、深さ・文字数・処理量の上限、C#/JavaScriptの対照例、通常・名前付き・recipe検索のフィルターと位置情報の一致をnet8.0とnet9.0の両方で維持してください。CLIの各変種は分離したDBを共有し、外部recipeの環境変数を復元します。
 
 `JsonEnvelopeWrapperTests` の raw JSON envelope フィクスチャは、初期化済みの一時プロジェクトDBを明示的な `--db` で固定する `CaptureRawEnvelope` を共有します（#5270）。キャプチャ量、行サイズ、項目数、ノード数、深さ、不正な行、混在する行の検証を、リポジトリの実インデックスから分離してください。決定的な回帰テストでは内部コールバック内で環境側のDB変更をコミットし、DB未指定の応答では本番のsnapshotガードが引き続き失敗を返し、分離済みの項目数上限テストでは終了コード7と `max_items` が維持されることを確認します。環境変数とカレントディレクトリの変更は非並列consoleコレクション内で行い、`finally` で復元してください。無関係なインデックスwriterの実行中にもnet8.0とnet9.0で検証します。
 
