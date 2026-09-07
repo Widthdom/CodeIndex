@@ -11,6 +11,42 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.47.0] - 2026-09-07
+
+#### Added
+
+- **Captured audit progress (#5260)** — `audit --all --progress` emits bounded stderr heartbeats during slow child queries while preserving JSON/NDJSON stdout. Progress reports active numeric recipe/query identifiers, completed/selected counts, monotonic elapsed time, and accurate terminal states; quiet/no-progress controls take precedence.
+- Added local audit baseline export, comparison, and reviewed-safe annotations. Versioned private files retain evidence hashes and coverage provenance; incomplete or ambiguous absence remains unknown, changed evidence requires review, and bounded comparison output reports new, unchanged, resolved, and unknown totals with omissions.
+- **Dependency analysis can filter persisted evidence by resolution state and reference kind (#5280)** — CLI `deps` adds bounded, repeatable `--resolution-state` and `--reference-kind` selectors, with matching MCP `resolutionStates` and `referenceKinds` arrays. Filters run before aggregation, ranking, SCC analysis, and graph budgets; normalized provenance is returned in query context, and cycle cursors bind the selectors.
+- **Audit recipes can include production automation with explicit bounded coverage (#5281)** — `--audit-scope production-and-tooling` adds indexed CI, installer, build/release, and custom tooling paths while retaining generic test, fixture, documentation, and loaded recipe-definition exclusions. CLI, audit-all, baseline, NDJSON, and MCP recipe results now distinguish exact indexed inclusion/exclusion counts, incomplete-generation uncertainty including known oversized files, bounded or uncertain unindexed inventory, unexecuted queries, and undeclared human review without rescanning the workspace. Audit-all coverage scans share its execution deadline.
+
+#### Fixed
+
+- **Preserve file-size budgets across indexing and freshness checks (#5258)** — CLI and MCP indexing save their effective size limit for subsequent indexing and ordinary root/shared-workspace checks. Scoped updates preserve the budget needed by untouched files, and legacy indexes recover a bounded budget from recorded file sizes without a rebuild. Failed reads retain scan-error and unverifiable evidence instead of also being reported as missing files.
+- **Batch JSON summaries preserve structured child errors and retry guidance (#5259)** — Sequential and parallel summaries retain safe child JSON error classifications, measured output-budget fields, and retry guidance, including E028 failures from status explanations and search arrays. Parsing is bounded and sanitized; raw failed streams remain an explicit `--include-raw-streams` option, and parent output limits still apply.
+- **Shell command substitutions remain visible in code-origin searches (#5275)** — Shared origin classification now tracks nested `$()` and backtick substitutions inside double quotes, including backtick unescaping and `case` pattern delimiters, preserving literal/help spans and original match coordinates. Ordinary, named, and recipe searches apply the same corrected `--origin code` and `--exclude-strings` behavior, with bounded parsing and `unknown` on budget exhaustion.
+- **Named-query search honors `--search-fields` (#5276)** — Grouped JSON and compact output now project each result through the ordinary search field selector while retaining query identity, counts, and truncation metadata. Byte budgets include the complete projected document. Unsupported projected output combinations return usage errors instead of silently changing or ignoring the selected format.
+- Candidate-window exhaustion keeps query, recipe, and aggregate counts non-authoritative, including when overlapping chunks collapse to fewer returned observations.
+
+- All-recipe audits distinguish execution completeness, observation emission, and intentional selection. Incomplete audits return exit 11 unless explicitly accepted. Bounded continuation tokens retain accounted child rows across total-row and byte budgets, reject changed query/index contracts, and provide explicit fallback guidance where full child coverage cannot be established.
+- Import preview and diff comparison-budget errors now identify the exhausted side, table, limit kind, and observed lower bound. Recovery distinguishes destination and archive constraints, avoids ineffective archive-shrinking advice for a large destination, and preserves existing safety limits and destination contents.
+- **Batch dispatch now includes only explicit read-only database diagnostics (#5282)** — Literal `db schema` and `db integrity` commands can run in sequential or parallel JSONL batches while preserving typed results and errors, database selection, input order, cancellation, and aggregate output budgets. The `--integrity-check` alias and every mutating database maintenance mode remain rejected.
+
+#### Security
+
+- Interrupted scoped exports now close their private snapshot connection before cleanup, preventing pooled SQLite handles from leaving temporary source data behind on Windows after cancellation or reconstruction failures.
+
+- Scoped exports now rebuild ordinary and trigram full-text indexes from retained chunks before compaction and hashing, removing excluded-file terms and previously deleted FTS residuals from the embedded database. All scope selectors apply this protection with or without `--redact-paths`, while preserving retained search, source database contents, private atomic publication, cancellation, and partial-archive readiness.
+- **Bound checkpoint manifest reads (#5277)** — Restore and retention validation now check and read the same regular-file handle, enforcing the 16 KiB byte limit during consumption even if the file grows after its size probe. Preserve BOM-aware decoding, sanitized diagnostics, and restore cancellation without a database migration.
+
+#### Internal
+
+- Removed ten unused private language capability constants and their empty CLI partial file after verifying that capability matching and validation use the authoritative catalog. Accepted capability values and CLI/MCP behavior are unchanged.
+- Isolate the global-log UTC/stack-trace test from ambient database provenance with an explicit private DB path and scoped log configuration. A deterministic changing-WAL regression preserves the report hint without weakening timestamp or stack-trace assertions; production behavior is unchanged.
+- Isolated search-alternative tests from the live repository index with temporary database/project contexts, preserving implicit database replay behavior during concurrent index updates (#5266).
+- **Isolated raw JSON envelope tests from ambient index updates (#5270)** — shared fixtures now use an initialized temporary database, preserving raw-output limits, structured errors, and exit-code assertions during unrelated indexing. A deterministic generation-change regression retains production snapshot safety coverage.
+- **Removed four declaration-only private members (#5283)** — deleted unused search, LSP, Markdown, and JavaScript/TypeScript extractor helpers after verifying that the complete source and generated-file index contains no consumers. This is an internal cleanup and does not claim a measured performance improvement.
+
 ### [1.46.1] - 2026-09-05
 
 #### Changed
@@ -6741,6 +6777,42 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.47.0] - 2026-09-07
+
+#### 追加
+
+- **取得した audit 出力で進捗を確認 (#5260)** — `audit --all --progress` は遅い子 query の実行中にも上限付き heartbeat を stderr に出力し、stdout の JSON/NDJSON を維持します。実行中の recipe/query 番号、完了／選択件数、単調増加時計による経過時間、終了状態を報告し、quiet/no-progress の指定を優先します。
+- ローカル監査 baseline の保存・比較・安全確認済み注釈を追加しました。バージョン付きの非公開ファイルに証拠ハッシュと完全性の由来を記録し、不完全または曖昧な不在は不明のまま扱い、証拠変更時は再レビューを必要とします。上限付き比較出力には新規・変更なし・解決済み・不明の総数と省略数を表示します。
+- **依存解析で保存済み evidence を解決状態と reference kind によって絞り込めるようになりました (#5280)** — CLI `deps` に上限付きで繰り返し指定できる `--resolution-state` と `--reference-kind` を追加し、MCP にも対応する `resolutionStates` / `referenceKinds` array を追加しました。filter は集約・ranking・SCC 解析・graph budget より前に適用し、query context は正規化済み provenance を返し、cycle cursor は selector に拘束されます。
+- **audit recipe で本番自動化を含め、上限付き coverage を明示できるようになりました (#5281)** — `--audit-scope production-and-tooling` は汎用的な test、fixture、documentation、読み込み済み recipe-definition 除外を維持しつつ、indexed CI、installer、build/release、独自配置の tooling path を追加します。CLI、audit-all、baseline、NDJSON、MCP の recipe 結果は workspace を再走査せず、indexed file の厳密な included / excluded 件数、既知の oversized file を含む incomplete-generation uncertainty、上限または不確実性付きの unindexed inventory、unexecuted query、人の review が未宣言であることを区別して返します。audit-all の coverage scan にも実行 deadline を適用します。
+
+#### 修正
+
+- **索引作成と鮮度チェックでファイルサイズ上限を維持します (#5258)** — CLIとMCPの索引作成は実効サイズ上限を保存し、後続の索引作成と通常のルート／共有workspaceチェックで再利用します。部分更新は未更新ファイルに必要な上限を維持し、旧索引はrebuildせず記録済みファイルサイズから制限内の上限を復元します。読み取り失敗は走査エラーと確認不能として保持し、同じファイルを欠落として重複報告しません。
+- **Batch JSON summary が子エラーの構造化情報と再試行案内を保持するようになりました (#5259)** — 逐次・並列の summary は、status 説明や search 配列の E028 を含め、子 JSON の安全なエラー分類、測定済みの出力サイズ情報、再試行案内を保持します。解析には上限と機密情報除去を適用し、失敗時の生 stream は引き続き `--include-raw-streams` の明示指定を必要とします。親の出力上限も維持します。
+- **Shellのコマンド置換がコード由来の検索で表示されるようになりました (#5275)** — 共有の由来分類が二重引用符内の入れ子の `$()` とバッククォートによるコマンド置換を追跡し、バッククォートのエスケープ解除と `case` のパターン区切りも扱いながら、リテラル・ヘルプ部分と元の一致位置を維持します。通常・名前付き・recipe検索で `--origin code` と `--exclude-strings` に同じ修正が適用され、解析上限を超えた場合は `unknown` を返します。
+- **名前付き検索が `--search-fields` を反映するようになりました (#5276)** — グループ化された JSON と compact 出力で通常検索と共通のフィールド選択を各結果に適用し、クエリ識別情報、件数、切り詰め情報を保持します。バイト上限は選択後の document 全体に適用します。フィールド選択と未対応の出力形式の併用は、形式を黙って変更・無視せず usage error を返します。
+- 候補枠の上限に達した場合は、重複チャンク除去後の返却件数が少なくても、query・recipe・集計の件数を確定値として扱わないようにしました。
+
+- 全レシピ監査で実行完了、observation の出力完了、意図的な選択を区別します。不完全な監査は明示的に許可しなければ終了コード11を返します。上限付き再開 token は全体行数・byte budget をまたいで出力済みの子 query 行を保持し、query/index 契約の変更を拒否します。子 query の全件性を確認できない場合は明示的な fallback を案内します。
+- importの事前検証とdiffの比較上限エラーが、超過した側・テーブル・上限の種類・観測値の下限を示すようになりました。宛先とアーカイブの制約を区別し、大きな宛先に対して効果のない入力アーカイブ縮小を勧めず、既存の安全上限と宛先の内容を維持します。
+- **batch dispatch で明示的な read-only database 診断だけを実行可能にしました (#5282)** — literal の `db schema` と `db integrity` は逐次・並列 JSONL batch で実行でき、型付き result / error、database 選択、入力順、cancellation、aggregate 出力 budget を維持します。`--integrity-check` alias と変更を伴うすべての database maintenance mode は引き続き拒否します。
+
+#### セキュリティ
+
+- スコープ付き export の中断時は、後片付け前に private snapshot の接続を閉じ、cancel や再構築失敗後に SQLite の pooled handle が Windows 上で一時ソースデータを残す問題を防ぎます。
+
+- スコープ付き export は、圧縮整理と hash 計算の前に残した chunk から通常・trigram の全文検索 index を再構築し、除外 file の term と削除済み FTS 残存データを埋め込み DB から除去します。すべての scope selector で `--redact-paths` の有無によらず適用し、残した内容の検索、元 DB の内容、private な atomic 公開、cancellation、partial archive の readiness を維持します。
+- **チェックポイント manifest の読み取り量を制限 (#5277)** — 復元と保持対象の検証で同じ通常ファイルのハンドルを検査・読み取りし、サイズ確認後に増大した場合も読み取り中に 16 KiB の上限を適用します。BOM 対応のデコード、サニタイズ済み診断、復元時のキャンセルを維持し、DB の移行は不要です。
+
+#### 内部変更
+
+- 言語ケイパビリティの照合と検証が正規のカタログを使用していることを確認し、未使用のprivate定数10個と、それらだけを含むCLIのpartialファイルを削除しました。受け付けるケイパビリティ値とCLI/MCPの動作は変更していません。
+- global log の UTC 時刻・stack trace テストに専用 DB パスを明示し、ログ設定をスコープ内に限定することで、外部 DB の provenance への依存を分離しました。WAL が変化し続ける状態の決定的な回帰テストで、時刻・stack trace の検証を弱めず report 案内を維持します。本番の挙動は変更していません。
+- 検索代替案のテストに一時DBとプロジェクトを使用し、作業用索引への依存を解消しました。索引更新中も、DB指定を明示しない再実行案の契約を維持します (#5266)。
+- **raw JSON envelopeテストを環境側のインデックス更新から分離しました（#5270）** — 共通フィクスチャで初期化済みの一時DBを使用し、無関係なインデックス更新中もraw出力上限、構造化エラー、終了コードの検証を維持します。決定的な世代変更の回帰テストで、本番のsnapshot安全性も検証します。
+- **宣言のみだった4つのprivateメンバーを削除しました (#5283)** — ソースと生成ファイルを含む完全なインデックスに利用箇所がないことを確認し、未使用の検索、LSP、Markdown、JavaScript/TypeScript抽出用ヘルパーを削除しました。これは内部整理であり、計測済みの性能向上を示すものではありません。
+
 ### [1.46.1] - 2026-09-05
 
 #### 変更
@@ -13443,7 +13515,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.46.1...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.47.0...HEAD
+[1.47.0]: https://github.com/Widthdom/CodeIndex/compare/v1.46.1...v1.47.0
 [1.46.1]: https://github.com/Widthdom/CodeIndex/compare/v1.46.0...v1.46.1
 [1.46.0]: https://github.com/Widthdom/CodeIndex/compare/v1.45.1...v1.46.0
 [1.45.1]: https://github.com/Widthdom/CodeIndex/compare/v1.45.0...v1.45.1
