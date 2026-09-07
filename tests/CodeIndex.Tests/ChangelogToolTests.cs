@@ -757,6 +757,17 @@ public sealed class ChangelogToolTests
         Assert.Equal(SampleArchive, scope.ReadFile(ArchivePath));
         Assert.Contains($"]({ArchivePath})", scope.ReadFile("CHANGELOG.md"));
         Assert.Contains("Validated 0", tool.CheckFragments());
+        scope.WriteFile("changelog.d/unreleased/195.fixed.md", SampleFragment);
+        tool.Prepare(new Version(1, 17, 0), new DateOnly(2026, 5, 1), true);
+        var prepared = scope.ReadFile("CHANGELOG.md");
+        var japaneseStart = prepared.IndexOf("## 日本語", StringComparison.Ordinal);
+        var archiveStart = prepared.IndexOf("### アーカイブ", StringComparison.Ordinal);
+        Assert.True(japaneseStart < archiveStart);
+        Assert.True(archiveStart < prepared.IndexOf("### [Unreleased]", japaneseStart, StringComparison.Ordinal));
+        Assert.Equal(1, CountOccurrences(prepared, "### アーカイブ"));
+        Assert.DoesNotContain("過去の履歴", prepared[..japaneseStart]);
+        Assert.Equal(SampleArchive, scope.ReadFile(ArchivePath));
+        tool.CheckFragments();
     }
 
     [Theory]
@@ -771,6 +782,7 @@ public sealed class ChangelogToolTests
     [InlineData("duplicate-release", "duplicate release")]
     [InlineData("missing-backlink", "link back")]
     [InlineData("unlisted-archive", "archive index")]
+    [InlineData("wrong-japanese-index", "archive index")]
     [InlineData("missing-archive", "archive index")]
     [InlineData("wrong-filename", "filename")]
     [InlineData("overlapping-range", "overlaps")]
@@ -795,6 +807,7 @@ public sealed class ChangelogToolTests
             case "duplicate-release": archive = archive.Replace("1.0.0", "1.16.0"); break;
             case "missing-backlink": archive = archive.Replace("../../CHANGELOG.md", "missing.md"); break;
             case "unlisted-archive": root = root.Replace($"[History]({ArchivePath})", string.Empty); break;
+            case "wrong-japanese-index": root = root.Replace($"{ArchivePath}#日本語", "docs/changelog/v0.9.0-v0.9.0.md#日本語"); break;
             case "missing-archive": break;
             case "wrong-filename": path = "docs/changelog/v0.9.0-v1.0.0.md"; root = root.Replace(ArchivePath, path); break;
             case "overlapping-range": archive = archive.Replace("1.0.0", "1.18.0"); path = "docs/changelog/v1.18.0-v1.18.0.md"; root = root.Replace(ArchivePath, path); break;
@@ -848,7 +861,7 @@ public sealed class ChangelogToolTests
     private const string ArchivePath = "docs/changelog/v1.0.0-v1.0.0.md";
     private static string RootWithArchive => SampleChangelog
         .Replace("# Changelog", $"# Changelog\n\n[History]({ArchivePath})")
-        .Replace("## 日本語", "### [1.16.0] - 2026-04-30\n\n- Current English.\n\n## 日本語")
+        .Replace("## 日本語", $"### [1.16.0] - 2026-04-30\n\n- Current English.\n\n## 日本語\n\n### アーカイブ\n\n[過去の履歴]({ArchivePath}#日本語)")
         .Replace("[Unreleased]:", "### [1.16.0] - 2026-04-30\n\n- 現行リリース。\n\n[Unreleased]:");
     private const string SampleArchive = """
         # Changelog archive
@@ -864,6 +877,8 @@ public sealed class ChangelogToolTests
         - Legacy English.
 
         ## 日本語
+
+        [最新の変更履歴](../../CHANGELOG.md#日本語)
 
           ### [1.0.0] - 2026-04-08
 

@@ -1081,7 +1081,9 @@ public sealed partial class ChangelogTool
 
     private sealed record ParsedChangelog(
         IReadOnlyList<string> PrefixLines,
+        IReadOnlyList<string> EnglishIntroLines,
         IReadOnlyList<VersionBlock> EnglishBlocks,
+        IReadOnlyList<string> JapaneseIntroLines,
         IReadOnlyList<VersionBlock> JapaneseBlocks,
         IReadOnlyList<FooterEntry> FooterEntries)
     {
@@ -1101,11 +1103,15 @@ public sealed partial class ChangelogTool
             var englishSectionLines = lines[(englishIndex + 1)..japaneseIndex];
             var japaneseSectionLines = lines[(japaneseIndex + 1)..footerIndex];
             var footerLines = lines[footerIndex..];
+            var english = ParseLanguageSection(englishSectionLines, "English");
+            var japanese = ParseLanguageSection(japaneseSectionLines, "Japanese");
 
             return new ParsedChangelog(
                 prefixLines,
-                ParseBlocks(englishSectionLines, "English"),
-                ParseBlocks(japaneseSectionLines, "Japanese"),
+                english.Intro,
+                english.Blocks,
+                japanese.Intro,
+                japanese.Blocks,
                 ParseFooter(footerLines));
         }
 
@@ -1128,6 +1134,9 @@ public sealed partial class ChangelogTool
 
             output.Add("## English");
             output.Add(string.Empty);
+            output.AddRange(EnglishIntroLines);
+            if (EnglishIntroLines.Count > 0)
+                output.Add(string.Empty);
             AppendBlocks(output, english);
 
             if (english.Count > 0 && english[^1].BodyLines.Count > 0)
@@ -1135,6 +1144,9 @@ public sealed partial class ChangelogTool
 
             output.Add("## 日本語");
             output.Add(string.Empty);
+            output.AddRange(JapaneseIntroLines);
+            if (JapaneseIntroLines.Count > 0)
+                output.Add(string.Empty);
             AppendBlocks(output, japanese);
 
             if (japanese.Count > 0 && japanese[^1].BodyLines.Count > 0)
@@ -1166,6 +1178,14 @@ public sealed partial class ChangelogTool
                 if (!isLast && block.BodyLines.Count > 0)
                     output.Add(string.Empty);
             }
+        }
+
+        private static (List<string> Intro, List<VersionBlock> Blocks) ParseLanguageSection(string[] lines, string sectionName)
+        {
+            var firstBlock = Array.FindIndex(lines, IsBlockHeading);
+            if (firstBlock < 0)
+                return (TrimLeadingAndTrailingBlankLines(lines.ToList()), []);
+            return (TrimLeadingAndTrailingBlankLines(lines[..firstBlock].ToList()), ParseBlocks(lines[firstBlock..], sectionName));
         }
 
         private static List<VersionBlock> ParseBlocks(string[] lines, string sectionName)

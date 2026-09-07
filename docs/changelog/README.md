@@ -2,7 +2,7 @@
 
 ## English
 
-[Current changelog and archive index](../../CHANGELOG.md#archives--アーカイブ)
+[Current changelog and archive index](../../CHANGELOG.md#archives)
 
 The root keeps both Unreleased sections and releases from v1.41.0 (2026-08-04)
 onward. Earlier history is stored in descending release order in
@@ -15,7 +15,7 @@ v1.40.3 and walking backward, we placed consecutive whole release pairs into
 each archive until adding the next pair and its compare definition would
 exceed 2 MiB minus 8 KiB reserved for navigation. This gives reproducible
 release boundaries, without assuming a calendar year fits. Initial sizes are
-341,001 bytes for the root, 1,940,515 and 1,957,517 bytes for the archives.
+342,351 bytes for the root, 1,940,525 and 1,957,527 bytes for the archives.
 All are below 2 MiB, with more than 2 MiB remaining before the standard
 4 MiB indexing limit. No size override or history exclusion is required.
 
@@ -29,6 +29,10 @@ archive-index links, and missing return navigation. Discovery is limited to
 output before any writes. `release-notes` accepts current or archived versions
 and retains the existing fixed GitHub release-note template. Archived releases
 cannot be targets of `prepare`.
+The tool does not automatically split files or choose a new cutoff: exceeding
+the ceiling stops validation or preparation and requires the archival procedure
+below. Archive navigation and compatibility tables stay in their respective
+language sections; preparation preserves those introductions outside release notes.
 
 Before a release, run `check` and the non-mutating `render --version X.Y.Z
 --date YYYY-MM-DD` preview. If root growth would exceed 3 MiB, first archive
@@ -43,7 +47,7 @@ history-maintenance PR):
    stable. Copy the English and Japanese blocks verbatim; retain legacy
    indentation and category headings. Put the relevant original reference
    definitions in each file; compare bases may name a release in another file.
-3. Add each archive to the root index and link back to `../../CHANGELOG.md`
+3. Add each archive to both root language indexes and link back to `../../CHANGELOG.md`
    from the archive prefix. Extend the root compatibility table with the
    former GitHub heading IDs and links to the new locations. Release heading
    `[1.40.3] - 2026-07-27` uses `1403---2026-07-27` in English and
@@ -68,7 +72,7 @@ It and this README are navigation documents, not release archives.
 
 ## 日本語
 
-[最新の変更履歴とアーカイブ一覧](../../CHANGELOG.md#archives--アーカイブ)
+[最新の変更履歴とアーカイブ一覧](../../CHANGELOG.md#アーカイブ)
 
 ルートには両言語の Unreleased と v1.41.0（2026-08-04）以降を残します。
 それ以前は [v1.22.0–v1.40.3](v1.22.0-v1.40.3.md) と
@@ -80,8 +84,8 @@ It and this README are navigation documents, not release archives.
 連続する日英のリリースと比較リンク定義をまとめ、次の組を追加すると
 2 MiB から案内用の 8 KiB を引いた容量を超える箇所で分割しました。
 年単位で収まるとは仮定せず、再現可能なリリース境界を使います。
-初回のサイズはルート 341,001 バイト、アーカイブ 1,940,515 バイトと
-1,957,517 バイトです。すべて 2 MiB 未満で、標準の索引上限 4 MiB まで
+初回のサイズはルート 342,351 バイト、アーカイブ 1,940,525 バイトと
+1,957,527 バイトです。すべて 2 MiB 未満で、標準の索引上限 4 MiB まで
 2 MiB 以上の余裕があり、サイズ上書きや履歴の除外は不要です。
 
 `dotnet run --project tools/CodeIndex.Changelog -- check` は fragment と
@@ -92,6 +96,9 @@ It and this README are navigation documents, not release archives.
 最大256ファイルです。`prepare` は書き込み前に既存履歴と生成結果を検証します。
 `release-notes` は現在と保管済みのバージョンに対応し、既存の固定形式の
 GitHub リリースノートを維持します。保管済みのリリースは `prepare` の対象にできません。
+ツールは自動分割や新しい境界の選定を行いません。上限超過時は検証・準備を停止し、
+以下の手順による移動が必要です。案内と互換表はそれぞれの言語セクションに置き、
+リリース準備時も本文に取り込まず導入部分として保持します。
 
 リリース前に `check` と非変更の `render --version X.Y.Z --date YYYY-MM-DD`
 で確認します。ルートが 3 MiB を超える場合はリリース準備 PR、または明示的に
@@ -103,7 +110,7 @@ GitHub リリースノートを維持します。保管済みのリリースは 
    `v<最古>-v<最新>.md` を作ります。既存アーカイブは維持し、日英本文、
    字下げ、旧カテゴリ見出しをそのままコピーします。元の比較リンク定義も
    対応するファイルに置きます。比較元が別ファイルのリリースでも構いません。
-3. ルート一覧とアーカイブ冒頭の `../../CHANGELOG.md` へのリンクを追加し、
+3. ルートの日英両方の一覧とアーカイブの `../../CHANGELOG.md` へのリンクを追加し、
    互換表に旧 GitHub 見出し ID と移動先を追加します。
    `[1.40.3] - 2026-07-27` の ID は英語が `1403---2026-07-27`、
    日本語が `1403---2026-07-27-1` です。相対リンクや文書内リンクも維持し、

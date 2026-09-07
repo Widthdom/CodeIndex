@@ -56,10 +56,14 @@ public sealed partial class ChangelogTool
     private static void ValidateHistory(IReadOnlyList<HistoryDocument> documents)
     {
         var releases = new HashSet<string>(StringComparer.Ordinal);
-        var rootPrefix = string.Join('\n', documents[0].Changelog.PrefixLines);
-        var linkedArchives = ArchiveLinkRegex.Matches(rootPrefix).Select(match => match.Groups["path"].Value).ToHashSet(StringComparer.Ordinal);
-        if (!linkedArchives.SetEquals(documents.Skip(1).Select(document => document.Path)))
-            throw new ChangelogException("CHANGELOG.md archive index has missing, unlisted, or invalid archive paths.");
+        var root = documents[0].Changelog;
+        foreach (var introduction in new[] { root.PrefixLines.Concat(root.EnglishIntroLines), root.JapaneseIntroLines.AsEnumerable() })
+        {
+            var linkedArchives = ArchiveLinkRegex.Matches(string.Join('\n', introduction))
+                .Select(match => match.Groups["path"].Value).ToHashSet(StringComparer.Ordinal);
+            if (!linkedArchives.SetEquals(documents.Skip(1).Select(document => document.Path)))
+                throw new ChangelogException("CHANGELOG.md English/日本語 archive indexes have missing, unlisted, or invalid archive paths.");
+        }
 
         Version? oldestRoot = null;
         var ranges = new List<(Version Oldest, Version Newest, string Path)>();

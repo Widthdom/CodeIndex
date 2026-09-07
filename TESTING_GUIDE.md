@@ -14,6 +14,8 @@ legacy indented release/category headings, duplicate/missing compare links,
 archive navigation/ranges, UTF-8 size boundaries, and pre-write rejection without
 changing version files, fragments, or archives. Never prepare a real release to
 test history archival. The repository history check also guards indexing headroom.
+Keep English/Japanese archive indexes in their own language introductions and
+verify repeated preparation preserves navigation outside release bodies.
 
 `AuditScopeIssue5281Tests` owns the production-and-tooling scope boundary and
 coverage contract. Keep mixed production/tooling paths, hidden CI, installer
@@ -1263,6 +1265,8 @@ prepare／release-notes は使い捨てリポジトリで実行し、日英ペ�
 見出し、比較リンクの欠落・重複、アーカイブの案内・範囲、UTF-8 のサイズ境界、
 拒否時に version・fragment・アーカイブが変わらないことを確認します。
 検証目的で実リリースを準備してはいけません。実履歴の検証では索引上限までの余裕も守ります。
+日英のアーカイブ一覧を各言語の導入部分に置き、準備を繰り返しても案内が
+リリース本文に混入せず保持されることを検証してください。
 
 このドキュメントは、`cdidx` のテストスイートがどう構成されているか、どのように安全にテストを追加・更新するか、そして挙動やテスト基盤を変更したときに従うべき規約をまとめたものです。
 
