@@ -142,11 +142,21 @@ public sealed class ChangelogToolTests
         Assert.Equal("Validated 0 changelog fragment(s).", summary);
     }
 
-    [Fact]
-    public void PrepareMovesFragmentsIntoReleaseAndUpdatesFooter()
+    [Theory]
+    [InlineData("lf")]
+    [InlineData("crlf")]
+    [InlineData("mixed")]
+    public void PrepareMovesFragmentsIntoReleaseAndUpdatesFooter(string newlineStyle)
     {
         using var scope = new TestRepositoryScope();
-        scope.WriteFile("CHANGELOG.md", SampleChangelog);
+        var input = SampleChangelog.Replace("\r\n", "\n", StringComparison.Ordinal);
+        input = newlineStyle switch
+        {
+            "crlf" => input.Replace("\n", "\r\n", StringComparison.Ordinal) + "\r\n",
+            "mixed" => input + "\r\n",
+            _ => input + "\n"
+        };
+        File.WriteAllText(Path.Combine(scope.Root, "CHANGELOG.md"), input);
         scope.WriteFile("version.json", """
             {
               "version": "1.16.0"
@@ -156,6 +166,7 @@ public sealed class ChangelogToolTests
         scope.WriteFile("changelog.d/unreleased/.gitkeep", string.Empty);
 
         var tool = new ChangelogTool(scope.Root);
+        var preview = tool.Prepare(new Version(1, 17, 0), new DateOnly(2026, 5, 1), writeChanges: false);
         var result = tool.Prepare(new Version(1, 17, 0), new DateOnly(2026, 5, 1), writeChanges: true);
 
         Assert.Contains("Prepared changelog for v1.17.0.", result.Summary);
@@ -163,6 +174,10 @@ public sealed class ChangelogToolTests
         Assert.Contains("Fragments consumed: 1.", result.Summary);
 
         var changelog = scope.ReadFile("CHANGELOG.md");
+        Assert.Equal(preview.RenderedChangelog, changelog);
+        Assert.DoesNotContain("\r", changelog);
+        Assert.EndsWith("\n", changelog);
+        Assert.Contains("Validated 0", tool.CheckFragments());
         Assert.Equal(2, CountOccurrences(changelog, "### [1.17.0] - 2026-05-01"));
         Assert.Contains("English release note", changelog);
         Assert.Contains("Japanese release note", changelog);
@@ -521,7 +536,7 @@ public sealed class ChangelogToolTests
     }
 
     [Fact]
-    public void RenderReleaseNotesDoesNotRequireTargetCompareFooter()
+    public void RenderReleaseNotesRejectsMissingTargetCompareFooter_Issue5294()
     {
         using var scope = new TestRepositoryScope();
         scope.WriteFile("CHANGELOG.md", """
@@ -548,10 +563,8 @@ public sealed class ChangelogToolTests
             """);
 
         var tool = new ChangelogTool(scope.Root);
-        var notes = tool.RenderReleaseNotes(new Version(1, 17, 0), new Version(1, 16, 0));
-
-        Assert.Contains("Full Changelog: https://github.com/Widthdom/CodeIndex/compare/v1.16.0...v1.17.0", notes);
-        Assert.DoesNotContain("CHANGELOG.md is missing compare-link footer", notes);
+        var error = Assert.Throws<ChangelogException>(() => tool.RenderReleaseNotes(new Version(1, 17, 0), new Version(1, 16, 0)));
+        Assert.Contains("missing compare link [1.17.0]", error.Message);
     }
 
     [Fact]
@@ -733,7 +746,163 @@ public sealed class ChangelogToolTests
         Assert.True(
             changelogLength <= ChangelogTool.MaxChangelogBytes,
             $"CHANGELOG.md is {changelogLength} bytes, but MaxChangelogBytes is {ChangelogTool.MaxChangelogBytes}.");
+        Assert.True(ChangelogTool.MaxChangelogBytes <= 3 * 1024 * 1024);
+        new ChangelogTool(Path.GetDirectoryName(RepositoryTestPaths.Combine("CHANGELOG.md"))!).CheckFragments();
     }
+
+    [Fact]
+    public void ArchivedHistorySupportsCheckPrepareAndReleaseNotes_Issue5294()
+    {
+        using var scope = new TestRepositoryScope();
+        scope.WriteFile("CHANGELOG.md", RootWithArchive);
+        scope.WriteFile(ArchivePath, SampleArchive);
+        scope.WriteFile("version.json", "{\"version\":\"1.16.0\"}");
+        scope.WriteFile("changelog.d/unreleased/195.fixed.md", SampleFragment);
+        var tool = new ChangelogTool(scope.Root);
+
+        Assert.Contains("Validated 1", tool.CheckFragments());
+        Assert.Contains("compare/v0.9.0...v1.0.0", tool.RenderReleaseNotes(new Version(1, 0, 0), new Version(0, 9, 0)));
+        Assert.Contains("compare/v1.15.3...v1.16.0", tool.RenderReleaseNotes(new Version(1, 16, 0), new Version(1, 15, 3)));
+        Assert.Contains("archived", Assert.Throws<ChangelogException>(() => tool.Prepare(new Version(1, 0, 0), new DateOnly(2026, 5, 1), true)).Message);
+        var preview = tool.Prepare(new Version(1, 17, 0), new DateOnly(2026, 5, 1), false);
+        Assert.Equal(RootWithArchive, scope.ReadFile("CHANGELOG.md"));
+        Assert.True(scope.Exists("changelog.d/unreleased/195.fixed.md"));
+        tool.Prepare(new Version(1, 17, 0), new DateOnly(2026, 5, 1), true);
+        Assert.Equal(preview.RenderedChangelog, scope.ReadFile("CHANGELOG.md"));
+        Assert.Equal(SampleArchive, scope.ReadFile(ArchivePath));
+        Assert.Contains($"]({ArchivePath})", scope.ReadFile("CHANGELOG.md"));
+        Assert.Contains("Validated 0", tool.CheckFragments());
+        scope.WriteFile("changelog.d/unreleased/195.fixed.md", SampleFragment);
+        tool.Prepare(new Version(1, 17, 0), new DateOnly(2026, 5, 1), true);
+        var prepared = scope.ReadFile("CHANGELOG.md");
+        var japaneseStart = prepared.IndexOf("## 日本語", StringComparison.Ordinal);
+        var archiveStart = prepared.IndexOf("### アーカイブ", StringComparison.Ordinal);
+        Assert.True(japaneseStart < archiveStart);
+        Assert.True(archiveStart < prepared.IndexOf("### [Unreleased]", japaneseStart, StringComparison.Ordinal));
+        Assert.Equal(1, CountOccurrences(prepared, "### アーカイブ"));
+        Assert.DoesNotContain("過去の履歴", prepared[..japaneseStart]);
+        Assert.Equal(SampleArchive, scope.ReadFile(ArchivePath));
+        tool.CheckFragments();
+    }
+
+    [Theory]
+    [InlineData("missing-japanese", "English/日本語")]
+    [InlineData("duplicate-japanese", "English/日本語")]
+    [InlineData("mismatched-date", "English/日本語")]
+    [InlineData("missing-compare", "missing compare")]
+    [InlineData("duplicate-compare", "duplicate compare")]
+    [InlineData("wrong-compare-target", "mismatched target")]
+    [InlineData("wrong-compare-base", "older version")]
+    [InlineData("wrong-unreleased-base", "newest root release")]
+    [InlineData("duplicate-release", "duplicate release")]
+    [InlineData("missing-backlink", "link back")]
+    [InlineData("unlisted-archive", "archive index")]
+    [InlineData("wrong-japanese-index", "archive index")]
+    [InlineData("missing-archive", "archive index")]
+    [InlineData("wrong-filename", "filename")]
+    [InlineData("overlapping-range", "overlaps")]
+    [InlineData("archive-unreleased", "Unreleased")]
+    [InlineData("reversed-order", "descending order")]
+    public void HistoryValidationRejectsBrokenArchivesBeforeMutation_Issue5294(string scenario, string expected)
+    {
+        using var scope = new TestRepositoryScope();
+        var root = RootWithArchive;
+        var archive = SampleArchive;
+        var path = ArchivePath;
+        switch (scenario)
+        {
+            case "missing-japanese": archive = archive.Replace("  ### [1.0.0] - 2026-04-08\n\n### 修正\n\n- 旧リリース。\n\n", string.Empty); break;
+            case "duplicate-japanese": archive = archive.Replace("  ### [1.0.0] - 2026-04-08", "  ### [1.0.0] - 2026-04-08\n\n  ### [1.0.0] - 2026-04-08"); break;
+            case "mismatched-date": archive = archive.Replace("  ### [1.0.0] - 2026-04-08", "  ### [1.0.0] - 2026-04-09"); break;
+            case "missing-compare": archive = archive.Replace("[1.0.0]:", "[0.9.0]:").Replace("tag/v1.0.0", "tag/v0.9.0"); break;
+            case "duplicate-compare": archive += "\n[1.0.0]: https://github.com/Widthdom/CodeIndex/releases/tag/v1.0.0\n"; break;
+            case "wrong-compare-target": archive = archive.Replace("tag/v1.0.0", "tag/v0.9.0"); break;
+            case "wrong-compare-base": archive = archive.Replace("releases/tag/v1.0.0", "compare/v1.0.0...v1.0.0"); break;
+            case "wrong-unreleased-base": root = root.Replace("v1.16.0...HEAD", "v1.0.0...HEAD"); break;
+            case "duplicate-release": archive = archive.Replace("1.0.0", "1.16.0"); break;
+            case "missing-backlink": archive = archive.Replace("../../CHANGELOG.md", "missing.md"); break;
+            case "unlisted-archive": root = root.Replace($"[History]({ArchivePath})", string.Empty); break;
+            case "wrong-japanese-index": root = root.Replace($"{ArchivePath}#日本語", "docs/changelog/v0.9.0-v0.9.0.md#日本語"); break;
+            case "missing-archive": break;
+            case "wrong-filename": path = "docs/changelog/v0.9.0-v1.0.0.md"; root = root.Replace(ArchivePath, path); break;
+            case "overlapping-range": archive = archive.Replace("1.0.0", "1.18.0"); path = "docs/changelog/v1.18.0-v1.18.0.md"; root = root.Replace(ArchivePath, path); break;
+            case "archive-unreleased": archive = archive.Replace("### [1.0.0] - 2026-04-08", "### [Unreleased]").Replace("[1.0.0]: https://github.com/Widthdom/CodeIndex/releases/tag/v1.0.0", "[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.0.0...HEAD"); break;
+            case "reversed-order": archive = archive.Replace("## 日本語", "### [1.1.0] - 2026-04-10\n\n## 日本語").Replace("[1.0.0]:", "### [1.1.0] - 2026-04-10\n\n[1.1.0]: https://github.com/Widthdom/CodeIndex/compare/v1.0.0...v1.1.0\n[1.0.0]:"); break;
+        }
+        scope.WriteFile("CHANGELOG.md", root);
+        if (scenario != "missing-archive")
+            scope.WriteFile(path, archive);
+        scope.WriteFile("version.json", "{\"version\":\"1.16.0\"}");
+        scope.WriteFile("changelog.d/unreleased/195.fixed.md", SampleFragment);
+        var tool = new ChangelogTool(scope.Root);
+        Assert.Contains(expected, Assert.Throws<ChangelogException>(() => tool.CheckFragments()).Message);
+        Assert.Contains(expected, Assert.Throws<ChangelogException>(() => tool.Prepare(new Version(1, 17, 0), new DateOnly(2026, 5, 1), true)).Message);
+        Assert.Contains(expected, Assert.Throws<ChangelogException>(() => tool.RenderReleaseNotes(new Version(1, 16, 0), new Version(1, 15, 3))).Message);
+        Assert.Equal(root, scope.ReadFile("CHANGELOG.md"));
+        Assert.Equal("{\"version\":\"1.16.0\"}", scope.ReadFile("version.json"));
+        Assert.Equal(SampleFragment, scope.ReadFile("changelog.d/unreleased/195.fixed.md"));
+        if (scenario != "missing-archive")
+            Assert.Equal(archive, scope.ReadFile(path));
+    }
+
+    [Fact]
+    public void HistoryByteLimitsCoverArchivesAndPreparedOutput_Issue5294()
+    {
+        using var scope = new TestRepositoryScope();
+        scope.WriteFile("CHANGELOG.md", RootWithArchive);
+        scope.WriteFile(ArchivePath, SampleArchive);
+        scope.WriteFile("version.json", "{\"version\":\"1.16.0\"}");
+        scope.WriteFile("changelog.d/unreleased/195.fixed.md", SampleFragment);
+        var tool = new ChangelogTool(scope.Root);
+        var paddingBytes = checked((int)ChangelogTool.MaxChangelogBytes - System.Text.Encoding.UTF8.GetByteCount(SampleArchive));
+        var padding = new string('界', paddingBytes / 3) + new string('x', paddingBytes % 3);
+        var archive = SampleArchive.Replace("Legacy English.", "Legacy English." + padding);
+        Assert.Equal(ChangelogTool.MaxChangelogBytes, System.Text.Encoding.UTF8.GetByteCount(archive));
+        scope.WriteFile(ArchivePath, archive);
+        tool.CheckFragments();
+        scope.WriteFile(ArchivePath, archive + "x");
+        Assert.Contains("maximum supported size", Assert.Throws<ChangelogException>(() => tool.CheckFragments()).Message);
+        scope.WriteFile(ArchivePath, SampleArchive);
+        var root = RootWithArchive.Replace("# Changelog", "# Changelog" + new string('x', checked((int)ChangelogTool.MaxChangelogBytes - System.Text.Encoding.UTF8.GetByteCount(RootWithArchive))));
+        scope.WriteFile("CHANGELOG.md", root);
+        tool.CheckFragments();
+        foreach (var write in new[] { false, true })
+            Assert.Contains("prepared output", Assert.Throws<ChangelogException>(() => tool.Prepare(new Version(1, 17, 0), new DateOnly(2026, 5, 1), write)).Message);
+        Assert.Equal(root, scope.ReadFile("CHANGELOG.md"));
+        Assert.Equal("{\"version\":\"1.16.0\"}", scope.ReadFile("version.json"));
+        Assert.Equal(SampleFragment, scope.ReadFile("changelog.d/unreleased/195.fixed.md"));
+    }
+
+    private const string ArchivePath = "docs/changelog/v1.0.0-v1.0.0.md";
+    private static string RootWithArchive => SampleChangelog
+        .Replace("# Changelog", $"# Changelog\n\n[History]({ArchivePath})")
+        .Replace("## 日本語", $"### [1.16.0] - 2026-04-30\n\n- Current English.\n\n## 日本語\n\n### アーカイブ\n\n[過去の履歴]({ArchivePath}#日本語)")
+        .Replace("[Unreleased]:", "### [1.16.0] - 2026-04-30\n\n- 現行リリース。\n\n[Unreleased]:");
+    private const string SampleArchive = """
+        # Changelog archive
+
+        [Current](../../CHANGELOG.md)
+
+        ## English
+
+        ### [1.0.0] - 2026-04-08
+
+        ### Fixed
+
+        - Legacy English.
+
+        ## 日本語
+
+        [最新の変更履歴](../../CHANGELOG.md#日本語)
+
+          ### [1.0.0] - 2026-04-08
+
+        ### 修正
+
+        - 旧リリース。
+
+        [1.0.0]: https://github.com/Widthdom/CodeIndex/releases/tag/v1.0.0
+        """;
 
     [Fact]
     public void PrepareRejectsOversizedVersionBeforeParsing()

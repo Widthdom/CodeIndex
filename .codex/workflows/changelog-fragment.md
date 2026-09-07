@@ -44,7 +44,10 @@ field entirely instead.
 
 The validator and release preparation tool reject oversized inputs before
 parsing: at most 512 unreleased fragments, each fragment at most 131072 bytes,
-`CHANGELOG.md` at most 8388608 bytes, and `version.json` at most 16384 bytes.
+each history file (`CHANGELOG.md` and `docs/changelog/v*.md`) at most 3145728
+bytes, at most 256 archives, and `version.json` at most 16384 bytes. `check`
+also validates history layout, bilingual pairs, archive navigation, and compare
+links. See `docs/changelog/README.md` for release-boundary archival procedures.
 
 ## Template
 

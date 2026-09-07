@@ -8,6 +8,17 @@ If you change test code, test helpers, test execution flow, or testing conventio
 
 ## Quick Start
 
+`ChangelogToolTests` covers current and archived history on net8.0 and net9.0.
+Prepare must accept LF, CRLF, and mixed endings and produce revalidatable LF output,
+including the final footer newline, on Windows as well as Unix.
+Use disposable repositories for prepare/release-notes; verify bilingual pairs,
+legacy indented release/category headings, duplicate/missing compare links,
+archive navigation/ranges, UTF-8 size boundaries, and pre-write rejection without
+changing version files, fragments, or archives. Never prepare a real release to
+test history archival. The repository history check also guards indexing headroom.
+Keep English/Japanese archive indexes in their own language introductions and
+verify repeated preparation preserves navigation outside release bodies.
+
 `AuditScopeIssue5281Tests` owns the production-and-tooling scope boundary and
 coverage contract. Keep mixed production/tooling paths, hidden CI, installer
 self-test naming, nested tests/fixtures, docs, recipe definitions, exact and
@@ -1250,6 +1261,16 @@ baseline レビューの回帰テストでは、索引除外設定の変更、�
 Issue #5260 の `QueryCommandRunnerAuditProgressIssue5260Tests` は子 query を待機させて実際の heartbeat を確認し、stdout の JSON/NDJSON とカスタム識別子の非公開、取消、query／出力の失敗、deadline、quiet/no-progress の優先順位、flag の適用範囲、単調増加時計による通知頻度と再描画／破棄を両 framework で検証します。console の変更は console-sensitive collection 内で行い、writer とテスト用 budget を `finally` で復元してください。
 
 `IndexCommandRunnerIssue5258Tests.cs`のIssue #5258検証は、明示指定・環境変数・既定のサイズ上限、通常のルート／共有workspaceチェック、部分更新、全体更新、旧方針の欠落・不正値、実際の削除、読み取り失敗、MCPの保存とdry run、読み取り上限の維持を両フレームワークで確認します。環境変数とカレントディレクトリの変更はSQLite pool sensitiveコレクション内に置き、`finally`で復元してください。
+
+`ChangelogToolTests` は現行・保管済みの履歴を net8.0 と net9.0 で検証します。
+prepare は LF・CRLF・混在改行を受け付け、Windows と Unix の両方でフッター末尾まで
+LF に統一された再検証可能な出力を生成することを確認します。
+prepare／release-notes は使い捨てリポジトリで実行し、日英ペア、旧字下げ・カテゴリ
+見出し、比較リンクの欠落・重複、アーカイブの案内・範囲、UTF-8 のサイズ境界、
+拒否時に version・fragment・アーカイブが変わらないことを確認します。
+検証目的で実リリースを準備してはいけません。実履歴の検証では索引上限までの余裕も守ります。
+日英のアーカイブ一覧を各言語の導入部分に置き、準備を繰り返しても案内が
+リリース本文に混入せず保持されることを検証してください。
 
 このドキュメントは、`cdidx` のテストスイートがどう構成されているか、どのように安全にテストを追加・更新するか、そして挙動やテスト基盤を変更したときに従うべき規約をまとめたものです。
 

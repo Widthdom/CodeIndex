@@ -74,7 +74,8 @@ public static class Program
         Console.Out.WriteLine("Limits:");
         Console.Out.WriteLine($"  unreleased fragments: {ChangelogTool.MaxFragmentCount}");
         Console.Out.WriteLine($"  fragment file size: {ChangelogTool.MaxFragmentBytes} bytes");
-        Console.Out.WriteLine($"  CHANGELOG.md size: {ChangelogTool.MaxChangelogBytes} bytes");
+        Console.Out.WriteLine($"  history file size (CHANGELOG.md and archives): {ChangelogTool.MaxChangelogBytes} bytes");
+        Console.Out.WriteLine($"  archive files: {ChangelogTool.MaxArchiveCount}");
         Console.Out.WriteLine($"  version.json size: {ChangelogTool.MaxVersionJsonBytes} bytes");
     }
 
@@ -220,11 +221,11 @@ internal static class ChangelogValueParser
     }
 }
 
-public sealed class ChangelogTool
+public sealed partial class ChangelogTool
 {
     public const int MaxFragmentCount = 512;
     public const long MaxFragmentBytes = 128 * 1024;
-    public const long MaxChangelogBytes = 8 * 1024 * 1024;
+    public const long MaxChangelogBytes = 3 * 1024 * 1024;
     public const long MaxVersionJsonBytes = 16 * 1024;
     internal static Action<PrepareWritePhase>? PrepareWritePhaseForTesting { get; set; }
     internal static Action<string> DeleteFileForTesting { get; set; } = File.Delete;
@@ -285,6 +286,7 @@ public sealed class ChangelogTool
     public string CheckFragments()
     {
         var fragments = LoadFragments(requireAny: false);
+        LoadHistory();
         return $"Validated {fragments.Count} changelog fragment(s).";
     }
 
@@ -298,7 +300,10 @@ public sealed class ChangelogTool
         var changelogPath = Path.Combine(_repositoryRoot, "CHANGELOG.md");
         var originalChangelogText = ReadAllTextBounded(changelogPath, _repositoryRoot, MaxChangelogBytes);
         var changelogText = originalChangelogText.Replace("\r\n", "\n", StringComparison.Ordinal);
-        var changelog = ParsedChangelog.Parse(changelogText);
+        var history = LoadHistory(changelogText);
+        var changelog = history[0].Changelog;
+        if (history.Skip(1).Any(document => document.Changelog.HasReleaseSection(targetVersion)))
+            throw new ChangelogException($"Release v{targetVersion} is archived; prepare only current or newer releases in CHANGELOG.md.");
 
         var targetHeading = $"### [{targetVersion}] - {releaseDate:yyyy-MM-dd}";
         var existingTargetBase = changelog.FooterEntries
@@ -323,6 +328,8 @@ public sealed class ChangelogTool
 
         var footerEntries = PrepareFooterEntries(changelog.FooterEntries, targetVersion.ToString(), releaseBase);
         var updatedChangelog = changelog.Render(english, japanese, footerEntries);
+        ValidateChangelogSize(updatedChangelog, "CHANGELOG.md (prepared output)");
+        ValidateHistory([new HistoryDocument("CHANGELOG.md", ParsedChangelog.Parse(updatedChangelog)), .. history.Skip(1)]);
 
         var consumedFragmentFiles = fragments.Select(fragment => fragment.RelativePath).ToList();
         var updatedVersionJson = JsonSerializer.Serialize(new { version = targetVersion.ToString() }, new JsonSerializerOptions { WriteIndented = true }) + Environment.NewLine;
@@ -360,9 +367,10 @@ public sealed class ChangelogTool
         if (previousVersion.CompareTo(targetVersion) >= 0)
             throw new ChangelogException($"Previous version v{previousVersion} must be older than target version v{targetVersion}.");
 
-        var changelogPath = Path.Combine(_repositoryRoot, "CHANGELOG.md");
-        var changelogText = ReadAllTextBounded(changelogPath, _repositoryRoot, MaxChangelogBytes).Replace("\r\n", "\n", StringComparison.Ordinal);
-        var changelog = ParsedChangelog.Parse(changelogText);
+        var history = LoadHistory();
+        var changelog = history.FirstOrDefault(document => document.Changelog.HasReleaseSection(targetVersion))?.Changelog;
+        if (changelog is null)
+            throw new ChangelogException($"CHANGELOG.md and archives are missing release notes for v{targetVersion}.");
         var versionPrefix = $"### [{targetVersion}]";
 
         var englishBlock = changelog.EnglishBlocks.FirstOrDefault(block => block.HeadingLine.StartsWith(versionPrefix, StringComparison.Ordinal));
@@ -1073,7 +1081,9 @@ public sealed class ChangelogTool
 
     private sealed record ParsedChangelog(
         IReadOnlyList<string> PrefixLines,
+        IReadOnlyList<string> EnglishIntroLines,
         IReadOnlyList<VersionBlock> EnglishBlocks,
+        IReadOnlyList<string> JapaneseIntroLines,
         IReadOnlyList<VersionBlock> JapaneseBlocks,
         IReadOnlyList<FooterEntry> FooterEntries)
     {
@@ -1085,7 +1095,7 @@ public sealed class ChangelogTool
             if (englishIndex < 0 || japaneseIndex < 0 || japaneseIndex <= englishIndex)
                 throw new ChangelogException("CHANGELOG.md is missing the English/日本語 section markers.");
 
-            var footerIndex = Array.FindIndex(lines, japaneseIndex + 1, line => FooterLinkRegex.IsMatch(line));
+            var footerIndex = Array.FindIndex(lines, japaneseIndex + 1, line => FooterLinkRegex.IsMatch(line) || FooterTagLinkRegex.IsMatch(line));
             if (footerIndex < 0)
                 throw new ChangelogException("CHANGELOG.md is missing compare-link footer definitions.");
 
@@ -1093,11 +1103,15 @@ public sealed class ChangelogTool
             var englishSectionLines = lines[(englishIndex + 1)..japaneseIndex];
             var japaneseSectionLines = lines[(japaneseIndex + 1)..footerIndex];
             var footerLines = lines[footerIndex..];
+            var english = ParseLanguageSection(englishSectionLines, "English");
+            var japanese = ParseLanguageSection(japaneseSectionLines, "Japanese");
 
             return new ParsedChangelog(
                 prefixLines,
-                ParseBlocks(englishSectionLines, "English"),
-                ParseBlocks(japaneseSectionLines, "Japanese"),
+                english.Intro,
+                english.Blocks,
+                japanese.Intro,
+                japanese.Blocks,
                 ParseFooter(footerLines));
         }
 
@@ -1120,6 +1134,9 @@ public sealed class ChangelogTool
 
             output.Add("## English");
             output.Add(string.Empty);
+            output.AddRange(EnglishIntroLines);
+            if (EnglishIntroLines.Count > 0)
+                output.Add(string.Empty);
             AppendBlocks(output, english);
 
             if (english.Count > 0 && english[^1].BodyLines.Count > 0)
@@ -1127,6 +1144,9 @@ public sealed class ChangelogTool
 
             output.Add("## 日本語");
             output.Add(string.Empty);
+            output.AddRange(JapaneseIntroLines);
+            if (JapaneseIntroLines.Count > 0)
+                output.Add(string.Empty);
             AppendBlocks(output, japanese);
 
             if (japanese.Count > 0 && japanese[^1].BodyLines.Count > 0)
@@ -1142,7 +1162,7 @@ public sealed class ChangelogTool
                     builder.Append('\n');
             }
 
-            return builder.ToString().TrimEnd() + Environment.NewLine;
+            return builder.ToString().TrimEnd() + "\n";
         }
 
         private static void AppendBlocks(List<string> output, IReadOnlyList<VersionBlock> blocks)
@@ -1160,6 +1180,14 @@ public sealed class ChangelogTool
             }
         }
 
+        private static (List<string> Intro, List<VersionBlock> Blocks) ParseLanguageSection(string[] lines, string sectionName)
+        {
+            var firstBlock = Array.FindIndex(lines, IsBlockHeading);
+            if (firstBlock < 0)
+                return (TrimLeadingAndTrailingBlankLines(lines.ToList()), []);
+            return (TrimLeadingAndTrailingBlankLines(lines[..firstBlock].ToList()), ParseBlocks(lines[firstBlock..], sectionName));
+        }
+
         private static List<VersionBlock> ParseBlocks(string[] lines, string sectionName)
         {
             var blocks = new List<VersionBlock>();
@@ -1173,17 +1201,17 @@ public sealed class ChangelogTool
                 if (index >= lines.Length)
                     break;
 
-                if (!lines[index].StartsWith("### ", StringComparison.Ordinal))
+                if (!IsBlockHeading(lines[index]))
                     throw new ChangelogException($"CHANGELOG.md {sectionName} section contains unexpected content: '{lines[index]}'.");
 
-                var heading = lines[index];
+                var heading = lines[index].TrimStart();
                 index++;
 
                 while (index < lines.Length && string.IsNullOrWhiteSpace(lines[index]))
                     index++;
 
                 var body = new List<string>();
-                while (index < lines.Length && !lines[index].StartsWith("### ", StringComparison.Ordinal))
+                while (index < lines.Length && !IsBlockHeading(lines[index]))
                 {
                     body.Add(lines[index]);
                     index++;
@@ -1195,6 +1223,9 @@ public sealed class ChangelogTool
 
             return blocks;
         }
+
+        private static bool IsBlockHeading(string line) =>
+            line.Length - line.TrimStart(' ').Length <= 3 && line.TrimStart(' ').StartsWith("### [", StringComparison.Ordinal);
 
         private static List<string> TrimLeadingAndTrailingBlankLines(List<string> lines)
         {

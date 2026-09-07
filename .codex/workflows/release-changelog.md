@@ -17,6 +17,14 @@ git switch -c release/v1.17.0 origin/main
 
 ## Prepare the changelog
 
+First run `check` and preview with `render` (the same version/date options as
+`prepare`). All history files and the prepared root must fit the 3 MiB ceiling,
+leaving 1 MiB below standard indexing limits. If necessary, archive complete
+older bilingual releases following `docs/changelog/README.md` before preparing
+the release. Keep the current release and both Unreleased sections at the root.
+History archival is also allowed in an explicitly authorized maintenance PR
+(#5294); it does not itself bump versions or consume fragments.
+
 ```bash
 dotnet run --project tools/CodeIndex.Changelog -- prepare --version 1.17.0 --date 2026-05-01
 ```
@@ -62,7 +70,8 @@ dotnet run --project tools/CodeIndex.Changelog -- release-notes --version 1.17.0
 ```
 
 The command validates that the matching English and 日本語 `### [1.17.0]`
-blocks exist in `CHANGELOG.md`, fails if both are empty, and emits:
+blocks exist in `CHANGELOG.md` or a validated `docs/changelog/v*.md` archive,
+fails if both are empty, and emits:
 
 ````md
 ## What's Changed
