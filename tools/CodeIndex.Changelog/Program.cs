@@ -1162,7 +1162,7 @@ public sealed partial class ChangelogTool
                     builder.Append('\n');
             }
 
-            return builder.ToString().TrimEnd() + Environment.NewLine;
+            return builder.ToString().TrimEnd() + "\n";
         }
 
         private static void AppendBlocks(List<string> output, IReadOnlyList<VersionBlock> blocks)

@@ -9,6 +9,8 @@ If you change test code, test helpers, test execution flow, or testing conventio
 ## Quick Start
 
 `ChangelogToolTests` covers current and archived history on net8.0 and net9.0.
+Prepare must accept LF, CRLF, and mixed endings and produce revalidatable LF output,
+including the final footer newline, on Windows as well as Unix.
 Use disposable repositories for prepare/release-notes; verify bilingual pairs,
 legacy indented release/category headings, duplicate/missing compare links,
 archive navigation/ranges, UTF-8 size boundaries, and pre-write rejection without
@@ -1261,6 +1263,8 @@ Issue #5260 の `QueryCommandRunnerAuditProgressIssue5260Tests` は子 query を
 `IndexCommandRunnerIssue5258Tests.cs`のIssue #5258検証は、明示指定・環境変数・既定のサイズ上限、通常のルート／共有workspaceチェック、部分更新、全体更新、旧方針の欠落・不正値、実際の削除、読み取り失敗、MCPの保存とdry run、読み取り上限の維持を両フレームワークで確認します。環境変数とカレントディレクトリの変更はSQLite pool sensitiveコレクション内に置き、`finally`で復元してください。
 
 `ChangelogToolTests` は現行・保管済みの履歴を net8.0 と net9.0 で検証します。
+prepare は LF・CRLF・混在改行を受け付け、Windows と Unix の両方でフッター末尾まで
+LF に統一された再検証可能な出力を生成することを確認します。
 prepare／release-notes は使い捨てリポジトリで実行し、日英ペア、旧字下げ・カテゴリ
 見出し、比較リンクの欠落・重複、アーカイブの案内・範囲、UTF-8 のサイズ境界、
 拒否時に version・fragment・アーカイブが変わらないことを確認します。

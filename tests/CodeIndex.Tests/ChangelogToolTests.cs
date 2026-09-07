@@ -142,11 +142,21 @@ public sealed class ChangelogToolTests
         Assert.Equal("Validated 0 changelog fragment(s).", summary);
     }
 
-    [Fact]
-    public void PrepareMovesFragmentsIntoReleaseAndUpdatesFooter()
+    [Theory]
+    [InlineData("lf")]
+    [InlineData("crlf")]
+    [InlineData("mixed")]
+    public void PrepareMovesFragmentsIntoReleaseAndUpdatesFooter(string newlineStyle)
     {
         using var scope = new TestRepositoryScope();
-        scope.WriteFile("CHANGELOG.md", SampleChangelog);
+        var input = SampleChangelog.Replace("\r\n", "\n", StringComparison.Ordinal);
+        input = newlineStyle switch
+        {
+            "crlf" => input.Replace("\n", "\r\n", StringComparison.Ordinal) + "\r\n",
+            "mixed" => input + "\r\n",
+            _ => input + "\n"
+        };
+        File.WriteAllText(Path.Combine(scope.Root, "CHANGELOG.md"), input);
         scope.WriteFile("version.json", """
             {
               "version": "1.16.0"
@@ -156,6 +166,7 @@ public sealed class ChangelogToolTests
         scope.WriteFile("changelog.d/unreleased/.gitkeep", string.Empty);
 
         var tool = new ChangelogTool(scope.Root);
+        var preview = tool.Prepare(new Version(1, 17, 0), new DateOnly(2026, 5, 1), writeChanges: false);
         var result = tool.Prepare(new Version(1, 17, 0), new DateOnly(2026, 5, 1), writeChanges: true);
 
         Assert.Contains("Prepared changelog for v1.17.0.", result.Summary);
@@ -163,6 +174,10 @@ public sealed class ChangelogToolTests
         Assert.Contains("Fragments consumed: 1.", result.Summary);
 
         var changelog = scope.ReadFile("CHANGELOG.md");
+        Assert.Equal(preview.RenderedChangelog, changelog);
+        Assert.DoesNotContain("\r", changelog);
+        Assert.EndsWith("\n", changelog);
+        Assert.Contains("Validated 0", tool.CheckFragments());
         Assert.Equal(2, CountOccurrences(changelog, "### [1.17.0] - 2026-05-01"));
         Assert.Contains("English release note", changelog);
         Assert.Contains("Japanese release note", changelog);
