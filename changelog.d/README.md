@@ -45,6 +45,10 @@ entirely; do not write `issues: null` or `issues: []`.
 
 ## Validation
 
+History layout and the 3 MiB per-file ceiling are validated alongside fragments.
+See [changelog archival](../docs/changelog/README.md) for the release-boundary
+cutoff, bilingual preservation, old-anchor compatibility, and future archival.
+
 Validate fragments locally before committing:
 
 ```bash

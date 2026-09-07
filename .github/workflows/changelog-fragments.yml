@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - 'CHANGELOG.md'
+      - 'docs/changelog/**'
       - 'changelog.d/**'
       - 'tools/CodeIndex.Changelog/**'
       - '.codex/workflows/changelog-fragment.md'
@@ -16,6 +17,7 @@ on:
       - main
     paths:
       - 'CHANGELOG.md'
+      - 'docs/changelog/**'
       - 'changelog.d/**'
       - 'tools/CodeIndex.Changelog/**'
       - '.codex/workflows/changelog-fragment.md'
@@ -49,5 +51,5 @@ jobs:
       - name: Restore changelog tool dependencies
         run: dotnet restore tools/CodeIndex.Changelog/CodeIndex.Changelog.csproj --locked-mode
 
-      - name: Validate changelog fragments
+      - name: Validate changelog fragments and history layout
         run: dotnet run --project tools/CodeIndex.Changelog --no-restore -- check
