@@ -18,6 +18,10 @@
 agents, MCP clients, and LSP-native editors can run fast full-text, symbol,
 dependency, and inspection queries without rescanning the same tree for every query.
 
+## Search guard errors
+
+Search and audit guard option errors return a versioned `E010_USAGE_ERROR` JSON object (exit 1) when JSON output is selected, including `--json=ndjson`, `--json=array`, `--format json`, and compact output. Output selection works before or after the invalid option; `--` still introduces a literal query. Missing values and invalid scopes/windows remain rejected (`--guard-scope` accepts only `window` or `same-line`). Human output retains its error, hint, and usage. `batch --json-summary` preserves the structured child error and continues subsequent commands without `--include-raw-streams`.
+
 ## Size-limited indexing
 
 A persisted `file_too_large` omission makes full and scoped CLI indexing return `status=partial`, `E022_INDEX_PARTIAL`, and exit 11, including unchanged retries and unrelated scoped writes. `--allow-partial` accepts exit 0 while preserving the partial status and incomplete facts. Intentional symbols-only and symbol-kind policies keep their existing success behavior. MCP indexing reports the same partial outcome with `isError=true` and retains successful data.
@@ -320,6 +324,10 @@ For commercial use, integration, and naming guidance, see
 [TRADEMARKS.md](TRADEMARKS.md).
 
 # cdidx（日本語）
+
+## 検索guardのエラー
+
+search と audit の guard オプションエラーは、JSON 出力の指定時にバージョン付き `E010_USAGE_ERROR` JSON オブジェクト（終了コード1）を返します。`--json=ndjson`、`--json=array`、`--format json`、compact 出力にも対応します。出力形式は不正オプションの前後どちらでも指定でき、`--` は引き続きリテラル検索文字列を導入します。欠落値や不正な scope/window は拒否します（`--guard-scope` は `window` と `same-line` のみ受理）。人間向け出力はエラー、ヒント、使用法を維持します。`batch --json-summary` は `--include-raw-streams` なしで子コマンドの構造化エラーを保持し、後続コマンドを継続します。
 
 ## サイズ上限によるインデックスの省略
 

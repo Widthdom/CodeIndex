@@ -238,42 +238,49 @@ public static partial class QueryCommandRunner
                     if (TryReadStringOptionValue(args, ref i, "--require-before", inlineValue, allowSeparatedDashPrefixedLiteralValue: true, out var requireBeforeValue, out var requireBeforeError))
                         AddSearchGuardFilter("--require-before", SearchGuardRole.Require, SearchGuardDirection.Before, requireBeforeValue!);
                     else
-                        AddParseError(requireBeforeError!);
+                        AddSearchGuardParseError(requireBeforeError!);
                     break;
                 case "--require-after":
                     if (TryReadStringOptionValue(args, ref i, "--require-after", inlineValue, allowSeparatedDashPrefixedLiteralValue: true, out var requireAfterValue, out var requireAfterError))
                         AddSearchGuardFilter("--require-after", SearchGuardRole.Require, SearchGuardDirection.After, requireAfterValue!);
                     else
-                        AddParseError(requireAfterError!);
+                        AddSearchGuardParseError(requireAfterError!);
                     break;
                 case "--reject-before":
                     if (TryReadStringOptionValue(args, ref i, "--reject-before", inlineValue, allowSeparatedDashPrefixedLiteralValue: true, out var rejectBeforeValue, out var rejectBeforeError))
                         AddSearchGuardFilter("--reject-before", SearchGuardRole.Reject, SearchGuardDirection.Before, rejectBeforeValue!);
                     else
-                        AddParseError(rejectBeforeError!);
+                        AddSearchGuardParseError(rejectBeforeError!);
                     break;
                 case "--reject-after":
                     if (TryReadStringOptionValue(args, ref i, "--reject-after", inlineValue, allowSeparatedDashPrefixedLiteralValue: true, out var rejectAfterValue, out var rejectAfterError))
                         AddSearchGuardFilter("--reject-after", SearchGuardRole.Reject, SearchGuardDirection.After, rejectAfterValue!);
                     else
-                        AddParseError(rejectAfterError!);
+                        AddSearchGuardParseError(rejectAfterError!);
                     break;
                 case "--guard-window":
+                    if (inlineValue == null && i + 1 < args.Length
+                        && TrySplitInlineOptionValue(args[i + 1], out var nextGuardOption)
+                        && IsRecognizedOptionToken(nextGuardOption!))
+                    {
+                        AddSearchGuardParseError(BuildMissingOptionValueError("--guard-window"));
+                        break;
+                    }
                     if (!TryReadRawOptionValue(args, ref i, "--guard-window", inlineValue, out var guardWindowValue, out var missingGuardWindowError))
                     {
-                        AddParseError(missingGuardWindowError!);
+                        AddSearchGuardParseError(missingGuardWindowError!);
                     }
                     else if (TryParseNonNegativeInt(guardWindowValue!, "--guard-window", out var parsedGuardWindow, out var guardWindowError))
                     {
                         WarnIfDuplicateSingleValueOption("--guard-window", guardWindowValue!);
                         if (parsedGuardWindow > DbReader.MaxSearchGuardWindow)
-                            AddParseError($"Error: --guard-window must be between 0 and {DbReader.MaxSearchGuardWindow}; got {parsedGuardWindow}.");
+                            AddSearchGuardParseError($"Error: --guard-window must be between 0 and {DbReader.MaxSearchGuardWindow}; got {parsedGuardWindow}.");
                         else
                             guardWindow = parsedGuardWindow;
                     }
                     else
                     {
-                        AddParseError(guardWindowError!);
+                        AddSearchGuardParseError(guardWindowError!);
                     }
                     break;
                 case "--guard-scope":
@@ -283,10 +290,10 @@ public static partial class QueryCommandRunner
                         if (TryNormalizeSearchGuardScope(guardScopeValue!, out var parsedGuardScope))
                             guardScope = parsedGuardScope;
                         else
-                            AddParseError($"Error: unsupported --guard-scope value '{ConsoleUi.FormatBoundedValue(guardScopeValue!)}'. Use window or same-line.");
+                            AddSearchGuardParseError($"Error: unsupported --guard-scope value '{ConsoleUi.FormatBoundedValue(guardScopeValue!)}'. Use window or same-line.");
                     }
                     else
-                        AddParseError(guardScopeError!);
+                        AddSearchGuardParseError(guardScopeError!);
                     break;
                 default:
                     return false;
