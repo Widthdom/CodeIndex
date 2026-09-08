@@ -42,6 +42,14 @@ public partial class IndexCommandRunnerTests
             var (partialExit, partial) = RunAndCaptureJson([.. args, "--json"]);
             AssertPartial(partialExit, partial);
             Assert.Equal(references, CountRows(dbPath, "symbol_references"));
+            var (dryExit, dry) = RunAndCaptureJson([.. args, "--dry-run", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, dryExit);
+            Assert.Equal(1, dry.GetProperty("projected_policy_skips").GetInt32());
+            Assert.Contains("limit_bytes=128", dry.GetProperty("errors")[0].GetProperty("message").GetString());
+            var (raisedDryExit, raisedDry) = RunAndCaptureJson([.. args, "--dry-run", "--max-file-bytes", "256", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, raisedDryExit);
+            Assert.Equal(0, raisedDry.GetProperty("projected_policy_skips").GetInt32());
+            Assert.True(raisedDry.GetProperty("estimated_table_mutations").GetProperty("chunks").GetInt64() > 0);
             using (var db = new DbContext(DbOpenIntent.QueryOnly, dbPath))
                 Assert.Equal("128", db.GetMetaString(IndexedFileSizePolicy.MetaKey));
 
@@ -169,6 +177,9 @@ public partial class IndexCommandRunnerTests
                 {
                     Assert.Equal(128, structured["max_file_bytes"]!.GetValue<long>());
                     Assert.Equal(128, status["size_omissions"]!["files"]![0]!["limit_bytes"]!.GetValue<long>());
+                    var dry = Call("index", new JsonObject { ["path"] = root, ["dryRun"] = true })["structuredContent"]!;
+                    Assert.Equal(128, dry["max_file_bytes"]!.GetValue<long>());
+                    Assert.False(dry["summary"]!["would_mutate_database"]!.GetValue<bool>());
                 }
             }
 

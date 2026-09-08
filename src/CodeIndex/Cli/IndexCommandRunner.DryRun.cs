@@ -50,6 +50,7 @@ public static partial class IndexCommandRunner
         {
             dbSnapshot = ReadDryRunDbSnapshot(resolvedDbPath, options, cancellationToken);
             var largestFile = dbSnapshot.Files.Values
+                .Where(file => !file.HasFileTooLargeIssue)
                 .Select(file => file.Size ?? 0)
                 .Where(size => size is >= 0 and <= int.MaxValue)
                 .DefaultIfEmpty(0)
@@ -2134,7 +2135,8 @@ public static partial class IndexCommandRunner
                     generatedSuppressed,
                     contentReuseEligible,
                     statReuseEligible,
-                    csharpMemberReadTargetPaths.Contains(reader.GetString(0)));
+                    csharpMemberReadTargetPaths.Contains(reader.GetString(0)),
+                    hasFileTooLargeIssue);
             }
 
             return new DryRunDbSnapshot(
@@ -2711,7 +2713,8 @@ public static partial class IndexCommandRunner
         bool GeneratedExtractionSuppressed,
         bool ContentReuseEligible,
         bool StatReuseEligible,
-        bool HasCSharpMemberReadTarget);
+        bool HasCSharpMemberReadTarget,
+        bool HasFileTooLargeIssue);
 
     private readonly record struct DryRunScanMetadata(
         bool HadErrors,
