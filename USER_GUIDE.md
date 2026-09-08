@@ -2538,6 +2538,8 @@ Default `cdidx search` is literal-safe unless you explicitly opt into raw FTS5:
 
 For punctuation-heavy code phrases such as `catch { }`, normal search may emit a rerun hint. Use `--exact-substring` when braces, operators, punctuation, and case need byte-for-byte matching. Use `--token-boundary` when the full phrase should match exactly but must stop at identifier/token boundaries, such as finding `new HttpClient` without `new HttpClientHandler`.
 
+Recipe execution also accepts `--token-boundary`. It overrides each selected child; `--exact-substring` overrides a child's boundary default with substring matching. Without either flag, the child's `tokenBoundary` / `token_boundary` default applies (false when omitted). The process argument-list child enables it by default. See [recipe matching and cursor compatibility](README.md#audit-recipe-token-boundaries).
+
 For whitespace-containing literal queries passed as one argument, such as `cdidx search "not supported"`, normal search still uses FTS token matching but ranks chunks containing the exact phrase ahead of token-only matches. Multi-token code-like phrases such as `throw new Exception` can emit an `--exact-substring` hint when tokenized search is likely to be misleading.
 
 Search case behavior depends on the selected mode:
@@ -6401,6 +6403,8 @@ JSON mode の `output_path` は生成した artifact の basename を返すた�
 | `--fts` なし | cdidx が明示している literal-safe prefix shorthand を除き、operator に見える文字も literal な query 内容として扱います。 |
 
 `catch { }` のように記号の多いコード片では、通常検索が再実行ヒントを出す場合があります。brace、operator、punctuation、大文字小文字まで byte-for-byte に一致させたい場合は `--exact-substring` を使います。`new HttpClient` を `new HttpClientHandler` に一致させたくない場合のように、query 全体の前後で identifier/token 境界も必要なら `--token-boundary` を使います。
+
+レシピ実行も `--token-boundary` を受理し、選択した各子クエリを上書きします。`--exact-substring` は子の境界既定値を部分一致に上書きします。どちらもなければ子の `tokenBoundary` / `token_boundary` の既定値（省略時 false）を使います。プロセス引数リストの子では既定で有効です。[レシピ検索と cursor の互換性](README.md#監査レシピのトークン境界)も参照してください。
 
 `cdidx search "not supported"` のように空白を含む literal query を 1 引数で渡した場合、通常検索は引き続き FTS token matching を使いますが、exact phrase を含む chunk を token-only match より前に並べます。`throw new Exception` のような複数 token のコードらしい phrase では、tokenized search が誤解を招きそうな場合に `--exact-substring` hint を出すことがあります。
 

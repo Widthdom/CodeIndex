@@ -1216,6 +1216,8 @@ public static partial class QueryCommandRunner
             args.Add("--exact");
         if (options.ExactSubstring)
             args.Add("--exact-substring");
+        if (options.TokenBoundary)
+            args.Add("--token-boundary");
         AddSearchRecipeRowSelectionReplayOptions(args, options);
         foreach (var guardFilter in options.GuardFilters)
             AddValue(BuildSearchGuardReplayOptionName(guardFilter), guardFilter.Query);

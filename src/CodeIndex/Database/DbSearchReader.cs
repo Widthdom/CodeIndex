@@ -665,6 +665,8 @@ public partial class DbReader
                 StartLine = result.StartLine + lineIndex,
                 EndLine = result.StartLine + lineIndex,
                 Content = text,
+                TokenBoundary = true,
+                MatchOriginContext = result,
                 Score = result.Score,
                 Visibility = result.Visibility,
                 Diagnostics = result.Diagnostics,
@@ -693,7 +695,7 @@ public partial class DbReader
         return false;
     }
 
-    private static bool IsTokenBoundaryMatch(string text, int start, int length)
+    internal static bool IsTokenBoundaryMatch(string text, int start, int length)
     {
         if (length <= 0)
             return false;
@@ -1635,6 +1637,8 @@ public partial class DbReader
                 Visibility = result.Visibility,
                 GuardEvidence = guardEvidence.Count == 0 ? null : guardEvidence,
                 GuardChecks = guardChecks.Count == 0 ? null : guardChecks,
+                TokenBoundary = result.TokenBoundary,
+                MatchOriginContext = result.MatchOriginContext,
                 Diagnostics = result.Diagnostics,
                 ChunkId = result.ChunkId,
                 NextOffset = result.NextOffset,

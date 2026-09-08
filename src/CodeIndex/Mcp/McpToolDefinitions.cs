@@ -853,7 +853,7 @@ public partial class McpServer
                 AppendConstraintDescription(obj, "Use this for case-sensitive exact text identity when tokenization, punctuation, emoji, or prefix matching would be misleading.");
                 break;
             case ("search", "tokenBoundary"):
-                AppendConstraintDescription(obj, "Use this for exact code phrases that should stop at identifier/token boundaries, such as matching `new HttpClient` without `new HttpClientHandler`.");
+                AppendConstraintDescription(obj, "Use this for exact code phrases that should stop at identifier/token boundaries, such as matching `new HttpClient` without `new HttpClientHandler`. Recipe children use their tokenBoundary default unless explicitly overridden: tokenBoundary controls boundaries, exactSubstring/exact alone selects substring mode. Receiver types are not resolved.");
                 break;
             case ("search", "exact"):
                 AppendConstraintDescription(obj, "Alias of `exactSubstring`; use `exactSubstring` in new calls for search text identity.");
