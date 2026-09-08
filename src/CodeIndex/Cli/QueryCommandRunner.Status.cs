@@ -196,6 +196,13 @@ public static partial class QueryCommandRunner
 
             // Build one-line summary for AI orientation / AI向けの1行サマリーを構築
             ApplyStatusDegradationGuidance(status, options);
+            if (status.SizeOmissions != null)
+            {
+                status.RecommendedAction = status.SizeOmissions.RecommendedAction;
+                status.AlternativeAction = status.SizeOmissions.AlternativeAction;
+                if (!options.Json)
+                    IndexCommandRunner.WriteSizeOmissionWarning(status.SizeOmissions);
+            }
             status.Summary = BuildStatusSummary(status);
 
             IReadOnlyList<StatusCheckFailure> checkFailures = options.CheckWorkspace
@@ -1035,7 +1042,7 @@ public static partial class QueryCommandRunner
         bool Includes(string scope) => checkAll || scopedChecks!.Contains(scope);
 
         if (Includes("workspace") && !status.IndexComplete)
-            failures.Add(new StatusCheckFailure("index_complete", false, "[degraded] index_complete=false; fix the persisted per-file failure before rerunning index"));
+            failures.Add(new StatusCheckFailure("index_complete", false, status.SizeOmissions != null ? "[degraded] index_complete=false; review size_omissions and explicitly choose a size limit or exclusion before rerunning index" : "[degraded] index_complete=false; fix the persisted per-file failure before rerunning index"));
 
         if (Includes("workspace"))
         {
@@ -1172,6 +1179,8 @@ public static partial class QueryCommandRunner
         string safetyClass,
         string safetyNote)
     {
+        if (status.SizeOmissions != null && !rebuild)
+            safetyNote = $"{status.SizeOmissions.RecommendedAction} {status.SizeOmissions.AlternativeAction} {safetyNote}";
         var args = new List<string>
         {
             "index",
@@ -1184,6 +1193,13 @@ public static partial class QueryCommandRunner
         }
         if (rebuild)
             args.Add("--rebuild");
+        else if (status.SizeOmissions != null)
+        {
+            // A deliberate policy choice is required; never replay an ineffective limit
+            // or automatically raise it based on untrusted file sizes.
+            args.Add("--max-file-bytes");
+            args.Add("<reviewed-byte-limit>");
+        }
         var symlinkPolicy = NormalizeIndexedSymlinkPolicy(status.IndexedFollowSymlinksPolicy);
         if (symlinkPolicy != null)
         {

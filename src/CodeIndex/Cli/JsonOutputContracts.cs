@@ -1141,6 +1141,7 @@ internal sealed class IndexUpdateJsonResult : IVersionedJsonResult
     public bool GraphDataCurrent { get; init; }
     public bool IndexComplete { get; init; }
     public IReadOnlyList<string>? IndexIncompleteReasons { get; init; }
+    public SizeOmissionSummary? SizeOmissions { get; init; }
     public ReferenceExtractionSafetyLimits ReferenceExtractionLimits { get; init; } = new();
     public bool ReferenceGraphComplete { get; init; }
     public IReadOnlyList<string>? ReferenceGraphIncompleteReasons { get; init; }
@@ -1195,6 +1196,7 @@ internal sealed class IndexFullScanJsonResult : IVersionedJsonResult
     public bool GraphDataCurrent { get; init; }
     public bool IndexComplete { get; init; }
     public IReadOnlyList<string>? IndexIncompleteReasons { get; init; }
+    public SizeOmissionSummary? SizeOmissions { get; init; }
     public ReferenceExtractionSafetyLimits ReferenceExtractionLimits { get; init; } = new();
     public bool ReferenceGraphComplete { get; init; }
     public IReadOnlyList<string>? ReferenceGraphIncompleteReasons { get; init; }

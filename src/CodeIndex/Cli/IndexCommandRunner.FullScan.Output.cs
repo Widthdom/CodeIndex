@@ -99,6 +99,8 @@ public static partial class IndexCommandRunner
         var referenceExtractionCapHitsAfter = signalReader.GetReferenceExtractionCapHits();
         var persistedReadinessAfter = signalReader.GetPersistedIndexGenerationReadiness(
             referenceExtractionCapHitsAfter);
+        var partial = IndexOutcomePolicy.IsPartial(output.Errors, persistedReadinessAfter);
+        var sizeOmissions = signalReader.GetSizeOmissions();
         var sqlGraphContractSignalAfter = signalReader.GetSqlGraphContractSignal(lang: null);
         if (!output.HasSqlFilesAfter)
         {
@@ -146,7 +148,7 @@ public static partial class IndexCommandRunner
         {
             CommandOutputWriter.WriteLine(JsonSerializer.Serialize(new IndexFullScanJsonResult
             {
-                Status = output.Errors > 0 ? "partial" : "success",
+                Status = partial ? "partial" : "success",
                 Mode = output.Options.Rebuild ? "rebuild" : "incremental",
                 UnknownExtensionFileCount = output.ScanResult.UnknownExtensionFiles.Count,
                 UnknownExtensionGroups = unknownExtensionGroups.Count > 0 ? unknownExtensionGroups : null,
@@ -188,6 +190,7 @@ public static partial class IndexCommandRunner
                     persistedReadinessAfter.SymbolKindFilterPolicy.SymbolsDropped,
                 GraphTableAvailable = persistedReadinessAfter.GraphTableAvailable,
                 GraphDataCurrent = persistedReadinessAfter.GraphDataCurrent,
+                SizeOmissions = sizeOmissions,
                 IndexComplete = persistedReadinessAfter.IndexComplete,
                 IndexIncompleteReasons = persistedReadinessAfter.IndexComplete
                     ? null
@@ -198,7 +201,7 @@ public static partial class IndexCommandRunner
                     ? null
                     : persistedReadinessAfter.ReferenceGraphIncompleteReasons,
                 ReferenceExtractionCapHits = referenceExtractionCapHitsAfter,
-                ErrorCode = output.Errors > 0 ? CommandErrorCodes.IndexPartial : null,
+                ErrorCode = partial ? CommandErrorCodes.IndexPartial : null,
                 IssuesTableAvailable = output.IssuesTableAvailableAfter,
                 SqlGraphContractReady = sqlGraphContractReadyAfter,
                 SqlGraphContractDegradedReason = sqlGraphContractDegradedReasonAfter,
@@ -212,8 +215,8 @@ public static partial class IndexCommandRunner
                 FoldReady = output.FoldReadyAfter,
                 FoldReadyReason = output.FoldReadyAfter ? null : output.FoldReadyReasonAfter,
                 DegradedReason = foldOnlyRemediation?.DegradedReason,
-                RecommendedAction = foldOnlyRemediation?.RecommendedAction,
-                AlternativeAction = foldOnlyRemediation?.AlternativeAction,
+                RecommendedAction = sizeOmissions?.RecommendedAction ?? foldOnlyRemediation?.RecommendedAction,
+                AlternativeAction = sizeOmissions?.AlternativeAction ?? foldOnlyRemediation?.AlternativeAction,
                 HeadChanged = unresolvedHeadChange,
                 PriorIndexedHeadCommit = output.PriorIndexedHeadCommit,
                 CurrentHeadCommit = output.CurrentHeadCommit,
@@ -294,6 +297,7 @@ public static partial class IndexCommandRunner
             CommandOutputWriter.WriteLine();
             if (output.Errors > 0)
                 ConsoleUi.PrintWarning($"Some files failed to index. Fix the reported files or permissions, then rerun `cdidx index \"{output.ProjectRoot}\"` to restore a fully ready index.");
+            WriteSizeOmissionWarning(sizeOmissions);
             if (!persistedReadinessAfter.IndexComplete)
                 ConsoleUi.PrintWarning($"Index generation is incomplete: {string.Join(", ", persistedReadinessAfter.IndexIncompleteReasons)}.");
             if (!persistedReadinessAfter.ReferenceGraphComplete)
@@ -315,7 +319,7 @@ public static partial class IndexCommandRunner
                     ? $"cdidx index complete ({ConsoleUi.Counted(output.FilesCount, "file", format: "N0")})"
                     : $"cdidx index finished with omissions ({ConsoleUi.Counted(output.FilesCount, "file", format: "N0")})");
 
-        return output.Errors > 0 && !output.Options.AllowPartial
+        return partial && !output.Options.AllowPartial
             ? CommandExitCodes.PartialResult
             : CommandExitCodes.Success;
     }

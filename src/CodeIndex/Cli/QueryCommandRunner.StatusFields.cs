@@ -416,6 +416,16 @@ public static partial class QueryCommandRunner
                 Dependencies: ["last_workspace_freshened_at", "index_complete", "reference_extraction_cap_hits"],
                 Interpretation: "This is historical run metadata, not live progress."),
             new(
+                "size_omissions",
+                "Size-cap omissions",
+                "persisted oversized inputs have bounded path and byte evidence plus explicit recovery choices.",
+                "absence means no persisted file_too_large rows were found, not that every completeness contract is ready.",
+                "Review an explicit --max-file-bytes limit or deliberate .cdidxignore exclusions, then index normally; --allow-partial only accepts the CLI exit code.",
+                Meaning: "Up to 20 sanitized paths of at most 512 characters, exact affected/omitted counts, and known omission-time actual_bytes and limit_bytes.",
+                Source: "Persisted file_too_large diagnostics and file rows; legacy cap bytes may be unavailable.",
+                Dependencies: ["index_complete", "index_incomplete_reasons"],
+                Interpretation: "These observations do not measure live files, relax limits, or equate freshness with completeness."),
+            new(
                 "last_failed_or_partial_index_run",
                 "Last failed or partial index run",
                 "absence means no persisted failed/partial run currently requires operator attention.",

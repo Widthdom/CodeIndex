@@ -280,6 +280,7 @@ public partial class DbReader
             IssuesTableAvailable = _hasIssuesPhysicalTable,
             FileIssuesDataCurrent = _hasIssuesTable,
             MigrationInProgress = batchInProgress,
+            SizeOmissions = GetSizeOmissions(),
             IndexComplete = persistedReadiness.IndexComplete,
             IndexIncompleteReasons = persistedReadiness.IndexComplete
                 ? null

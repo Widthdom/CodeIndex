@@ -8,6 +8,8 @@ If you change test code, test helpers, test execution flow, or testing conventio
 
 ## Quick Start
 
+`IndexCommandRunnerIssue5295Tests` uses a 128-byte cap for full/scoped boundary, retry, partial opt-in, graph preservation, persisted-policy, status/workspace, CLI/MCP dry-run cap parity and non-mutation, and MCP recovery checks on net8.0 and net9.0. Keep console/environment changes in the SQLite pool sensitive collection.
+
 `ChangelogToolTests` covers current and archived history on net8.0 and net9.0.
 Prepare must accept LF, CRLF, and mixed endings and produce revalidatable LF output,
 including the final footer newline, on Windows as well as Unix.
@@ -1241,6 +1243,7 @@ Check the following:
 
 `QueryCommandRunnerUnusedIssue5296Tests` は sibling partial 宣言 16 個と、参照を意図的に削除した private メンバー 192 個を使用します。未使用 field の誤検出がないこと、再構築する chunk 片が最大 64 個であること、SQLite の 1,000 VM 命令ごとの progress callback が最大 2,000 回であることを検証します。共有 CI の実時間に依存せず、候補ごとの再構築が復活した場合に検出するための上限です。無関係な chunk、欠損本文、旧 chunk 順序を含む #5089・#4834・#3673 の正確性テストも維持します。さらに実行中の native SQLite 処理を deadline・caller cancellation で止め、上限付きで解析可能な非確定 JSON、処理完了前の heartbeat、接続・token の再利用、読み取り専用性を検証します。net8.0 と net9.0 の両方で実行してください。[性能計測](docs/unused-performance.md) も参照してください。
 
+`IndexCommandRunnerIssue5295Tests` は128バイトの上限で全件・差分の境界値、再試行、partial の明示許容、グラフ保持、保存済み方針、status/workspace、CLI/MCP dry-run の上限一致・非変更性、MCP の復旧を net8.0 と net9.0 で検証します。コンソール・環境変数の変更は SQLite pool sensitive collection 内で行います。
 
 `AuditScopeIssue5281Tests` は production-and-tooling scope の境界と coverage 契約を担当します。
 本番コードと tooling の混在 path、hidden CI、installer の self-test 命名、nested test / fixture、docs、

@@ -43,7 +43,12 @@ internal static class IndexedFileSizePolicy
         if (!hasSizeColumn)
             return 0;
         using var command = connection.CreateCommand();
-        command.CommandText = $"SELECT MAX(size) FROM files WHERE size BETWEEN 0 AND {int.MaxValue}";
+        command.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'file_issues'";
+        var hasIssues = Convert.ToInt64(command.ExecuteScalar(), CultureInfo.InvariantCulture) > 0;
+        var omissions = hasIssues
+            ? " AND NOT EXISTS (SELECT 1 FROM file_issues i WHERE i.file_id = files.id AND i.kind = 'file_too_large')"
+            : string.Empty;
+        command.CommandText = $"SELECT MAX(size) FROM files WHERE size BETWEEN 0 AND {int.MaxValue}{omissions}";
         return command.ExecuteScalar() is long size ? size : 0;
     }
 }
