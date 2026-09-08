@@ -8516,7 +8516,7 @@ public partial class QueryCommandRunnerTests
             var nextCursor = firstQuery.GetProperty("next_cursor").GetString();
 
             Assert.False(string.IsNullOrWhiteSpace(nextCursor));
-            Assert.True(nextCursor!.StartsWith("-", StringComparison.Ordinal), $"Expected a negative-score cursor, got '{nextCursor}'.");
+            Assert.Matches("^recipe:v2:[0-9a-f]{64}:-", nextCursor!);
 
             var (secondExitCode, secondStdout, secondStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 ["--recipe", "risky-code/secret-term", "--db", dbPath, "--format", "compact", "--limit", "1", "--cursor", nextCursor],
