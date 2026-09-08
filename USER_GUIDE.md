@@ -3931,7 +3931,8 @@ Existing-database validation does not interpret every `SQLITE_CANTOPEN` as a mis
     - Recovery: fix file/directory permissions, or exclude the path via `.cdidxignore`. The index keeps running across the rest of the tree; no rebuild is required after permissions are fixed — a normal `cdidx index .` will pick up the now-readable files.
 
 13. **File rejected: too large**
-    - Symptom: `validate --kind file_too_large` reports `File too large (N MiB > M MiB limit). Override with --max-file-bytes <bytes> or CDIDX_MAX_FILE_BYTES=<bytes> when this source file is intentionally indexable.` The file is listed in `files`, but no chunks, symbols, or references are indexed for it, so it does not appear in search.
+    - Outcome: full/scoped indexing, including unchanged retries, returns partial exit 11 (`E022_INDEX_PARTIAL`). `--allow-partial` only accepts exit 0; persisted omissions remain incomplete. MCP indexing returns `isError=true`. Inspect `size_omissions` in index/status/workspace health for bounded paths and known byte evidence. Explicitly change the limit or deliberately exclude the path, then run normal indexing (a full scan for exclusions); no rebuild is required.
+    - Symptom: `validate --kind file_too_large` reports `File too large (N MiB > M MiB limit); actual_bytes=<observed>; limit_bytes=<cap>. Override with --max-file-bytes <bytes> or CDIDX_MAX_FILE_BYTES=<bytes> when this source file is intentionally indexable.` The file is listed in `files`, but no chunks, symbols, or references are indexed for it, so it does not appear in search.
     - Cause: the file exceeds the configured per-file size limit. Indexing huge generated files would waste tokens and bloat the DB.
     - Recovery: shrink or split the file, add it to `.cdidxignore`, or raise the limit with `cdidx index . --max-file-bytes 50M` / `CDIDX_MAX_FILE_BYTES=50M` when the file is legitimate source. Generated artifacts should generally be gitignored too.
 
@@ -7728,7 +7729,8 @@ SELinux profile が取れれば confinement-aware hint を追加します。
     - 復旧: ファイル／ディレクトリ権限を直すか、`.cdidxignore` で除外する。インデックスはツリーの他の部分は走査を続けるので、権限修正後は通常の `cdidx index .` で取り込まれ、`--rebuild` は不要。
 
 13. **ファイルが拒否される: サイズ超過**
-    - 症状: `validate --kind file_too_large` が `File too large (N MiB > M MiB limit). Override with --max-file-bytes <bytes> or CDIDX_MAX_FILE_BYTES=<bytes> when this source file is intentionally indexable.` を報告する。対象 file は `files` に載るが、chunk、symbol、reference は index されないため search には現れない。
+    - 結果: 全件・差分インデックスは、変更のない再試行も含め partial の終了コード11（`E022_INDEX_PARTIAL`）を返します。`--allow-partial` は終了コード0を許容するだけで、保存済みの省略は不完全のままです。MCP のインデックスは `isError=true` を返します。index/status/workspace health の `size_omissions` で件数上限付きパスと判明しているバイト数を確認してください。上限を明示的に変えるか、パスを意図的に除外してから通常のインデックス（除外時は全件走査）を実行します。再構築は不要です。
+    - 症状: `validate --kind file_too_large` が `File too large (N MiB > M MiB limit); actual_bytes=<observed>; limit_bytes=<cap>. Override with --max-file-bytes <bytes> or CDIDX_MAX_FILE_BYTES=<bytes> when this source file is intentionally indexable.` を報告する。対象 file は `files` に載るが、chunk、symbol、reference は index されないため search には現れない。
     - 原因: ファイルが設定された 1 ファイルあたりサイズ上限を超えている。巨大な生成ファイルを索引化するとトークンを浪費し DB が肥大化する。
     - 復旧: ファイルを縮小／分割する、`.cdidxignore` に追加する、または正当な source file なら `cdidx index . --max-file-bytes 50M` / `CDIDX_MAX_FILE_BYTES=50M` で上限を上げる。生成物は基本的に `.gitignore` 対象でもあるはず。
 

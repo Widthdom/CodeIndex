@@ -564,7 +564,7 @@ internal static class CliFlagSchema
             new() { Name = "--count", Description = "Count only; result limits are ignored by count modes, but scan caps can still mark approximate counts as degraded", PrimaryCommands = Set(CountCommands) },
             new() { Name = "--group-partials", Description = "Definition/Symbols/Inspect: collapse C# partial type and method declarations into logical families", PrimaryCommands = Set("definition", "symbols", "inspect") },
             new() { Name = "--strict-not-found", Description = "Return exit code 2 when a valid query has zero rows", PrimaryCommands = Set(StrictNotFoundCommands), Safety = CliOptionSafety.StrictFailure },
-            new() { Name = "--allow-partial", Description = "Return exit code 0 instead of 11 for accepted partial query output or an incomplete index generation", PrimaryCommands = Set(AllowPartialCommands) },
+            new() { Name = "--allow-partial", Description = "Return exit code 0 instead of 11 for accepted partial query output, index file failures, or size omissions; completeness stays false", PrimaryCommands = Set(AllowPartialCommands) },
             new() { Name = "--strict", Description = "Return exit code 4 when impact preconditions are unmet", PrimaryCommands = Set("impact") },
             new() { Name = "--since", ValuePlaceholder = "<datetime>", Description = "Filter by modified-since timestamp", PrimaryCommands = Set(SinceCommands) },
             new() { Name = "--bytes", Description = "Files: sort by size and show raw byte counts in human output; map: show raw byte counts", PrimaryCommands = Set(ByteFormatCommands) },

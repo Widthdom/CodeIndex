@@ -400,6 +400,7 @@ internal static class WorkspaceCommandRunner
 
             using var reader = new DbReader(db, cancellationToken);
             var snapshot = reader.GetWorkspaceIndexHealth();
+            var sizeOmissions = reader.GetSizeOmissions();
             var schemaCompatible = !snapshot.IndexNewerThanReader;
             var graphReady = snapshot.GraphTableAvailable
                 && snapshot.GraphDataCurrent
@@ -495,7 +496,9 @@ internal static class WorkspaceCommandRunner
                 Probed: true,
                 Status: status,
                 Reason: reason,
-                RepairAction: BuildProbedMemberRepairAction(
+                RepairAction: sizeOmissions != null
+                    ? new WorkspaceMemberRepairAction("review_size_limit_or_exclusion")
+                    : BuildProbedMemberRepairAction(
                     status,
                     reason,
                     projectRoot,
@@ -513,6 +516,7 @@ internal static class WorkspaceCommandRunner
                 IndexComplete: snapshot.IndexComplete,
                 GraphReady: graphReady,
                 IndexNewerThanReader: false,
+                SizeOmissions: sizeOmissions,
                 IndexIncompleteReasons: snapshot.IndexComplete
                     ? null
                     : snapshot.IndexIncompleteReasons,

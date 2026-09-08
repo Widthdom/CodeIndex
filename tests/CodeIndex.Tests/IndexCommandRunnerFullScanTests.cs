@@ -810,7 +810,7 @@ public partial class IndexCommandRunnerTests
             var (exitCode, json) = RunAndCaptureJson(
                 [projectRoot, "--exclude-symbol-kind", "namespace", "--max-file-bytes", "1", "--json", "--quiet"]);
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(CommandExitCodes.PartialResult, exitCode);
             Assert.Equal(0, json.GetProperty("symbols_dropped_by_kind_filter").GetInt64());
             var reasons = ReadCompletenessReasons(json, "index_incomplete_reasons");
             Assert.Contains(DbReader.SymbolKindFilterCoverageLimitedReason, reasons);
@@ -876,7 +876,7 @@ public partial class IndexCommandRunnerTests
 
             var (indexExitCode, indexJson) = RunAndCaptureJson([.. args]);
 
-            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(scenario == "max-file-bytes" ? CommandExitCodes.PartialResult : CommandExitCodes.Success, indexExitCode);
             Assert.Equal(expectedGraphTableAvailable, indexJson.GetProperty("graph_table_available").GetBoolean());
             Assert.Equal(expectedIndexComplete, indexJson.GetProperty("index_complete").GetBoolean());
             Assert.Equal(expectedReferenceGraphComplete, indexJson.GetProperty("reference_graph_complete").GetBoolean());
@@ -936,7 +936,7 @@ public partial class IndexCommandRunnerTests
                     .Where(arg => arg is not "--json" and not "--quiet")
                     .ToArray();
                 var (humanExitCode, stdout, stderr) = RunAndCaptureStreams(humanArgs);
-                Assert.Equal(CommandExitCodes.Success, humanExitCode);
+                Assert.Equal(CommandExitCodes.PartialResult, humanExitCode);
                 Assert.Contains("Index", stdout, StringComparison.Ordinal);
                 Assert.Contains("incomplete", stdout, StringComparison.Ordinal);
                 Assert.Contains(
@@ -973,14 +973,16 @@ public partial class IndexCommandRunnerTests
             if (initialCap)
                 initialArgs.InsertRange(1, ["--max-file-bytes", "128"]);
             var (initialExitCode, _) = RunAndCaptureJson([.. initialArgs]);
-            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.Equal(initialCap ? CommandExitCodes.PartialResult : CommandExitCodes.Success, initialExitCode);
 
             var nextArgs = new List<string> { projectRoot, "--json", "--quiet" };
             if (nextCap)
                 nextArgs.InsertRange(1, ["--max-file-bytes", "128"]);
+            if (!nextCap)
+                nextArgs.InsertRange(1, ["--max-file-bytes", "1024"]);
             var (nextExitCode, nextJson) = RunAndCaptureJson([.. nextArgs]);
 
-            Assert.Equal(CommandExitCodes.Success, nextExitCode);
+            Assert.Equal(nextCap ? CommandExitCodes.PartialResult : CommandExitCodes.Success, nextExitCode);
             Assert.Equal(expectedComplete, nextJson.GetProperty("index_complete").GetBoolean());
             Assert.Equal(
                 expectedComplete,
@@ -1033,17 +1035,17 @@ public partial class IndexCommandRunnerTests
             var (exitCode, json) = RunAndCaptureJson(
                 [projectRoot, "--max-file-bytes", "128", "--json", "--quiet"]);
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(CommandExitCodes.PartialResult, exitCode);
             Assert.False(json.GetProperty("index_complete").GetBoolean());
             Assert.False(json.GetProperty("reference_graph_complete").GetBoolean());
             Assert.False(json.GetProperty("fold_ready").GetBoolean());
             Assert.Equal(JsonValueKind.Null, json.GetProperty("degraded_reason").ValueKind);
-            Assert.Equal(JsonValueKind.Null, json.GetProperty("recommended_action").ValueKind);
-            Assert.Equal(JsonValueKind.Null, json.GetProperty("alternative_action").ValueKind);
+            Assert.Contains("--max-file-bytes", json.GetProperty("recommended_action").GetString());
+            Assert.Contains(".cdidxignore", json.GetProperty("alternative_action").GetString());
 
             var humanArgs = new[] { projectRoot, "--max-file-bytes", "128" };
             var (humanExitCode, _, stderr) = RunAndCaptureStreams(humanArgs);
-            Assert.Equal(CommandExitCodes.Success, humanExitCode);
+            Assert.Equal(CommandExitCodes.PartialResult, humanExitCode);
             Assert.DoesNotContain("fold-only", stderr, StringComparison.Ordinal);
         }
         finally
@@ -1072,7 +1074,7 @@ public partial class IndexCommandRunnerTests
                 ? new[] { projectRoot, "--max-file-bytes", "128", "--json", "--quiet" }
                 : new[] { projectRoot, "--json", "--quiet" };
             var (indexExitCode, _) = RunAndCaptureJson(args);
-            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(capFileBytes ? CommandExitCodes.PartialResult : CommandExitCodes.Success, indexExitCode);
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             using (var connection = OpenNonPoolingConnection(dbPath))
@@ -4842,8 +4844,8 @@ public partial class IndexCommandRunnerTests
             var (refreshExitCode, refreshJson) = RunAndCaptureJson(
                 [projectRoot, "--max-file-bytes", "1024", "--json", "--quiet"]);
 
-            Assert.Equal(CommandExitCodes.Success, refreshExitCode);
-            Assert.Equal("success", refreshJson.GetProperty("status").GetString());
+            Assert.Equal(CommandExitCodes.PartialResult, refreshExitCode);
+            Assert.Equal("partial", refreshJson.GetProperty("status").GetString());
             Assert.False(refreshJson.GetProperty("index_complete").GetBoolean());
             AssertCompletenessReason(
                 refreshJson,
@@ -5195,12 +5197,13 @@ public partial class IndexCommandRunnerTests
 
             var (exitCode, _, stderr) = RunCliInSubprocess([projectRoot], projectRoot);
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(CommandExitCodes.PartialResult, exitCode);
             Assert.Contains("[WARN] File too large", stderr);
             Assert.Contains("Index generation is incomplete: file_too_large.", stderr);
             Assert.Contains("Reference graph is incomplete: file_too_large.", stderr);
             Assert.DoesNotContain("Some files failed to index", stderr);
-            Assert.DoesNotContain("rerun `cdidx index", stderr);
+            Assert.Contains("--max-file-bytes", stderr);
+            Assert.Contains(".cdidxignore", stderr);
         }
         finally
         {

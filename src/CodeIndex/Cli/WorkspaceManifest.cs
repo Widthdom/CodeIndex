@@ -54,7 +54,9 @@ internal sealed record WorkspaceMemberIndexHealth(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     IndexSymbolKindFilterJsonResult? SymbolKindFilter = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    long? SymbolsDroppedByKindFilter = null);
+    long? SymbolsDroppedByKindFilter = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    CodeIndex.Models.SizeOmissionSummary? SizeOmissions = null);
 
 internal sealed record WorkspaceMemberHealthSummary(
     int MemberCount,
