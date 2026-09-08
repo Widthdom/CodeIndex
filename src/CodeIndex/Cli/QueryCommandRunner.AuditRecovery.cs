@@ -92,8 +92,13 @@ public static partial class QueryCommandRunner
     private static string EncodeAuditPlanToken(string binding, string kind, int ordinal)
     {
         var value = ordinal.ToString(CultureInfo.InvariantCulture);
-        var payload = new JsonObject { ["binding"] = binding, ["kind"] = kind, ["ordinal"] = ordinal,
-            ["checksum"] = AuditBaselineStore.Hash(binding, kind, value) };
+        var payload = new JsonObject
+        {
+            ["binding"] = binding,
+            ["kind"] = kind,
+            ["ordinal"] = ordinal,
+            ["checksum"] = AuditBaselineStore.Hash(binding, kind, value)
+        };
         return AuditPlanTokenPrefix + Convert.ToBase64String(Encoding.UTF8.GetBytes(payload.ToJsonString()));
     }
 
@@ -132,8 +137,11 @@ public static partial class QueryCommandRunner
     }
 
     private static JsonObject AuditReplayNode(List<string> args)
-        => new() { ["argv"] = new JsonArray(args.Select(arg => (JsonNode?)JsonValue.Create(arg)).ToArray()),
-            ["command"] = string.Join(" ", args.Select(QuoteReplayShellArg)) };
+        => new()
+        {
+            ["argv"] = new JsonArray(args.Select(arg => (JsonNode?)JsonValue.Create(arg)).ToArray()),
+            ["command"] = string.Join(" ", args.Select(QuoteReplayShellArg))
+        };
 
     private static int? PrepareAuditPartition(DbReader reader, QueryCommandOptions options, JsonSerializerOptions jsonOptions,
         AuditAllRunState state, CancellationToken cancellationToken)
@@ -198,9 +206,15 @@ public static partial class QueryCommandRunner
         if (state.PlanBinding != GetAuditPlanBinding(reader, options, state)) unavailable = "index_changed_during_plan";
         if (unavailable != null)
         {
-            var failure = new JsonObject { ["api_version"] = JsonOutputContract.ApiVersion, ["mode"] = "audit_partition_plan",
-                ["available"] = false, ["reason"] = unavailable, ["coverage_authoritative"] = false,
-                ["guidance"] = "Narrow the original --path/--lang scope and regenerate the plan. No partial path inventory is presented as complete." };
+            var failure = new JsonObject
+            {
+                ["api_version"] = JsonOutputContract.ApiVersion,
+                ["mode"] = "audit_partition_plan",
+                ["available"] = false,
+                ["reason"] = unavailable,
+                ["coverage_authoritative"] = false,
+                ["guidance"] = "Narrow the original --path/--lang scope and regenerate the plan. No partial path inventory is presented as complete."
+            };
             Console.WriteLine(failure.ToJsonString(EnsureJsonNodeSerializerOptions(jsonOptions)));
             return unavailable == "cancelled" ? CommandExitCodes.CancelledBySignal
                 : options.AllowPartial ? CommandExitCodes.Success : CommandExitCodes.PartialResult;
@@ -224,9 +238,12 @@ public static partial class QueryCommandRunner
         var args = BuildAuditPlanArgv(options, state);
         var versions = new JsonArray();
         foreach (var recipe in state.SelectedRecipes)
-            versions.Add(new JsonObject { ["recipe"] = recipe.Name,
+            versions.Add(new JsonObject
+            {
+                ["recipe"] = recipe.Name,
                 ["version"] = BuildSearchRecipeFreshnessContext(recipe, recipe.Queries, "current", null).ExpectedRecipeVersion,
-                ["scope"] = BuildSearchRecipeScope(recipe, options).Name });
+                ["scope"] = BuildSearchRecipeScope(recipe, options).Name
+            });
         var units = new JsonArray();
         for (var i = offset; i < Math.Min(paths.Length, offset + AuditPlanPageLimit); i++)
         {
@@ -237,20 +254,38 @@ public static partial class QueryCommandRunner
             replay["state"] = "pending";
             units.Add(replay);
         }
-        var root = new JsonObject { ["api_version"] = JsonOutputContract.ApiVersion, ["mode"] = "audit_partition_plan",
-            ["available"] = true, ["generation"] = state.PlanGeneration, ["binding"] = state.PlanBinding,
+        var root = new JsonObject
+        {
+            ["api_version"] = JsonOutputContract.ApiVersion,
+            ["mode"] = "audit_partition_plan",
+            ["available"] = true,
+            ["generation"] = state.PlanGeneration,
+            ["binding"] = state.PlanBinding,
             ["effective_scope_and_recipe_versions_fingerprint"] = state.PlanBinding,
             ["recipe_versions"] = versions,
-            ["unit"] = "one_exact_indexed_path_all_selected_recipe_queries", ["disjoint_paths"] = true,
-            ["eligible_path_count"] = paths.Length, ["inventory_complete"] = true,
-            ["coverage_authoritative"] = false, ["covered_partition_count"] = 0, ["pending_partition_count"] = paths.Length,
+            ["unit"] = "one_exact_indexed_path_all_selected_recipe_queries",
+            ["disjoint_paths"] = true,
+            ["eligible_path_count"] = paths.Length,
+            ["inventory_complete"] = true,
+            ["coverage_authoritative"] = false,
+            ["covered_partition_count"] = 0,
+            ["pending_partition_count"] = paths.Length,
             ["execution_state_scope"] = "new_plan_no_execution_receipts_imported",
-            ["page_offset"] = offset, ["units"] = units,
-            ["limits"] = new JsonObject { ["paths"] = AuditPlanPathLimit, ["inventory_rows"] = AuditPlanRowLimit,
-                ["visited_rows"] = visited, ["queries"] = AuditContinuationQueryLimit, ["page_units"] = AuditPlanPageLimit,
-                ["plan_time_ms"] = 10_000, ["output_bytes"] = GetAuditRecoveryByteLimit(options, state),
-                ["candidate_rows_per_query"] = AuditAllCandidateRowsPerQuery },
-            ["guidance"] = "Run each unit argv and collect its partition receipt by id. Page cursors enumerate plans, not completed execution. Retries may repeat observations. A capped single file stays pending/non-authoritative; inspect its source manually. Aggregate recipe/query observations, never cross-recipe unique findings. Baseline reviews are separate." };
+            ["page_offset"] = offset,
+            ["units"] = units,
+            ["limits"] = new JsonObject
+            {
+                ["paths"] = AuditPlanPathLimit,
+                ["inventory_rows"] = AuditPlanRowLimit,
+                ["visited_rows"] = visited,
+                ["queries"] = AuditContinuationQueryLimit,
+                ["page_units"] = AuditPlanPageLimit,
+                ["plan_time_ms"] = 10_000,
+                ["output_bytes"] = GetAuditRecoveryByteLimit(options, state),
+                ["candidate_rows_per_query"] = AuditAllCandidateRowsPerQuery
+            },
+            ["guidance"] = "Run each unit argv and collect its partition receipt by id. Page cursors enumerate plans, not completed execution. Retries may repeat observations. A capped single file stays pending/non-authoritative; inspect its source manually. Aggregate recipe/query observations, never cross-recipe unique findings. Baseline reviews are separate."
+        };
         var serializer = EnsureJsonNodeSerializerOptions(jsonOptions);
         while (true)
         {
@@ -280,13 +315,20 @@ public static partial class QueryCommandRunner
         {
             var covered = AuditExecutionComplete(state) && !AuditHasObservationOmissions(state)
                 && state.Errors.Count == 0 && state.OmittedErrorCount == 0 && state.IndexState == "current";
-            payload["partition"] = new JsonObject { ["id"] = state.PartitionId, ["path"] = state.PartitionPath,
-                ["binding"] = state.PlanBinding, ["generation"] = state.PlanGeneration,
-                ["state"] = covered ? "covered" : "pending", ["covered_partition_count"] = covered ? 1 : 0,
-                ["pending_partition_count"] = covered ? 0 : 1, ["execution_state_scope"] = "this_partition_only",
+            payload["partition"] = new JsonObject
+            {
+                ["id"] = state.PartitionId,
+                ["path"] = state.PartitionPath,
+                ["binding"] = state.PlanBinding,
+                ["generation"] = state.PlanGeneration,
+                ["state"] = covered ? "covered" : "pending",
+                ["covered_partition_count"] = covered ? 1 : 0,
+                ["pending_partition_count"] = covered ? 0 : 1,
+                ["execution_state_scope"] = "this_partition_only",
                 ["coverage_authoritative"] = covered && payload["summary"]!["count_authoritative"]!.GetValue<bool>(),
                 ["reason"] = state.Recipes.SelectMany(recipe => recipe.Queries).Any(query => query.Result?.CandidateWindowExhausted == true)
-                    ? "single_file_candidate_window_exhausted" : null };
+                    ? "single_file_candidate_window_exhausted" : null
+            };
         }
         if (!state.RecoveryRequest.TopSummary) return;
         payload.Remove("recipes");
@@ -298,7 +340,10 @@ public static partial class QueryCommandRunner
         payload["summary"]!["failed_query_count"] = state.Recipes.Sum(recipe => recipe.Queries.Count(query => query.Status == "failed"));
         payload["limits"]!["effective_max_json_bytes"] = GetAuditRecoveryByteLimit(options, state);
         payload["recipe_source_diagnostic_count"] = state.RegistryDiagnostics.Count;
-        payload["recovery"] = new JsonObject { ["partition_plan"] = AuditReplayNode([.. BuildAuditPlanArgv(options, state), "--partition-plan"]),
-            ["guidance"] = "Resume continuation.next_command when available. For non-resumable candidate windows request the bounded partition plan. Plans restart observations and do not prove exhaustive coverage." };
+        payload["recovery"] = new JsonObject
+        {
+            ["partition_plan"] = AuditReplayNode([.. BuildAuditPlanArgv(options, state), "--partition-plan"]),
+            ["guidance"] = "Resume continuation.next_command when available. For non-resumable candidate windows request the bounded partition plan. Plans restart observations and do not prove exhaustive coverage."
+        };
     }
 }
