@@ -59,7 +59,9 @@ public sealed class QueryCommandRunnerAuditRecoveryIssue5299Tests
         foreach (var path in expected.Append("other/Outside.cs").Append("src/Excluded.cs"))
             TestProjectHelper.InsertIndexedFile(db, path, "csharp", "class Needle5299 { }\n");
         var recipes = new[] { Recipe(), Recipe("second") };
-        string[] args = ["--all", "--db", db, "--audit-scope", "all", "--path", "src/**", "--exclude-path", "**/Excluded.cs", "--partition-plan"];
+        const int pageByteBudget = 8192;
+        string[] args = ["--all", "--db", db, "--audit-scope", "all", "--path", "src/**", "--exclude-path", "**/Excluded.cs", "--partition-plan",
+            "--max-json-bytes", pageByteBudget.ToString(System.Globalization.CultureInfo.InvariantCulture)];
         var seen = new HashSet<string>(StringComparer.Ordinal);
         string[]? next = args;
         string? firstUnit = null;
@@ -69,7 +71,8 @@ public sealed class QueryCommandRunnerAuditRecoveryIssue5299Tests
             using (document)
             {
                 Assert.Equal(CommandExitCodes.Success, exit);
-                Assert.True(Encoding.UTF8.GetByteCount(output) <= QueryCommandRunner.AuditRecoveryByteLimit);
+                Assert.True(Encoding.UTF8.GetByteCount(output) <= pageByteBudget);
+                Assert.Equal(pageByteBudget, document.RootElement.GetProperty("limits").GetProperty("output_bytes").GetInt32());
                 var root = document.RootElement;
                 Assert.Equal(expected.Count, root.GetProperty("eligible_path_count").GetInt32());
                 Assert.True(root.GetProperty("inventory_complete").GetBoolean());
@@ -194,6 +197,31 @@ public sealed class QueryCommandRunnerAuditRecoveryIssue5299Tests
         using var routedPlan = JsonDocument.Parse(routed);
         Assert.Equal(CommandExitCodes.Success, routedExit);
         Assert.True(routedPlan.RootElement.GetProperty("available").GetBoolean());
+        foreach (var literal in new[] { "--audit-scope", "--db" })
+        {
+            var literalRecipes = new[] { recipe, recipe with { Name = "second" } };
+            var (literalExit, literalPlan, _) = Run([.. args, "--exclude-path=" + literal], literalRecipes);
+            using (literalPlan)
+            {
+                Assert.Equal(CommandExitCodes.Success, literalExit);
+                var replay = Replay(literalPlan.RootElement.GetProperty("units")[0]);
+                var (replayExit, replayResult, _) = Run(replay, literalRecipes);
+                using (replayResult)
+                {
+                    Assert.True(replayExit == CommandExitCodes.Success, replayResult.RootElement.GetRawText());
+                    Assert.Equal(2, replayResult.RootElement.GetProperty("summary").GetProperty("emitted_result_count").GetInt32());
+                }
+                var (partialExit, partialResult, _) = Run([.. replay, "--total-limit", "1"], literalRecipes);
+                using (partialResult)
+                {
+                    Assert.Equal(CommandExitCodes.PartialResult, partialExit);
+                    var continuation = partialResult.RootElement.GetProperty("continuation");
+                    Assert.Contains("--exclude-path=" + literal, continuation.GetProperty("next_command").GetString());
+                    var (lastExit, lastResult, _) = Run([.. replay, "--total-limit", "1", "--continuation", continuation.GetProperty("next_token").GetString()!], literalRecipes);
+                    using (lastResult) Assert.Equal(CommandExitCodes.Success, lastExit);
+                }
+            }
+        }
     }
 
     [Fact]

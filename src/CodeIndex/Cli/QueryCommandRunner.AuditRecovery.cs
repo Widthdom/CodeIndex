@@ -117,15 +117,11 @@ public static partial class QueryCommandRunner
 
     private static List<string> BuildAuditPlanArgv(QueryCommandOptions options, AuditAllRunState state)
     {
-        var args = BuildAuditAllRecoveryArgv(state.SelectedRecipes[0].Name, options);
+        var args = BuildAuditAllRecoveryArgv(state.SelectedRecipes[0].Name, options, includeDb: false, includeScope: false, safeOptionLiterals: true);
         // InvocationContext emits [cdidx, audit, recipe]. Pin the database even when
         // its original selection came from workspace/environment discovery.
         args[2] = "--all";
-        var dbIndex = args.IndexOf("--db");
-        if (dbIndex >= 0) args.RemoveRange(dbIndex, 2);
         AddReplayValueOption(args, "--db", Path.GetFullPath(options.DbPath));
-        var scopeIndex = args.IndexOf("--audit-scope");
-        if (scopeIndex >= 0) args.RemoveRange(scopeIndex, 2);
         if (!options.SourceOnly)
         {
             if (options.AuditScopeExplicit) AddReplayValueOption(args, "--audit-scope", options.AuditScope);
@@ -262,7 +258,8 @@ public static partial class QueryCommandRunner
             root["returned_partition_count"] = units.Count;
             root["remaining_partition_count"] = paths.Length - next;
             root["next"] = next < paths.Length
-                ? AuditReplayNode([.. args, "--partition-plan", "--plan-cursor", EncodeAuditPlanToken(state.PlanBinding!, "page", next)]) : null;
+                ? AuditReplayNode([.. args, "--partition-plan", "--max-json-bytes", GetAuditRecoveryByteLimit(options, state).ToString(CultureInfo.InvariantCulture),
+                    "--plan-cursor", EncodeAuditPlanToken(state.PlanBinding!, "page", next)]) : null;
             var json = root.ToJsonString(serializer);
             if (GetJsonDocumentByteCount(json) <= GetAuditRecoveryByteLimit(options, state)) { Console.WriteLine(json); return CommandExitCodes.Success; }
             if (units.Count <= 1) return WriteAuditRecoveryBudgetError(options, jsonOptions, GetJsonDocumentByteCount(json));

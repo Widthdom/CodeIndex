@@ -1172,27 +1172,34 @@ public static partial class QueryCommandRunner
     private static string BuildAuditAllRecoveryCommand(string recipeName, QueryCommandOptions options, bool includeDb = true)
         => string.Join(" ", BuildAuditAllRecoveryArgv(recipeName, options, includeDb).Select(QuoteReplayShellArg));
 
-    private static List<string> BuildAuditAllRecoveryArgv(string recipeName, QueryCommandOptions options, bool includeDb = true)
+    private static List<string> BuildAuditAllRecoveryArgv(string recipeName, QueryCommandOptions options, bool includeDb = true, bool includeScope = true, bool safeOptionLiterals = false)
     {
         var args = new List<string>();
+        void AddValue(string name, string? value)
+        {
+            if (safeOptionLiterals && value?.StartsWith("--", StringComparison.Ordinal) == true)
+                args.Add(name + "=" + value);
+            else
+                AddReplayValueOption(args, name, value);
+        }
         options.InvocationContext.AddRecipeCommandPrefix(args, recipeName);
         args.Add("--format");
         args.Add(OutputFormatCompact);
-        AddReplayValueOption(args, "--limit", options.Limit.ToString(CultureInfo.InvariantCulture));
+        AddValue("--limit", options.Limit.ToString(CultureInfo.InvariantCulture));
         if (includeDb && options.DbPathExplicit)
-            AddReplayValueOption(args, "--db", options.DbPath);
+            AddValue("--db", options.DbPath);
         if (options.SourceOnly)
             args.Add("--source-only");
-        else if (options.AuditScopeExplicit)
-            AddReplayValueOption(args, "--audit-scope", options.AuditScope);
+        else if (includeScope && options.AuditScopeExplicit)
+            AddValue("--audit-scope", options.AuditScope);
         if (!string.IsNullOrWhiteSpace(options.Lang))
-            AddReplayValueOption(args, "--lang", options.Lang);
+            AddValue("--lang", options.Lang);
         if (options.AllowUnknownLang)
             args.Add("--allow-unknown-lang");
         foreach (var pathPattern in options.PathPatterns)
-            AddReplayValueOption(args, "--path", pathPattern);
+            AddValue("--path", pathPattern);
         foreach (var excludePath in options.ExcludePaths)
-            AddReplayValueOption(args, "--exclude-path", excludePath);
+            AddValue("--exclude-path", excludePath);
         if (options.ExcludeTests)
             args.Add("--exclude-tests");
         if (options.IncludeGenerated)
@@ -1200,7 +1207,7 @@ public static partial class QueryCommandRunner
         if (options.ShowExcluded)
             args.Add("--show-excluded");
         if (options.Since.HasValue)
-            AddReplayValueOption(args, "--since", options.Since.Value.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture));
+            AddValue("--since", options.Since.Value.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture));
         if (options.NoDedup)
             args.Add("--no-dedup");
         if (options.NoVisibilityRank)
@@ -1211,11 +1218,11 @@ public static partial class QueryCommandRunner
             args.Add("--exact-substring");
         AddSearchRecipeRowSelectionReplayOptions(args, options);
         foreach (var guardFilter in options.GuardFilters)
-            AddReplayValueOption(args, BuildSearchGuardReplayOptionName(guardFilter), guardFilter.Query);
+            AddValue(BuildSearchGuardReplayOptionName(guardFilter), guardFilter.Query);
         if (options.GuardFilters.Count > 0 && options.GuardWindow != DbReader.DefaultSearchGuardWindow)
-            AddReplayValueOption(args, "--guard-window", options.GuardWindow.ToString(CultureInfo.InvariantCulture));
+            AddValue("--guard-window", options.GuardWindow.ToString(CultureInfo.InvariantCulture));
         if (options.GuardFilters.Count > 0 && options.GuardScope != SearchGuardScope.Window)
-            AddReplayValueOption(args, "--guard-scope", FormatSearchGuardScope(options.GuardScope));
+            AddValue("--guard-scope", FormatSearchGuardScope(options.GuardScope));
         if (options.ExcludeComments)
             args.Add("--exclude-comments");
         if (options.ExcludeStrings)
@@ -1223,14 +1230,14 @@ public static partial class QueryCommandRunner
         if (options.ExcludeFixtures)
             args.Add("--exclude-fixtures");
         foreach (var origin in options.MatchOrigins)
-            AddReplayValueOption(args, "--origin", origin);
+            AddValue("--origin", origin);
         foreach (var origin in options.ExcludeOrigins)
-            AddReplayValueOption(args, "--exclude-origin", origin);
+            AddValue("--exclude-origin", origin);
         foreach (var kind in options.ResultKinds)
-            AddReplayValueOption(args, "--result-kind", kind);
-        AddReplayValueOption(args, "--snippet-lines", options.SnippetLines.ToString(CultureInfo.InvariantCulture));
-        AddReplayValueOption(args, "--snippet-focus", FormatSearchSnippetFocusMode(options.SnippetFocus));
-        AddReplayValueOption(args, "--max-line-width", options.MaxLineWidth.ToString(CultureInfo.InvariantCulture));
+            AddValue("--result-kind", kind);
+        AddValue("--snippet-lines", options.SnippetLines.ToString(CultureInfo.InvariantCulture));
+        AddValue("--snippet-focus", FormatSearchSnippetFocusMode(options.SnippetFocus));
+        AddValue("--max-line-width", options.MaxLineWidth.ToString(CultureInfo.InvariantCulture));
         return args;
     }
 

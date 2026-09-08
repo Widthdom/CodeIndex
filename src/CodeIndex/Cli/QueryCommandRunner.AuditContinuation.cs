@@ -191,7 +191,10 @@ public static partial class QueryCommandRunner
             var nextByteLimit = options.MaxJsonBytes ?? DefaultAuditAllJsonByteLimit;
             if (state.EmittedResultCount == 0 && state.ByteOmittedResultCount > 0)
                 nextByteLimit = (int)Math.Min(MaxSearchJsonByteLimit, (long)nextByteLimit * 2);
-            command = "cdidx audit --all" + replay[prefix.Length..]
+            var allReplay = state.RecoveryRequest.Partition != null
+                ? string.Join(" ", BuildAuditPlanArgv(options, state).Select(QuoteReplayShellArg))
+                : "cdidx audit --all" + replay[prefix.Length..];
+            command = allReplay
                 + " --total-limit " + state.EffectiveTotalLimit.ToString(CultureInfo.InvariantCulture)
                 + " --max-json-bytes " + nextByteLimit.ToString(CultureInfo.InvariantCulture)
                 + (options.CountOnly ? " --count" : "") + (options.SummaryOnly ? " --summary-only" : "")
