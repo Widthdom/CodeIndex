@@ -5,6 +5,23 @@ namespace CodeIndex.Cli;
 
 public static partial class QueryCommandRunner
 {
+    private static string BuildSearchRecipeCursorBinding(DbReader reader, SearchRecipeScopeJsonResult scope,
+        QueryCommandOptions options, SearchAuditRecipeQuery query)
+        => AuditBaselineStore.Hash("recipe-cursor-v2-token-boundary", reader.GetPaginationGeneration().Identity,
+            BuildSearchDefinitionVersion("audit-recipe-query-v2-token-boundary", query, CliJsonSerializerContext.Default.SearchAuditRecipeQuery),
+            BuildAuditAllRecoveryCommand(query.Name, options, includeDb: false),
+            scope.Name, string.Join('\0', scope.PathPatterns), string.Join('\0', scope.ExcludePaths), scope.ExcludeTests.ToString());
+
+    private static string FormatSearchRecipeCursor(SearchResult result, DbReader reader,
+        SearchRecipeScopeJsonResult scope, QueryCommandOptions options, SearchAuditRecipeQuery query)
+        => "recipe:v2:" + BuildSearchRecipeCursorBinding(reader, scope, options, query) + ":" + FormatSearchCursor(result);
+
+    private static (bool Exact, bool TokenBoundary) ResolveSearchRecipeMatchMode(
+        SearchAuditRecipeQuery query, QueryCommandOptions options)
+        => query.ResolveMatchMode(
+            options.Exact || options.ExactSubstring ? true : null,
+            options.TokenBoundary ? true : null);
+
     private readonly record struct SearchRecipeQueryMaterializationRequest(
         DbReader Reader,
         SearchRecipeScopeJsonResult Scope,
@@ -50,6 +67,7 @@ public static partial class QueryCommandRunner
             guardWindow: request.Options.GuardWindow,
             guardScope: request.Options.GuardScope,
             requiredPathPatterns: GetSearchRecipeRequiredPathPatterns(request.Options, request.RecipeQuery),
+            tokenBoundary: ResolveSearchRecipeMatchMode(request.RecipeQuery, request.Options).TokenBoundary,
             resultRanking: request.ResultLimit.HasValue
                 ? GetSearchRecipeResultRanking(request.RecipeQuery.ResultRanking, request.ResultLimit.Value)
                 : SearchResultRanking.Default,
@@ -110,7 +128,7 @@ public static partial class QueryCommandRunner
         {
             try
             {
-                var exact = userExact || recipeQuery.ExactSubstring;
+                var exact = ResolveSearchRecipeMatchMode(recipeQuery, options).Exact;
                 var resultLimit = aggregateResultLimit.HasValue
                     ? Math.Max(0, Math.Min(options.Limit, aggregateResultLimit.Value - emittedBefore - total))
                     : GetSearchRecipeEffectiveResultLimit(options, total);
@@ -198,7 +216,7 @@ public static partial class QueryCommandRunner
                         && !options.FirstPerFile
                         && !options.SampleSize.HasValue
                         && rows.Count > 0
-                            ? FormatSearchCursor(rows[^1].Result)
+                            ? FormatSearchRecipeCursor(rows[^1].Result, reader, scope, options, recipeQuery)
                             : null,
                     rows.Select(row => row.Compact).ToList(),
                     outputSelection.SourceTotal,
@@ -210,6 +228,7 @@ public static partial class QueryCommandRunner
                     outputSelection.LimitOmittedCount,
                     outputSelection.Selectors)
                 {
+                    TokenBoundary = ResolveSearchRecipeMatchMode(recipeQuery, options).TokenBoundary,
                     SummaryEvidencePaths = summaryEvidencePaths,
                     SummaryEvidencePathCount = summaryEvidencePathCount,
                     SummaryEvidencePathCountAuthoritative = materialization.SourceTotalAuthoritative,
@@ -258,7 +277,7 @@ public static partial class QueryCommandRunner
         {
             try
             {
-                var exact = userExact || recipeQuery.ExactSubstring;
+                var exact = ResolveSearchRecipeMatchMode(recipeQuery, options).Exact;
                 var resultLimit = GetSearchRecipeEffectiveResultLimit(options, total);
                 var materializationRequest = new SearchRecipeQueryMaterializationRequest(
                     reader,
@@ -311,7 +330,7 @@ public static partial class QueryCommandRunner
                         && !options.FirstPerFile
                         && !options.SampleSize.HasValue
                         && rows.Count > 0
-                            ? FormatSearchCursor(rows[^1].Result)
+                            ? FormatSearchRecipeCursor(rows[^1].Result, reader, scope, options, recipeQuery)
                             : null,
                     rows.Select(row => new SearchRecipeCompactResultJsonResult(
                         row.Result.Path,
@@ -404,7 +423,7 @@ public static partial class QueryCommandRunner
         {
             try
             {
-                var exact = userExact || recipeQuery.ExactSubstring;
+                var exact = ResolveSearchRecipeMatchMode(recipeQuery, options).Exact;
                 var materializationRequest = new SearchRecipeQueryMaterializationRequest(
                     reader,
                     scope,
@@ -476,7 +495,7 @@ public static partial class QueryCommandRunner
         total = 0;
         foreach (var recipeQuery in recipeQueries)
         {
-            var exact = userExact || recipeQuery.ExactSubstring;
+            var exact = ResolveSearchRecipeMatchMode(recipeQuery, options).Exact;
             var materializationRequest = new SearchRecipeQueryMaterializationRequest(
                 reader,
                 scope,

@@ -26,6 +26,16 @@ A new plan has every partition pending. Collect each execution's `partition` rec
 agents, MCP clients, and LSP-native editors can run fast full-text, symbol,
 dependency, and inspection queries without rescanning the same tree for every query.
 
+## Audit recipe token boundaries
+
+`audit <recipe>` and `search --recipe <recipe>` accept `--token-boundary`, including batch execution. It overrides every selected child's match mode with case-sensitive full-query token boundaries. Explicit `--exact-substring` (or `--exact`) instead overrides a child's boundary default with substring matching; these flags remain mutually exclusive. Without an override, each child's `tokenBoundary` / `token_boundary` setting defaults to false and its existing substring/FTS policy remains active. MCP `search` uses the same defaults and supports explicit `tokenBoundary: false` to disable boundaries; explicit `exactSubstring`/`exact` without `tokenBoundary` selects the exact/FTS policy and disables the boundary default.
+
+`dogfood-risk-patterns/process-argument-list` defaults to complete `ArgumentList` tokens in code, retaining `.ArgumentList` and C# `.@ArgumentList` while excluding `TypeArgumentListPattern`. This is lexical evidence, not receiver-type resolution: confirm that the receiver is `ProcessStartInfo`. Unicode letters participate in boundaries; C# `@` is normalized, but Unicode escape sequences are not decoded. Comments/strings follow the recipe's origin filters; genuine substring audits retain their defaults.
+
+Recipe definition fingerprints now include boundary policy. Restart old or mismatched recipe cursors and `audit --all` continuations; export a new baseline after a recipe-policy change rather than treating old observations as resolved. Recipe row cursors bind the index generation, child definition, effective scope and replay options. No database rebuild is required.
+
+C# origin classification remains line-local for multiline comments/strings; see [#5307](https://github.com/Widthdom/CodeIndex/issues/5307). Boundary filtering does not add compiler-level lexical or type analysis.
+
 ## Search guard errors
 
 Search and audit guard option errors return a versioned `E010_USAGE_ERROR` JSON object (exit 1) when JSON output is selected, including `--json=ndjson`, `--json=array`, `--format json`, and compact output. Output selection works before or after the invalid option; `--` still introduces a literal query. Missing values and invalid scopes/windows remain rejected (`--guard-scope` accepts only `window` or `same-line`). Human output retains its error, hint, and usage. `batch --json-summary` preserves the structured child error and continues subsequent commands without `--include-raw-streams`.
@@ -338,6 +348,16 @@ For commercial use, integration, and naming guidance, see
 A deadline returns exit `11`; cancellation returns `130`. JSON reports `analysis_complete: false`, `analysis_state` (`time_budget_exceeded` or `cancelled`), `analysis_timeout_ms`, and `total_count_authoritative: false`, with no unverified candidates or continuation cursor. A bounded JSON envelope retains these fields under `metadata`. Restart with narrower filters or a larger analysis budget. Completed paged envelopes report lower-bound totals and keep continuation cursors; use explicit `unused --count --json` for full totals, subject to the same analysis budget.
 
 # cdidx（日本語）
+
+## 監査レシピのトークン境界
+
+`audit <recipe>` と `search --recipe <recipe>` は、batch 実行を含めて `--token-boundary` を受理します。選択した各子クエリを、大文字小文字を区別するクエリ全体のトークン境界一致に上書きします。明示的な `--exact-substring`（または `--exact`）は子の境界既定値を部分一致に上書きし、これらのフラグは引き続き併用できません。指定がなければ子の `tokenBoundary` / `token_boundary` は既定で false となり、従来の部分一致／FTS 方針を維持します。MCP `search` も同じ既定値を使い、明示的な `tokenBoundary: false` で境界を無効化できます。`tokenBoundary` なしで `exactSubstring` / `exact` を明示すると、exact／FTS 方針を選択し、境界既定値を無効化します。
+
+`dogfood-risk-patterns/process-argument-list` はコード内の完全な `ArgumentList` トークンを既定で検索し、`.ArgumentList` や C# の `.@ArgumentList` を保持して `TypeArgumentListPattern` を除外します。字句上の証拠であり型解決ではないため、受信側が `ProcessStartInfo` かは確認してください。Unicode の文字は境界判定に含まれ、C# の `@` は正規化されますが、Unicode エスケープ列は復号しません。コメント／文字列にはレシピの出現元フィルターを適用し、部分一致を意図した監査の既定値は維持します。
+
+レシピ定義の fingerprint に境界方針を含めます。旧形式や条件不一致のレシピ cursor と `audit --all` continuation は最初から再実行してください。方針変更後は旧観測を解決済み扱いせず、新しい baseline を export します。レシピの行 cursor は index 世代、子定義、実効 scope、再実行オプションに結び付きます。DB の再構築は不要です。
+
+C# の複数行コメント／文字列の出現元分類には行単位の制限が残ります（[#5307](https://github.com/Widthdom/CodeIndex/issues/5307)）。境界フィルターはコンパイラー相当の字句解析や型解析を追加するものではありません。
 
 ### audit の小さな要約と復旧
 

@@ -16,6 +16,8 @@ A destination-side failure means comparison against the current destination cann
 
 ## Audit baseline contract
 
+Recipe matching resolves explicit CLI `--token-boundary`, explicit substring mode, then the child's default through `SearchAuditRecipeQuery.ResolveMatchMode`; MCP passes nullable boolean overrides to the same resolver. Boundary matches reuse `DbReader` token checks, with accepted spans retained in snippet origins/highlights. `audit-recipe-v2-token-boundary` / `audit-recipe-query-v2-token-boundary` fingerprints include the serialized child policy. Recovery replay includes the override, binding all-recipe continuations and baseline scope. Individual `recipe:v2:` cursors additionally bind the generation, definition and effective scope/replay; reject legacy or mismatched recipe cursors before child execution. Keep ad hoc cursor formats unchanged.
+
 `audit --all --summary-level top` keeps completion, freshness, lower-bound observation counts, omission totals, continuation and a partition-plan command, without child details. Successful output is capped at 64 KiB including its newline (or the smaller `--max-json-bytes`); detailed output remains the default. Output budgets do not enlarge query or planning work budgets.
 
 `--partition-plan` computes a deterministic union of effective child scopes over indexed paths, including child/user path intersections, exclusions, generated-file policy, language and timestamp filters. Plans have at most 10,000 paths, 100,000 visited inventory rows, 512 child queries, a 10-second planning deadline and 10 units per page. Overflow emits an unavailable, non-authoritative result rather than a partial inventory. Each unit runs all selected queries on one exact binary-equal path; bound parameters preserve literal glob characters. Page/unit tokens bind index generation, indexed root, canonical replay scope and recipe versions; they are checksummed corruption detectors, not authorization credentials. Recompute and validate before execution. The `AsyncLocal` exact-path lease is disposed before returning to other commands.
@@ -4388,6 +4390,10 @@ Unused partial-type SQL materializes type identity/ancestor arity and reconstruc
 The CLI applies a cancellable analysis deadline, registers SQLite interruption, and reports incomplete/cancelled JSON without unverified results. SQLite callbacks can surface cancellation as `SQLITE_ERROR`, so the unused boundary handles that only when its token is cancelled. Bounded page envelopes avoid an implicit second count analysis and preserve lower-bound count authority. Explicit count/summary commands retain full analysis. See [unused performance validation](docs/unused-performance.md) for operation-count budgets and measurements.
 
 # 開発者ガイド
+
+## 監査レシピのトークン境界
+
+`SearchAuditRecipeQuery.ResolveMatchMode` は、CLI の明示的な `--token-boundary`、明示的な部分一致、子の既定値の順で検索方式を決めます。MCP も nullable な真偽値を同じ関数に渡します。境界一致には `DbReader` の判定を再利用し、採用された位置をスニペットの出現元・ハイライトに維持します。`audit-recipe-v2-token-boundary` / `audit-recipe-query-v2-token-boundary` の fingerprint は子の設定を含みます。復旧用の再実行指定にも上書きを含め、全レシピ continuation と baseline の scope に結び付けます。個別の `recipe:v2:` cursor は世代・定義・実効 scope と再実行指定にも結び付け、旧形式や条件不一致は子クエリ実行前に拒否します。通常検索の cursor 形式は維持します。
 
 ## audit の要約と分割計画
 

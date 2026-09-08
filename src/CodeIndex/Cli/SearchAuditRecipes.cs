@@ -1516,8 +1516,9 @@ internal static class SearchAuditRecipes
                     "ArgumentList",
                     "Find process argument-list construction as positive evidence against shell or command-line interpolation.",
                     ["audit", "security"],
-                    "Review whether every untrusted argument flows through ArgumentList rather than a shell-expanded command string.")
+                    "Matches the complete ArgumentList token in code, including member access; receiver types are not resolved. Verify ProcessStartInfo ownership and whether every untrusted argument avoids shell expansion.")
                 {
+                    TokenBoundary = true,
                     Severity = "info",
                     RiskEvidence =
                     [
@@ -3971,9 +3972,17 @@ internal static class SearchAuditRecipes
         var exactSubstring = TryReadBool(obj["exactSubstring"] ?? obj["exact_substring"], out var exactValue)
             ? exactValue
             : true;
+        var tokenNode = obj["tokenBoundary"] ?? obj["token_boundary"];
+        var tokenBoundary = false;
+        if (tokenNode is not null && !TryReadBool(tokenNode, out tokenBoundary))
+        {
+            AddDiagnostic(diagnostics, $"{sourceLabel} query '{name}' tokenBoundary must be a boolean.");
+            return false;
+        }
 
         query = new SearchAuditRecipeQuery(name, queryText, description, labels, falsePositiveGuidance, exactSubstring)
         {
+            TokenBoundary = tokenBoundary,
             Severity = severity,
             Aliases = aliases,
             DeprecatedAliases = deprecatedAliases,
@@ -4375,6 +4384,14 @@ internal sealed record SearchAuditRecipeQuery(
     string FalsePositiveGuidance,
     bool ExactSubstring = true)
 {
+    public bool TokenBoundary { get; init; }
+
+    internal (bool Exact, bool TokenBoundary) ResolveMatchMode(bool? exactOverride, bool? tokenBoundaryOverride)
+    {
+        var boundary = tokenBoundaryOverride ?? (exactOverride.HasValue ? false : TokenBoundary);
+        return (boundary || (exactOverride ?? ExactSubstring), boundary);
+    }
+
     public string Severity { get; init; } = SearchAuditRecipes.DefaultQuerySeverity;
     public List<string> Aliases { get; init; } = [];
     public List<string> DeprecatedAliases { get; init; } = [];
@@ -4487,7 +4504,11 @@ internal sealed record SearchRecipeQueryListItemJsonResult(
     [property: JsonPropertyName("nullable_contract_taxonomy")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     SearchRecipeNullableContractTaxonomyJsonResult? NullableContractTaxonomy,
-    [property: JsonPropertyName("exact_substring")] bool ExactSubstring);
+    [property: JsonPropertyName("exact_substring")] bool ExactSubstring)
+{
+    [JsonPropertyName("token_boundary")]
+    public bool TokenBoundary { get; init; }
+}
 
 internal sealed record SearchRecipeGuardFilterJsonResult(
     [property: JsonPropertyName("role")] string Role,
@@ -4706,6 +4727,9 @@ internal sealed record SearchRecipeQueryResultJsonResult(
     [property: JsonPropertyName("limit_omitted_count")] int LimitOmittedCount,
     [property: JsonPropertyName("selectors")] List<SearchRowSelectorJsonResult> Selectors)
 {
+    [JsonPropertyName("token_boundary")]
+    public bool TokenBoundary { get; init; }
+
     [JsonIgnore]
     public List<SearchRecipeTopFileJsonResult> SummaryEvidencePaths { get; init; } = [];
 
