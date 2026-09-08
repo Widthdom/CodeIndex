@@ -4375,7 +4375,19 @@ For symmetry, the MCP server no longer echoes raw `Exception.Message` content in
 ---
 
 <a id="開発者ガイド"></a>
+## Unused analysis cost
+
+Unused partial-type SQL materializes type identity/ancestor arity and reconstructed peer content once per statement, preserving namespace, generic/nested type, overlap, null-content and legacy chunk ordering semantics. These values cannot survive a statement's SQLite generation. Lexical masking reuse is scoped to one unused operation, keyed by exact content, and capped at 128 entries / 4,194,304 retained UTF-16 characters (source plus masked text); saturation falls back to the same uncached algorithm. Same-file content reuse has the same entry/character caps. There is no process-global content cache or schema migration.
+
+The CLI applies a cancellable analysis deadline, registers SQLite interruption, and reports incomplete/cancelled JSON without unverified results. SQLite callbacks can surface cancellation as `SQLITE_ERROR`, so the unused boundary handles that only when its token is cancelled. Bounded page envelopes avoid an implicit second count analysis and preserve lower-bound count authority. Explicit count/summary commands retain full analysis. See [unused performance validation](docs/unused-performance.md) for operation-count budgets and measurements.
+
 # 開発者ガイド
+
+## unused 解析の処理量
+
+unused の partial 型 SQL は型の同一性・祖先の arity と再構築した peer 本文を statement ごとに一度だけ具体化し、名前空間、ジェネリック・入れ子型、重複、null 本文、旧 chunk 順序の意味を維持します。これらの値は statement の SQLite 世代を越えて残りません。字句マスクの再利用は unused 処理一回に限定し、内容の完全一致をキーとして、128 entry／保持する UTF-16 文字数 4,194,304（元本文とマスク結果の合計）まで保持します。上限に達した場合も同じアルゴリズムで計算します。同一ファイル本文の再利用にも同じ entry・文字数上限を適用します。プロセス全体の本文キャッシュやスキーマ移行は追加しません。
+
+CLI は解析の deadline と SQLite 割り込みを組み合わせ、未検証結果を含めずに未完了・キャンセルを JSON で報告します。SQLite callback 内のキャンセルが `SQLITE_ERROR` になる場合もあるため、unused の境界では token がキャンセルされた場合だけこのエラーを扱います。バイト上限付きページの envelope は暗黙の追加全件集計を避け、総数が下限であることを維持します。明示的な count・summary は全件を解析します。命令数の上限と計測方法は [unused の性能検証](docs/unused-performance.md) を参照してください。
 
 ## サイズ上限によるインデックスの省略
 

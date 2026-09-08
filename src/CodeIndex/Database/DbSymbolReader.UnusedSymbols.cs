@@ -35,12 +35,47 @@ public partial class DbReader
         var containerKindSql = GetSymbolColumnSql("container_kind", "''", symbolAlias);
         var containerNameSql = GetSymbolColumnSql("container_name", "''", symbolAlias);
         var containerQualifiedNameSql = GetSymbolColumnSql("container_qualified_name", containerNameSql, symbolAlias);
-        var ownSignatureSql = GetSymbolColumnSql("signature", "''", "partial_own_type");
-        var peerSignatureSql = GetSymbolColumnSql("signature", "''", "partial_peer_type");
-        var ownQualifiedNameSql = BuildCSharpPartialTypeQualifiedNameSql("partial_own_type");
-        var peerQualifiedNameSql = BuildCSharpPartialTypeQualifiedNameSql("partial_peer_type");
-        var ownTypeShapeSql = BuildCSharpPartialTypeShapeSql("partial_own_type", "partial_own_ancestor");
-        var peerTypeShapeSql = BuildCSharpPartialTypeShapeSql("partial_peer_type", "partial_peer_ancestor");
+        return $@"
+              AND NOT (
+                  {fileAlias}.lang = 'csharp'
+                  AND {visibilitySql} IN ('private', 'fileprivate')
+                  AND {symbolAlias}.name <> ''
+                  AND {containerKindSql} IN ('class', 'struct', 'interface')
+                  AND {containerNameSql} <> ''
+                  AND EXISTS (
+                      SELECT 1
+                      FROM unused_partial_types partial_own_type
+                      JOIN unused_partial_contents partial_peer_type
+                        ON partial_peer_type.file_id <> partial_own_type.file_id
+                       AND partial_peer_type.kind = partial_own_type.kind
+                       AND partial_peer_type.name = partial_own_type.name
+                       AND partial_peer_type.type_shape = partial_own_type.type_shape
+                      WHERE partial_own_type.file_id = {symbolAlias}.file_id
+                        AND partial_own_type.kind = {containerKindSql}
+                        AND partial_own_type.name = {containerNameSql}
+                        AND (
+                            {containerQualifiedNameSql} = ''
+                            OR {containerQualifiedNameSql} = partial_own_type.name
+                            OR {containerQualifiedNameSql} = partial_own_type.qualified_name
+                        )
+                        AND (
+                            {containerQualifiedNameSql} = ''
+                            OR {containerQualifiedNameSql} = partial_peer_type.name
+                            OR {containerQualifiedNameSql} = partial_peer_type.qualified_name
+                        )
+                        AND csharp_identifier_occurrence_count(partial_peer_type.reconstructed_content, {symbolAlias}.name) > 0
+                      LIMIT 1
+                  )
+              )";
+    }
+
+    // Statement-local materialization cannot outlive the SQLite generation and can spill to
+    // SQLite temporary storage. Preserve the overlap and lexical boundary rules of #5089.
+    private string BuildUnusedPartialTypeCtes()
+    {
+        var signatureSql = GetSymbolColumnSql("signature", "''", "partial_own_type");
+        var qualifiedNameSql = BuildCSharpPartialTypeQualifiedNameSql("partial_own_type");
+        var typeShapeSql = BuildCSharpPartialTypeShapeSql("partial_own_type", "partial_own_ancestor");
         var peerTypeStartLineSql = GetSymbolColumnSql("start_line", "partial_peer_type.line", "partial_peer_type");
         var peerTypeEndLineSql = GetSymbolColumnSql("end_line", peerTypeStartLineSql, "partial_peer_type");
         var peerChunkOrdinalSql = _chunkColumns.Contains("chunk_index")
@@ -56,39 +91,18 @@ public partial class DbReader
             : "partial_peer_piece.start_line, partial_peer_piece.reconstruction_ordinal";
 
         return $@"
-              AND NOT (
-                  {fileAlias}.lang = 'csharp'
-                  AND {visibilitySql} IN ('private', 'fileprivate')
-                  AND {symbolAlias}.name <> ''
-                  AND {containerKindSql} IN ('class', 'struct', 'interface')
-                  AND {containerNameSql} <> ''
-                  AND EXISTS (
-                      SELECT 1
-                      FROM symbols partial_own_type
-                      JOIN symbols partial_peer_type
-                        ON partial_peer_type.file_id <> partial_own_type.file_id
-                       AND partial_peer_type.kind = partial_own_type.kind
-                       AND partial_peer_type.name = partial_own_type.name
-                      JOIN files partial_peer_file ON partial_peer_file.id = partial_peer_type.file_id
-                      WHERE partial_own_type.file_id = {symbolAlias}.file_id
-                        AND partial_own_type.kind = {containerKindSql}
-                        AND partial_own_type.name = {containerNameSql}
-                        AND lower({ownSignatureSql}) LIKE '%partial%'
-                        AND lower({peerSignatureSql}) LIKE '%partial%'
-                        AND partial_peer_file.lang = 'csharp'
-                        AND (
-                            {containerQualifiedNameSql} = ''
-                            OR {containerQualifiedNameSql} = partial_own_type.name
-                            OR {containerQualifiedNameSql} = {ownQualifiedNameSql}
-                        )
-                        AND (
-                            {containerQualifiedNameSql} = ''
-                            OR {containerQualifiedNameSql} = partial_peer_type.name
-                            OR {containerQualifiedNameSql} = {peerQualifiedNameSql}
-                        )
-                        AND {ownTypeShapeSql} = {peerTypeShapeSql}
-                        AND (
-                            SELECT csharp_identifier_occurrence_count(
+            unused_partial_types AS MATERIALIZED (
+                SELECT partial_own_type.*, {qualifiedNameSql} AS qualified_name,
+                       {typeShapeSql} AS type_shape
+                FROM symbols partial_own_type
+                JOIN files partial_file ON partial_file.id = partial_own_type.file_id
+                WHERE partial_file.lang = 'csharp'
+                  AND partial_own_type.kind IN ('class', 'struct', 'interface')
+                  AND lower({signatureSql}) LIKE '%partial%'
+            ),
+            unused_partial_contents AS MATERIALIZED (
+                SELECT partial_peer_type.*, (
+                            SELECT
                                 GROUP_CONCAT(
                                     csharp_text_in_line_range(
                                         partial_peer_piece.content,
@@ -99,8 +113,7 @@ public partial class DbReader
                                                 partial_peer_piece.prior_content_end_line + 1,
                                                 {peerTypeStartLineSql})),
                                         MIN({peerTypeEndLineSql}, partial_peer_piece.end_line)),
-                                    char(10) ORDER BY {peerPieceConcatOrderSql}),
-                                {symbolAlias}.name)
+                                    char(10) ORDER BY {peerPieceConcatOrderSql})
                             FROM (
                                 SELECT
                                     partial_peer_chunk.file_id,
@@ -122,10 +135,16 @@ public partial class DbReader
                             ) partial_peer_piece
                             WHERE partial_peer_piece.end_line >= {peerTypeStartLineSql}
                               AND partial_peer_piece.start_line <= {peerTypeEndLineSql}
-                        ) > 0
-                      LIMIT 1
-                  )
-              )";
+                        ) AS reconstructed_content
+                FROM unused_partial_types partial_peer_type
+                WHERE EXISTS (
+                    SELECT 1 FROM unused_partial_types other_partial
+                    WHERE other_partial.name = partial_peer_type.name
+                      AND other_partial.kind = partial_peer_type.kind
+                      AND other_partial.type_shape = partial_peer_type.type_shape
+                      AND other_partial.file_id <> partial_peer_type.file_id
+                )
+            )";
     }
 
     private string BuildCSharpPartialTypeQualifiedNameSql(string typeAlias)
@@ -286,6 +305,7 @@ public partial class DbReader
         string? bucketFilter = null,
         string? minConfidence = null)
     {
+        using var lexicalScope = new DbContext.UnusedLexicalScope(Cancellation);
         // Without symbol_references (legacy read-only DB), every symbol would appear unused,
         // which is a meaningless signal. Return empty rather than drowning the caller in noise.
         // symbol_references が無いレガシー read-only DB では全シンボルが未使用扱いになってしまうため、
@@ -606,7 +626,9 @@ public partial class DbReader
         }
 
         var content = builder.ToString();
-        fileContentByFileId[fileId] = content;
+        if (fileContentByFileId.Count < DbContext.UnusedLexicalScope.MaximumEntries
+            && content.Length <= DbContext.UnusedLexicalScope.MaximumCharacters - fileContentByFileId.Values.Sum(value => value.Length))
+            fileContentByFileId[fileId] = content;
         return content;
     }
 
@@ -1011,6 +1033,7 @@ public partial class DbReader
         IReadOnlyList<string>? visibilityFilters, IReadOnlyList<string>? excludeVisibilityFilters,
         string? bucketFilter, string? minConfidence, Func<UnusedSymbolResult, bool>? resultFilter)
     {
+        using var lexicalScope = new DbContext.UnusedLexicalScope(Cancellation);
         if (!_hasReferencesTable)
             return EmptyUnusedCountResult();
         if (lang != null && !SupportsReferenceLanguage(lang))

@@ -167,7 +167,8 @@ public partial class QueryCommandRunnerTests
             Assert.Equal("unused", metadata.GetProperty("command").GetString());
             Assert.Equal("symbols", metadata.GetProperty("primary_collection").GetString());
             Assert.Equal(expectedRows.Count, metadata.GetProperty("total_count").GetInt32());
-            Assert.True(metadata.GetProperty("total_count_authoritative").GetBoolean());
+            // Page envelopes no longer repeat the full analysis just to count (#5296).
+            Assert.False(metadata.GetProperty("total_count_authoritative").GetBoolean());
             Assert.Equal(results.Length, metadata.GetProperty("returned_count").GetInt32());
             Assert.Equal(
                 results.Length,
