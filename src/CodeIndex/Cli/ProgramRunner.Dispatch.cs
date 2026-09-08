@@ -81,7 +81,7 @@ internal static partial class ProgramRunner
             "languages" => a => QueryCommandRunner.RunLanguages(a, context.JsonOptions),
             "impact" => a => QueryCommandRunner.RunImpact(a, context.JsonOptions),
             "deps" => a => QueryCommandRunner.RunDeps(a, context.JsonOptions, context.CancellationToken),
-            "unused" => a => QueryCommandRunner.RunUnused(a, context.JsonOptions),
+            "unused" => a => QueryCommandRunner.RunUnused(a, context.JsonOptions, context.CancellationToken),
             "hotspots" => a => QueryCommandRunner.RunHotspots(a, context.JsonOptions),
             "batch" => a => QueryCommandRunner.RunBatch(a, context.JsonOptions, context.AppVersion, context.CancellationToken),
             "suggestions" => a => SuggestionsCommandRunner.Run(a, context.JsonOptions, context.CancellationToken),

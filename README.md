@@ -313,7 +313,20 @@ For commercial use, integration, and naming guidance, see
 [INTEGRATION_POLICY.md](INTEGRATION_POLICY.md), and
 [TRADEMARKS.md](TRADEMARKS.md).
 
+## Unused analysis budgets
+
+`unused` bounds analysis after the database opens to 30,000 ms by default. Set `--analysis-timeout-ms <1..600000>` to change that budget. This includes candidate selection, protective partial-type checks, and requested summaries; `--limit` and `--max-json-bytes` only limit output. Interactive stderr shows one progress line per second; `--progress` also enables it for captured output. `--quiet` and `--no-progress` suppress progress.
+
+A deadline returns exit `11`; cancellation returns `130`. JSON reports `analysis_complete: false`, `analysis_state` (`time_budget_exceeded` or `cancelled`), `analysis_timeout_ms`, and `total_count_authoritative: false`, with no unverified candidates or continuation cursor. A bounded JSON envelope retains these fields under `metadata`. Restart with narrower filters or a larger analysis budget. Completed paged envelopes report lower-bound totals and keep continuation cursors; use explicit `unused --count --json` for full totals, subject to the same analysis budget.
+
 # cdidx（日本語）
+
+## unused 解析の時間上限
+
+`unused` は DB を開いた後の解析を既定で 30,000 ms に制限します。`--analysis-timeout-ms <1..600000>` で変更できます。候補選択、partial 型の保護チェック、要求した集計を含む上限であり、`--limit` と `--max-json-bytes` は出力量だけを制限します。対話的 stderr には毎秒進行状況を表示し、`--progress` を付けると出力取得時にも表示します。`--quiet` と `--no-progress` は進行表示を抑制します。
+
+時間上限到達は終了コード `11`、キャンセルは `130` です。JSON は `analysis_complete: false`、`analysis_state`（`time_budget_exceeded` または `cancelled`）、`analysis_timeout_ms`、`total_count_authoritative: false` を返し、未検証候補や継続 cursor を含めません。バイト上限付き JSON envelope ではこれらを `metadata` に保持します。フィルターを絞るか解析時間を増やして再実行してください。完了したページの envelope は総数を下限として示し、継続 cursor を維持します。全件の集計には明示的な `unused --count --json` を使用します。この集計にも同じ解析時間上限が適用されます。
+
 
 ## import と diff の比較上限
 

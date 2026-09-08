@@ -122,6 +122,17 @@ public static partial class QueryCommandRunner
                 case "--progress":
                     progress = true;
                     break;
+                case "--analysis-timeout-ms":
+                    if (TryReadStringOptionValue(args, ref i, "--analysis-timeout-ms", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var timeoutValue, out var timeoutError))
+                    {
+                        WarnIfDuplicateSingleValueOption("--analysis-timeout-ms", timeoutValue!);
+                        if (!int.TryParse(timeoutValue, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out unusedAnalysisTimeoutMs)
+                            || unusedAnalysisTimeoutMs is < 1 or > 600_000)
+                            AddParseError("--analysis-timeout-ms must be an integer from 1 to 600000.");
+                    }
+                    else
+                        AddParseError(timeoutError!);
+                    break;
                 case "--fields":
                     if (TryReadStringOptionValue(args, ref i, "--fields", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var fieldsValue, out var fieldsError))
                     {

@@ -214,6 +214,7 @@ public sealed class QueryCommandOptions
     public List<string>? MapSections { get; init; }
     public bool SummaryOnly { get; init; }
     public bool Progress { get; init; }
+    public int UnusedAnalysisTimeoutMs { get; init; } = QueryCommandRunner.DefaultUnusedAnalysisTimeoutMs;
     public bool MapSummaryOnly { get; init; }
     public bool DependencyCycles { get; init; }
     public int DependencyCycleGraphBudget { get; init; } = QueryCommandRunner.DefaultDependencyCycleGraphBudget;

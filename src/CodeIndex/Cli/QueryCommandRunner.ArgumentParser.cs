@@ -153,6 +153,7 @@ public static partial class QueryCommandRunner
         private List<string>? mapSections;
         private bool summaryOnly;
         private bool progress;
+        private int unusedAnalysisTimeoutMs = DefaultUnusedAnalysisTimeoutMs;
         private bool mapSummaryOnly;
         private bool dependencyCycles;
         private int dependencyCycleGraphBudget = DefaultDependencyCycleGraphBudget;
@@ -571,6 +572,7 @@ public static partial class QueryCommandRunner
                 MapSections = mapSections,
                 SummaryOnly = summaryOnly,
                 Progress = progress,
+                UnusedAnalysisTimeoutMs = unusedAnalysisTimeoutMs,
                 MapSummaryOnly = mapSummaryOnly,
                 DependencyCycles = dependencyCycles,
                 DependencyCycleGraphBudget = dependencyCycleGraphBudget,

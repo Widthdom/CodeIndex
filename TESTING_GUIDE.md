@@ -1231,7 +1231,16 @@ Check the following:
 ---
 
 <a id="テストガイド"></a>
+## Unused performance regression coverage
+
+`QueryCommandRunnerUnusedIssue5296Tests` uses 16 sibling partial declarations and 192 private members whose references are deliberately removed. Require no false unused fields, at most 64 reconstructed chunk pieces, and at most 2,000 SQLite progress callbacks at 1,000 VM instructions per callback. These deterministic budgets catch repeated per-candidate reconstruction without wall-clock assertions on shared CI. Retain #5089, #4834 and #3673 as correctness controls, including unrelated chunks, missing content and legacy chunk ordering. Tests also interrupt active native SQLite work on deadline/caller cancellation, verify parseable bounded non-authoritative JSON, observe a heartbeat before completion, and confirm connection/token reuse and read-only behavior. Run both net8.0 and net9.0 lanes; see [performance measurements](docs/unused-performance.md).
+
 # テストガイド
+
+## unused の性能回帰テスト
+
+`QueryCommandRunnerUnusedIssue5296Tests` は sibling partial 宣言 16 個と、参照を意図的に削除した private メンバー 192 個を使用します。未使用 field の誤検出がないこと、再構築する chunk 片が最大 64 個であること、SQLite の 1,000 VM 命令ごとの progress callback が最大 2,000 回であることを検証します。共有 CI の実時間に依存せず、候補ごとの再構築が復活した場合に検出するための上限です。無関係な chunk、欠損本文、旧 chunk 順序を含む #5089・#4834・#3673 の正確性テストも維持します。さらに実行中の native SQLite 処理を deadline・caller cancellation で止め、上限付きで解析可能な非確定 JSON、処理完了前の heartbeat、接続・token の再利用、読み取り専用性を検証します。net8.0 と net9.0 の両方で実行してください。[性能計測](docs/unused-performance.md) も参照してください。
+
 
 `AuditScopeIssue5281Tests` は production-and-tooling scope の境界と coverage 契約を担当します。
 本番コードと tooling の混在 path、hidden CI、installer の self-test 命名、nested test / fixture、docs、
