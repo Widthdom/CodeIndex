@@ -2,6 +2,14 @@
 
 > **[日本語版はこちら / Japanese version](#cdidx日本語)**
 
+### Compact audit recovery
+
+Use `cdidx audit --all --db .cdidx/codeindex.db --audit-scope all --summary-level top` for completion, freshness, observation lower bounds and recovery without repeated child descriptions. `--summary-level detailed` preserves the default detail. Successful top summaries and plan pages fit 64 KiB including the final newline; `--max-json-bytes` may impose a smaller budget. JSON/NDJSON/count and `--allow-partial` retain their existing semantics. Counts sum recipe/query observations, including overlapping recipes; they are not unique findings.
+
+When continuation cannot resume a capped child, run the emitted `recovery.partition_plan.argv`, or `cdidx audit --all --db .cdidx/codeindex.db --audit-scope all --partition-plan`. Each unit contains copyable `argv` and a shell-quoted command that executes one exact indexed path with the original filters. Follow `next.argv` to enumerate further plan pages. Tokens reject changed index generations, scope or recipe definitions; regenerate the plan after such changes. Different recipe defaults remain bound to the plan when no single explicit scope applies.
+
+A new plan has every partition pending. Collect each execution's `partition` receipt by binding/id; a page cursor is not proof of execution, and retries may repeat observations. A single file that still exhausts the candidate window remains pending/non-authoritative and requires manual source inspection. Plans cover eligible indexed paths, not unindexed files or human finding review. The limits are 10,000 paths, 100,000 visited inventory rows, 512 queries, 10 seconds and 10 units per page. Overflow returns an unavailable plan with narrowing guidance. Output budgets do not enlarge those work limits, and baseline review annotations remain separate.
+
 [![Build and Test](https://github.com/Widthdom/CodeIndex/actions/workflows/dotnet.yml/badge.svg)](https://github.com/Widthdom/CodeIndex/actions/workflows/dotnet.yml)
 [![CodeQL](https://github.com/Widthdom/CodeIndex/actions/workflows/codeql.yml/badge.svg)](https://github.com/Widthdom/CodeIndex/actions/workflows/codeql.yml)
 [![Release](https://github.com/Widthdom/CodeIndex/actions/workflows/release.yml/badge.svg)](https://github.com/Widthdom/CodeIndex/actions/workflows/release.yml)
@@ -330,6 +338,14 @@ For commercial use, integration, and naming guidance, see
 A deadline returns exit `11`; cancellation returns `130`. JSON reports `analysis_complete: false`, `analysis_state` (`time_budget_exceeded` or `cancelled`), `analysis_timeout_ms`, and `total_count_authoritative: false`, with no unverified candidates or continuation cursor. A bounded JSON envelope retains these fields under `metadata`. Restart with narrower filters or a larger analysis budget. Completed paged envelopes report lower-bound totals and keep continuation cursors; use explicit `unused --count --json` for full totals, subject to the same analysis budget.
 
 # cdidx（日本語）
+
+### audit の小さな要約と復旧
+
+`cdidx audit --all --db .cdidx/codeindex.db --audit-scope all --summary-level top` は子クエリの説明を繰り返さず、完了・鮮度・観測数の下限・復旧情報を返します。`--summary-level detailed` は既定の詳細出力を維持します。成功した最上位要約と計画ページは末尾改行込みで最大 64 KiB となり、`--max-json-bytes` でさらに小さく制限できます。JSON/NDJSON/count と `--allow-partial` の既存の意味は維持されます。件数は重複する recipe も含む recipe/query ごとの観測数の合計であり、一意な指摘数ではありません。
+
+候補上限に達した子クエリを継続できない場合は、出力された `recovery.partition_plan.argv`、または `cdidx audit --all --db .cdidx/codeindex.db --audit-scope all --partition-plan` を実行します。各単位には元の条件を維持して索引内の厳密な 1 パスを実行する `argv` と、シェル用に引用されたコマンドがあります。`next.argv` で次の計画ページを取得します。索引世代・scope・recipe 定義が変わるとトークンは拒否されるため、計画を再作成してください。単一の明示 scope を適用できない異なる recipe 既定値も計画に照合されます。
+
+新規計画は全単位を pending とします。実行ごとの `partition` 記録を binding/id ごとに収集してください。ページカーソルは実行済みの証拠ではなく、再実行では観測が重複し得ます。単一ファイルでも候補上限に達すれば pending・非 authoritative のままで、ソースの手動確認が必要です。計画は対象となる索引内パスを扱い、未索引ファイルや人手レビューの完了を保証しません。上限は 10,000 パス、延べ 100,000 索引行、512 クエリ、10 秒、1 ページ 10 単位です。超過時は利用不可の計画と絞り込み案内を返します。出力予算で作業上限は増えず、baseline レビューの注釈とも独立しています。
 
 ## 検索guardのエラー
 

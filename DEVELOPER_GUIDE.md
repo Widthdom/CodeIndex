@@ -16,6 +16,12 @@ A destination-side failure means comparison against the current destination cann
 
 ## Audit baseline contract
 
+`audit --all --summary-level top` keeps completion, freshness, lower-bound observation counts, omission totals, continuation and a partition-plan command, without child details. Successful output is capped at 64 KiB including its newline (or the smaller `--max-json-bytes`); detailed output remains the default. Output budgets do not enlarge query or planning work budgets.
+
+`--partition-plan` computes a deterministic union of effective child scopes over indexed paths, including child/user path intersections, exclusions, generated-file policy, language and timestamp filters. Plans have at most 10,000 paths, 100,000 visited inventory rows, 512 child queries, a 10-second planning deadline and 10 units per page. Overflow emits an unavailable, non-authoritative result rather than a partial inventory. Each unit runs all selected queries on one exact binary-equal path; bound parameters preserve literal glob characters. Page/unit tokens bind index generation, indexed root, canonical replay scope and recipe versions; they are checksummed corruption detectors, not authorization credentials. Recompute and validate before execution. The `AsyncLocal` exact-path lease is disposed before returning to other commands.
+
+Plan pagination does not acknowledge execution. A fresh plan reports all units pending; each execution returns a receipt for that partition only. Consumers maintain receipts by binding/id, rerun pending units, and discard receipts after binding changes. A huge single-file candidate window remains pending with `single_file_candidate_window_exhausted`; no source exclusion or cap increase is automatic. Observation sums remain per recipe/query and can overlap. Baseline finding-review annotations are independent of these execution receipts.
+
 Audit continuation consumes raw pre-deduplication candidate exhaustion from `DbReader.Search`, including bounded guard/ranking evidence. JSON query-detail admission must remove hidden rows before continuation accounting; NDJSON row admission is independent of detail metadata. Probe query-completion prefix boundaries independently when byte-fitting JSON/NDJSON, since tokens and restart commands disappear discontinuously when a child completes.
 
 All-recipe continuation is separate from baselines. `QueryCommandRunner.AuditContinuation.cs` binds a bounded per-child offset vector to pagination generation, recipe definition versions, canonical effective filter replay, selectors, and ordering. Replay a fixed 10,000-candidate window before slicing so total-row/byte budgets cannot reorder observations. Advance offsets only from retained output rows after final JSON/NDJSON admission; failed children remain pending. Validate token length, depth, vector bounds, binding and checksum before executing queries. Report execution completeness separately from emission completeness and intentional selection. Tokens support 512 children and 16 KiB; non-authoritative child coverage requires explicit bounded restart/narrowing guidance. CLI `audit --all` owns this scheduler; individual MCP recipe queries and baseline files do not consume these tokens.
@@ -4382,6 +4388,14 @@ Unused partial-type SQL materializes type identity/ancestor arity and reconstruc
 The CLI applies a cancellable analysis deadline, registers SQLite interruption, and reports incomplete/cancelled JSON without unverified results. SQLite callbacks can surface cancellation as `SQLITE_ERROR`, so the unused boundary handles that only when its token is cancelled. Bounded page envelopes avoid an implicit second count analysis and preserve lower-bound count authority. Explicit count/summary commands retain full analysis. See [unused performance validation](docs/unused-performance.md) for operation-count budgets and measurements.
 
 # 開発者ガイド
+
+## audit の要約と分割計画
+
+`audit --all --summary-level top` は子クエリの詳細を省き、完了・鮮度・観測数の下限・省略件数・継続情報・分割計画コマンドを保持します。成功出力は改行込みで最大 64 KiB（`--max-json-bytes` が小さければその値）です。既定の詳細出力は維持され、出力予算で検索・計画の作業予算が増えることはありません。
+
+`--partition-plan` は子クエリと利用者のパス条件の積集合、除外、生成ファイル方針、言語、更新日時を反映した索引内パスの和集合を決定的に求めます。上限は 10,000 パス、延べ 100,000 索引行、512 子クエリ、計画時間 10 秒、1 ページ 10 単位です。超過時は不完全な一覧を完全な計画として公開せず、利用不可・非 authoritative を返します。各単位はバインドした厳密なパス一致で全選択クエリを実行し、glob 特殊文字も文字通り扱います。トークンは索引世代・ルート・再実行条件・recipe バージョンを照合し、実行前に再検証します。チェックサムは破損検出用であり認可情報ではありません。`AsyncLocal` のパス制限は終了時に必ず復元します。
+
+計画のページ送りは実行済みの記録ではありません。新規計画は全単位を pending とし、各実行は対象単位だけの記録を返します。利用側で binding/id ごとに記録を保持し、pending を再実行し、binding 変更時には記録を破棄します。単一巨大ファイルの候補上限超過は `single_file_candidate_window_exhausted` の pending のままです。自動の除外や上限緩和は行いません。集計は重複し得る recipe/query ごとの観測数であり、baseline の人手レビューとは独立です。
 
 ## unused 解析の処理量
 

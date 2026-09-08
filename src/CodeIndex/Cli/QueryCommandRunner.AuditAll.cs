@@ -73,6 +73,11 @@ public static partial class QueryCommandRunner
         internal int[]? InitialOffsets { get; set; }
         internal bool GenerationChanged { get; set; }
         internal bool SuppressRows { get; set; }
+        internal AuditRecoveryRequest RecoveryRequest { get; set; } = new();
+        internal string? PartitionPath { get; set; }
+        internal string? PartitionId { get; set; }
+        internal string? PlanBinding { get; set; }
+        internal string? PlanGeneration { get; set; }
     }
 
     private sealed class AuditAllResultSnapshot
@@ -185,7 +190,9 @@ public static partial class QueryCommandRunner
                 command: "audit");
         }
 
-        if (!TryExtractAuditContinuation(subArgs, out var cleanArgs, out var continuation))
+        if (!TryExtractAuditRecovery(subArgs, out var recoveryArgs, out var recoveryRequest))
+            return WriteAuditRecoveryError(subArgs, jsonOptions);
+        if (!TryExtractAuditContinuation(recoveryArgs, out var cleanArgs, out var continuation))
             return WriteAuditContinuationError(subArgs, jsonOptions);
         var normalizedArgs = AddAuditAllSummaryFormatIfNeeded(cleanArgs);
         var searchArgs = new string[normalizedArgs.Length + 2];
@@ -220,7 +227,8 @@ public static partial class QueryCommandRunner
             beforeQueryForTesting,
             beforeCoverageForTesting,
             consume,
-            continuation);
+            continuation,
+            recoveryRequest);
     }
 
     private static string[] AddAuditAllSummaryFormatIfNeeded(string[] args)
@@ -306,13 +314,15 @@ public static partial class QueryCommandRunner
         Action<DbReader>? beforeQueryForTesting,
         Action<DbReader>? beforeCoverageForTesting,
         Func<DbReader?, QueryCommandOptions, AuditAllRunState, int>? consume = null,
-        string? continuation = null)
+        string? continuation = null,
+        AuditRecoveryRequest? recoveryRequest = null)
     {
         var effectiveTotalLimit = options.TotalLimit ?? DefaultAuditAllTotalLimit;
         var timeBudget = AuditAllTimeBudgetForTesting ?? DefaultAuditAllTimeBudget;
         var state = new AuditAllRunState(selectedRecipes, registryDiagnostics, effectiveTotalLimit, timeBudget);
         state.ContinuationInput = continuation;
-        using var progress = ConsoleUi.ShouldUseProgressAnimation()
+        state.RecoveryRequest = recoveryRequest ?? new();
+        using var progress = !state.RecoveryRequest.Plan && ConsoleUi.ShouldUseProgressAnimation()
             && (options.Progress || ConsoleUi.ShouldUseInteractiveStandardError())
                 ? new ConsoleUi.AuditProgress(selectedRecipes.Count, selectedRecipes.Sum(recipe => (long)recipe.Queries.Count),
                     Console.Error, ConsoleUi.ShouldUseInteractiveStandardError(), ConsoleUi.GetWindowWidth(), startImmediately: false)
@@ -365,6 +375,12 @@ public static partial class QueryCommandRunner
         Func<DbReader?, QueryCommandOptions, AuditAllRunState, int>? consume = null)
     {
         var stopwatch = Stopwatch.StartNew();
+        if (state.RecoveryRequest.Plan || state.RecoveryRequest.Partition != null)
+        {
+            var prepared = PrepareAuditPartition(reader, options, jsonOptions, state, cancellationToken);
+            if (prepared.HasValue) return prepared.Value;
+        }
+        using var partitionScope = DbReader.BeginAuditPartitionPath(state.PartitionPath);
         if (consume == null && !InitializeAuditContinuation(reader, options, state))
             return WriteAuditContinuationError([], jsonOptions, options.Json);
         if (consume != null)
@@ -613,7 +629,7 @@ public static partial class QueryCommandRunner
             return;
 
         var results = queryRun.Result.Results;
-        var byteLimit = options.MaxJsonBytes ?? DefaultAuditAllJsonByteLimit;
+        var byteLimit = GetAuditRecoveryByteLimit(options, state);
         var serializationOptions = EnsureJsonNodeSerializerOptions(jsonOptions);
         var ndjson = IsAuditAllNdjson(options);
         var retainedCount = 0;
@@ -755,7 +771,7 @@ public static partial class QueryCommandRunner
         }
 
         var serializationOptions = EnsureJsonNodeSerializerOptions(jsonOptions);
-        var byteLimit = options.MaxJsonBytes ?? DefaultAuditAllJsonByteLimit;
+        var byteLimit = GetAuditRecoveryByteLimit(options, state);
         var ndjson = IsAuditAllNdjson(options);
         if (ndjson)
             return WriteAuditAllNdjson(options, jsonOptions, serializationOptions, state, byteLimit);
@@ -784,6 +800,8 @@ public static partial class QueryCommandRunner
         if (GetJsonDocumentByteCount(json) > byteLimit)
         {
             var minimumRequiredBytes = GetJsonDocumentByteCount(json);
+            if (state.RecoveryRequest.TopSummary)
+                return WriteAuditRecoveryBudgetError(options, jsonOptions, minimumRequiredBytes);
             var retryByIncreasingBudget = minimumRequiredBytes <= MaxSearchJsonByteLimit;
             return CommandErrorWriter.WriteResponseBudgetError(
                 json: true,
@@ -892,6 +910,8 @@ public static partial class QueryCommandRunner
             snapshot.ApplyPrefix(state, 0);
             var terminalLine = BuildAuditAllTerminalLine(options, state, serializationOptions);
             var minimumRequiredBytes = JsonLineBytes(terminalLine);
+            if (state.RecoveryRequest.TopSummary)
+                return WriteAuditRecoveryBudgetError(options, jsonOptions, checked((int)minimumRequiredBytes));
             return CommandErrorWriter.WriteResponseBudgetError(
                 json: true,
                 jsonOptions,
@@ -973,6 +993,11 @@ public static partial class QueryCommandRunner
         var omittedQueryDetails = 0;
         foreach (var recipeRun in state.Recipes)
         {
+            if (state.RecoveryRequest.TopSummary)
+            {
+                omittedQueryDetails += recipeRun.Recipe.Queries.Count;
+                continue;
+            }
             var queryNodes = new JsonArray();
             foreach (var queryRun in recipeRun.Queries)
             {
@@ -1060,7 +1085,7 @@ public static partial class QueryCommandRunner
             && state.Recipes.All(recipe => recipe.Queries.All(query => query.Result?.SourceTotalAuthoritative == true))
             && freshnessStates.All(freshness => freshness.FreshnessState == "clean");
 
-        return new JsonObject
+        var payload = new JsonObject
         {
             ["api_version"] = JsonOutputContract.ApiVersion,
             ["mode"] = "all_recipes",
@@ -1140,29 +1165,41 @@ public static partial class QueryCommandRunner
             ["recipes"] = recipeNodes,
             ["continuation"] = BuildAuditContinuation(options, state),
         };
+        AddAuditRecoveryProjection(payload, options, state);
+        return payload;
     }
 
     private static string BuildAuditAllRecoveryCommand(string recipeName, QueryCommandOptions options, bool includeDb = true)
+        => string.Join(" ", BuildAuditAllRecoveryArgv(recipeName, options, includeDb).Select(QuoteReplayShellArg));
+
+    private static List<string> BuildAuditAllRecoveryArgv(string recipeName, QueryCommandOptions options, bool includeDb = true, bool includeScope = true, bool safeOptionLiterals = false)
     {
         var args = new List<string>();
+        void AddValue(string name, string? value)
+        {
+            if (safeOptionLiterals && value?.StartsWith("--", StringComparison.Ordinal) == true)
+                args.Add(name + "=" + value);
+            else
+                AddReplayValueOption(args, name, value);
+        }
         options.InvocationContext.AddRecipeCommandPrefix(args, recipeName);
         args.Add("--format");
         args.Add(OutputFormatCompact);
-        AddReplayValueOption(args, "--limit", options.Limit.ToString(CultureInfo.InvariantCulture));
+        AddValue("--limit", options.Limit.ToString(CultureInfo.InvariantCulture));
         if (includeDb && options.DbPathExplicit)
-            AddReplayValueOption(args, "--db", options.DbPath);
+            AddValue("--db", options.DbPath);
         if (options.SourceOnly)
             args.Add("--source-only");
-        else if (options.AuditScopeExplicit)
-            AddReplayValueOption(args, "--audit-scope", options.AuditScope);
+        else if (includeScope && options.AuditScopeExplicit)
+            AddValue("--audit-scope", options.AuditScope);
         if (!string.IsNullOrWhiteSpace(options.Lang))
-            AddReplayValueOption(args, "--lang", options.Lang);
+            AddValue("--lang", options.Lang);
         if (options.AllowUnknownLang)
             args.Add("--allow-unknown-lang");
         foreach (var pathPattern in options.PathPatterns)
-            AddReplayValueOption(args, "--path", pathPattern);
+            AddValue("--path", pathPattern);
         foreach (var excludePath in options.ExcludePaths)
-            AddReplayValueOption(args, "--exclude-path", excludePath);
+            AddValue("--exclude-path", excludePath);
         if (options.ExcludeTests)
             args.Add("--exclude-tests");
         if (options.IncludeGenerated)
@@ -1170,7 +1207,7 @@ public static partial class QueryCommandRunner
         if (options.ShowExcluded)
             args.Add("--show-excluded");
         if (options.Since.HasValue)
-            AddReplayValueOption(args, "--since", options.Since.Value.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture));
+            AddValue("--since", options.Since.Value.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture));
         if (options.NoDedup)
             args.Add("--no-dedup");
         if (options.NoVisibilityRank)
@@ -1181,11 +1218,11 @@ public static partial class QueryCommandRunner
             args.Add("--exact-substring");
         AddSearchRecipeRowSelectionReplayOptions(args, options);
         foreach (var guardFilter in options.GuardFilters)
-            AddReplayValueOption(args, BuildSearchGuardReplayOptionName(guardFilter), guardFilter.Query);
+            AddValue(BuildSearchGuardReplayOptionName(guardFilter), guardFilter.Query);
         if (options.GuardFilters.Count > 0 && options.GuardWindow != DbReader.DefaultSearchGuardWindow)
-            AddReplayValueOption(args, "--guard-window", options.GuardWindow.ToString(CultureInfo.InvariantCulture));
+            AddValue("--guard-window", options.GuardWindow.ToString(CultureInfo.InvariantCulture));
         if (options.GuardFilters.Count > 0 && options.GuardScope != SearchGuardScope.Window)
-            AddReplayValueOption(args, "--guard-scope", FormatSearchGuardScope(options.GuardScope));
+            AddValue("--guard-scope", FormatSearchGuardScope(options.GuardScope));
         if (options.ExcludeComments)
             args.Add("--exclude-comments");
         if (options.ExcludeStrings)
@@ -1193,15 +1230,15 @@ public static partial class QueryCommandRunner
         if (options.ExcludeFixtures)
             args.Add("--exclude-fixtures");
         foreach (var origin in options.MatchOrigins)
-            AddReplayValueOption(args, "--origin", origin);
+            AddValue("--origin", origin);
         foreach (var origin in options.ExcludeOrigins)
-            AddReplayValueOption(args, "--exclude-origin", origin);
+            AddValue("--exclude-origin", origin);
         foreach (var kind in options.ResultKinds)
-            AddReplayValueOption(args, "--result-kind", kind);
-        AddReplayValueOption(args, "--snippet-lines", options.SnippetLines.ToString(CultureInfo.InvariantCulture));
-        AddReplayValueOption(args, "--snippet-focus", FormatSearchSnippetFocusMode(options.SnippetFocus));
-        AddReplayValueOption(args, "--max-line-width", options.MaxLineWidth.ToString(CultureInfo.InvariantCulture));
-        return string.Join(" ", args.Select(QuoteReplayShellArg));
+            AddValue("--result-kind", kind);
+        AddValue("--snippet-lines", options.SnippetLines.ToString(CultureInfo.InvariantCulture));
+        AddValue("--snippet-focus", FormatSearchSnippetFocusMode(options.SnippetFocus));
+        AddValue("--max-line-width", options.MaxLineWidth.ToString(CultureInfo.InvariantCulture));
+        return args;
     }
 
     private static JsonObject BuildAuditAllQueryNode(

@@ -68,6 +68,7 @@ public static partial class QueryCommandRunner
             reader.GetIndexedProjectRoot() ?? "",
             options.CountOnly.ToString(), options.SummaryOnly.ToString(),
         };
+        if (state.RecoveryRequest.Partition is { } partition) parts.Add(partition);
         foreach (var recipe in state.SelectedRecipes)
         {
             parts.Add(BuildAuditAllRecoveryCommand(recipe.Name, options, includeDb: false));
@@ -190,11 +191,17 @@ public static partial class QueryCommandRunner
             var nextByteLimit = options.MaxJsonBytes ?? DefaultAuditAllJsonByteLimit;
             if (state.EmittedResultCount == 0 && state.ByteOmittedResultCount > 0)
                 nextByteLimit = (int)Math.Min(MaxSearchJsonByteLimit, (long)nextByteLimit * 2);
-            command = "cdidx audit --all" + replay[prefix.Length..]
+            var allReplay = state.RecoveryRequest.Partition != null
+                ? string.Join(" ", BuildAuditPlanArgv(options, state).Select(QuoteReplayShellArg))
+                : "cdidx audit --all" + replay[prefix.Length..];
+            command = allReplay
                 + " --total-limit " + state.EffectiveTotalLimit.ToString(CultureInfo.InvariantCulture)
                 + " --max-json-bytes " + nextByteLimit.ToString(CultureInfo.InvariantCulture)
                 + (options.CountOnly ? " --count" : "") + (options.SummaryOnly ? " --summary-only" : "")
                 + " --continuation " + QuoteReplayShellArg(token);
+            if (state.RecoveryRequest.TopSummary) command += " --summary-level top";
+            if (state.RecoveryRequest.Partition is { } partition)
+                command += " --partition " + QuoteReplayShellArg(partition);
         }
         return new JsonObject
         {
