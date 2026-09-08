@@ -288,7 +288,8 @@ public partial class McpServer : IDisposable
         string text,
         JsonNode? structuredContent = null,
         string? mimeType = null,
-        bool enrichStructuredContent = true)
+        bool enrichStructuredContent = true,
+        bool isError = false)
     {
         mimeType ??= structuredContent is null ? "text/plain" : "application/json";
         var result = new JsonObject
@@ -303,6 +304,8 @@ public partial class McpServer : IDisposable
                 }
             }
         };
+        if (isError)
+            result["isError"] = true;
         if (structuredContent is JsonObject structuredObject)
         {
             if (enrichStructuredContent)

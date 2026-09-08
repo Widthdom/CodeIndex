@@ -421,7 +421,7 @@ internal sealed partial class FileContentLoader
         var observed = grewDuringRead
             ? $"File too large (> {limit} limit; grew during read)"
             : $"File too large ({actual} > {limit} limit)";
-        return $"{observed}. Override with --max-file-bytes <bytes> or {FileIndexer.MaxFileSizeEnvironmentVariable}=<bytes> when this source file is intentionally indexable.";
+        return FormattableString.Invariant($"{observed}; actual_bytes={actualBytes}; limit_bytes={maxFileSizeBytes}. Override with --max-file-bytes <bytes> or {FileIndexer.MaxFileSizeEnvironmentVariable}=<bytes> when this source file is intentionally indexable.");
     }
 
     private static string FormatBytesForError(long bytes)

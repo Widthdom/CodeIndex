@@ -4876,7 +4876,7 @@ public partial class IndexCommandRunnerTests
             };
             var (parallelExitCode, parallelJson) = RunAndCaptureJson(parallelArgs);
 
-            Assert.Equal(CommandExitCodes.Success, serialExitCode);
+            Assert.Equal(scenario == "oversize" ? CommandExitCodes.PartialResult : CommandExitCodes.Success, serialExitCode);
             Assert.True(
                 serialExitCode == parallelExitCode,
                 $"Serial result: {serialJson}; parallel result: {parallelJson}");
@@ -5175,7 +5175,7 @@ public partial class IndexCommandRunnerTests
                     "2",
                 ]);
 
-            Assert.Equal(CommandExitCodes.Success, serialExitCode);
+            Assert.Equal(scenario == "file_too_large" ? CommandExitCodes.PartialResult : CommandExitCodes.Success, serialExitCode);
             Assert.Equal(serialExitCode, parallelExitCode);
             foreach (var property in new[]
                      {
@@ -7812,7 +7812,7 @@ public partial class IndexCommandRunnerTests
                 ? [projectRoot, "--max-file-bytes", "1024", "--json", "--quiet"]
                 : [projectRoot, "--json", "--quiet"];
             Assert.Equal(
-                CommandExitCodes.Success,
+                oversized ? CommandExitCodes.PartialResult : CommandExitCodes.Success,
                 IndexCommandRunner.Run(retryArgs, _jsonOptions));
             Assert.Equal(0, CountMoneyParseImplicitImplementationReferences(projectRoot));
             Assert.False(ReadCSharpStaticInterfaceSourceEvidence(projectRoot));
@@ -8022,7 +8022,7 @@ public partial class IndexCommandRunnerTests
                 ? [projectRoot, "--max-file-bytes", "1024", "--json", "--quiet"]
                 : [projectRoot, "--json", "--quiet"];
             Assert.Equal(
-                CommandExitCodes.Success,
+                oversized ? CommandExitCodes.PartialResult : CommandExitCodes.Success,
                 IndexCommandRunner.Run(retryArgs, _jsonOptions));
             Assert.False(IndexedFileExists(projectRoot, "IParseable.cs"));
             Assert.True(IndexedFileExists(projectRoot, "IParseable.py"));
@@ -8428,11 +8428,12 @@ public partial class IndexCommandRunnerTests
 
             var (exitCode, _, stderr) = RunCliInSubprocess([projectRoot, "--files", "huge.py"], projectRoot);
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(CommandExitCodes.PartialResult, exitCode);
             Assert.Contains("Index generation is incomplete: file_too_large.", stderr);
             Assert.Contains("Reference graph is incomplete: file_too_large.", stderr);
             Assert.DoesNotContain("Some files failed to update", stderr);
-            Assert.DoesNotContain("rerun `cdidx index", stderr);
+            Assert.Contains("--max-file-bytes", stderr);
+            Assert.Contains(".cdidxignore", stderr);
         }
         finally
         {
@@ -8465,7 +8466,7 @@ public partial class IndexCommandRunnerTests
             var (updateExitCode, updateJson) = RunAndCaptureJson(
                 [projectRoot, "--files", "huge.py", "--max-file-bytes", "128", "--json", "--quiet"]);
 
-            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.Equal(CommandExitCodes.PartialResult, updateExitCode);
             Assert.False(updateJson.GetProperty("issues_table_available").GetBoolean());
             Assert.False(updateJson.GetProperty("index_complete").GetBoolean());
             AssertCompletenessReason(updateJson, "index_incomplete_reasons", "file_too_large");
@@ -10722,8 +10723,8 @@ public partial class IndexCommandRunnerTests
             WriteOversizedAsciiFile(Path.Combine(projectRoot, "app.cs"));
 
             var (exitCode2, json2) = RunAndCaptureJson([projectRoot, "--files", "app.cs", "--json"]);
-            Assert.Equal(CommandExitCodes.Success, exitCode2);
-            Assert.Equal("success", json2.GetProperty("status").GetString());
+            Assert.Equal(CommandExitCodes.PartialResult, exitCode2);
+            Assert.Equal("partial", json2.GetProperty("status").GetString());
             Assert.Equal(0, json2.GetProperty("summary").GetProperty("errors").GetInt32());
 
             using var verifyDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);

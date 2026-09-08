@@ -8,6 +8,8 @@ If you change test code, test helpers, test execution flow, or testing conventio
 
 ## Quick Start
 
+`IndexCommandRunnerIssue5295Tests` uses a 128-byte cap for full/scoped boundary, retry, partial opt-in, graph preservation, persisted-policy, status/workspace, and MCP recovery checks on net8.0 and net9.0. Keep console/environment changes in the SQLite pool sensitive collection.
+
 `ChangelogToolTests` covers current and archived history on net8.0 and net9.0.
 Prepare must accept LF, CRLF, and mixed endings and produce revalidatable LF output,
 including the final footer newline, on Windows as well as Unix.
@@ -1232,6 +1234,8 @@ Check the following:
 
 <a id="テストガイド"></a>
 # テストガイド
+
+`IndexCommandRunnerIssue5295Tests` は128バイトの上限で全件・差分の境界値、再試行、partial の明示許容、グラフ保持、保存済み方針、status/workspace、MCP の復旧を net8.0 と net9.0 で検証します。コンソール・環境変数の変更は SQLite pool sensitive collection 内で行います。
 
 `AuditScopeIssue5281Tests` は production-and-tooling scope の境界と coverage 契約を担当します。
 本番コードと tooling の混在 path、hidden CI、installer の self-test 命名、nested test / fixture、docs、

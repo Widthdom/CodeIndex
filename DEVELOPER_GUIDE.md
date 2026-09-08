@@ -2,6 +2,12 @@
 
 > **[日本語版はこちら / Japanese version](#開発者ガイド)**
 
+## Size-limited indexing
+
+A persisted `file_too_large` omission makes full and scoped CLI indexing return `status=partial`, `E022_INDEX_PARTIAL`, and exit 11, including unchanged retries and unrelated scoped writes. `--allow-partial` accepts exit 0 while preserving the partial status and incomplete facts. Intentional symbols-only and symbol-kind policies keep their existing success behavior. MCP indexing reports the same partial outcome with `isError=true` and retains successful data.
+
+`size_omissions` in index, status, and workspace health provides an affected-file count, up to 20 sanitized paths (512 characters each), truncation/omitted counts, and observed `actual_bytes` / `limit_bytes` when known. These are observations at omission time, not live file measurements; older diagnostic rows may lack exact byte evidence. Review an explicit `--max-file-bytes <bytes>` (MCP `maxFileBytes`) or deliberately exclude paths in `.cdidxignore`, then run normal indexing. Exclusion requires a full workspace scan and removes those files from searchable coverage. Rebuild is unnecessary. Repair command placeholders require a reviewed limit; no limit is raised automatically. Omitted file sizes do not raise the saved admission policy. Freshness and generation completeness remain separate facts.
+
 ## Import and diff comparison limits
 
 `import --check` / `--dry-run` and `diff` return exit `3` when comparison exceeds the fixed safety budget: 1,000,000 rows per table per side, or 4 MiB per compared row. JSON errors add `comparison_budget` with `side` (`left`/`right`), `role` (`destination`/`archive` for import, otherwise `left`/`right`), `table`, `kind` (`rows_per_table_per_side`/`row_bytes`), `limit`, `observed`, and `observed_is_lower_bound=true`. The observed value is the count or accumulated row bytes at failure, not a complete table/row size. `table` identifies the primary comparison table; row counts refer to its comparison query, including joined reference candidates and any metadata-category selection, rather than raw stored row counts. Diagnostics contain fixed identities and counters, never row contents or database paths. Import retains `error_code=import_destination_comparison_budget_exceeded` and `root_cause=comparison_budget_exceeded`; diff retains its database error code.
@@ -24,7 +30,7 @@ Absence can become resolved only when both snapshots have complete coverage. Ret
 
 For indexing, a nonblank invalid environment value retains the existing warning-and-default behavior; an explicit valid limit still takes precedence.
 
-`IndexedFileSizePolicy` stores the effective byte budget in `codeindex_meta.indexed_max_file_size_bytes`. CLI and MCP indexing resolve explicit input, valid environment input, saved policy, then the 4 MiB default. Successful full scans replace the policy; scoped scans keep the larger prior policy. Both retain a budget at least as large as surviving file rows, including skipped rows. Freshness checks never lower that budget because the current environment is smaller. Missing or invalid metadata falls back to the default and largest valid recorded size; all accepted budgets remain within `int.MaxValue`. No schema migration or forced rebuild is required. Dry runs read but do not stamp policy. Normalized content/checksum loading and its byte/allocation bounds remain shared with indexing. The sorted freshness merge consumes discovered indexed paths even when loading fails, preserving scan-error and unverifiable evidence instead of falsely counting a deletion.
+`IndexedFileSizePolicy` stores the effective byte budget in `codeindex_meta.indexed_max_file_size_bytes`. CLI and MCP indexing resolve explicit input, valid environment input, saved policy, then the 4 MiB default. Successful full scans replace the policy; scoped scans keep the larger prior policy. Both retain a budget at least as large as surviving file rows, including reusable skipped rows but excluding `file_too_large` omissions. Freshness checks never lower that budget because the current environment is smaller. Missing or invalid metadata falls back to the default and largest valid recorded size; all accepted budgets remain within `int.MaxValue`. No schema migration or forced rebuild is required. Dry runs read but do not stamp policy. Normalized content/checksum loading and its byte/allocation bounds remain shared with indexing. The sorted freshness merge consumes discovered indexed paths even when loading fails, preserving scan-error and unverifiable evidence instead of falsely counting a deletion.
 
 ## Build & Test
 
@@ -4371,6 +4377,12 @@ For symmetry, the MCP server no longer echoes raw `Exception.Message` content in
 <a id="開発者ガイド"></a>
 # 開発者ガイド
 
+## サイズ上限によるインデックスの省略
+
+保存済みの `file_too_large` が残る場合、CLI の全件・差分インデックスは `status=partial`、`E022_INDEX_PARTIAL`、終了コード11を返します。変更のない再試行や別ファイルだけの更新も同様です。`--allow-partial` は終了コード0を許容しますが、partial と不完全性の情報は維持します。意図した symbols-only・symbol-kind 方針の成功動作は維持します。MCP のインデックスも `isError=true` で同じ partial 結果を返し、成功したデータは保持します。
+
+index、status、workspace health の `size_omissions` は対象件数、最大20件の無害化済みパス（各512文字まで）、切り詰め・省略件数、判明している `actual_bytes` / `limit_bytes` を示します。サイズは省略時点の観測値で、現在のファイルを再測定した値ではありません。旧診断には正確なバイト数がない場合があります。内容を確認して `--max-file-bytes <bytes>`（MCP は `maxFileBytes`）を明示するか、`.cdidxignore` で意図的に除外してから通常のインデックスを実行してください。除外の反映にはワークスペース全件走査が必要で、除外した内容は検索対象から外れます。再構築は不要です。復旧コマンドのプレースホルダーには確認済みの上限を指定します。省略ファイルのサイズを理由に保存済み上限を自動的に引き上げることはありません。鮮度と世代の完全性は別々に扱います。
+
 ## import と diff の比較上限
 
 `import --check` / `--dry-run` と `diff` は、固定の安全上限（テーブルごと・片側ごとに100万行、比較する1行あたり4 MiB）を超えると終了コード `3` を返します。JSONエラーの `comparison_budget` は、`side`（`left`/`right`）、`role`（importでは `destination`/`archive`、diffでは `left`/`right`）、`table`、`kind`（`rows_per_table_per_side`/`row_bytes`）、`limit`、`observed`、`observed_is_lower_bound=true` を持ちます。観測値は失敗時点の行数または行内の累積バイト数であり、テーブルや行全体の大きさではありません。`table` は比較の主テーブルを示し、行数は参照候補の結合やメタデータ分類の選択を含む比較クエリの行数で、保存された生の行数とは異なります。診断には固定の識別子と数値だけを含め、行の内容やDBパスは含めません。importは `error_code=import_destination_comparison_budget_exceeded` と `root_cause=comparison_budget_exceeded`、diffは既存のDBエラーコードを維持します。
@@ -4395,7 +4407,7 @@ For symmetry, the MCP server no longer echoes raw `Exception.Message` content in
 
 索引作成時の空白以外の不正な環境変数値は、従来どおり警告して既定値へ戻します。有効な上限の明示指定があれば、そちらを優先します。
 
-`IndexedFileSizePolicy`は実効バイト上限を`codeindex_meta.indexed_max_file_size_bytes`に保存します。CLIとMCPの索引作成は、明示指定、有効な環境変数、保存済み方針、既定の4 MiBの順に解決します。成功した全体走査は方針を置き換え、部分走査は従来の大きい上限を維持します。どちらも、スキップされた行を含む残存ファイル行のサイズ以上の上限を保持します。鮮度チェックは現在の環境変数が小さくても読み取り上限を下げません。メタデータが未保存または不正なら、既定値と記録済みの有効な最大サイズを使い、すべての上限を`int.MaxValue`以内に制限します。スキーマ移行や強制rebuildは不要です。dry runは方針を読み取りますが保存しません。内容の正規化・チェックサム計算とバイト数・割り当て上限は索引作成と同じ処理を使います。鮮度比較の整列済みマージは読み取り失敗時も発見済みの索引パスを消費し、削除と誤判定せず走査エラーと確認不能の証拠を保持します。
+`IndexedFileSizePolicy`は実効バイト上限を`codeindex_meta.indexed_max_file_size_bytes`に保存します。CLIとMCPの索引作成は、明示指定、有効な環境変数、保存済み方針、既定の4 MiBの順に解決します。成功した全体走査は方針を置き換え、部分走査は従来の大きい上限を維持します。どちらも、再利用でスキップされた行を含み、`file_too_large` の省略行を除いた残存ファイル行のサイズ以上の上限を保持します。鮮度チェックは現在の環境変数が小さくても読み取り上限を下げません。メタデータが未保存または不正なら、既定値と記録済みの有効な最大サイズを使い、すべての上限を`int.MaxValue`以内に制限します。スキーマ移行や強制rebuildは不要です。dry runは方針を読み取りますが保存しません。内容の正規化・チェックサム計算とバイト数・割り当て上限は索引作成と同じ処理を使います。鮮度比較の整列済みマージは読み取り失敗時も発見済みの索引パスを消費し、削除と誤判定せず走査エラーと確認不能の証拠を保持します。
 
 ## ビルド・テスト
 

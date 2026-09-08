@@ -2291,8 +2291,8 @@ public partial class IndexCommandRunnerTests
 
             var (exitCode, json) = RunAndCaptureJson([projectRoot, "--max-file-bytes", "128", "--json"]);
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(CommandExitCodes.PartialResult, exitCode);
+            Assert.Equal("partial", json.GetProperty("status").GetString());
             Assert.Equal(0, json.GetProperty("summary").GetProperty("errors").GetInt32());
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
@@ -2667,8 +2667,8 @@ public sealed class Caller
 
             var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "large.py", "--max-file-bytes", "128", "--json"]);
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(CommandExitCodes.PartialResult, exitCode);
+            Assert.Equal("partial", json.GetProperty("status").GetString());
             Assert.Equal(0, json.GetProperty("summary").GetProperty("errors").GetInt32());
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");

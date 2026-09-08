@@ -18,6 +18,12 @@
 agents, MCP clients, and LSP-native editors can run fast full-text, symbol,
 dependency, and inspection queries without rescanning the same tree for every query.
 
+## Size-limited indexing
+
+A persisted `file_too_large` omission makes full and scoped CLI indexing return `status=partial`, `E022_INDEX_PARTIAL`, and exit 11, including unchanged retries and unrelated scoped writes. `--allow-partial` accepts exit 0 while preserving the partial status and incomplete facts. Intentional symbols-only and symbol-kind policies keep their existing success behavior. MCP indexing reports the same partial outcome with `isError=true` and retains successful data.
+
+`size_omissions` in index, status, and workspace health provides an affected-file count, up to 20 sanitized paths (512 characters each), truncation/omitted counts, and observed `actual_bytes` / `limit_bytes` when known. These are observations at omission time, not live file measurements; older diagnostic rows may lack exact byte evidence. Review an explicit `--max-file-bytes <bytes>` (MCP `maxFileBytes`) or deliberately exclude paths in `.cdidxignore`, then run normal indexing. Exclusion requires a full workspace scan and removes those files from searchable coverage. Rebuild is unnecessary. Repair command placeholders require a reviewed limit; no limit is raised automatically. Omitted file sizes do not raise the saved admission policy. Freshness and generation completeness remain separate facts.
+
 ## Import and diff comparison limits
 
 `import --check` / `--dry-run` and `diff` return exit `3` when comparison exceeds the fixed safety budget: 1,000,000 rows per table per side, or 4 MiB per compared row. JSON errors add `comparison_budget` with `side` (`left`/`right`), `role` (`destination`/`archive` for import, otherwise `left`/`right`), `table`, `kind` (`rows_per_table_per_side`/`row_bytes`), `limit`, `observed`, and `observed_is_lower_bound=true`. The observed value is the count or accumulated row bytes at failure, not a complete table/row size. `table` identifies the primary comparison table; row counts refer to its comparison query, including joined reference candidates and any metadata-category selection, rather than raw stored row counts. Diagnostics contain fixed identities and counters, never row contents or database paths. Import retains `error_code=import_destination_comparison_budget_exceeded` and `root_cause=comparison_budget_exceeded`; diff retains its database error code.
@@ -314,6 +320,12 @@ For commercial use, integration, and naming guidance, see
 [TRADEMARKS.md](TRADEMARKS.md).
 
 # cdidx（日本語）
+
+## サイズ上限によるインデックスの省略
+
+保存済みの `file_too_large` が残る場合、CLI の全件・差分インデックスは `status=partial`、`E022_INDEX_PARTIAL`、終了コード11を返します。変更のない再試行や別ファイルだけの更新も同様です。`--allow-partial` は終了コード0を許容しますが、partial と不完全性の情報は維持します。意図した symbols-only・symbol-kind 方針の成功動作は維持します。MCP のインデックスも `isError=true` で同じ partial 結果を返し、成功したデータは保持します。
+
+index、status、workspace health の `size_omissions` は対象件数、最大20件の無害化済みパス（各512文字まで）、切り詰め・省略件数、判明している `actual_bytes` / `limit_bytes` を示します。サイズは省略時点の観測値で、現在のファイルを再測定した値ではありません。旧診断には正確なバイト数がない場合があります。内容を確認して `--max-file-bytes <bytes>`（MCP は `maxFileBytes`）を明示するか、`.cdidxignore` で意図的に除外してから通常のインデックスを実行してください。除外の反映にはワークスペース全件走査が必要で、除外した内容は検索対象から外れます。再構築は不要です。復旧コマンドのプレースホルダーには確認済みの上限を指定します。省略ファイルのサイズを理由に保存済み上限を自動的に引き上げることはありません。鮮度と世代の完全性は別々に扱います。
 
 ## import と diff の比較上限
 

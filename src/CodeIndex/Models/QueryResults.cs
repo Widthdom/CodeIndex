@@ -1888,6 +1888,9 @@ public class StatusResult
     [JsonPropertyName("index_incomplete_reasons")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<string>? IndexIncompleteReasons { get; set; }
+    [JsonPropertyName("size_omissions")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public SizeOmissionSummary? SizeOmissions { get; set; }
     /// <summary>
     /// True when the normalized include/exclude policy used for the persisted generation is
     /// available. False is the conservative legacy fallback: negative symbol and graph results

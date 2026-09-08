@@ -186,6 +186,13 @@ public partial class McpServer
         AddMcpIndexDiagnostics(structured, details.Failures, details.Diagnostics);
         using var signalReader = new DbReader(details.Writer.Connection);
         var persistedReadiness = signalReader.GetPersistedIndexGenerationReadiness();
+        var partial = IndexOutcomePolicy.IsPartial(details.Errors, persistedReadiness);
+        structured["status"] = partial ? "partial" : "success";
+        if (partial)
+            structured["error_code"] = CommandErrorCodes.IndexPartial;
+        var sizeOmissions = signalReader.GetSizeOmissions();
+        if (sizeOmissions != null)
+            structured["size_omissions"] = System.Text.Json.JsonSerializer.SerializeToNode(sizeOmissions, _jsonOptions);
         AddIndexGenerationReadinessSignal(structured, persistedReadiness);
         AddReferenceGraphCompletenessSignal(structured, persistedReadiness);
         if (!details.SqlGraphContractReady)
@@ -203,7 +210,9 @@ public partial class McpServer
 
         return CreateToolResult(
             id,
-            details.Errors == 0 && !persistedReadiness.IndexComplete
+            sizeOmissions != null
+                ? $"Indexing partial: size-limited input omitted. {sizeOmissions.RecommendedAction} {sizeOmissions.AlternativeAction}"
+                : details.Errors == 0 && !persistedReadiness.IndexComplete
                 ? $"Indexing finished with persisted omissions: {string.Join(", ", persistedReadiness.IndexIncompleteReasons)}."
                 : details.Errors == 0 && !details.FoldReady
                 ? details.FoldReadyReason switch
@@ -214,6 +223,7 @@ public partial class McpServer
                     _ => "Indexing complete. Note: --exact Unicode fold path not active."
                 }
                 : "Indexing complete.",
-            structured);
+            structured,
+            isError: sizeOmissions != null);
     }
 }

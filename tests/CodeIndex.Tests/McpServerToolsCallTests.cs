@@ -10275,12 +10275,12 @@ public partial class McpServerTests
                 server,
                 fixtureDir,
                 args => args["maxFileBytes"] = JsonNode.Parse("128"));
-            var recovered = CallIndex(server, fixtureDir);
+            var recovered = CallIndex(server, fixtureDir, args => args["maxFileBytes"] = JsonNode.Parse("1024"));
 
             Assert.False(
                 initial["result"]?["isError"]?.GetValue<bool>() ?? false,
                 initial.ToJsonString());
-            Assert.False(
+            Assert.True(
                 capped["result"]?["isError"]?.GetValue<bool>() ?? false,
                 capped.ToJsonString());
             Assert.False(
@@ -11759,7 +11759,7 @@ public partial class McpServerTests
                 fixtureDir,
                 args => args["maxFileBytes"] = JsonNode.Parse("1024"));
 
-            Assert.False(refreshResponse["result"]?["isError"]?.GetValue<bool>() ?? false, refreshResponse.ToJsonString());
+            Assert.True(refreshResponse["result"]?["isError"]?.GetValue<bool>() ?? false, refreshResponse.ToJsonString());
             var refreshStructured = refreshResponse["result"]!["structuredContent"]!;
             Assert.Equal(0, refreshStructured["summary"]!["errors"]!.GetValue<int>());
             Assert.False(refreshStructured["index_complete"]!.GetValue<bool>());
