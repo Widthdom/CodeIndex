@@ -68,12 +68,12 @@ public partial class DbReader
         var checksum = cmd.ExecuteScalar() as string;
         try
         {
-            if (string.IsNullOrEmpty(checksum) ||
-                !FileIndexer.TryComputeChecksum(absolute, 4 * 1024 * 1024, out var current, _cancellation) ||
-                !string.Equals(checksum, current, StringComparison.OrdinalIgnoreCase))
+            var current = new FileContentLoader(4 * 1024 * 1024).Load(absolute, path, path, _cancellation).Checksum;
+            if (string.IsNullOrEmpty(checksum) || !string.Equals(checksum, current, StringComparison.OrdinalIgnoreCase))
                 throw SameSymbolGuardUnavailable("source_stale_missing_or_over_budget");
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException
+            or FileIndexer.FileTooLargeSkippedException or FileIndexer.BinaryFileSkippedException)
         {
             throw SameSymbolGuardUnavailable("source_stale_missing_or_over_budget");
         }

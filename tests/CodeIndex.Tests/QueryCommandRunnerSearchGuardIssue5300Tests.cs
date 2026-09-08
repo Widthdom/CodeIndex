@@ -166,6 +166,10 @@ public partial class QueryCommandRunnerTests
                 return reader.Search(query, 10, guardFilters: filters, guardScope: SearchGuardScope.SameSymbol);
             }
             Assert.Single(Search());
+            // Indexing decodes UTF-16 before checksumming; freshness must use the same content contract.
+            File.WriteAllText(Path.Combine(root, "src/a.cs"), source, System.Text.Encoding.Unicode);
+            Assert.Single(Search());
+            TestProjectHelper.WriteTextFile(root, "src/a.cs", source);
             TestProjectHelper.AppendTextFile(root, "src/a.cs", "\n// drift");
             Assert.Contains("source_stale", Assert.Throws<CodeIndexException>(() => Search()).Message);
             TestProjectHelper.WriteTextFile(root, "src/a.cs", source);
