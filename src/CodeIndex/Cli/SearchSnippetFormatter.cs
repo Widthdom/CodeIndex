@@ -101,7 +101,8 @@ public static class SearchSnippetFormatter
             exposeLiteralHighlights,
             effectivePreferredMatchLine,
             effectivePreferredMatchColumn,
-            effectivePreferredMatchLength);
+            effectivePreferredMatchLength,
+            result.TokenBoundary);
         AttachHighlightOrigins(excerpt.Highlights, matchFacets);
         return new CompactSearchResult
         {
@@ -200,6 +201,9 @@ public static class SearchSnippetFormatter
 
         var snippetLines = ReadSnippetLines(result.Content, 0, matchScan.LineCount - 1, normalizeCSharpVerbatimNames).ToList();
         var lineContext = snippetLines.ToDictionary(line => result.StartLine + line.Index, line => line.Text);
+        if (result.MatchOriginContext is { } originContext)
+            lineContext = EnumerateContentLines(originContext.Content)
+                .ToDictionary(line => originContext.StartLine + line.Index, line => line.Text);
         var matchSet = matchScan.MatchIndexes.ToHashSet();
         foreach (var snippetLine in snippetLines)
         {
@@ -207,15 +211,17 @@ public static class SearchSnippetFormatter
                 continue;
 
             var absoluteLine = result.StartLine + snippetLine.Index;
-            var occurrences = exposeLiteralHighlights
+            var occurrences = exposeLiteralHighlights || result.TokenBoundary
                 ? normalizeCSharpVerbatimNames && snippetLine.NormalizedText != null && snippetLine.RawIndexMap != null
-                    ? GetMatchedTermOccurrences(snippetLine.NormalizedText, absoluteLine, normalizedQuery, [], caseSensitive, snippetLine.Text, snippetLine.RawIndexMap)
-                    : GetMatchedTermOccurrences(snippetLine.Text, absoluteLine, normalizedQuery, [], caseSensitive)
+                    ? GetMatchedTermOccurrences(snippetLine.NormalizedText, absoluteLine, normalizedQuery, [], caseSensitive, snippetLine.Text, snippetLine.RawIndexMap, result.TokenBoundary)
+                    : GetMatchedTermOccurrences(snippetLine.Text, absoluteLine, normalizedQuery, [], caseSensitive, tokenBoundary: result.TokenBoundary)
                 : normalizeCSharpVerbatimNames && snippetLine.NormalizedText != null && snippetLine.RawIndexMap != null
                     ? GetMatchedTermOccurrences(snippetLine.NormalizedText, absoluteLine, normalizedQuery, tokens, caseSensitive, snippetLine.Text, snippetLine.RawIndexMap)
                     : GetMatchedTermOccurrences(snippetLine.Text, absoluteLine, normalizedQuery, tokens, caseSensitive);
             if (occurrences.Count == 0)
             {
+                if (result.TokenBoundary)
+                    continue;
                 AddFacet(SearchMatchClassifier.Classify(
                     result.Path,
                     result.Lang,
@@ -317,7 +323,8 @@ public static class SearchSnippetFormatter
         bool exposeLiteralHighlights,
         int? preferredMatchLine,
         int? preferredMatchColumn,
-        int? preferredMatchLength)
+        int? preferredMatchLength,
+        bool tokenBoundary = false)
     {
         ArgumentNullException.ThrowIfNull(queryContext);
 
@@ -329,6 +336,8 @@ public static class SearchSnippetFormatter
         var tokens = queryForLanguage.Tokens;
         var normalizeCSharpVerbatimNames = queryForLanguage.NormalizeCSharpVerbatimNames;
 
+        if (tokenBoundary)
+            tokens = [];
         var hasPreferredMatchSpan = preferredMatchLine.HasValue
             && preferredMatchColumn is > 0
             && preferredMatchLength is > 0;
@@ -435,12 +444,12 @@ public static class SearchSnippetFormatter
             matchLines.Add(absoluteLine);
             var matchLineForTerms = normalizeCSharpVerbatimNames && snippetLine.NormalizedText != null ? snippetLine.NormalizedText : originalLine;
             var termOccurrences = normalizeCSharpVerbatimNames && snippetLine.NormalizedText != null && snippetLine.RawIndexMap != null
-                ? GetMatchedTermOccurrences(snippetLine.NormalizedText, absoluteLine, normalizedQuery, tokens, caseSensitive, originalLine, snippetLine.RawIndexMap)
-                : GetMatchedTermOccurrences(originalLine, absoluteLine, normalizedQuery, tokens, caseSensitive);
+                ? GetMatchedTermOccurrences(snippetLine.NormalizedText, absoluteLine, normalizedQuery, tokens, caseSensitive, originalLine, snippetLine.RawIndexMap, tokenBoundary)
+                : GetMatchedTermOccurrences(originalLine, absoluteLine, normalizedQuery, tokens, caseSensitive, tokenBoundary: tokenBoundary);
             var literalTermOccurrences = exposeLiteralHighlights
                 ? normalizeCSharpVerbatimNames && snippetLine.NormalizedText != null && snippetLine.RawIndexMap != null
-                    ? GetMatchedTermOccurrences(snippetLine.NormalizedText, absoluteLine, normalizedQuery, [], caseSensitive, originalLine, snippetLine.RawIndexMap)
-                    : GetMatchedTermOccurrences(originalLine, absoluteLine, normalizedQuery, [], caseSensitive)
+                    ? GetMatchedTermOccurrences(snippetLine.NormalizedText, absoluteLine, normalizedQuery, [], caseSensitive, originalLine, snippetLine.RawIndexMap, tokenBoundary)
+                    : GetMatchedTermOccurrences(originalLine, absoluteLine, normalizedQuery, [], caseSensitive, tokenBoundary: tokenBoundary)
                 : null;
             ApplyVisibleRanges(termOccurrences, clamped);
             if (literalTermOccurrences != null)
@@ -839,12 +848,12 @@ public static class SearchSnippetFormatter
 
     private sealed record SearchSnippetLine(int Index, string Text, string? NormalizedText, int[]? RawIndexMap);
 
-    private static List<SearchTermOccurrence> GetMatchedTermOccurrences(string line, int absoluteLine, string query, string[] tokens, bool caseSensitive = false, string? rawLine = null, int[]? rawIndexMap = null)
+    private static List<SearchTermOccurrence> GetMatchedTermOccurrences(string line, int absoluteLine, string query, string[] tokens, bool caseSensitive = false, string? rawLine = null, int[]? rawIndexMap = null, bool tokenBoundary = false)
     {
         var comparison = caseSensitive ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
         var occurrences = new List<SearchTermOccurrence>();
         if (!string.IsNullOrWhiteSpace(query))
-            AddTermOccurrences(occurrences, line, absoluteLine, query, comparison, rawLine, rawIndexMap);
+            AddTermOccurrences(occurrences, line, absoluteLine, query, comparison, rawLine, rawIndexMap, tokenBoundary);
 
         foreach (var token in tokens)
             AddTermOccurrences(occurrences, line, absoluteLine, token, comparison, rawLine, rawIndexMap);
@@ -874,7 +883,7 @@ public static class SearchSnippetFormatter
         }
     }
 
-    private static void AddTermOccurrences(List<SearchTermOccurrence> occurrences, string line, int absoluteLine, string term, StringComparison comparison, string? rawLine, int[]? rawIndexMap)
+    private static void AddTermOccurrences(List<SearchTermOccurrence> occurrences, string line, int absoluteLine, string term, StringComparison comparison, string? rawLine, int[]? rawIndexMap, bool tokenBoundary = false)
     {
         if (string.IsNullOrEmpty(term))
             return;
@@ -882,6 +891,11 @@ public static class SearchSnippetFormatter
         var index = 0;
         while ((index = line.IndexOf(term, index, comparison)) >= 0)
         {
+            if (tokenBoundary && !DbReader.IsTokenBoundaryMatch(line, index, term.Length))
+            {
+                index++;
+                continue;
+            }
             var occurrenceColumn = index + 1;
             var occurrenceLength = term.Length;
             var occurrenceTerm = line.Substring(index, term.Length);

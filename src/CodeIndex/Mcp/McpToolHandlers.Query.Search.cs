@@ -252,8 +252,7 @@ public partial class McpServer
             return CreateToolErrorResponse(id, sinceError!);
         var deduplicate = !(args?["noDedup"]?.GetValue<bool>() ?? false);
         var includeGenerated = args?["includeGenerated"]?.GetValue<bool>() ?? false;
-        if (args?["tokenBoundary"]?.GetValue<bool>() ?? false)
-            return CreateToolErrorResponse(id, "'tokenBoundary' is only supported for ad hoc search, not recipe execution.");
+        var tokenBoundaryOverride = args?["tokenBoundary"]?.GetValue<bool>();
         if (!TryResolveSearchExactArgument(args, out var userExact, out var exactError))
             return CreateToolErrorResponse(id, exactError!);
         var hasExactOverride = args?["exact"] is not null || args?["exactSubstring"] is not null;
@@ -290,7 +289,8 @@ public partial class McpServer
             var total = 0;
             foreach (var recipeQuery in recipe.Queries)
             {
-                var exact = hasExactOverride ? userExact : recipeQuery.ExactSubstring;
+                var (exact, tokenBoundary) = recipeQuery.ResolveMatchMode(
+                    hasExactOverride ? userExact : null, tokenBoundaryOverride);
                 ResolveMcpRecipeQueryScope(
                     recipeQuery,
                     pathPatterns,
@@ -317,6 +317,7 @@ public partial class McpServer
                         guardWindow: guardWindow,
                         guardScope: guardScope,
                         requiredPathPatterns: requiredPathPatterns,
+                        tokenBoundary: tokenBoundary,
                         resultRanking: recipeQuery.ResultRanking);
                 }
                 catch (SearchQueryLimitException)
@@ -346,6 +347,7 @@ public partial class McpServer
                     ["recommended_labels"] = ToJsonArray(recipeQuery.RecommendedLabels),
                     ["false_positive_guidance"] = recipeQuery.FalsePositiveGuidance,
                     ["exact_substring"] = exact,
+                    ["token_boundary"] = tokenBoundary,
                     ["match_origins"] = ToJsonArray(recipeQuery.MatchOrigins),
                     ["exclude_origins"] = ToJsonArray(recipeQuery.ExcludeOrigins),
                     ["result_kinds"] = ToJsonArray(recipeQuery.ResultKinds),
@@ -472,7 +474,8 @@ public partial class McpServer
                 ["description"] = query.Description,
                 ["recommended_labels"] = ToJsonArray(query.RecommendedLabels),
                 ["false_positive_guidance"] = query.FalsePositiveGuidance,
-                ["exact_substring"] = query.ExactSubstring
+                ["exact_substring"] = query.ExactSubstring,
+                ["token_boundary"] = query.TokenBoundary
             }).ToArray<JsonNode?>())
         };
 

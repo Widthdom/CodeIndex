@@ -712,8 +712,8 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.UsageError, ftsExitCode);
             Assert.Contains($"Error [{CommandErrorCodes.UsageError}]", ftsStderr);
             Assert.Contains("raw FTS mode (--fts) cannot be combined with literal search modes", ftsStderr);
-            Assert.Equal(CommandExitCodes.UsageError, recipeExitCode);
-            Assert.Contains("--token-boundary is only supported for ad hoc search", recipeStderr);
+            Assert.Equal(CommandExitCodes.Success, recipeExitCode);
+            Assert.DoesNotContain("only supported for ad hoc search", recipeStderr);
         }
         finally
         {

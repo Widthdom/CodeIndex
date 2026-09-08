@@ -44,6 +44,10 @@ public class SearchResult
     public long ChunkId { get; set; }
     [JsonIgnore]
     public int NextOffset { get; set; }
+    [JsonIgnore]
+    internal bool TokenBoundary { get; set; }
+    [JsonIgnore]
+    internal SearchResult? MatchOriginContext { get; set; }
 }
 
 public sealed class SearchDiagnostic
@@ -56,7 +60,10 @@ public sealed class SearchDiagnostic
     public int? Limit { get; set; }
 }
 
-public readonly record struct SearchCursor(double Score, long ChunkId, int Offset);
+public readonly record struct SearchCursor(double Score, long ChunkId, int Offset)
+{
+    internal string? RecipeBinding { get; init; }
+}
 
 public readonly record struct QueryCountResult(
     int Count,

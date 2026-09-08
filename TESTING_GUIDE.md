@@ -8,6 +8,8 @@ If you change test code, test helpers, test execution flow, or testing conventio
 
 ## Quick Start
 
+`QueryCommandRunnerRecipeTokenBoundaryIssue5298Tests` and `McpServerIssue5298Tests` cover recipe defaults/overrides, exact positive member counts, C# verbatim and Unicode controls, mixed code/comment/string origins, external recipes, cursor/continuation and baseline compatibility. Keep batch and CLI/MCP behavior aligned on net8.0 and net9.0; Unicode escape decoding is outside the existing text matcher's contract.
+
 `QueryCommandRunnerSearchGuardIssue5297Tests.cs` shares one isolated database across search/audit guard parser failures, JSON selectors before/after invalid options, missing/inline values, bounded control-character diagnostics, and human/literal-query controls. Missing guard values immediately before `--` must preserve JSON-looking literals, both with and without a separate explicit JSON selector. Keep sequential and parallel batch continuation coverage without raw streams, and run both net8.0 and net9.0.
 
 `IndexCommandRunnerIssue5295Tests` uses a 128-byte cap for full/scoped boundary, retry, partial opt-in, graph preservation, persisted-policy, status/workspace, CLI/MCP dry-run cap parity and non-mutation, and MCP recovery checks on net8.0 and net9.0. Keep console/environment changes in the SQLite pool sensitive collection.
@@ -1240,6 +1242,8 @@ Check the following:
 `QueryCommandRunnerUnusedIssue5296Tests` uses 16 sibling partial declarations and 192 private members whose references are deliberately removed. Require no false unused fields, at most 64 reconstructed chunk pieces, and at most 2,000 SQLite progress callbacks at 1,000 VM instructions per callback. These deterministic budgets catch repeated per-candidate reconstruction without wall-clock assertions on shared CI. Retain #5089, #4834 and #3673 as correctness controls, including unrelated chunks, missing content and legacy chunk ordering. Tests also interrupt active native SQLite work on deadline/caller cancellation, verify parseable bounded non-authoritative JSON, observe a heartbeat before completion, and confirm connection/token reuse and read-only behavior. Run both net8.0 and net9.0 lanes; see [performance measurements](docs/unused-performance.md).
 
 # テストガイド
+
+`QueryCommandRunnerRecipeTokenBoundaryIssue5298Tests` と `McpServerIssue5298Tests` は、レシピの既定値／上書き、実際のメンバー使用の正確な件数、C# の verbatim 表記と Unicode、同一行のコード・コメント・文字列、外部レシピ、cursor・continuation・baseline の互換性を検証します。net8.0／net9.0 で batch・CLI・MCP の整合性を保ってください。Unicode エスケープの復号は既存のテキスト検索の契約に含みません。
 
 `QueryCommandRunnerSearchGuardIssue5297Tests.cs` は隔離したデータベースを共有し、search/audit の guard 解析失敗、不正オプション前後の JSON 指定、欠落値・インライン値、制御文字を含む診断の上限、人間向け出力・リテラル検索を検証します。guard 値が `--` の直前で欠落していても、JSON 指定に見えるリテラルを保持し、別途明示した JSON 指定の有無を区別してください。raw stream を使わない逐次・並列 batch の継続検証を維持し、net8.0 と net9.0 の両方で実行してください。
 

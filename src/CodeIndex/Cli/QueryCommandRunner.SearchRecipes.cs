@@ -107,7 +107,7 @@ public static partial class QueryCommandRunner
                 Console.WriteLine($"  default excludes: {string.Join(", ", recipe.DefaultExcludePaths)}");
             foreach (var query in recipe.Queries)
             {
-                var mode = query.ExactSubstring ? "exact-substring" : "fts";
+                var mode = query.TokenBoundary ? "token-boundary" : query.ExactSubstring ? "exact-substring" : "fts";
                 Console.WriteLine($"  - {query.Name}: {query.Query} ({mode})");
                 Console.WriteLine($"    {query.Description}");
                 Console.WriteLine($"    false positives: {query.FalsePositiveGuidance}");
@@ -776,6 +776,13 @@ public static partial class QueryCommandRunner
         return WithDb(options, jsonOptions, reader =>
         {
             EnsureSearchRecipeCoverage(reader, scope, options);
+            if (options.SearchCursor is { } cursor
+                && cursor.RecipeBinding != BuildSearchRecipeCursorBinding(reader, scope, options, selection.Queries[0]))
+            {
+                WriteUsageError("Invalid, stale, or mismatched recipe cursor.", options,
+                    "Restart the selected recipe query without --cursor; keep the recipe, index, scope, and matching options unchanged when resuming.");
+                return CommandExitCodes.UsageError;
+            }
             if (options.ResultsOnly || options.SearchFields != null || (options.Json && options.JsonOutputFormatExplicit && options.JsonOutputFormat == JsonOutputFormatNdjson))
             {
                 var rowQueryResults = CollectSearchRecipeQueryResults(
@@ -4697,7 +4704,7 @@ public static partial class QueryCommandRunner
         string? indexReason)
     {
         var recipeVersion = BuildSearchDefinitionVersion(
-            "audit-recipe-v1",
+            "audit-recipe-v2-token-boundary",
             recipe,
             CliJsonSerializerContext.Default.SearchAuditRecipe);
         return new(
@@ -4709,7 +4716,7 @@ public static partial class QueryCommandRunner
                 .Select(query => new SearchQueryFreshnessExpectedQuery(
                     query.Name,
                     BuildSearchDefinitionVersion(
-                        "audit-recipe-query-v1",
+                        "audit-recipe-query-v2-token-boundary",
                         query,
                         CliJsonSerializerContext.Default.SearchAuditRecipeQuery)))
                 .ToList());
@@ -5914,6 +5921,16 @@ public static partial class QueryCommandRunner
     private static bool TryParseSearchCursor(string value, out SearchCursor cursor)
     {
         cursor = default;
+        string? recipeBinding = null;
+        if (value.StartsWith("recipe:v2:", StringComparison.Ordinal))
+        {
+            if (value.Length > 200 || value.Length < 75 || value[74] != ':')
+                return false;
+            recipeBinding = value[10..74];
+            if (!recipeBinding.All(char.IsAsciiHexDigit))
+                return false;
+            value = value[75..];
+        }
         var lastSeparator = value.LastIndexOf(':');
         if (lastSeparator <= 0 || lastSeparator == value.Length - 1)
             return false;
@@ -5931,7 +5948,7 @@ public static partial class QueryCommandRunner
         if (!int.TryParse(value.AsSpan(lastSeparator + 1), NumberStyles.None, CultureInfo.InvariantCulture, out var offset) || offset < 0)
             return false;
 
-        cursor = new SearchCursor(score, chunkId, offset);
+        cursor = new SearchCursor(score, chunkId, offset) { RecipeBinding = recipeBinding };
         return true;
     }
 
@@ -6180,7 +6197,8 @@ public static partial class QueryCommandRunner
             query.StringComparisonTaxonomy,
             query.BroadCatchTaxonomy,
             query.NullableContractTaxonomy,
-            query.ExactSubstring)).ToList());
+            query.ExactSubstring)
+        { TokenBoundary = query.TokenBoundary }).ToList());
 
     private static string FormatSearchRecipeStringComparisonDomains(SearchRecipeStringComparisonTaxonomyJsonResult taxonomy)
         => string.Join(", ", taxonomy.DomainCategories.Select(category => category.Name));

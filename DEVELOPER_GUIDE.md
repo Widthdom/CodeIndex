@@ -16,6 +16,8 @@ A destination-side failure means comparison against the current destination cann
 
 ## Audit baseline contract
 
+Recipe matching resolves explicit CLI `--token-boundary`, explicit substring mode, then the child's default through `SearchAuditRecipeQuery.ResolveMatchMode`; MCP passes nullable boolean overrides to the same resolver. Boundary matches reuse `DbReader` token checks, with accepted spans retained in snippet origins/highlights. `audit-recipe-v2-token-boundary` / `audit-recipe-query-v2-token-boundary` fingerprints include the serialized child policy. Recovery replay includes the override, binding all-recipe continuations and baseline scope. Individual `recipe:v2:` cursors additionally bind the generation, definition and effective scope/replay; reject legacy or mismatched recipe cursors before child execution. Keep ad hoc cursor formats unchanged.
+
 Audit continuation consumes raw pre-deduplication candidate exhaustion from `DbReader.Search`, including bounded guard/ranking evidence. JSON query-detail admission must remove hidden rows before continuation accounting; NDJSON row admission is independent of detail metadata. Probe query-completion prefix boundaries independently when byte-fitting JSON/NDJSON, since tokens and restart commands disappear discontinuously when a child completes.
 
 All-recipe continuation is separate from baselines. `QueryCommandRunner.AuditContinuation.cs` binds a bounded per-child offset vector to pagination generation, recipe definition versions, canonical effective filter replay, selectors, and ordering. Replay a fixed 10,000-candidate window before slicing so total-row/byte budgets cannot reorder observations. Advance offsets only from retained output rows after final JSON/NDJSON admission; failed children remain pending. Validate token length, depth, vector bounds, binding and checksum before executing queries. Report execution completeness separately from emission completeness and intentional selection. Tokens support 512 children and 16 KiB; non-authoritative child coverage requires explicit bounded restart/narrowing guidance. CLI `audit --all` owns this scheduler; individual MCP recipe queries and baseline files do not consume these tokens.
@@ -4382,6 +4384,10 @@ Unused partial-type SQL materializes type identity/ancestor arity and reconstruc
 The CLI applies a cancellable analysis deadline, registers SQLite interruption, and reports incomplete/cancelled JSON without unverified results. SQLite callbacks can surface cancellation as `SQLITE_ERROR`, so the unused boundary handles that only when its token is cancelled. Bounded page envelopes avoid an implicit second count analysis and preserve lower-bound count authority. Explicit count/summary commands retain full analysis. See [unused performance validation](docs/unused-performance.md) for operation-count budgets and measurements.
 
 # 開発者ガイド
+
+## 監査レシピのトークン境界
+
+`SearchAuditRecipeQuery.ResolveMatchMode` は、CLI の明示的な `--token-boundary`、明示的な部分一致、子の既定値の順で検索方式を決めます。MCP も nullable な真偽値を同じ関数に渡します。境界一致には `DbReader` の判定を再利用し、採用された位置をスニペットの出現元・ハイライトに維持します。`audit-recipe-v2-token-boundary` / `audit-recipe-query-v2-token-boundary` の fingerprint は子の設定を含みます。復旧用の再実行指定にも上書きを含め、全レシピ continuation と baseline の scope に結び付けます。個別の `recipe:v2:` cursor は世代・定義・実効 scope と再実行指定にも結び付け、旧形式や条件不一致は子クエリ実行前に拒否します。通常検索の cursor 形式は維持します。
 
 ## unused 解析の処理量
 

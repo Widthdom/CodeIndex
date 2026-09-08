@@ -35,6 +35,8 @@ public static partial class QueryCommandRunner
         out SearchRoutePlan route)
     {
         route = default;
+        if (options.SearchCursor is { RecipeBinding: not null } && options.RecipeName == null)
+            return RejectSearchUsage(options, "A recipe cursor requires recipe execution.", "Resume the original recipe query or remove --cursor.");
         SearchExecutionKind execution;
         if (options.ListRecipes)
         {
@@ -239,13 +241,6 @@ public static partial class QueryCommandRunner
 
     private static bool TryValidateSearchRecipeIdentityAndOutput(QueryCommandOptions options)
     {
-        if (options.TokenBoundary)
-        {
-            return RejectSearchUsage(
-                options,
-                "--token-boundary is only supported for ad hoc search and --named-query batches, not recipe execution.",
-                "Run an individual query without --recipe if token-boundary filtering is required.");
-        }
         if (options.Query != null || options.ExtraNames.Count > 0)
         {
             return RejectSearchUsage(
