@@ -90,6 +90,7 @@ public static partial class QueryCommandRunner
         private bool excludeStrings;
         private bool excludeFixtures;
         private List<string>? parseErrors;
+        private bool searchGuardValidationError;
         private bool exactName;
         private bool exactSubstring;
         private bool tokenBoundary;
@@ -312,7 +313,7 @@ public static partial class QueryCommandRunner
         {
             ValidateQueryPathOptionValues(userPathPatterns, excludePaths, AddParseError);
             if (guardFilters.Count > DbReader.MaxSearchGuardFilters)
-                AddParseError($"Error: search accepts at most {DbReader.MaxSearchGuardFilters} guard filters; got {guardFilters.Count}.");
+                AddSearchGuardParseError($"Error: search accepts at most {DbReader.MaxSearchGuardFilters} guard filters; got {guardFilters.Count}.");
             var duplicateNamedQuery = namedSearchQueries
                 .GroupBy(query => query.Name, StringComparer.OrdinalIgnoreCase)
                 .FirstOrDefault(group => group.Count() > 1);
@@ -611,6 +612,7 @@ public static partial class QueryCommandRunner
                 SourceOnly = sourceOnly,
                 NoSemanticTokens = noSemanticTokens,
                 ParseError = parseErrors == null ? null : string.Join(Environment.NewLine, parseErrors),
+                SearchGuardValidationError = searchGuardValidationError,
             };
         }
 
@@ -620,16 +622,22 @@ public static partial class QueryCommandRunner
             parseErrors.Add(error);
         }
 
+        private void AddSearchGuardParseError(string error)
+        {
+            searchGuardValidationError = true;
+            AddParseError(error);
+        }
+
         private void AddSearchGuardFilter(string optionName, SearchGuardRole role, SearchGuardDirection direction, string value)
         {
             if (string.IsNullOrWhiteSpace(value))
             {
-                AddParseError(BuildMissingOptionValueError(optionName));
+                AddSearchGuardParseError(BuildMissingOptionValueError(optionName));
                 return;
             }
             if (value.Length > QueryLimits.MaxQueryLength)
             {
-                AddParseError($"Error: {optionName} query too long (max {QueryLimits.MaxQueryLength} characters).");
+                AddSearchGuardParseError($"Error: {optionName} query too long (max {QueryLimits.MaxQueryLength} characters).");
                 return;
             }
 

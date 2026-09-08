@@ -84,6 +84,8 @@ public static partial class QueryCommandRunner
         options.InvocationContext = invocationContext;
         options.InvocationJsonOptions = jsonOptions;
         options.InvocationMachineErrorOutputRequested = ProgramRunner.ContainsJsonOutputFlag(validationArgs);
+        if (options.SearchGuardValidationError && options.Json)
+            options.InvocationMachineErrorOutputRequested = true;
         if (ReferenceEquals(invocationContext, QueryCommandInvocationContext.Search)
             && TryWriteSearchFindAlternativeError(validationArgs, options, jsonOptions))
             return false;
@@ -102,6 +104,7 @@ public static partial class QueryCommandRunner
             options,
             invocationContext,
             options.LanguageValidationError
+                || options.SearchGuardValidationError
                 || invocationContext.StructuredMachineUsageErrors
                 || options.Json
                 && options.ParseError is not null

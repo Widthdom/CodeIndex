@@ -253,6 +253,7 @@ public sealed class QueryCommandOptions
     public bool SourceOnly { get; init; }
     public bool NoSemanticTokens { get; init; }
     public string? ParseError { get; init; }
+    internal bool SearchGuardValidationError { get; init; }
 }
 
 public sealed record SearchNamedQuery(string Name, string Query);
