@@ -68,6 +68,7 @@ public static partial class QueryCommandRunner
             reader.GetIndexedProjectRoot() ?? "",
             options.CountOnly.ToString(), options.SummaryOnly.ToString(),
         };
+        if (state.RecoveryRequest.Partition is { } partition) parts.Add(partition);
         foreach (var recipe in state.SelectedRecipes)
         {
             parts.Add(BuildAuditAllRecoveryCommand(recipe.Name, options, includeDb: false));
@@ -195,6 +196,9 @@ public static partial class QueryCommandRunner
                 + " --max-json-bytes " + nextByteLimit.ToString(CultureInfo.InvariantCulture)
                 + (options.CountOnly ? " --count" : "") + (options.SummaryOnly ? " --summary-only" : "")
                 + " --continuation " + QuoteReplayShellArg(token);
+            if (state.RecoveryRequest.TopSummary) command += " --summary-level top";
+            if (state.RecoveryRequest.Partition is { } partition)
+                command += " --partition " + QuoteReplayShellArg(partition);
         }
         return new JsonObject
         {
