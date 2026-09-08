@@ -448,6 +448,6 @@ public partial class QueryCommandRunnerTests
         Assert.Contains("--reject-before <query>", usage);
         Assert.Contains("--reject-after <query>", usage);
         Assert.Contains("--guard-window <n>", usage);
-        Assert.Contains("--guard-scope <window|same-line>", usage);
+        Assert.Contains("--guard-scope <window|same-line|same-symbol>", usage);
     }
 }

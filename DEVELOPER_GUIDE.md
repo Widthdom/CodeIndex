@@ -2,6 +2,17 @@
 
 > **[日本語版はこちら / Japanese version](#開発者ガイド)**
 
+## Symbol-bounded lexical guards
+
+`DbSearchReader.SymbolGuards.cs` owns the additive `same-symbol` guard contract.
+Keep CLI, recipe replay/fingerprints, MCP schemas and `USER_GUIDE.md` aligned.
+Use current extractor stamps, complete-index provenance and bounded live checksum
+verification before trusting indexed ranges. Select only a unique strictly nested
+callable range; exclude descendant-owned lines. Preserve existing window/same-line
+semantics and report unavailable ranges explicitly instead of inferring ownership.
+The scope is lexical; comments/strings are evidence, and no dataflow claim is made.
+API version 1 remains compatible; the new guard scope publishes contract version 1.
+
 ## Size-limited indexing
 
 A persisted `file_too_large` omission makes full and scoped CLI indexing return `status=partial`, `E022_INDEX_PARTIAL`, and exit 11, including unchanged retries and unrelated scoped writes. `--allow-partial` accepts exit 0 while preserving the partial status and incomplete facts. Intentional symbols-only and symbol-kind policies keep their existing success behavior. MCP indexing reports the same partial outcome with `isError=true` and retains successful data.
@@ -4381,6 +4392,17 @@ For symmetry, the MCP server no longer echoes raw `Exception.Message` content in
 ---
 
 <a id="開発者ガイド"></a>
+
+## シンボル範囲で制限する字句ガード
+
+`DbSearchReader.SymbolGuards.cs` が追加の `same-symbol` 契約を実装します。
+CLI、レシピの再実行・フィンガープリント、MCP スキーマ、`USER_GUIDE.md` を同期してください。
+索引済み範囲を信頼する前に、現行の抽出バージョン、完全な索引の来歴、上限付きの実ファイルの
+チェックサム検証を必要とします。一意で厳密に内包される callable 範囲のみを選び、子関数が所有する
+行を除外します。既存の window/same-line の意味を維持し、所有範囲を推測せず未利用を明示します。
+これは字句的な判定であり、コメント・文字列も証拠になり、データフローの保証はありません。
+API version 1 の互換性を維持し、新しい guard scope は contract version 1 を公開します。
+
 ## Unused analysis cost
 
 Unused partial-type SQL materializes type identity/ancestor arity and reconstructed peer content once per statement, preserving namespace, generic/nested type, overlap, null-content and legacy chunk ordering semantics. These values cannot survive a statement's SQLite generation. Lexical masking reuse is scoped to one unused operation, keyed by exact content, and capped at 128 entries / 4,194,304 retained UTF-16 characters (source plus masked text); saturation falls back to the same uncached algorithm. Same-file content reuse has the same entry/character caps. There is no process-global content cache or schema migration.

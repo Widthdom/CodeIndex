@@ -12,7 +12,7 @@ public partial class QueryCommandRunnerTests
         var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
         string[][] invalidOptions =
         [
-            ["--guard-scope", "same-symbol"],
+            ["--guard-scope", "unknown-scope"],
             ["--guard-scope=unknown"],
             ["--guard-scope"],
             ["--guard-window", "nope"],
@@ -121,9 +121,9 @@ public partial class QueryCommandRunnerTests
         var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
         string[][] children =
         [
-            ["search", "Return", "--guard-scope", "same-symbol", "--json"],
+            ["search", "Return", "--guard-scope", "unknown-scope", "--json"],
             ["search", "Return", "--guard-window", "nope", "--json"],
-            ["audit", "safe-file-delete", "--guard-scope", "same-symbol", "--format=json"],
+            ["audit", "safe-file-delete", "--guard-scope", "unknown-scope", "--format=json"],
             ["languages", "--format", "count"],
         ];
         var input = string.Join('\n', children.Select(child => JsonSerializer.Serialize(child))) + "\n";

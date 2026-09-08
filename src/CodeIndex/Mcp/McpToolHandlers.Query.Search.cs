@@ -94,6 +94,10 @@ public partial class McpServer
                 {
                     countResults = reader.Search(query, MaxLimit, lang, rawQuery, pathPatterns, excludePaths, excludeTests, deduplicate, since, exactSearch, prefix, guardFilters: guardFilters, guardWindow: guardWindow, guardScope: guardScope, tokenBoundary: tokenBoundary);
                 }
+                catch (CodeIndexException ex) when (ex.Code == "same_symbol_scope_unavailable")
+                {
+                    return CreateToolErrorResponse(id, ex.Message + " " + ex.Hint);
+                }
                 catch (SearchQueryLimitException)
                 {
                     return CreateToolErrorResponse(id, FormatLiteralSearchQueryLimitError());
@@ -105,6 +109,7 @@ public partial class McpServer
                 var truncatedCount = countResults.Count >= MaxLimit;
                 var payload = BuildCountOnlyPayload(countResults.Count, truncatedCount ? null : countResults.Count, truncatedCount, countResults, result => result.Path);
                 payload["query"] = query;
+                AddSameSymbolGuardContext(payload, guardFilters, guardScope, guardWindow);
                 payload["rawQuery"] = rawQuery;
                 if (tokenBoundary)
                     payload["tokenBoundary"] = true;
@@ -124,6 +129,10 @@ public partial class McpServer
             try
             {
                 results = reader.Search(query, FetchLimitForEnvelope(limit), lang, rawQuery, pathPatterns, excludePaths, excludeTests, deduplicate, since, exactSearch, prefix, cursor: cursor, guardFilters: guardFilters, guardWindow: guardWindow, guardScope: guardScope, tokenBoundary: tokenBoundary);
+            }
+            catch (CodeIndexException ex) when (ex.Code == "same_symbol_scope_unavailable")
+            {
+                return CreateToolErrorResponse(id, ex.Message + " " + ex.Hint);
             }
             catch (SearchQueryLimitException)
             {
@@ -150,6 +159,7 @@ public partial class McpServer
                     ["results"] = new JsonArray()
                 };
                 AddSearchStabilityMetadata(payload, reader, cursor, results);
+                AddSameSymbolGuardContext(payload, guardFilters, guardScope, guardWindow);
                 AddFtsQueryDiagnostics(payload, ftsDiagnostics);
                 AddResultEnvelope(payload, 0, 0, truncated: false);
                 if (suggestExactSubstring)
@@ -190,6 +200,7 @@ public partial class McpServer
                 ["results"] = ToJsonArray(compactResults)
             };
             AddSearchStabilityMetadata(structured, reader, cursor, results, truncated);
+            AddSameSymbolGuardContext(structured, guardFilters, guardScope, guardWindow);
             AddResultEnvelope(structured, results.Count, truncated ? null : results.Count, truncated);
             if (format == "compact")
                 ApplyCompactResults(
@@ -319,6 +330,10 @@ public partial class McpServer
                         requiredPathPatterns: requiredPathPatterns,
                         resultRanking: recipeQuery.ResultRanking);
                 }
+                catch (CodeIndexException ex) when (ex.Code == "same_symbol_scope_unavailable")
+                {
+                    return CreateToolErrorResponse(id, ex.Message + " " + ex.Hint);
+                }
                 catch (SearchQueryLimitException)
                 {
                     return CreateToolErrorResponse(id, FormatLiteralSearchQueryLimitError());
@@ -376,12 +391,25 @@ public partial class McpServer
             };
             AddFreshnessHint(payload, reader);
             AddSearchRecipeSourceDiagnostics(payload, registry.Diagnostics);
+            AddSameSymbolGuardContext(payload, guardFilters, guardScope, guardWindow);
             adjustments.ApplyTo(payload);
             var summary = total == 0
                 ? $"Recipe '{recipe.Name}' returned no search results."
                 : $"Recipe '{recipe.Name}' returned {total} search result(s) across {recipe.Queries.Count} query(ies).";
             return CreateToolResult(id, summary, payload);
         });
+    }
+
+    private static void AddSameSymbolGuardContext(JsonObject payload, IReadOnlyList<SearchGuardFilter> filters, SearchGuardScope scope, int window)
+    {
+        if (!filters.Any(filter => (filter.Scope ?? scope) == SearchGuardScope.SameSymbol))
+            return;
+        payload["guard_scope"] = "same-symbol";
+        payload["guard_window"] = window;
+        payload["guard_scope_contract_version"] = 1;
+        payload["guard_scope_supported_language"] = "csharp";
+        payload["guard_scope_unavailable_policy"] = "error";
+        payload["guard_scope_focus_line"] = "excluded";
     }
 
     private static bool TryResolveMcpRecipeAuditScope(
