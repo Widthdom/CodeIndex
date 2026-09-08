@@ -16,7 +16,8 @@ public partial class DbReader
         IReadOnlyList<string>? DependencySymbols,
         IReadOnlyList<string>? DependencySymbolFamilies,
         bool SuppressDependencyNoise,
-        DependencyEvidenceFilter? EvidenceFilter = null);
+        DependencyEvidenceFilter? EvidenceFilter = null,
+        bool GroupPartialTypes = false);
 
     private sealed record DependencyQueryPlan(
         DependencyQueryRequest Request,

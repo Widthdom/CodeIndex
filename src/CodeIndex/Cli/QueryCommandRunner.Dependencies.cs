@@ -647,11 +647,22 @@ public static partial class QueryCommandRunner
         }
 
         var reverse = cmdArgs.Any(static arg => arg == "--reverse");
+        if (options.GroupDependencyPartialTypes && (!options.DependencyCycles || options.WorkspaceDbPaths.Count > 0))
+        {
+            WriteUsageError("--group-partial-types requires --cycles and a single database.",
+                GetUsageLineOrThrow("deps"), "Use `deps --cycles --group-partial-types --db <path>`.");
+            return CommandExitCodes.UsageError;
+        }
         var cycleCursorBaseFingerprint = BuildDependencyCycleCursorFingerprint(options, reverse);
 
         return WithDb(options, jsonOptions, reader =>
         {
             cancellationToken.ThrowIfCancellationRequested();
+            cycleCursorBaseFingerprint = BindDependencyCycleGroupingGeneration(cycleCursorBaseFingerprint, options, reader);
+            if (options.GroupDependencyPartialTypes && !emitsJson)
+                CommandErrorWriter.WriteStderr(reader.DependencyCycleGroupingReady
+                    ? "Dependency cycles: typed C# nodes; intra-type edges are counted separately from SCC edges."
+                    : "Dependency cycles: raw-file fallback; current C# family/reference metadata is unavailable.");
             WriteReferenceGraphCompletenessWarningIfNeeded(emitsJson, reader);
             if (TryWriteInvalidWorkspaceDependencyDatabaseError(options, out var workspaceDbExitCode))
                 return workspaceDbExitCode;
@@ -723,7 +734,8 @@ public static partial class QueryCommandRunner
                         options.Limit,
                         cyclePageOffset,
                         zeroCursorFingerprint,
-                        cancellationToken);
+                        cancellationToken,
+                        options.GroupDependencyPartialTypes ? reader : null);
                     if (options.DependencyCycleCursor.HasValue)
                     {
                         WriteUsageError(
@@ -842,7 +854,8 @@ public static partial class QueryCommandRunner
                     options.Limit,
                     cyclePageOffset,
                     cycleCursorFingerprint,
-                    cancellationToken);
+                    cancellationToken,
+                    options.GroupDependencyPartialTypes ? reader : null);
                 outputEdges = analysis.Edges;
                 cycles = analysis.Cycles;
                 dependencyCycleAnalysis = analysis;
@@ -1464,6 +1477,7 @@ public static partial class QueryCommandRunner
         public List<List<string>> Cycles => Components.Select(static component => component.Nodes).ToList();
         public DependencyCycleComponent? LargestComponent { get; init; }
         public int LargestComponentRank { get; init; }
+        public JsonObject? Grouping { get; init; }
     }
 
     internal static DependencyCycleAnalysis AnalyzeDependencyCycles(
@@ -1473,15 +1487,21 @@ public static partial class QueryCommandRunner
         int displayLimit,
         int pageOffset,
         string cursorFingerprint,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        DbReader? groupingReader = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var allComponents = FindRankedDependencyCycles(graphEdges, cancellationToken);
+        var groupingApplied = groupingReader?.DependencyCycleGroupingReady == true;
+        var internalEdges = groupingApplied
+            ? graphEdges.Where(static edge => edge.SourcePath == edge.TargetPath && edge.SourcePath.StartsWith("csharp-type:", StringComparison.Ordinal)).ToList()
+            : [];
+        var analysisEdges = groupingApplied ? graphEdges.Except(internalEdges).ToList() : graphEdges;
+        var allComponents = FindRankedDependencyCycles(analysisEdges, cancellationToken);
         var graphBudgetReached = graphRowCount > graphEdgeBudget;
         var components = allComponents.Skip(pageOffset).Take(displayLimit).ToList();
         var nextOffset = pageOffset + components.Count;
         var hasMore = nextOffset < allComponents.Count;
-        var outputEdges = FilterEdgesToComponents(graphEdges, components);
+        var outputEdges = FilterEdgesToComponents(analysisEdges, components);
         var truncatedReason = graphBudgetReached
             ? "graph_edge_budget"
             : hasMore
@@ -1510,7 +1530,7 @@ public static partial class QueryCommandRunner
             graphBudgetReached || hasMore,
             terminationReason,
             truncatedReason,
-            Math.Min(graphRowCount, graphEdgeBudget),
+            groupingApplied ? graphEdges.Count : Math.Min(graphRowCount, graphEdgeBudget),
             graphEdgeBudget,
             !graphBudgetReached,
             allComponents.Count,
@@ -1524,6 +1544,8 @@ public static partial class QueryCommandRunner
         {
             LargestComponent = largestComponentEntry.Component,
             LargestComponentRank = largestComponentEntry.Rank,
+            Grouping = groupingReader == null ? null : BuildDependencyCycleGroupingJson(
+                groupingReader, graphEdges, internalEdges, components, largestComponentEntry.Component),
         };
     }
 
@@ -1571,6 +1593,13 @@ public static partial class QueryCommandRunner
         payload["cycle_grouping_mode"] = "file";
         payload["cycle_grouping_applied"] = false;
         payload["cycle_grouping_reason"] = "file_level_scc";
+        if (analysis.Grouping != null)
+        {
+            payload["cycle_grouping_mode"] = analysis.Grouping["applied"]!.GetValue<bool>() ? "csharp_partial_type" : "file";
+            payload["cycle_grouping_applied"] = analysis.Grouping["applied"]!.DeepClone();
+            payload["cycle_grouping_reason"] = analysis.Grouping["reason"]!.DeepClone();
+            payload["cycle_grouping"] = analysis.Grouping.DeepClone();
+        }
         if (analysis.LargestComponent != null)
         {
             payload["largest_component"] = BuildDependencyCycleComponentJson(
@@ -1605,6 +1634,8 @@ public static partial class QueryCommandRunner
     private static string BuildDependencyCycleTruncationSummary(DependencyCycleAnalysis analysis)
         => analysis.TruncatedReason == "page_limit"
             ? $"page complete: showing ranked cycles {analysis.PageOffset + 1}-{analysis.PageOffset + analysis.Components.Count}"
+            : analysis.Grouping?["applied"]?.GetValue<bool>() == true
+                ? "partial analysis: raw file-pair or typed-edge budget reached"
             : $"partial analysis: graph edge budget reached after {analysis.GraphEdgeCount} edges";
 
     private static string BuildDependencyCycleTruncationWarning(
@@ -1702,6 +1733,8 @@ public static partial class QueryCommandRunner
         AppendCursorFingerprintValue(builder, "families", string.Join('\u001f', options.DependencySymbolFamilies));
         AppendCursorFingerprintValue(builder, "suppressNoise", options.DependencySuppressNoise ? "1" : "0");
         AppendCursorFingerprintValue(builder, "graphBudget", options.DependencyCycleGraphBudget.ToString(CultureInfo.InvariantCulture));
+        if (options.GroupDependencyPartialTypes)
+            AppendCursorFingerprintValue(builder, "grouping", "csharp-partial-type-v1");
         if (options.DependencyEvidenceFilter.IsActive)
         {
             AppendCursorFingerprintValue(builder, "resolutionStates", string.Join(',', options.DependencyEvidenceFilter.Resolutions));
@@ -2269,14 +2302,16 @@ public static partial class QueryCommandRunner
             options.DependencySymbols,
             options.DependencySymbolFamilies,
             options.DependencySuppressNoise,
-            options.DependencyEvidenceFilter);
+            options.DependencyEvidenceFilter,
+            options.GroupDependencyPartialTypes);
         candidateRowCount += primaryCandidateRows;
         if (options.WorkspaceDbPaths.Count == 0)
         {
             if (!options.DependencySuppressNoise)
                 return results.Take(limit).ToList();
 
-            candidateRowCount = results.Count(HasRetainedDependencyEvidence);
+            if (!options.GroupDependencyPartialTypes)
+                candidateRowCount = results.Count(HasRetainedDependencyEvidence);
             return OrderWorkspaceCycleCandidates(results, limit);
         }
 

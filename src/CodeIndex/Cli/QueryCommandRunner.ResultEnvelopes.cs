@@ -300,6 +300,8 @@ public static partial class QueryCommandRunner
             query["cycles"] = true;
             query["graph_budget"] = options.DependencyCycleGraphBudget;
             query["all_cycle_nodes"] = options.IncludeAllDependencyCycleNodes;
+            if (options.GroupDependencyPartialTypes)
+                query["group_partial_types"] = true;
             if (options.DependencyCycleCursor.HasValue)
             {
                 query["cursor"] = FormatDependencyCycleCursor(options.DependencyCycleCursor.Value);

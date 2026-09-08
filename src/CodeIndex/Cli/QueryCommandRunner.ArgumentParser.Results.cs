@@ -85,6 +85,9 @@ public static partial class QueryCommandRunner
                 case "--cycles":
                     dependencyCycles = true;
                     break;
+                case "--group-partial-types":
+                    groupDependencyPartialTypes = true;
+                    break;
                 case "--all-cycle-nodes":
                     includeAllDependencyCycleNodes = true;
                     break;

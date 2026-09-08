@@ -32,8 +32,8 @@ public partial class DbReader
         {
             _sql.Append(@"
             candidate_symbols AS (
-                SELECT candidate_edges.source_path,
-                       candidate_edges.target_path,
+                SELECT " + (_request.GroupPartialTypes ? _reader.DependencyCycleSourceNodeSql() : "candidate_edges.source_path") + @" AS source_path,
+                       " + (_request.GroupPartialTypes ? _reader.DependencyCycleTargetNodeSql() : "candidate_edges.target_path") + @" AS target_path,
                        r.id AS reference_id,
                        r.symbol_name,
                        src.lang AS source_lang,
@@ -60,7 +60,7 @@ public partial class DbReader
                 JOIN symbols s ON s.name = r.symbol_name
                 JOIN files dst ON s.file_id = dst.id
                  AND dst.path = candidate_edges.target_path
-                WHERE src.path != dst.path
+                WHERE " + (_request.GroupPartialTypes ? $"(src.path != dst.path OR ({_reader.DependencyCycleSourceNodeSql()} != 'file:' || src.path AND {_reader.DependencyCycleTargetNodeSql()} != 'file:' || dst.path))" : "src.path != dst.path") + @"
                   AND src.lang = dst.lang");
             _sql.Append(_reader.BuildDependencyEvidenceFilter(_request.EvidenceFilter, "cycleAggregateEvidence"));
             _sql.Append(BuildDependencySymbolFilter(
@@ -156,7 +156,7 @@ public partial class DbReader
                    edge_reference_totals.target_path,
                    edge_reference_totals.reference_count,
                    COALESCE(GROUP_CONCAT(CASE WHEN symbol_rank <= @symbolSampleLimit THEN symbol_name END, char(31)), '') AS symbols,
-                   COALESCE(edge_evidence_payloads.evidence_payload, '') AS evidence_payload
+                   COALESCE(edge_evidence_payloads.evidence_payload, '') AS evidence_payload" + (_request.GroupPartialTypes ? ", (SELECT COUNT(*) FROM candidate_edges) AS raw_candidate_count" : string.Empty) + @"
             FROM edge_reference_totals
             LEFT JOIN ranked_edge_symbols
               ON ranked_edge_symbols.source_path = edge_reference_totals.source_path
@@ -168,7 +168,14 @@ public partial class DbReader
                      edge_reference_totals.target_path,
                      edge_reference_totals.reference_count,
                      edge_evidence_payloads.evidence_payload
-            ORDER BY edge_reference_totals.source_path, edge_reference_totals.target_path");
+            " + (_request.GroupPartialTypes
+                ? """
+                    UNION ALL
+                    SELECT NULL, NULL, 0, '', '', (SELECT COUNT(*) FROM candidate_edges)
+                    WHERE NOT EXISTS (SELECT 1 FROM edge_reference_totals)
+                    ORDER BY 1, 2 LIMIT @limit
+                    """
+                : "ORDER BY edge_reference_totals.source_path, edge_reference_totals.target_path"));
         }
     }
 }

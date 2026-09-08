@@ -36,9 +36,12 @@ public partial class McpServer
         var cyclesOnly = args?["cycles"]?.GetValue<bool>() ?? false;
         var suppressNoise = args?["suppressNoise"]?.GetValue<bool>() ?? false;
         var summaryOnly = args?["summaryOnly"]?.GetValue<bool>() ?? false;
+        var groupPartialTypes = args?["groupPartialTypes"]?.GetValue<bool>() ?? false;
         var includeAllCycleNodes = args?["includeAllCycleNodes"]?.GetValue<bool>() ?? false;
         var format = args?["format"]?.GetValue<string>()?.ToLowerInvariant() ?? "edgelist";
         var cursorValue = args?["cursor"]?.GetValue<string>();
+        if (groupPartialTypes && !cyclesOnly)
+            return CreateToolErrorResponse(id, "'groupPartialTypes' requires 'cycles=true'.");
         if (requestedGraphBudget.HasValue && !cyclesOnly)
             return CreateToolErrorResponse(id, "'graphBudget' requires 'cycles=true'.");
         if (cursorValue != null && !cyclesOnly)
@@ -73,6 +76,7 @@ public partial class McpServer
             DependencyEvidenceFilter = evidenceFilter,
             DependencySuppressNoise = suppressNoise,
             IncludeAllDependencyCycleNodes = includeAllCycleNodes,
+            GroupDependencyPartialTypes = groupPartialTypes,
         };
         var cursorBaseFingerprint = QueryCommandRunner.BuildDependencyCycleCursorFingerprint(cursorOptions, reverse);
         var cursor = cursorValue == null
@@ -84,6 +88,7 @@ public partial class McpServer
 
         return WithDbReader(id, args, reader =>
         {
+            var boundCursorBaseFingerprint = QueryCommandRunner.BindDependencyCycleGroupingGeneration(cursorBaseFingerprint, cursorOptions, reader);
             var cycleCandidateRowCount = 0;
             var results = cyclesOnly
                 ? reader.GetFileDependencyCycleCandidates(
@@ -96,9 +101,10 @@ public partial class McpServer
                     reverse,
                     cancellationToken: reader.Cancellation,
                     suppressDependencyNoise: suppressNoise,
-                    evidenceFilter: evidenceFilter)
+                    evidenceFilter: evidenceFilter,
+                    groupPartialTypes: groupPartialTypes)
                 : reader.GetFileDependencies(limit, lang, pathPatterns, excludePaths, excludeTests, reverse, evidenceFilter: evidenceFilter);
-            if (cyclesOnly && suppressNoise)
+            if (cyclesOnly && suppressNoise && !groupPartialTypes)
                 cycleCandidateRowCount = results.Count(QueryCommandRunner.HasRetainedDependencyEvidence);
             var rawCycleCandidates = cyclesOnly
                 ? suppressNoise
@@ -110,7 +116,7 @@ public partial class McpServer
                 : null;
             var cycleCandidates = cycleFilter?.Edges ?? rawCycleCandidates;
             var cursorFingerprint = QueryCommandRunner.BuildDependencyCycleGraphFingerprint(
-                cursorBaseFingerprint,
+                boundCursorBaseFingerprint,
                 cycleCandidates,
                 cycleCandidateRowCount);
             if (cursor is { } suppliedCursor
@@ -125,7 +131,8 @@ public partial class McpServer
                     limit,
                     pageOffset,
                     cursorFingerprint,
-                    reader.Cancellation)
+                    reader.Cancellation,
+                    groupPartialTypes ? reader : null)
                 : null;
             if (cursor.HasValue && cycleAnalysis != null && pageOffset >= cycleAnalysis.TotalCycleCount)
                 return CreateToolErrorResponse(id, "'cursor' points beyond the available dependency-cycle result set.");

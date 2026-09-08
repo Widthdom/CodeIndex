@@ -2,6 +2,10 @@
 
 > **[日本語版はこちら / Japanese version](#テストガイド)**
 
+## Typed dependency-cycle regression coverage
+
+`QueryCommandRunnerIssue5301Tests` uses real indexing to verify partial-family collapse, same-file inter-type SCCs, namespace/generic/nested identity, bounded declaration mappings, Python file-scope retention, graph budgets, pagination and stale-metadata fallback. Keep CLI/MCP parity and the raw-file regressions in #5197 on both net8 and net9.
+
 This document explains how the `cdidx` test suite is organized, how to add or update tests safely, and which conventions to follow when the behavior or test infrastructure changes.
 
 If you change test code, test helpers, test execution flow, or testing conventions, update this document in the same commit.
@@ -1239,6 +1243,11 @@ Check the following:
 ---
 
 <a id="テストガイド"></a>
+
+## 型単位の依存循環の回帰テスト
+
+`QueryCommandRunnerIssue5301Tests` は実際の索引処理を使い、partial 型の統合、同一ファイル内の型間 SCC、namespace・generic・入れ子の型の識別、宣言パス対応表の上限、Python のファイル単位の保持、解析上限、ページング、古いメタデータへのフォールバックを検証します。CLI/MCP の一致と #5197 のファイル単位の回帰テストを net8/net9 の両方で維持してください。
+
 ## Unused performance regression coverage
 
 `QueryCommandRunnerUnusedIssue5296Tests` uses 16 sibling partial declarations and 192 private members whose references are deliberately removed. Require no false unused fields, at most 64 reconstructed chunk pieces, and at most 2,000 SQLite progress callbacks at 1,000 VM instructions per callback. These deterministic budgets catch repeated per-candidate reconstruction without wall-clock assertions on shared CI. Retain #5089, #4834 and #3673 as correctness controls, including unrelated chunks, missing content and legacy chunk ordering. Tests also interrupt active native SQLite work on deadline/caller cancellation, verify parseable bounded non-authoritative JSON, observe a heartbeat before completion, and confirm connection/token reuse and read-only behavior. Run both net8.0 and net9.0 lanes; see [performance measurements](docs/unused-performance.md).
