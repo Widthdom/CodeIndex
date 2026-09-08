@@ -73,12 +73,38 @@ public partial class QueryCommandRunnerTests
             }
         }
 
-        // A literal JSON-looking query must not request machine output.
-        var (literalExit, literalOut, literalError) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-            ["--db", dbPath, "--guard-scope", "same-symbol", "--", "--json"], _jsonOptions));
-        Assert.Equal(CommandExitCodes.UsageError, literalExit);
-        Assert.Empty(literalOut);
-        Assert.Contains("Error", literalError);
+        // Missing guard values must not consume the marker protecting a JSON-looking literal.
+        foreach (var command in new[] { "search", "audit" })
+        {
+            foreach (var option in new[] { "--guard-window", "--guard-scope" })
+            {
+                foreach (var literal in new[] { "--json", "--json=array", "--format=compact" })
+                {
+                    foreach (var explicitJson in new[] { false, true })
+                    {
+                        string[] args = ["Return", "--db", dbPath, .. explicitJson ? new[] { "--json" } : Array.Empty<string>(),
+                            option, "--", literal];
+                        var (literalExit, literalOut, literalError) = CaptureConsole(() => command == "search"
+                            ? QueryCommandRunner.RunSearch(args, _jsonOptions)
+                            : QueryCommandRunner.RunAudit(args, _jsonOptions));
+                        Assert.Equal(CommandExitCodes.UsageError, literalExit);
+                        if (explicitJson)
+                        {
+                            Assert.Empty(literalError);
+                            using var error = JsonDocument.Parse(literalOut);
+                            Assert.Equal(command, error.RootElement.GetProperty("command").GetString());
+                            Assert.Equal(CommandErrorCodes.UsageError, error.RootElement.GetProperty("error_code").GetString());
+                            Assert.Contains(option + " requires a value", error.RootElement.GetProperty("message").GetString());
+                        }
+                        else
+                        {
+                            Assert.Empty(literalOut);
+                            Assert.Contains(option + " requires a value", literalError);
+                        }
+                    }
+                }
+            }
+        }
         var (jsonExit, jsonOut, jsonError) = CaptureConsole(() => QueryCommandRunner.RunSearch(
             ["--db", dbPath, "--json", "--guard-window", "nope", "--", "--guard-scope"], _jsonOptions));
         Assert.Equal(CommandExitCodes.UsageError, jsonExit);

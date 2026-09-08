@@ -260,8 +260,9 @@ public static partial class QueryCommandRunner
                     break;
                 case "--guard-window":
                     if (inlineValue == null && i + 1 < args.Length
-                        && TrySplitInlineOptionValue(args[i + 1], out var nextGuardOption)
-                        && IsRecognizedOptionToken(nextGuardOption!))
+                        && (args[i + 1] == "--"
+                            || TrySplitInlineOptionValue(args[i + 1], out var nextGuardOption)
+                            && IsRecognizedOptionToken(nextGuardOption!)))
                     {
                         AddSearchGuardParseError(BuildMissingOptionValueError("--guard-window"));
                         break;
