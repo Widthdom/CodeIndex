@@ -10,6 +10,9 @@ namespace CodeIndex.Cli;
 public static partial class QueryCommandRunner
 {
     public static int RunUnused(string[] cmdArgs, JsonSerializerOptions jsonOptions)
+        => RunUnused(cmdArgs, jsonOptions, CancellationToken.None);
+
+    public static int RunUnused(string[] cmdArgs, JsonSerializerOptions jsonOptions, CancellationToken cancellationToken)
     {
         var byBucket = cmdArgs.Any(arg => arg == "--by-bucket");
         var previewOptionError = ValidatePreviewOptions("unused", cmdArgs, allowMaxLineWidth: false, allowFocusOptions: false);
@@ -87,7 +90,8 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.UsageError;
         var unusedScope = BuildUnusedAuditScopeFilters(options);
 
-        return WithDb(options, jsonOptions, reader =>
+        return WithDb(options, jsonOptions, reader => RunBoundedUnusedAnalysis(
+            reader, options, jsonOptions, options.UnusedAnalysisTimeoutMs, cancellationToken, () =>
         {
             // Warn if user specified an unsupported language / 未対応言語の場合は警告
             if (options.Lang != null && !reader.SupportsReferenceLanguage(options.Lang) && !options.Json)
@@ -412,7 +416,7 @@ public static partial class QueryCommandRunner
                     excludeVisibilityFilters: unusedScope.ExcludeVisibilityFilters,
                     bucketFilter: options.UnusedBucket,
                     minConfidence: options.MinUnusedConfidence);
-        });
+        }), cancellationToken: cancellationToken);
     }
 
     internal static readonly string[] OrderedUnusedBuckets =

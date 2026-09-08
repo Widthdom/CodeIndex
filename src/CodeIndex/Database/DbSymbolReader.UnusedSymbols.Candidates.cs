@@ -133,8 +133,15 @@ public partial class DbReader
             hasUsableUnusedChunks);
         var sql = new StringBuilder(
             capacity: resolveSqlReferences || useCSharpPartialUseExclusion ? 5_000 : 3_000);
+        if (useCSharpPartialUseExclusion)
+        {
+            sql.Append("WITH ");
+            sql.Append(BuildUnusedPartialTypeCtes());
+        }
         if (resolveSqlReferences)
-            sql.Append("\n            WITH unused_candidates AS (\n                SELECT ");
+            sql.Append(useCSharpPartialUseExclusion
+                ? ", unused_candidates AS (\n                SELECT "
+                : "\n            WITH unused_candidates AS (\n                SELECT ");
         else
             sql.Append("\n            SELECT ");
         sql.Append(BuildUnusedCandidateProjectionSql(bucketSql));
@@ -170,6 +177,11 @@ public partial class DbReader
             scope,
             hasUsableUnusedChunks);
         var sql = new StringBuilder(capacity: useCSharpPartialUseExclusion ? 5_000 : 4_000);
+        if (useCSharpPartialUseExclusion)
+        {
+            sql.Append("WITH ");
+            sql.Append(BuildUnusedPartialTypeCtes());
+        }
         sql.Append(@"
             SELECT COUNT(*), COUNT(DISTINCT f.path), MAX(CASE WHEN f.lang = 'sql' THEN 1 ELSE 0 END)");
         AppendUnusedCandidateSourceSql(

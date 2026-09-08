@@ -154,6 +154,7 @@ internal static partial class JsonEnvelopeWrapper
     {
         command = CanonicalizeCommandName(command);
         var boundedResponseRequest = IsBoundedResponseRequest(command, args);
+        using var unusedProgressOutput = command == "unused" ? ConsoleUi.UnusedProgress.PreserveOutput() : null;
         var explicitJsonProjection = boundedResponseRequest
                                      && HasArgument(command, args, "--fields")
                                      && HasJsonOutputSelection(command, args);

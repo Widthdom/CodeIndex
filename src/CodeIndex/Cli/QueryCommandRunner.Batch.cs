@@ -923,7 +923,7 @@ public static partial class QueryCommandRunner
             "languages" => args => RunLanguages(args, jsonOptions),
             "impact" => args => RunImpact(args, jsonOptions),
             "deps" => args => RunDeps(args, jsonOptions, cancellationToken),
-            "unused" => args => RunUnused(args, jsonOptions),
+            "unused" => args => RunUnused(args, jsonOptions, cancellationToken),
             "hotspots" => args => RunHotspots(args, jsonOptions),
             "db" => args => DbCommandRunner.Run(args, jsonOptions, cancellationToken),
             _ => throw new InvalidOperationException($"Batch schema command '{commandName}' has no dispatcher."),

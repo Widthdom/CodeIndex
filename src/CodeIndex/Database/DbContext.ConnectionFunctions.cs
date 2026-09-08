@@ -43,7 +43,10 @@ public partial class DbContext : IDisposable
         if (string.IsNullOrEmpty(text) || string.IsNullOrEmpty(identifier))
             return 0;
 
-        text = MaskCSharpCommentsAndStrings(text);
+        // Masking cannot introduce an identifier absent from the source.
+        if (!text.Contains(identifier, StringComparison.Ordinal))
+            return 0;
+        text = UnusedLexicalScope.Current.Value?.Mask(text) ?? MaskCSharpCommentsAndStrings(text);
         var count = 0;
         var searchIndex = 0;
         while (searchIndex < text.Length)
@@ -63,6 +66,41 @@ public partial class DbContext : IDisposable
         }
 
         return count;
+    }
+
+    internal sealed class UnusedLexicalScope : IDisposable
+    {
+        internal static readonly AsyncLocal<UnusedLexicalScope?> Current = new();
+        internal const int MaximumCharacters = 4 * 1024 * 1024;
+        internal const int MaximumEntries = 128;
+        private readonly UnusedLexicalScope? _previous = Current.Value;
+        private readonly Dictionary<string, string> _masked = new(StringComparer.Ordinal);
+        private readonly CancellationToken _cancellation;
+        private int _characters;
+        internal CancellationToken Cancellation => _cancellation;
+
+        internal UnusedLexicalScope(CancellationToken cancellation)
+        {
+            _cancellation = cancellation;
+            Current.Value = this;
+        }
+
+        internal string Mask(string text)
+        {
+            _cancellation.ThrowIfCancellationRequested();
+            if (_masked.TryGetValue(text, out var cached))
+                return cached;
+            var masked = MaskCSharpCommentsAndStrings(text);
+            _cancellation.ThrowIfCancellationRequested();
+            if (_masked.Count < MaximumEntries && text.Length <= (MaximumCharacters - _characters) / 2)
+            {
+                _masked.Add(text, masked);
+                _characters += text.Length * 2;
+            }
+            return masked;
+        }
+
+        public void Dispose() => Current.Value = _previous;
     }
 
     internal static int CountCSharpIdentifierOccurrencesInLineRange(
@@ -118,8 +156,11 @@ public partial class DbContext : IDisposable
             return 0;
 
         var line = 0;
+        var cancellation = UnusedLexicalScope.Current.Value?.Cancellation ?? default;
         for (var i = 0; i < text.Length; i++)
         {
+            if ((i & 4095) == 0)
+                cancellation.ThrowIfCancellationRequested();
             if (text[i] != '\n')
                 continue;
 
@@ -217,7 +258,7 @@ public partial class DbContext : IDisposable
 
         var normalizedStartLine = Math.Max(1, startLine);
         var normalizedEndLine = Math.Max(normalizedStartLine, endLine);
-        text = MaskCSharpCommentsAndStrings(text);
+        text = UnusedLexicalScope.Current.Value?.Mask(text) ?? MaskCSharpCommentsAndStrings(text);
 
         var inRangeOccurrences = 0;
         var lineNumber = 1;
@@ -285,9 +326,12 @@ public partial class DbContext : IDisposable
         var inString = false;
         var inChar = false;
         var inVerbatimString = false;
+        var cancellation = UnusedLexicalScope.Current.Value?.Cancellation ?? default;
 
         for (var i = 0; i < chars.Length; i++)
         {
+            if ((i & 4095) == 0)
+                cancellation.ThrowIfCancellationRequested();
             var ch = chars[i];
             var next = i + 1 < chars.Length ? chars[i + 1] : '\0';
 

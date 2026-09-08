@@ -557,6 +557,19 @@ internal static partial class JsonEnvelopeWrapper
         }
 
         var capturedErrorText = capturedError.ToString();
+        if (command == "unused"
+            && rawResults.OfType<JsonObject>().FirstOrDefault(value =>
+                TryReadBool(value, "analysis_complete", out var complete) && !complete) is { } incompleteAnalysis)
+        {
+            var metadata = (JsonObject)incompleteAnalysis.DeepClone();
+            metadata.Remove("results");
+            metadata["api_version"] = "1";
+            metadata["command"] = command;
+            metadata["exit_code"] = exitCode;
+            var incompleteEnvelope = new JsonObject { ["metadata"] = metadata, ["results"] = new JsonArray() };
+            return WriteProjectionRegistryResponse(command, incompleteEnvelope.ToJsonString(jsonOptions),
+                exitCode, controls.MaxJsonBytes, jsonOptions);
+        }
         var commandError = TakeCommandError(rawResults, exitCode, out var completeCommandError);
         if (commandError is null
             && exitCode != CommandExitCodes.Success
@@ -1875,6 +1888,15 @@ internal static partial class JsonEnvelopeWrapper
             terminalCount = new ResponseCount(terminalTotal, terminalAuthoritative);
             if (terminalAuthoritative)
                 return terminalCount.Value;
+        }
+        // Unused pages already perform protective whole-family checks. An implicit count
+        // repeats that analysis and defeats its execution budget. Exact totals are opt-in
+        // through unused --count; the overfetched native page still preserves continuation.
+        if (command == "unused")
+        {
+            var hasMore = extraction.SourcePayload is { } source
+                          && (ReadOptionalBool(source, "has_more") || source["next_cursor"] is JsonValue);
+            return new ResponseCount(offset + availableCount + (hasMore ? 1 : 0), false);
         }
         if (!CountableResponseCommands.Contains(command))
             return terminalCount ?? new ResponseCount(offset + availableCount, false);
