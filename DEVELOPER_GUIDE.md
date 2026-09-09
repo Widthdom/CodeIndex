@@ -6,7 +6,7 @@
 
 `DbSearchReader.AttachCSharpOriginLines` supplies shared, indexed file prefixes to the snippet classifier. Preserve the per-file 4,096-line, 8 Mi-character and 128-chunk read limits, including overlap accounting; query pagination must not change those budgets. The character limit leaves room above existing 4 Mi-character semantic-analysis windows. Keep missing lines absent so the lexical classifier returns `unknown` rather than assuming code. Ordinary/token-boundary row and count paths and MCP must retain identical origin decisions and original UTF-16 coordinates. No persisted schema changes are involved.
 
-Build `CSharpOriginContext` once per file prefix with cancellation, share its origin spans across rows and occurrences, and compute/cache schema/help/regex labels only for queried string spans. Do not rescan preceding lines or reconstruct schema context for every match.
+Build `CSharpOriginContext` once per file prefix with cancellation and share its origin spans across rows and occurrences. Track schema argument positions during that same lexical pass, with at most 64 active builder invocations and a 64-line lookback; overflow leaves affected labels unknown. Cache regex/help classification per opening line, with cancellation at label lookup. Do not rescan preceding lines or reconstruct schema context per match or per literal.
 
 ## Dependency cycles by C# type
 
@@ -4433,7 +4433,7 @@ The CLI applies a cancellable analysis deadline, registers SQLite interruption, 
 
 `DbSearchReader.AttachCSharpOriginLines` は共有のインデックス済みファイル先頭部分を snippet 分類器へ渡します。ファイルごとの 4,096 行、8 Mi 文字、128 チャンクの読み取り上限と重複分の計上を維持し、query のページングで上限を変えないでください。文字数上限は既存の 4 Mi 文字の意味解析ウィンドウより大きく設定しています。欠落行を補わず、字句分類器がコードと推測せず `unknown` を返すようにします。通常／token-boundary の行・件数経路と MCP で同じ origin 判定と元の UTF-16 座標を維持してください。永続スキーマの変更はありません。
 
-`CSharpOriginContext` はキャンセルに対応してファイル先頭部分ごとに一度だけ構築し、origin の区間を行・一致間で共有します。schema/help/regex ラベルは照会された文字列区間だけで計算・キャッシュしてください。一致ごとに先行行を再走査したり schema コンテキストを再構築したりしないでください。
+`CSharpOriginContext` はキャンセルに対応してファイル先頭部分ごとに一度だけ構築し、origin の区間を行・一致間で共有します。同じ字句走査で schema の引数位置を追跡し、同時に開いている builder 呼び出しは最大 64、遡及範囲は 64 行とし、超過時は対象ラベルを不明にします。regex/help 分類は開始行ごとにキャッシュし、ラベル照会時にもキャンセルを確認してください。一致やリテラルごとに先行行を再走査したり schema コンテキストを再構築したりしないでください。
 
 ## C# 型単位の依存循環
 

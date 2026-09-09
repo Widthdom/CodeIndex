@@ -6,7 +6,7 @@
 
 Issue #5307 tests pair multiline comments, verbatim/raw strings and closing delimiters with executable controls. Preserve escaped quotes, delimiter lengths, schema/help/regex labels, missing prefix lines and lexical budgets, original coordinates, and CLI row/count/recipe plus MCP parity on net8.0 and net9.0. Synthetic snippet fixtures that assert known C# origins must supply the preceding indexed lines explicitly.
 
-Keep the shared-prefix allocation regression, cancellation check and ordinary/verbatim/raw interpolation-opener parity. Generic sampling tests may use another language to keep their row-cardinality contract independent of C# lexical budgets. Preserve the existing 4 Mi-character trust-source cache regression.
+Keep allocation regressions for shared prefixes and many distinct matched literals, cancellation during label lookup, builder-argument labels and ordinary/verbatim/raw interpolation-opener parity. Generic sampling tests may use another language to keep their row-cardinality contract independent of C# lexical budgets. Preserve the existing 4 Mi-character trust-source cache regression.
 
 ## Typed dependency-cycle regression coverage
 
@@ -1281,7 +1281,7 @@ Issue #5300 のテストは隣接・入れ子の C# callable、対象行の除�
 
 Issue #5307 のテストは、複数行コメント、verbatim/raw 文字列、閉じ区切りと実行コードの対照を組み合わせます。引用符のエスケープ、区切りの長さ、schema/help/regex ラベル、先頭行の欠落、字句処理上限、元の座標、CLI の行／件数／recipe と MCP の一致を net8.0 と net9.0 で維持してください。C# origin が既知であることを検証する合成 snippet fixture は、前のインデックス済み行を明示的に渡します。
 
-先頭部分を共有する割り当て量の回帰テスト、キャンセル、通常／verbatim／raw の補間開始位置の分類一致を維持してください。汎用サンプリングテストは行数の契約を C# 字句処理上限から独立させるため別言語を使用できます。既存の 4 Mi 文字の trust-source cache 回帰テストも維持してください。
+先頭部分の共有と多数の異なるリテラルに一致する場合の割り当て量、ラベル照会時のキャンセル、builder 引数ラベル、通常／verbatim／raw の補間開始位置の分類一致を検証してください。汎用サンプリングテストは行数の契約を C# 字句処理上限から独立させるため別言語を使用できます。既存の 4 Mi 文字の trust-source cache 回帰テストも維持してください。
 
 `QueryCommandRunnerRecipeTokenBoundaryIssue5298Tests` と `McpServerIssue5298Tests` は、レシピの既定値／上書き、実際のメンバー使用の正確な件数、C# の verbatim 表記と Unicode、同一行のコード・コメント・文字列、外部レシピ、cursor・continuation・baseline の互換性を検証します。net8.0／net9.0 で batch・CLI・MCP の整合性を保ってください。Unicode エスケープの復号は既存のテキスト検索の契約に含みません。
 

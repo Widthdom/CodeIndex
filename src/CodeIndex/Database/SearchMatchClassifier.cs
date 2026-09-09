@@ -533,9 +533,7 @@ internal static partial class SearchMatchClassifier
         int contentStart,
         IReadOnlyDictionary<int, string>? lineContext)
     {
-        var normalizedPath = path.Replace('\\', '/');
-        if (normalizedPath is not "src/CodeIndex/Mcp/McpToolDefinitions.cs"
-            and not "src/CodeIndex/Mcp/McpToolCatalog.cs")
+        if (!IsSchemaDescriptionPath(path))
         {
             return false;
         }
@@ -552,6 +550,9 @@ internal static partial class SearchMatchClassifier
 
         return IsDescriptionBuilderArgument(line, text, contentStart, lineContext);
     }
+
+    private static bool IsSchemaDescriptionPath(string path)
+        => path.Replace('\\', '/') is "src/CodeIndex/Mcp/McpToolDefinitions.cs" or "src/CodeIndex/Mcp/McpToolCatalog.cs";
 
     private static bool IsDescriptionBuilderArgument(
         int line,

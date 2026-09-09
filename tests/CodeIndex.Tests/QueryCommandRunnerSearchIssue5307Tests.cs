@@ -121,8 +121,45 @@ public partial class QueryCommandRunnerTests
         Assert.True(allocated < 16 * 1024 * 1024, $"Shared prefix allocated {allocated} bytes.");
         Assert.Equal(5, compact.MatchFacets.Count);
         Assert.All(compact.MatchFacets, facet => Assert.Equal("code", facet.Origin));
+
+        result.Content = "var values = new[] {" + string.Join(",", Enumerable.Repeat("\"needle" + new string('x', 200) + "\"", 500)) + "};";
+        result.EndLine = 1;
+        before = GC.GetAllocatedBytesForCurrentThread();
+        compact = SearchSnippetFormatter.ToCompactResult(result, "needle", maxLines: 1, exposeLiteralHighlights: true);
+        allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.True(allocated < 16 * 1024 * 1024, $"Distinct string labels allocated {allocated} bytes.");
+        Assert.Equal(500, compact.MatchFacets.Count);
+        Assert.All(compact.MatchFacets, facet => Assert.Equal("string_literal", facet.Origin));
+
+        result.Content = "CreateToolDefinition(\"name\",\n\"needle\" + \"needle\", new JsonObject());";
+        result.EndLine = 2;
+        compact = SearchSnippetFormatter.ToCompactResult(result, "needle", exposeLiteralHighlights: true);
+        Assert.Equal(2, compact.MatchFacets.Count);
+        Assert.All(compact.MatchFacets, facet => Assert.Equal("schema_description", facet.Origin));
+        foreach (var depth in new[] { 64, 65 })
+        {
+            var nested = string.Concat(Enumerable.Repeat("StringOrArraySchema(", depth)) + "\"needle\"" + new string(')', depth);
+            var nestedOrigins = new SearchMatchClassifier.CSharpOriginContext(result.Path,
+                new Dictionary<int, string> { [1] = nested });
+            Assert.Equal(depth == 64 ? "schema_description" : "unknown",
+                nestedOrigins.GetOrigin(1, nested, nested.IndexOf("needle", StringComparison.Ordinal)));
+        }
+        var window = Enumerable.Range(1, 66).ToDictionary(i => i, _ => "");
+        window[1] = "CreateToolDefinition(\"name\",";
+        window[65] = "\"needle\"";
+        window[66] = "+ \"needle\");";
+        var windowOrigins = new SearchMatchClassifier.CSharpOriginContext(result.Path, window);
+        Assert.Equal("schema_description", windowOrigins.GetOrigin(65, window[65], 1));
+        Assert.Equal("string_literal", windowOrigins.GetOrigin(66, window[66], 3));
         using var cancelled = new CancellationTokenSource();
+        var origins = new SearchMatchClassifier.CSharpOriginContext(result.Path,
+            new Dictionary<int, string> { [1] = "\"needle\"" }, cancelled.Token);
+        var copied = new string("\"needle\"".ToCharArray());
+        Assert.Equal("string_literal", origins.GetOrigin(1, copied, 1));
+        Assert.Equal("string_literal", origins.GetOrigin(1, copied, 1));
+        Assert.Equal("unknown", origins.GetOrigin(1, " needle ", 1));
         cancelled.Cancel();
+        Assert.Throws<OperationCanceledException>(() => origins.GetOrigin(1, "\"needle\"", 1));
         Assert.Throws<OperationCanceledException>(() => new SearchMatchClassifier.CSharpOriginContext(
             result.Path, new Dictionary<int, string> { [1] = source }, cancelled.Token));
     }
