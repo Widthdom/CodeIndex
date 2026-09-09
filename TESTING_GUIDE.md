@@ -6,6 +6,8 @@
 
 `QueryCommandRunnerIssue5301Tests` uses real indexing to verify partial-family collapse, same-file inter-type SCCs through local functions, namespace/generic/nested identity, bounded declaration mappings, Python and top-level file-scope retention, mixed SQL readiness, graph budgets, pagination and noise-suppressed stale-metadata fallback. Keep CLI/MCP parity and the raw-file regressions in #5197 on both net8 and net9.
 
+`ProgramCliTests.Run_Unhandled*` (#5311) pins a private absent `--db` and log directory, disables ambient configuration and lifecycle logging, and restores environment variables through `EnvironmentVariableScope`. Each exception/SQLite exit-code case covers both a saved failure event and a directory occupying `last-failure.json`, verifying the report hint or current-diagnostics-unavailable message and safe stderr. Keep these tests in the console-sensitive collection with the existing net8-only production-runtime attributes; run the related `GlobalToolLogTests` and `ReportCommandRunnerTests` on both net8/net9. The deterministic write obstruction does not establish the cause of the historical ambient-storage failure.
+
 This document explains how the `cdidx` test suite is organized, how to add or update tests safely, and which conventions to follow when the behavior or test infrastructure changes.
 
 If you change test code, test helpers, test execution flow, or testing conventions, update this document in the same commit.
@@ -1259,6 +1261,8 @@ Check the following:
 ---
 
 <a id="テストガイド"></a>
+
+`ProgramCliTests.Run_Unhandled*`（#5311）は、テスト専用の未作成 `--db` とログディレクトリを指定し、既存設定の探索とライフサイクルログを無効化します。環境変数は `EnvironmentVariableScope` で復元します。各例外／SQLite 終了コードについて、診断保存の成功と `last-failure.json` を同名ディレクトリで塞いだ失敗を検証し、report の案内または今回の診断を保存できなかった旨、および安全な stderr を確認します。console-sensitive collection と既存の net8 専用 production-runtime 属性を維持し、関連する `GlobalToolLogTests`・`ReportCommandRunnerTests` は net8/net9 の両方で実行してください。この確実な書き込み阻害は、過去に発生した既存保存先での障害原因を特定するものではありません。
 
 ## 型単位の依存循環の回帰テスト
 
