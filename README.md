@@ -46,6 +46,8 @@ C# origin classification remains line-local for multiline comments/strings; see 
 
 ## Search guard errors
 
+Missing numeric option values also preserve following inline output selectors: `cdidx search Return --limit --json=array` returns an `E010_USAGE_ERROR` JSON object with exit 1, just like placing the output selector first. This applies to search/audit numeric options and aliases, including counts, snippet limits, and byte budgets. A following `--` still protects a literal query; explicit inline values and existing numeric ranges are unchanged. Without machine output, the error, hint, and usage remain on stderr.
+
 Search and audit guard option errors return a versioned `E010_USAGE_ERROR` JSON object (exit 1) when JSON output is selected, including `--json=ndjson`, `--json=array`, `--format json`, and compact output. Output selection works before or after the invalid option; `--` still introduces a literal query. Missing values and invalid scopes/windows remain rejected (`--guard-scope` accepts `window`, `same-line`, or `same-symbol`). Human output retains its error, hint, and usage. `batch --json-summary` preserves the structured child error and continues subsequent commands without `--include-raw-streams`.
 
 ## Size-limited indexing
@@ -385,6 +387,8 @@ C# の複数行コメント／文字列の出現元分類には行単位の制�
 新規計画は全単位を pending とします。実行ごとの `partition` 記録を binding/id ごとに収集してください。ページカーソルは実行済みの証拠ではなく、再実行では観測が重複し得ます。単一ファイルでも候補上限に達すれば pending・非 authoritative のままで、ソースの手動確認が必要です。計画は対象となる索引内パスを扱い、未索引ファイルや人手レビューの完了を保証しません。上限は 10,000 パス、延べ 100,000 索引行、512 クエリ、10 秒、1 ページ 10 単位です。超過時は利用不可の計画と絞り込み案内を返します。出力予算で作業上限は増えず、baseline レビューの注釈とも独立しています。
 
 ## 検索guardのエラー
+
+数値オプションの値欠如時も、後続のインライン出力指定を保持します。`cdidx search Return --limit --json=array` は、出力指定を先に置いた場合と同じく `E010_USAGE_ERROR` JSON オブジェクトと終了コード1を返します。search／audit の件数、スニペット上限、バイト予算などの数値オプションと別名が対象です。後続の `--` は引き続きリテラル検索文字列を保護し、明示的なインライン値と既存の数値範囲は変わりません。機械向け出力を指定しない場合、エラー、ヒント、使用法は stderr に出力されます。
 
 search と audit の guard オプションエラーは、JSON 出力の指定時にバージョン付き `E010_USAGE_ERROR` JSON オブジェクト（終了コード1）を返します。`--json=ndjson`、`--json=array`、`--format json`、compact 出力にも対応します。出力形式は不正オプションの前後どちらでも指定でき、`--` は引き続きリテラル検索文字列を導入します。欠落値や不正な scope/window は拒否します（`--guard-scope` は `window`、`same-line`、`same-symbol` を受理）。人間向け出力はエラー、ヒント、使用法を維持します。`batch --json-summary` は `--include-raw-streams` なしで子コマンドの構造化エラーを保持し、後続コマンドを継続します。
 

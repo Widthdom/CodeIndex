@@ -383,7 +383,7 @@ public partial class QueryCommandRunnerTests
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
 
-            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
                 ["target", "--db", dbPath, "--max-line-width", "--json"],
                 _jsonOptions));
 
@@ -391,7 +391,17 @@ public partial class QueryCommandRunnerTests
             // Missing-value guard short-circuits before TryParsePositiveInt; see
             // RunExcerpt_RejectsMissingFocusColumnValue for the matching contract note.
             // TryParsePositiveInt より前で値欠如として短絡する。契約の詳細は上記テスト参照。
-            Assert.Contains("--max-line-width requires a value", stderr);
+            Assert.Empty(stderr);
+            using var error = JsonDocument.Parse(stdout);
+            Assert.Equal(CommandErrorCodes.UsageError, error.RootElement.GetProperty("error_code").GetString());
+            Assert.Contains("--max-line-width requires a value", error.RootElement.GetProperty("message").GetString());
+            Assert.Equal("references", error.RootElement.GetProperty("command").GetString());
+            Assert.False(string.IsNullOrWhiteSpace(error.RootElement.GetProperty("hint").GetString()));
+            var (humanExit, humanOut, humanError) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["target", "--db", dbPath, "--format=text", "--max-line-width"], _jsonOptions));
+            Assert.Equal(CommandExitCodes.UsageError, humanExit);
+            Assert.Empty(humanOut);
+            Assert.Contains("--max-line-width requires a value", humanError);
         }
         finally
         {
