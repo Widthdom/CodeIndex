@@ -200,10 +200,12 @@ public static class SearchSnippetFormatter
             return facets;
 
         var snippetLines = ReadSnippetLines(result.Content, 0, matchScan.LineCount - 1, normalizeCSharpVerbatimNames).ToList();
-        var lineContext = snippetLines.ToDictionary(line => result.StartLine + line.Index, line => line.Text);
+        IReadOnlyDictionary<int, string> lineContext = snippetLines.ToDictionary(line => result.StartLine + line.Index, line => line.Text);
         if (result.MatchOriginContext is { } originContext)
             lineContext = EnumerateContentLines(originContext.Content)
                 .ToDictionary(line => originContext.StartLine + line.Index, line => line.Text);
+        if (result.CSharpOriginLines is { } csharpOriginLines)
+            lineContext = csharpOriginLines;
         var matchSet = matchScan.MatchIndexes.ToHashSet();
         foreach (var snippetLine in snippetLines)
         {

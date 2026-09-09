@@ -1,6 +1,6 @@
 namespace CodeIndex.Database;
 
-internal static class SearchMatchClassifier
+internal static partial class SearchMatchClassifier
 {
     public const string Code = "code";
     public const string Comment = "comment";
@@ -391,6 +391,12 @@ internal static class SearchMatchClassifier
         int index,
         IReadOnlyDictionary<int, string>? lineContext)
     {
+        return ClassifyCSharpContext(path, line, text, index, lineContext);
+    }
+
+    private static string ClassifyCSharpLegacy(
+        string path, int line, string text, int index, IReadOnlyDictionary<int, string>? lineContext)
+    {
         var trimmed = text.TrimStart();
         if (trimmed.StartsWith("///", StringComparison.Ordinal) ||
             trimmed.StartsWith("//", StringComparison.Ordinal) ||
@@ -538,7 +544,8 @@ internal static class SearchMatchClassifier
         {
             var equalsIndex = text.IndexOf('=', propertyIndex + descriptionProperty.Length);
             var valueQuoteIndex = equalsIndex < 0 ? -1 : text.IndexOf('"', equalsIndex + 1);
-            return valueQuoteIndex >= 0 && contentStart == valueQuoteIndex + 1;
+            return valueQuoteIndex >= 0 && contentStart > valueQuoteIndex && contentStart <= text.Length &&
+                   text.AsSpan(valueQuoteIndex, contentStart - valueQuoteIndex).IndexOfAnyExcept('"') < 0;
         }
 
         return IsDescriptionBuilderArgument(line, text, contentStart, lineContext);

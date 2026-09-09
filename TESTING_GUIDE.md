@@ -2,6 +2,10 @@
 
 > **[日本語版はこちら / Japanese version](#テストガイド)**
 
+## C# multiline search-origin coverage
+
+Issue #5307 tests pair multiline comments, verbatim/raw strings and closing delimiters with executable controls. Preserve escaped quotes, delimiter lengths, schema/help/regex labels, missing prefix lines and lexical budgets, original coordinates, and CLI row/count/recipe plus MCP parity on net8.0 and net9.0. Synthetic snippet fixtures that assert known C# origins must supply the preceding indexed lines explicitly.
+
 ## Typed dependency-cycle regression coverage
 
 `QueryCommandRunnerIssue5301Tests` uses real indexing to verify partial-family collapse, same-file inter-type SCCs through local functions, namespace/generic/nested identity, bounded declaration mappings, Python and top-level file-scope retention, mixed SQL readiness, graph budgets, pagination and noise-suppressed stale-metadata fallback. Keep CLI/MCP parity and the raw-file regressions in #5197 on both net8 and net9.
@@ -1270,6 +1274,10 @@ Issue #5300 のテストは隣接・入れ子の C# callable、対象行の除�
 `QueryCommandRunnerUnusedIssue5296Tests` uses 16 sibling partial declarations and 192 private members whose references are deliberately removed. Require no false unused fields, at most 64 reconstructed chunk pieces, and at most 2,000 SQLite progress callbacks at 1,000 VM instructions per callback. These deterministic budgets catch repeated per-candidate reconstruction without wall-clock assertions on shared CI. Retain #5089, #4834 and #3673 as correctness controls, including unrelated chunks, missing content and legacy chunk ordering. Tests also interrupt active native SQLite work on deadline/caller cancellation, verify parseable bounded non-authoritative JSON, observe a heartbeat before completion, and confirm connection/token reuse and read-only behavior. Run both net8.0 and net9.0 lanes; see [performance measurements](docs/unused-performance.md).
 
 # テストガイド
+
+## C# 複数行検索 origin の検証
+
+Issue #5307 のテストは、複数行コメント、verbatim/raw 文字列、閉じ区切りと実行コードの対照を組み合わせます。引用符のエスケープ、区切りの長さ、schema/help/regex ラベル、先頭行の欠落、字句処理上限、元の座標、CLI の行／件数／recipe と MCP の一致を net8.0 と net9.0 で維持してください。C# origin が既知であることを検証する合成 snippet fixture は、前のインデックス済み行を明示的に渡します。
 
 `QueryCommandRunnerRecipeTokenBoundaryIssue5298Tests` と `McpServerIssue5298Tests` は、レシピの既定値／上書き、実際のメンバー使用の正確な件数、C# の verbatim 表記と Unicode、同一行のコード・コメント・文字列、外部レシピ、cursor・continuation・baseline の互換性を検証します。net8.0／net9.0 で batch・CLI・MCP の整合性を保ってください。Unicode エスケープの復号は既存のテキスト検索の契約に含みません。
 

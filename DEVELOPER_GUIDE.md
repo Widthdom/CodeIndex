@@ -2,6 +2,10 @@
 
 > **[日本語版はこちら / Japanese version](#開発者ガイド)**
 
+## C# search-origin context
+
+`DbSearchReader.AttachCSharpOriginLines` supplies shared, indexed file prefixes to the snippet classifier. Preserve the per-file 4,096-line, 1 Mi-character and 128-chunk read limits, including overlap accounting; query pagination must not change those budgets. Keep missing lines absent so the lexical classifier returns `unknown` rather than assuming code. Ordinary/token-boundary row and count paths and MCP must retain identical origin decisions and original UTF-16 coordinates. No persisted schema changes are involved.
+
 ## Dependency cycles by C# type
 
 Opt in with `cdidx deps --cycles --group-partial-types --json` (MCP: `cycles=true, groupPartialTypes=true`). The default remains the original file graph. Current C# partial-family and reference-identity metadata assigns each confirmed reference endpoint to its owning type before SCC analysis. Partial declarations share a node; ordinary types remain declaration-specific. Namespaces, generic arities, nested types and multiple types in one file remain distinct. Same-file inter-type dependencies are included. Non-type, ambiguous-ownership and non-authoritative target evidence retains an explicit `file:` node; this is not a compiler-complete type graph.
@@ -4422,6 +4426,10 @@ Unused partial-type SQL materializes type identity/ancestor arity and reconstruc
 The CLI applies a cancellable analysis deadline, registers SQLite interruption, and reports incomplete/cancelled JSON without unverified results. SQLite callbacks can surface cancellation as `SQLITE_ERROR`, so the unused boundary handles that only when its token is cancelled. Bounded page envelopes avoid an implicit second count analysis and preserve lower-bound count authority. Explicit count/summary commands retain full analysis. See [unused performance validation](docs/unused-performance.md) for operation-count budgets and measurements.
 
 # 開発者ガイド
+
+## C# 検索 origin のコンテキスト
+
+`DbSearchReader.AttachCSharpOriginLines` は共有のインデックス済みファイル先頭部分を snippet 分類器へ渡します。ファイルごとの 4,096 行、1 Mi 文字、128 チャンクの読み取り上限と重複分の計上を維持し、query のページングで上限を変えないでください。欠落行を補わず、字句分類器がコードと推測せず `unknown` を返すようにします。通常／token-boundary の行・件数経路と MCP で同じ origin 判定と元の UTF-16 座標を維持してください。永続スキーマの変更はありません。
 
 ## C# 型単位の依存循環
 

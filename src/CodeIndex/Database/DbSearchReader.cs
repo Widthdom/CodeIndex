@@ -380,10 +380,47 @@ public partial class DbReader
         }
 
         AttachSearchEnclosingSymbols(pagedResults, searchPrimaryMatchContext);
+        AttachCSharpOriginLines(pagedResults);
         candidateWindowObserver?.Invoke(guardCandidateLimitReached || contextRankingCandidateLimitReached
             || !hasCandidatePostProcessing && nextOffset - (cursor?.Offset ?? 0) >= limit
             || results.Count >= limit);
         return pagedResults;
+    }
+
+    private void AttachCSharpOriginLines(List<SearchResult> results)
+    {
+        // Read only bounded indexed prefixes; never fill holes with invented blank lines.
+        // Share each prefix between its rows. Per-file budgets must not depend on pagination.
+        foreach (var group in results.Where(r => string.Equals(r.Lang, "csharp", StringComparison.OrdinalIgnoreCase))
+                     .GroupBy(r => r.Path, StringComparer.Ordinal))
+        {
+            var endLine = Math.Min(SearchMatchClassifier.CSharpContextLineLimit, group.Max(r => r.EndLine));
+            var budget = SearchMatchClassifier.CSharpContextCharacterLimit;
+            var lines = new Dictionary<int, string>();
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = @"
+                SELECT c.start_line, substr(c.content, 1, @characters + 1)
+                FROM chunks c JOIN files f ON c.file_id = f.id
+                WHERE f.path = @path AND c.start_line <= @endLine
+                ORDER BY c.start_line, c.id LIMIT 128";
+            SqliteCommandPolicy.Add(cmd, "@path", group.Key);
+            SqliteCommandPolicy.Add(cmd, "@endLine", endLine);
+            SqliteCommandPolicy.Add(cmd, "@characters", budget);
+            using var reader = cmd.ExecuteTrackedReader();
+            while (reader.TrackedRead())
+            {
+                ThrowIfCancellationRequested();
+                var content = reader.GetString(1);
+                if (content.Length > budget)
+                    break;
+                budget -= content.Length;
+                var start = reader.GetInt32(0);
+                foreach (var (offset, value) in EnumerateContentLines(content, 0, endLine - start))
+                    lines.TryAdd(start + offset, value);
+            }
+            foreach (var result in group)
+                result.CSharpOriginLines = lines;
+        }
     }
 
     private List<SearchResult> SearchLongFtsTokenFallback(
