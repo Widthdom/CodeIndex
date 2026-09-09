@@ -878,11 +878,13 @@ public static partial class QueryCommandRunner
                     ? cycles.SelectMany(static cycle => cycle)
                     : symbolFilter.Edges.SelectMany(static result => new[] { result.SourcePath, result.TargetPath })
                 : outputEdges.SelectMany(static result => new[] { result.SourcePath, result.TargetPath });
-            var sqlGraphSignal = NarrowSqlGraphContractSignalByPaths(
-                reader,
-                baseSqlGraphSignal,
-                sqlGraphSignalPaths,
-                options.Lang);
+            var sqlGraphSignal = options.GroupDependencyPartialTypes && reader.DependencyCycleGroupingReady
+                ? baseSqlGraphSignal
+                : NarrowSqlGraphContractSignalByPaths(
+                    reader,
+                    baseSqlGraphSignal,
+                    sqlGraphSignalPaths,
+                    options.Lang);
             if (!options.DependencyCycles && outputEdges.Count == 0)
             {
                 if (depsFormat is OutputFormatDot or OutputFormatGraphMl or OutputFormatJsonGraph)
@@ -2310,7 +2312,7 @@ public static partial class QueryCommandRunner
             if (!options.DependencySuppressNoise)
                 return results.Take(limit).ToList();
 
-            if (!options.GroupDependencyPartialTypes)
+            if (!options.GroupDependencyPartialTypes || !primaryReader.DependencyCycleGroupingReady)
                 candidateRowCount = results.Count(HasRetainedDependencyEvidence);
             return OrderWorkspaceCycleCandidates(results, limit);
         }

@@ -60,7 +60,7 @@ public partial class DbReader
                 JOIN symbols s ON s.name = r.symbol_name
                 JOIN files dst ON s.file_id = dst.id
                  AND dst.path = candidate_edges.target_path
-                WHERE " + (_request.GroupPartialTypes ? $"(src.path != dst.path OR ({_reader.DependencyCycleSourceNodeSql()} != 'file:' || src.path AND {_reader.DependencyCycleTargetNodeSql()} != 'file:' || dst.path))" : "src.path != dst.path") + @"
+                WHERE " + (_request.GroupPartialTypes ? $"(src.path != dst.path OR ({_reader.DependencyCycleSourceNodeSql()} != 'file:' || src.path OR {_reader.DependencyCycleTargetNodeSql()} != 'file:' || dst.path))" : "src.path != dst.path") + @"
                   AND src.lang = dst.lang");
             _sql.Append(_reader.BuildDependencyEvidenceFilter(_request.EvidenceFilter, "cycleAggregateEvidence"));
             _sql.Append(BuildDependencySymbolFilter(

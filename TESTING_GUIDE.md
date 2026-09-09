@@ -4,7 +4,7 @@
 
 ## Typed dependency-cycle regression coverage
 
-`QueryCommandRunnerIssue5301Tests` uses real indexing to verify partial-family collapse, same-file inter-type SCCs, namespace/generic/nested identity, bounded declaration mappings, Python file-scope retention, graph budgets, pagination and stale-metadata fallback. Keep CLI/MCP parity and the raw-file regressions in #5197 on both net8 and net9.
+`QueryCommandRunnerIssue5301Tests` uses real indexing to verify partial-family collapse, same-file inter-type SCCs through local functions, namespace/generic/nested identity, bounded declaration mappings, Python and top-level file-scope retention, mixed SQL readiness, graph budgets, pagination and noise-suppressed stale-metadata fallback. Keep CLI/MCP parity and the raw-file regressions in #5197 on both net8 and net9.
 
 This document explains how the `cdidx` test suite is organized, how to add or update tests safely, and which conventions to follow when the behavior or test infrastructure changes.
 
@@ -1246,7 +1246,7 @@ Check the following:
 
 ## 型単位の依存循環の回帰テスト
 
-`QueryCommandRunnerIssue5301Tests` は実際の索引処理を使い、partial 型の統合、同一ファイル内の型間 SCC、namespace・generic・入れ子の型の識別、宣言パス対応表の上限、Python のファイル単位の保持、解析上限、ページング、古いメタデータへのフォールバックを検証します。CLI/MCP の一致と #5197 のファイル単位の回帰テストを net8/net9 の両方で維持してください。
+`QueryCommandRunnerIssue5301Tests` は実際の索引処理を使い、partial 型の統合、ローカル関数を経由する同一ファイル内の型間 SCC、namespace・generic・入れ子の型の識別、宣言パス対応表の上限、Python とトップレベル参照のファイル単位の保持、混在 SQL の準備状態、解析上限、ページング、ノイズ抑制時の古いメタデータへのフォールバックを検証します。CLI/MCP の一致と #5197 のファイル単位の回帰テストを net8/net9 の両方で維持してください。
 
 ## Unused performance regression coverage
 

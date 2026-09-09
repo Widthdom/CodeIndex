@@ -12,32 +12,47 @@ public partial class DbReader
         && _symbolColumns.Contains("family_key")
         && _symbolColumns.Contains("is_partial_declaration");
 
+    private static string DependencyCycleDeclaredTypeNodeSql(string symbol)
+        => $"CASE WHEN {symbol}.is_partial_declaration = 1 AND NULLIF({symbol}.family_key, '') IS NOT NULL THEN 'csharp-type:' || codeindex_partial_family_id({symbol}.family_key) ELSE 'csharp-type:symbol:' || {symbol}.id END";
+
     private static string DependencyCycleTypeNodeSql(string symbol, string file)
-        => $"""
-            CASE WHEN {file}.lang = 'csharp' AND {symbol}.kind IN ('class', 'struct', 'interface', 'record', 'enum')
-              AND COALESCE({symbol}.is_partial_declaration, 0) <> 1
-            THEN 'csharp-type:symbol:' || {symbol}.id
-            WHEN {file}.lang = 'csharp' AND {symbol}.kind NOT IN ('namespace', 'import')
-              AND NULLIF({symbol}.family_key, '') IS NOT NULL
+    {
+        const string typeKinds = "('class', 'struct', 'interface', 'record', 'enum')";
+        const string ownerName = "COALESCE(type_owner.container_qualified_name || '.', '') || type_owner.name";
+        // Resolve the nearest containing type, including references in local functions.
+        // A non-partial nested type can carry its parent's hotspot key; only the
+        // owning declaration itself decides whether cross-file grouping is valid.
+        return $"""
+            CASE WHEN {file}.lang <> 'csharp' OR {symbol}.kind IN ('namespace', 'import')
+            THEN 'file:' || {file}.path
+            WHEN {symbol}.kind IN {typeKinds}
+            THEN {DependencyCycleDeclaredTypeNodeSql(symbol)}
+            WHEN {symbol}.container_kind IN {typeKinds} AND NULLIF({symbol}.family_key, '') IS NOT NULL
               AND EXISTS (SELECT 1 FROM symbols type_owner
                   WHERE type_owner.file_id = {symbol}.file_id
+                    AND type_owner.kind IN {typeKinds} AND type_owner.is_partial_declaration = 1
                     AND type_owner.family_key = {symbol}.family_key
-                    AND type_owner.kind IN ('class', 'struct', 'interface', 'record')
-                    AND type_owner.is_partial_declaration = 1)
+                    AND ({ownerName}) = {symbol}.container_qualified_name)
             THEN 'csharp-type:' || codeindex_partial_family_id({symbol}.family_key)
-            WHEN {file}.lang = 'csharp' AND {symbol}.kind IN ('class', 'struct', 'interface', 'record', 'enum')
-            THEN 'csharp-type:symbol:' || {symbol}.id
-            WHEN {file}.lang = 'csharp' AND {symbol}.container_kind IN ('class', 'struct', 'interface', 'record', 'enum')
-            THEN COALESCE((SELECT CASE WHEN COUNT(*) = 1 THEN 'csharp-type:symbol:' || MIN(type_owner.id) END
-                FROM symbols type_owner
-                WHERE type_owner.file_id = {symbol}.file_id
-                  AND type_owner.kind IN ('class', 'struct', 'interface', 'record', 'enum')
-                  AND type_owner.name = {symbol}.container_name
-                  AND COALESCE(type_owner.container_qualified_name || '.', '') || type_owner.name = {symbol}.container_qualified_name
-                  AND type_owner.start_line <= {symbol}.start_line AND type_owner.end_line >= {symbol}.end_line),
-                'file:' || {file}.path)
-            ELSE 'file:' || {file}.path END
+            ELSE COALESCE((
+                SELECT CASE WHEN COUNT(*) = 1 THEN MIN(node_id) END
+                FROM (
+                    SELECT {DependencyCycleDeclaredTypeNodeSql("type_owner")} AS node_id,
+                           DENSE_RANK() OVER (ORDER BY LENGTH({ownerName}) DESC,
+                               type_owner.start_line DESC, COALESCE(type_owner.start_column, 0) DESC) AS owner_rank
+                    FROM symbols type_owner
+                    WHERE type_owner.file_id = {symbol}.file_id
+                      AND type_owner.kind IN {typeKinds}
+                      AND type_owner.start_line <= {symbol}.start_line
+                      AND type_owner.end_line >= {symbol}.end_line
+                      AND (type_owner.start_line < {symbol}.start_line
+                           OR COALESCE(type_owner.start_column, 0) <= COALESCE({symbol}.start_column, 2147483647))
+                      AND ({symbol}.container_qualified_name = ({ownerName})
+                           OR SUBSTR({symbol}.container_qualified_name, 1, LENGTH({ownerName}) + 1) = ({ownerName}) || '.')
+                ) WHERE owner_rank = 1
+            ), 'file:' || {file}.path) END
             """;
+    }
 
     private string DependencyCycleSourceNodeSql()
         => $"COALESCE((SELECT {DependencyCycleTypeNodeSql("owner", "src")} FROM symbols owner WHERE owner.id = r.source_symbol_id AND owner.file_id = src.id), 'file:' || src.path)";

@@ -19,10 +19,18 @@ public partial class QueryCommandRunnerTests
         File.WriteAllText(Path.Combine(project.Root, "Mixed.cs"), """
             namespace Demo;
             public partial class Alpha {
-                public static void A() { Beta.B(); }
+                public static void A() {
+                    void Hop() { Beta.B(); }
+                    Hop();
+                }
                 public class Beta { public static void B() { Alpha.A(); } }
             }
-            file class Gamma { public static void G() { Delta.D(); } }
+            file class Gamma {
+                public static void G() {
+                    void Hop() { Delta.D(); }
+                    Hop();
+                }
+            }
             public class Delta { public static void D() { Gamma.G(); } }
             """);
         var dbPath = Path.Combine(project.Root, ".cdidx", "codeindex.db");
@@ -111,8 +119,12 @@ public partial class QueryCommandRunnerTests
         File.WriteAllText(Path.Combine(project.Root, "b.py"), "def right():\n    left()\n");
         File.WriteAllText(Path.Combine(project.Root, "self1.py"), "def self1():\n    self1()\n");
         File.WriteAllText(Path.Combine(project.Root, "self2.py"), "def self2():\n    self2()\n");
+        File.WriteAllText(Path.Combine(project.Root, "left.sql"), "CREATE VIEW LeftView AS SELECT * FROM RightView;\n");
+        File.WriteAllText(Path.Combine(project.Root, "right.sql"), "CREATE VIEW RightView AS SELECT * FROM LeftView;\n");
+        File.WriteAllText(Path.Combine(project.Root, "TopLevel.cs"), "TopTarget.Run();\npublic class TopTarget { public static void Run() { } }\n");
         var dbPath = Path.Combine(project.Root, ".cdidx", "codeindex.db");
         Assert.Equal(0, CaptureConsole(() => IndexCommandRunner.Run([project.Root, "--db", dbPath, "--json", "--quiet"], _jsonOptions)).Result);
+        DowngradeSqlGraphContractVersion(dbPath);
         var result = CaptureConsole(() => QueryCommandRunner.RunDeps(
             ["--db", dbPath, "--json", "--cycles", "--group-partial-types", "--suppress-noise"], _jsonOptions));
         Assert.True(result.Result == 0, result.Stderr);
@@ -123,13 +135,64 @@ public partial class QueryCommandRunnerTests
         Assert.Equal(4, types.Length);
         Assert.Equal(4, types.Select(mapping => mapping.GetProperty("family_identity").GetString()).Distinct().Count());
         Assert.All(types, mapping => Assert.Equal(2, mapping.GetProperty("file_count").GetInt32()));
-        var python = Assert.Single(document.RootElement.GetProperty("cycles").EnumerateArray());
+        Assert.False(document.RootElement.GetProperty("sql_graph_contract_ready").GetBoolean());
+        var python = Assert.Single(document.RootElement.GetProperty("cycles").EnumerateArray(),
+            cycle => cycle.GetProperty("nodes").EnumerateArray().Any(node => node.GetString() == "file:a.py"));
         Assert.Equal(new[] { "file:a.py", "file:b.py" }, python.GetProperty("nodes").EnumerateArray().Select(node => node.GetString()));
+        Assert.Contains(document.RootElement.GetProperty("cycles").EnumerateArray(),
+            cycle => cycle.GetProperty("nodes").EnumerateArray().Any(node => node.GetString() == "file:left.sql"));
+        using (var server = new McpServer(dbPath, "test", dbPathExplicit: true))
+        {
+            var response = server.HandleMessage(JsonNode.Parse("""
+                {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"deps","arguments":{"cycles":true,"groupPartialTypes":true}}}
+                """)!)!;
+            Assert.False(response["result"]!["structuredContent"]!["sql_graph_contract_ready"]!.GetValue<bool>(), response.ToJsonString());
+        }
+        var topLevel = CaptureConsole(() => QueryCommandRunner.RunDeps(
+            ["--db", dbPath, "--json", "--cycles", "--group-partial-types", "--path", "TopLevel.cs", "--resolution-state", "resolved"], _jsonOptions));
+        Assert.True(topLevel.Result == 0, topLevel.Stderr);
+        using var topDocument = ParseJsonOutput(topLevel.Stdout);
+        Assert.True(topDocument.RootElement.GetProperty("cycle_grouping").GetProperty("inter_node_reference_count").GetInt64() > 0);
         var emptyBudget = CaptureConsole(() => QueryCommandRunner.RunDeps(
             ["--db", dbPath, "--json", "--cycles", "--group-partial-types", "--path", "self*", "--graph-budget", "1"], _jsonOptions));
         Assert.True(emptyBudget.Result == 0, emptyBudget.Stderr);
         using var emptyDocument = ParseJsonOutput(emptyBudget.Stdout);
         Assert.False(emptyDocument.RootElement.GetProperty("analysis_complete").GetBoolean());
         Assert.Equal(0, emptyDocument.RootElement.GetProperty("cycles").GetArrayLength());
+    }
+
+    [Fact]
+    public void RunDeps_StaleFamilyFallbackKeepsRawSuppressionBudgetSemantics_Issue5301()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_deps_fallback_5301");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        InsertFileWithSymbolsAndReferences(dbPath, "Source.cs", ["Source"], ["Target"]);
+        InsertFileWithSymbolsAndReferences(dbPath, "Target1.cs", ["Target"], []);
+        InsertFileWithSymbolsAndReferences(dbPath, "Target2.cs", ["Target"], []);
+        SetCycleReferenceResolution(dbPath, "Source.cs", "Target1.cs", "unresolved");
+        MarkDependencyGraphReady(dbPath);
+        using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+        {
+            var writer = new DbWriter(db.Connection);
+            writer.MarkReferenceIdentityContractReady();
+            writer.SetMeta(DbContext.GetHotspotFamilyVersionMetaKey("csharp"), "0");
+        }
+        foreach (var grouped in new[] { false, true })
+        {
+            var result = CaptureConsole(() => QueryCommandRunner.RunDeps(
+                ["--db", dbPath, "--json", "--cycles", "--suppress-noise", "--graph-budget", "1", .. grouped ? new[] { "--group-partial-types" } : []], _jsonOptions));
+            Assert.True(result.Result == 0, result.Stderr);
+            using var document = ParseJsonOutput(result.Stdout);
+            Assert.True(document.RootElement.GetProperty("analysis_complete").GetBoolean());
+            Assert.False(document.RootElement.GetProperty("cycle_grouping_applied").GetBoolean());
+            Assert.Equal(0, document.RootElement.GetProperty("graph_edge_count").GetInt32());
+        }
+        using var server = new McpServer(dbPath, "test", dbPathExplicit: true);
+        var response = server.HandleMessage(JsonNode.Parse("""
+            {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"deps","arguments":{"cycles":true,"groupPartialTypes":true,"suppressNoise":true,"graphBudget":1}}}
+            """)!)!;
+        var content = response["result"]!["structuredContent"]!;
+        Assert.True(content["analysis_complete"]!.GetValue<bool>(), response.ToJsonString());
+        Assert.False(content["cycle_grouping_applied"]!.GetValue<bool>());
     }
 }

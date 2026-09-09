@@ -104,7 +104,7 @@ public partial class McpServer
                     evidenceFilter: evidenceFilter,
                     groupPartialTypes: groupPartialTypes)
                 : reader.GetFileDependencies(limit, lang, pathPatterns, excludePaths, excludeTests, reverse, evidenceFilter: evidenceFilter);
-            if (cyclesOnly && suppressNoise && !groupPartialTypes)
+            if (cyclesOnly && suppressNoise && (!groupPartialTypes || !reader.DependencyCycleGroupingReady))
                 cycleCandidateRowCount = results.Count(QueryCommandRunner.HasRetainedDependencyEvidence);
             var rawCycleCandidates = cyclesOnly
                 ? suppressNoise
@@ -143,7 +143,7 @@ public partial class McpServer
                     ? cycles.SelectMany(static cycle => cycle)
                     : cycleCandidates.SelectMany(static result => new[] { result.SourcePath, result.TargetPath })
                 : results.SelectMany(static result => new[] { result.SourcePath, result.TargetPath });
-            var sqlGraphSignal = results.Count == 0
+            var sqlGraphSignal = results.Count == 0 || (groupPartialTypes && reader.DependencyCycleGroupingReady)
                 ? baseSqlGraphSignal
                 : QueryCommandRunner.NarrowSqlGraphContractSignalByPaths(
                     reader,
