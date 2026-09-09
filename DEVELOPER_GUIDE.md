@@ -22,6 +22,12 @@ The scope is lexical; comments/strings are evidence, and no dataflow claim is ma
 Reject callables containing interpolated strings because masking hides executable interpolation expressions.
 API version 1 remains compatible; the new guard scope publishes contract version 1.
 
+## Unused analysis cost
+
+Unused partial-type SQL materializes type identity/ancestor arity and reconstructed peer content once per statement, preserving namespace, generic/nested type, overlap, null-content and legacy chunk ordering semantics. These values cannot survive a statement's SQLite generation. Lexical masking reuse is scoped to one unused operation, keyed by exact content, and capped at 128 entries / 4,194,304 retained UTF-16 characters (source plus masked text); saturation falls back to the same uncached algorithm. Same-file content reuse has the same entry/character caps. There is no process-global content cache or schema migration.
+
+The CLI applies a cancellable analysis deadline, registers SQLite interruption, and reports incomplete/cancelled JSON without unverified results. SQLite callbacks can surface cancellation as `SQLITE_ERROR`, so the unused boundary handles that only when its token is cancelled. Bounded page envelopes avoid an implicit second count analysis and preserve lower-bound count authority. Explicit count/summary commands retain full analysis. See [unused performance validation](docs/unused-performance.md) for operation-count budgets and measurements.
+
 ## Size-limited indexing
 
 A persisted `file_too_large` omission makes full and scoped CLI indexing return `status=partial`, `E022_INDEX_PARTIAL`, and exit 11, including unchanged retries and unrelated scoped writes. `--allow-partial` accepts exit 0 while preserving the partial status and incomplete facts. Intentional symbols-only and symbol-kind policies keep their existing success behavior. MCP indexing reports the same partial outcome with `isError=true` and retains successful data.
@@ -4414,12 +4420,6 @@ CLI、レシピの再実行・フィンガープリント、MCP スキーマ、`
 これは字句的な判定であり、コメント・文字列も証拠になり、データフローの保証はありません。
 補間式内の実行可能なコードがマスクで隠れるため、補間文字列を含む callable は拒否します。
 API version 1 の互換性を維持し、新しい guard scope は contract version 1 を公開します。
-
-## Unused analysis cost
-
-Unused partial-type SQL materializes type identity/ancestor arity and reconstructed peer content once per statement, preserving namespace, generic/nested type, overlap, null-content and legacy chunk ordering semantics. These values cannot survive a statement's SQLite generation. Lexical masking reuse is scoped to one unused operation, keyed by exact content, and capped at 128 entries / 4,194,304 retained UTF-16 characters (source plus masked text); saturation falls back to the same uncached algorithm. Same-file content reuse has the same entry/character caps. There is no process-global content cache or schema migration.
-
-The CLI applies a cancellable analysis deadline, registers SQLite interruption, and reports incomplete/cancelled JSON without unverified results. SQLite callbacks can surface cancellation as `SQLITE_ERROR`, so the unused boundary handles that only when its token is cancelled. Bounded page envelopes avoid an implicit second count analysis and preserve lower-bound count authority. Explicit count/summary commands retain full analysis. See [unused performance validation](docs/unused-performance.md) for operation-count budgets and measurements.
 
 # 開発者ガイド
 
