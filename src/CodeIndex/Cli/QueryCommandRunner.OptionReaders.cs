@@ -4,6 +4,18 @@ namespace CodeIndex.Cli;
 
 public static partial class QueryCommandRunner
 {
+    private sealed partial class QueryArgumentParser
+    {
+        // All raw-value readers are numeric. Record missing values separately from invalid
+        // numbers so output routing can preserve the requested machine format.
+        private bool TryReadRawOptionValue(string[] args, ref int index, string optionName, string? inlineValue, out string? value, out string? error)
+        {
+            var success = QueryCommandRunner.TryReadRawOptionValue(args, ref index, optionName, inlineValue, out value, out error);
+            missingNumericOptionValue |= !success;
+            return success;
+        }
+    }
+
     // Per-flag hints appended to "Error: <flag> requires a value." so users learn the expected
     // value type or range without consulting `--help`. Routed through BuildMissingOptionValueError
     // so every missing-value site reuses the same table and the messages stay consistent.
@@ -108,7 +120,10 @@ public static partial class QueryCommandRunner
         // 次トークンが別の既知オプションなら「値欠如」として扱い、index を進めない。これを
         // 入れないと `--limit --lang rust` が `--limit=--lang` と解釈され、後続の `rust` が
         // 黙って捨てられ、`--lang` が integer じゃないという混乱したメッセージが出てしまう。
-        if (IsRecognizedOptionToken(candidate))
+        // Preserve inline options and the literal-query marker for the parser's next iteration.
+        // Negative numbers and unknown option-shaped values still reach numeric validation.
+        if (candidate == "--" || IsRecognizedOptionToken(candidate)
+            || TrySplitInlineOptionValue(candidate, out var nextOption) && IsRecognizedOptionToken(nextOption!))
         {
             value = null;
             error = BuildMissingOptionValueError(optionName);

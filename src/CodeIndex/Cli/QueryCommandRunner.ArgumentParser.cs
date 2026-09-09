@@ -91,6 +91,7 @@ public static partial class QueryCommandRunner
         private bool excludeFixtures;
         private List<string>? parseErrors;
         private bool searchGuardValidationError;
+        private bool missingNumericOptionValue;
         private bool exactName;
         private bool exactSubstring;
         private bool tokenBoundary;
@@ -613,6 +614,7 @@ public static partial class QueryCommandRunner
                 NoSemanticTokens = noSemanticTokens,
                 ParseError = parseErrors == null ? null : string.Join(Environment.NewLine, parseErrors),
                 SearchGuardValidationError = searchGuardValidationError,
+                MissingNumericOptionValue = missingNumericOptionValue,
             };
         }
 

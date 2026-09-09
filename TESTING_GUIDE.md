@@ -8,6 +8,8 @@ If you change test code, test helpers, test execution flow, or testing conventio
 
 ## Quick Start
 
+`QueryCommandRunnerNumericBoundaryIssue5305Tests.cs` shares an isolated database across all non-guard numeric reader callers and aliases. Cover missing values with separated/inline output selectors in both orders, the `--` literal marker with and without explicit JSON, numeric range/overflow rejection, option-shaped inline values, and valid limit endpoints. Run alongside the #5297 guard parser regressions on net8.0 and net9.0.
+
 Issue #5300 guard tests cover adjacent and nested C# callables, focus-line exclusion,
 window bounds, lexical comment/string evidence, row/count parity, CLI/MCP/recipe
 scope propagation, and explicit stale/missing/ambiguous/partial/budget failures.
@@ -1262,6 +1264,8 @@ Issue #5300 のテストは隣接・入れ子の C# callable、対象行の除�
 `QueryCommandRunnerUnusedIssue5296Tests` uses 16 sibling partial declarations and 192 private members whose references are deliberately removed. Require no false unused fields, at most 64 reconstructed chunk pieces, and at most 2,000 SQLite progress callbacks at 1,000 VM instructions per callback. These deterministic budgets catch repeated per-candidate reconstruction without wall-clock assertions on shared CI. Retain #5089, #4834 and #3673 as correctness controls, including unrelated chunks, missing content and legacy chunk ordering. Tests also interrupt active native SQLite work on deadline/caller cancellation, verify parseable bounded non-authoritative JSON, observe a heartbeat before completion, and confirm connection/token reuse and read-only behavior. Run both net8.0 and net9.0 lanes; see [performance measurements](docs/unused-performance.md).
 
 # テストガイド
+
+`QueryCommandRunnerNumericBoundaryIssue5305Tests.cs` は、guard 以外の数値読み取り処理の全呼び出し元と別名について、分離した DB を共有して検証します。値欠如と分離形式／インライン形式の出力指定の前後順、明示的 JSON 指定の有無と `--` リテラルマーカー、数値の範囲外／オーバーフロー、オプションに似たインライン値、許容される limit の上下限を確認してください。#5297 の guard パーサー回帰テストとともに net8.0／net9.0 で実行します。
 
 `QueryCommandRunnerRecipeTokenBoundaryIssue5298Tests` と `McpServerIssue5298Tests` は、レシピの既定値／上書き、実際のメンバー使用の正確な件数、C# の verbatim 表記と Unicode、同一行のコード・コメント・文字列、外部レシピ、cursor・continuation・baseline の互換性を検証します。net8.0／net9.0 で batch・CLI・MCP の整合性を保ってください。Unicode エスケープの復号は既存のテキスト検索の契約に含みません。
 

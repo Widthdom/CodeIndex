@@ -50,6 +50,12 @@ public static partial class QueryCommandRunner
         if (options.ParseError == null && dbPathError == null && inspectCursorScopeError == null)
             return false;
 
+        if (options.MissingNumericOptionValue && options.Json)
+        {
+            jsonOptions ??= options.InvocationJsonOptions ?? ProgramRunner.CreateDefaultJsonOptions();
+            options.InvocationMachineErrorOutputRequested = true;
+        }
+
         var primaryError = options.ParseError ?? dbPathError ?? inspectCursorScopeError!;
         var primaryHint = primaryError == dbPathError && options.ParseError == null
             ? "create or refresh the index with `cdidx index <projectPath>` (or `cdidx .`) and then rerun this command."
