@@ -29,6 +29,16 @@ public partial class DbReader
             return _sql.Build();
         }
 
+        internal DependencySqlFragment BuildCycleTargets()
+        {
+            AppendTargetFiles();
+            _sql.Append(" AND dst.lang = 'sql'");
+            AppendTargetScope();
+            _sql.Append(" GROUP BY dst.path, dst.lang, " + _expressions.TargetLogicalSymbolName
+                + ", " + _expressions.TargetLogicalSymbolSegmentCount + "),");
+            return _sql.Build();
+        }
+
         private void AppendTargetFiles()
         {
             _sql.Append(@"

@@ -8,6 +8,10 @@
 
 Build `CSharpOriginContext` once per file prefix with cancellation and share its origin spans across rows and occurrences. Track schema argument positions during that same lexical pass, with at most 64 active builder invocations and a 64-line lookback; overflow leaves affected labels unknown. Cache regex/help classification per opening line, with cancellation at label lookup. Do not rescan preceding lines or reconstruct schema context per match or per literal.
 
+## SQL dependency cycles
+
+`deps --cycles` (MCP: `deps` with `cycles=true`) uses the same SQL qualified-name matching as ordinary dependencies. Candidate selection and reference evidence both resolve the source occurrence and its container, preserve schema identity, and apply the same scoped leaf fallback. Qualified views such as `dbo.LeftView` and `dbo.RightView` therefore form a file cycle without merging unrelated same-leaf objects in other schemas. Path/reverse, symbol and evidence filters, graph budgets, and cursor completeness retain their existing meanings; no reindex is required for this query fix.
+
 ## Dependency cycles by C# type
 
 Opt in with `cdidx deps --cycles --group-partial-types --json` (MCP: `cycles=true, groupPartialTypes=true`). The default remains the original file graph. Current C# partial-family and reference-identity metadata assigns each confirmed reference endpoint to its owning type before SCC analysis. Partial declarations share a node; ordinary types remain declaration-specific. Namespaces, generic arities, nested types and multiple types in one file remain distinct. Same-file inter-type dependencies are included. Non-type, ambiguous-ownership and non-authoritative target evidence retains an explicit `file:` node; this is not a compiler-complete type graph.
@@ -4434,6 +4438,10 @@ API version 1 の互換性を維持し、新しい guard scope は contract vers
 `DbSearchReader.AttachCSharpOriginLines` は共有のインデックス済みファイル先頭部分を snippet 分類器へ渡します。ファイルごとの 4,096 行、8 Mi 文字、128 チャンクの読み取り上限と重複分の計上を維持し、query のページングで上限を変えないでください。文字数上限は既存の 4 Mi 文字の意味解析ウィンドウより大きく設定しています。欠落行を補わず、字句分類器がコードと推測せず `unknown` を返すようにします。通常／token-boundary の行・件数経路と MCP で同じ origin 判定と元の UTF-16 座標を維持してください。永続スキーマの変更はありません。
 
 `CSharpOriginContext` はキャンセルに対応してファイル先頭部分ごとに一度だけ構築し、origin の区間を行・一致間で共有します。同じ字句走査で schema の引数位置を追跡し、同時に開いている builder 呼び出しは最大 64、遡及範囲は 64 行とし、超過時は対象ラベルを不明にします。regex/help 分類は開始行ごとにキャッシュし、ラベル照会時にもキャンセルを確認してください。一致やリテラルごとに先行行を再走査したり schema コンテキストを再構築したりしないでください。
+
+## SQL の依存循環
+
+`deps --cycles`（MCP: `deps` の `cycles=true`）は通常の依存関係検索と同じ SQL 修飾名の照合を使います。候補選択と参照証拠の取得の両方で、参照位置と所属コンテナから名前を解決し、スキーマの識別と検索範囲に基づく末尾名へのフォールバックを維持します。`dbo.LeftView` と `dbo.RightView` のような修飾付きビューの循環を検出し、別スキーマの無関係な同名オブジェクトを混ぜません。パス・逆方向・シンボル・証拠のフィルター、グラフ解析上限、カーソルの完全性判定の意味は変わりません。このクエリ修正のための再索引は不要です。
 
 ## C# 型単位の依存循環
 
