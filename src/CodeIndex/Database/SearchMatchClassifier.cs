@@ -1,6 +1,6 @@
 namespace CodeIndex.Database;
 
-internal static class SearchMatchClassifier
+internal static partial class SearchMatchClassifier
 {
     public const string Code = "code";
     public const string Comment = "comment";
@@ -18,9 +18,10 @@ internal static class SearchMatchClassifier
         int column,
         int length,
         string? enclosingSymbolKind = null,
-        IReadOnlyDictionary<int, string>? lineContext = null)
+        IReadOnlyDictionary<int, string>? lineContext = null,
+        CSharpOriginContext? csharpContext = null)
     {
-        var origin = ClassifyOrigin(path, lang, line, text, column, enclosingSymbolKind, lineContext);
+        var origin = ClassifyOrigin(path, lang, line, text, column, enclosingSymbolKind, lineContext, csharpContext);
         var testFile = IsLikelyTestPath(path);
         var testSymbol = string.Equals(enclosingSymbolKind, "test.method", StringComparison.OrdinalIgnoreCase);
         var testFixture = (testFile || testSymbol) && IsStringLikeOrigin(origin);
@@ -100,7 +101,8 @@ internal static class SearchMatchClassifier
         string text,
         int column,
         string? enclosingSymbolKind,
-        IReadOnlyDictionary<int, string>? lineContext)
+        IReadOnlyDictionary<int, string>? lineContext,
+        CSharpOriginContext? csharpContext)
     {
         if (text.Length == 0)
             return Code;
@@ -108,7 +110,7 @@ internal static class SearchMatchClassifier
         var index = Math.Clamp(column - 1, 0, Math.Max(0, text.Length - 1));
         var normalizedLang = lang?.ToLowerInvariant();
         if (string.Equals(normalizedLang, "csharp", StringComparison.Ordinal))
-            return ClassifyCSharp(path, line, text, index, lineContext);
+            return csharpContext?.GetOrigin(line, text, index) ?? ClassifyCSharp(path, line, text, index, lineContext);
 
         if (normalizedLang is "shell" or "bash" or "zsh")
             return ClassifyShell(path, text, index);
@@ -391,6 +393,12 @@ internal static class SearchMatchClassifier
         int index,
         IReadOnlyDictionary<int, string>? lineContext)
     {
+        return ClassifyCSharpContext(path, line, text, index, lineContext);
+    }
+
+    private static string ClassifyCSharpLegacy(
+        string path, int line, string text, int index, IReadOnlyDictionary<int, string>? lineContext)
+    {
         var trimmed = text.TrimStart();
         if (trimmed.StartsWith("///", StringComparison.Ordinal) ||
             trimmed.StartsWith("//", StringComparison.Ordinal) ||
@@ -525,9 +533,7 @@ internal static class SearchMatchClassifier
         int contentStart,
         IReadOnlyDictionary<int, string>? lineContext)
     {
-        var normalizedPath = path.Replace('\\', '/');
-        if (normalizedPath is not "src/CodeIndex/Mcp/McpToolDefinitions.cs"
-            and not "src/CodeIndex/Mcp/McpToolCatalog.cs")
+        if (!IsSchemaDescriptionPath(path))
         {
             return false;
         }
@@ -538,11 +544,15 @@ internal static class SearchMatchClassifier
         {
             var equalsIndex = text.IndexOf('=', propertyIndex + descriptionProperty.Length);
             var valueQuoteIndex = equalsIndex < 0 ? -1 : text.IndexOf('"', equalsIndex + 1);
-            return valueQuoteIndex >= 0 && contentStart == valueQuoteIndex + 1;
+            return valueQuoteIndex >= 0 && contentStart > valueQuoteIndex && contentStart <= text.Length &&
+                   text.AsSpan(valueQuoteIndex, contentStart - valueQuoteIndex).IndexOfAnyExcept('"') < 0;
         }
 
         return IsDescriptionBuilderArgument(line, text, contentStart, lineContext);
     }
+
+    private static bool IsSchemaDescriptionPath(string path)
+        => path.Replace('\\', '/') is "src/CodeIndex/Mcp/McpToolDefinitions.cs" or "src/CodeIndex/Mcp/McpToolCatalog.cs";
 
     private static bool IsDescriptionBuilderArgument(
         int line,

@@ -2,6 +2,12 @@
 
 > **[日本語版はこちら / Japanese version](#テストガイド)**
 
+## C# multiline search-origin coverage
+
+Issue #5307 tests pair multiline comments, verbatim/raw strings and closing delimiters with executable controls. Preserve escaped quotes, delimiter lengths, schema/help/regex labels, missing prefix lines and lexical budgets, original coordinates, and CLI row/count/recipe plus MCP parity on net8.0 and net9.0. Synthetic snippet fixtures that assert known C# origins must supply the preceding indexed lines explicitly.
+
+Keep allocation regressions for shared prefixes and many distinct matched literals, cancellation during label lookup, builder-argument labels and ordinary/verbatim/raw interpolation-opener parity. Generic sampling tests may use another language to keep their row-cardinality contract independent of C# lexical budgets. Preserve the existing 4 Mi-character trust-source cache regression.
+
 ## Typed dependency-cycle regression coverage
 
 `QueryCommandRunnerIssue5301Tests` uses real indexing to verify partial-family collapse, same-file inter-type SCCs through local functions, namespace/generic/nested identity, bounded declaration mappings, Python and top-level file-scope retention, mixed SQL readiness, graph budgets, pagination and noise-suppressed stale-metadata fallback. Keep CLI/MCP parity and the raw-file regressions in #5197 on both net8 and net9.
@@ -1274,6 +1280,12 @@ Issue #5300 のテストは隣接・入れ子の C# callable、対象行の除�
 パーサー（#5297）の回帰テストとともに net8.0 / net9.0 で実行します。
 
 # テストガイド
+
+## C# 複数行検索 origin の検証
+
+Issue #5307 のテストは、複数行コメント、verbatim/raw 文字列、閉じ区切りと実行コードの対照を組み合わせます。引用符のエスケープ、区切りの長さ、schema/help/regex ラベル、先頭行の欠落、字句処理上限、元の座標、CLI の行／件数／recipe と MCP の一致を net8.0 と net9.0 で維持してください。C# origin が既知であることを検証する合成 snippet fixture は、前のインデックス済み行を明示的に渡します。
+
+先頭部分の共有と多数の異なるリテラルに一致する場合の割り当て量、ラベル照会時のキャンセル、builder 引数ラベル、通常／verbatim／raw の補間開始位置の分類一致を検証してください。汎用サンプリングテストは行数の契約を C# 字句処理上限から独立させるため別言語を使用できます。既存の 4 Mi 文字の trust-source cache 回帰テストも維持してください。
 
 `QueryCommandRunnerNumericBoundaryIssue5305Tests.cs` は、guard 以外の数値読み取り処理の全呼び出し元と別名について、分離した DB を共有して検証します。値欠如と分離形式／インライン形式の出力指定の前後順、明示的 JSON 指定の有無と `--` リテラルマーカー、数値の範囲外／オーバーフロー、オプションに似たインライン値、許容される limit の上下限を確認してください。#5297 の guard パーサー回帰テストとともに net8.0／net9.0 で実行します。
 

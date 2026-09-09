@@ -48,6 +48,8 @@ public class SearchResult
     internal bool TokenBoundary { get; set; }
     [JsonIgnore]
     internal SearchResult? MatchOriginContext { get; set; }
+    [JsonIgnore]
+    internal SearchMatchClassifier.CSharpOriginContext? CSharpOrigins { get; set; }
 }
 
 public sealed class SearchDiagnostic

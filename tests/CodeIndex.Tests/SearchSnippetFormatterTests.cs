@@ -531,6 +531,11 @@ public class SearchSnippetFormatterTests
             Content = $"// {query}\nvar text = \"{query}\";\nvar padding = 0;\n{codeExpression}\nvar gap = 0;\n{codeExpression}",
             Score = -1.0,
         };
+        result.MatchOriginContext = new SearchResult
+        {
+            StartLine = 1,
+            Content = new string('\n', 9) + result.Content,
+        };
 
         var compact = SearchSnippetFormatter.ToCompactResult(result, query, maxLines: 2);
 
@@ -557,6 +562,11 @@ public class SearchSnippetFormatterTests
             EndLine = 20,
             Content = $"var text = \"{query}\"; {new string('x', 200)}; {codeExpression}",
             Score = -1.0,
+        };
+        sameLineResult.MatchOriginContext = new SearchResult
+        {
+            StartLine = 1,
+            Content = new string('\n', 19) + sameLineResult.Content,
         };
 
         var sameLine = SearchSnippetFormatter.ToCompactResult(sameLineResult, query, maxLines: 1, maxLineWidth: 80);

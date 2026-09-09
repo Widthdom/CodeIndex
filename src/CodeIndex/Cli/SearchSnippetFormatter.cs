@@ -200,10 +200,13 @@ public static class SearchSnippetFormatter
             return facets;
 
         var snippetLines = ReadSnippetLines(result.Content, 0, matchScan.LineCount - 1, normalizeCSharpVerbatimNames).ToList();
-        var lineContext = snippetLines.ToDictionary(line => result.StartLine + line.Index, line => line.Text);
+        IReadOnlyDictionary<int, string> lineContext = snippetLines.ToDictionary(line => result.StartLine + line.Index, line => line.Text);
         if (result.MatchOriginContext is { } originContext)
             lineContext = EnumerateContentLines(originContext.Content)
                 .ToDictionary(line => originContext.StartLine + line.Index, line => line.Text);
+        var csharpOrigins = result.CSharpOrigins;
+        if (csharpOrigins is null && string.Equals(result.Lang, "csharp", StringComparison.OrdinalIgnoreCase))
+            csharpOrigins = new SearchMatchClassifier.CSharpOriginContext(result.Path, lineContext);
         var matchSet = matchScan.MatchIndexes.ToHashSet();
         foreach (var snippetLine in snippetLines)
         {
@@ -230,7 +233,8 @@ public static class SearchSnippetFormatter
                     column: 1,
                     length: 1,
                     result.EnclosingSymbolKind,
-                    lineContext));
+                    lineContext,
+                    csharpOrigins));
                 continue;
             }
 
@@ -244,7 +248,8 @@ public static class SearchSnippetFormatter
                     occurrence.Column,
                     occurrence.Length,
                     result.EnclosingSymbolKind,
-                    lineContext));
+                    lineContext,
+                    csharpOrigins));
             }
         }
 
