@@ -11,6 +11,7 @@ verification before trusting indexed ranges. Select only a unique strictly neste
 callable range; exclude descendant-owned lines. Preserve existing window/same-line
 semantics and report unavailable ranges explicitly instead of inferring ownership.
 The scope is lexical; comments/strings are evidence, and no dataflow claim is made.
+Reject callables containing interpolated strings because masking hides executable interpolation expressions.
 API version 1 remains compatible; the new guard scope publishes contract version 1.
 
 ## Size-limited indexing
@@ -4403,6 +4404,7 @@ CLI、レシピの再実行・フィンガープリント、MCP スキーマ、`
 チェックサム検証を必要とします。一意で厳密に内包される callable 範囲のみを選び、子関数が所有する
 行を除外します。既存の window/same-line の意味を維持し、所有範囲を推測せず未利用を明示します。
 これは字句的な判定であり、コメント・文字列も証拠になり、データフローの保証はありません。
+補間式内の実行可能なコードがマスクで隠れるため、補間文字列を含む callable は拒否します。
 API version 1 の互換性を維持し、新しい guard scope は contract version 1 を公開します。
 
 ## Unused analysis cost

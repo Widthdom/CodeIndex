@@ -11,6 +11,7 @@ If you change test code, test helpers, test execution flow, or testing conventio
 Issue #5300 guard tests cover adjacent and nested C# callables, focus-line exclusion,
 window bounds, lexical comment/string evidence, row/count parity, CLI/MCP/recipe
 scope propagation, and explicit stale/missing/ambiguous/partial/budget failures.
+Cover anonymous functions inside regular, verbatim and raw interpolated strings, with ordinary literal controls.
 Use real temporary source files for checksum verification and stamp an unfiltered
 symbol policy in synthetic fixtures. Run these with existing guard/count (#4349)
 and parser (#5297) regressions on net8.0 and net9.0.
@@ -1251,7 +1252,8 @@ Check the following:
 
 Issue #5300 のテストは隣接・入れ子の C# callable、対象行の除外、行窓の制限、コメント・文字列の
 字句的証拠、行数と件数の整合、CLI/MCP/レシピの scope 伝播、古い・欠落・曖昧・不完全な範囲と
-予算超過の明示的失敗を検証します。チェックサム検証には実際の一時ソースファイルを用意し、
+予算超過の明示的失敗を検証します。通常・逐語的・raw 補間文字列内の匿名関数と、
+通常の文字列リテラルの対照例も検証してください。チェックサム検証には実際の一時ソースファイルを用意し、
 合成 fixture にはシンボルフィルターなしの方針を記録してください。既存の guard/count（#4349）と
 パーサー（#5297）の回帰テストとともに net8.0 / net9.0 で実行します。
 

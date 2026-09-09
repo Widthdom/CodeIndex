@@ -1600,6 +1600,8 @@ Returned `guard_checks` include `scope_available: true`, `symbol_start_line`,
 (start greater than end denotes an empty window). Missing/stale ranges, incomplete
 indexes or source, overlapping/shared declaration boundary lines, lambdas,
 anonymous delegates and ambiguous expression bodies fail with `same_symbol_scope_unavailable`.
+Callables containing interpolated strings are also unavailable: the lexical mask
+cannot establish ownership of executable expressions inside those strings.
 There is no implicit fallback. Refresh the index, narrow to supported C# callable
 ranges, or explicitly choose `window`. Current extractor stamps and matching live
 source checksums are required; an offline archive cannot establish this scope.
@@ -5549,6 +5551,8 @@ MCP `search` tool では同じ mode を camelCase 引数 `requireBefore`, `requi
 `symbol_end_line` と、有効な両端を含む `window_start_line` / `window_end_line` が入ります。
 開始行が終了行より大きい場合は空の行窓です。範囲の欠落・古さ、不完全な索引やソース、宣言境界の
 重複・共有、ラムダ、匿名 delegate、曖昧な式本体は `same_symbol_scope_unavailable` で失敗します。
+補間文字列を含む callable も未対応です。字句マスクでは文字列内の実行可能な式の所有範囲を
+確定できないためです。
 暗黙のフォールバックはありません。再索引するか、対応する C# callable 範囲へ検索を絞るか、
 明示的に `window` を選んでください。現行の抽出バージョンと実ファイルのチェックサム一致が必須で、
 オフラインのアーカイブだけではこの範囲を確定できません。検索1回につき最大256ファイル、

@@ -42,7 +42,7 @@ public partial class QueryCommandRunnerTests
                     }
                     void StringGuard()
                     {
-                        var text = "Clear => delegate"; int delegateCount = 0;
+                        var text = "Clear => delegate $\""; int delegateCount = 0;
                         Return();
                     }
                     void Expression() =>
@@ -112,6 +112,12 @@ public partial class QueryCommandRunnerTests
                 ("lambda.cs", "csharp", "class C\n{\n void M()\n {\n  Action a = () => { Clear(); Return(); };\n }\n}"),
                 ("anonymous.cs", "csharp", "class C\n{\n void M()\n {\n  Action a = delegate { Clear(); Return(); };\n }\n}"),
                 ("expression.cs", "csharp", "class C\n{\n void M() => Use(() => Return());\n}"),
+                ("interpolation.cs", "csharp", "class C\n{\n void M()\n {\n  Clear();\n  var s = $\"{Use(() => Return())}\";\n }\n}"),
+                ("verbatim.cs", "csharp", "class C\n{\n void M()\n {\n  Clear();\n  var s = $@\"{Use(delegate { Return(); })}\";\n }\n}"),
+                ("verbatim_reverse.cs", "csharp", "class C\n{\n void M()\n {\n  Clear();\n  var s = @$\"{Use(() => Return())}\";\n }\n}"),
+                ("raw_interpolation.cs", "csharp", "class C\n{\n void M()\n {\n  Clear();\n  var s = $$\"\"\"{{Use(() => Return())}}\"\"\";\n }\n}"),
+                ("raw_delegate.cs", "csharp", "class C\n{\n void M()\n {\n  Clear();\n  var s = $\"\"\"{Use(delegate { Return(); })}\"\"\";\n }\n}"),
+                ("simple_interpolation.cs", "csharp", "class C\n{\n void M()\n {\n  Clear();\n  var s = $\"{Return()}\";\n }\n}"),
                 ("adjacent.cs", "csharp", "class C\n{\n void A() { Clear(); } void B() { Return(); }\n}"),
                 ("partial.cs", "csharp", "class C\n{\n void M()\n {\n  Return();"),
                 ("outside.cs", "csharp", "// Return\nclass C {}"),
@@ -125,9 +131,12 @@ public partial class QueryCommandRunnerTests
             var filters = new[] { new SearchGuardFilter(SearchGuardRole.Reject, SearchGuardDirection.Before, "Clear") };
             foreach (var (path, _, _) in cases)
             {
-                var exception = Assert.Throws<CodeIndexException>(() => reader.Search("Return", 10,
-                    pathPatterns: [path], guardFilters: filters, guardScope: SearchGuardScope.SameSymbol));
-                Assert.StartsWith("same_symbol_scope_unavailable:", exception.Message);
+                foreach (var role in new[] { SearchGuardRole.Require, SearchGuardRole.Reject })
+                {
+                    var exception = Assert.Throws<CodeIndexException>(() => reader.Search("Return", 10,
+                        pathPatterns: [path], guardFilters: [filters[0] with { Role = role }], guardScope: SearchGuardScope.SameSymbol));
+                    Assert.StartsWith("same_symbol_scope_unavailable:", exception.Message);
+                }
             }
             var args = new[] { "Return", "--db", dbPath, "--path", "lambda.cs", "--reject-before", "Clear", "--guard-scope", "same-symbol", "--json" };
             var (exit, output, _) = CaptureConsole(() => QueryCommandRunner.RunSearch(args, _jsonOptions));

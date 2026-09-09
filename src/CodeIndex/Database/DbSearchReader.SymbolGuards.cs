@@ -133,6 +133,11 @@ public partial class DbReader
                 maskedLines[i] = new string(' ', maskedLines[i].Length);
         }
         masked = string.Join('\n', maskedLines);
+        // The lexical mask hides interpolation expressions, including anonymous
+        // functions inside them. Their surviving '$' prefix makes the whole
+        // selected callable unavailable until interpolation ownership is reliable.
+        if (masked.Contains('$'))
+            throw SameSymbolGuardUnavailable("interpolated_scope_unsupported");
         if (container.Kind == "lambda" || ContainsAnonymousDelegateKeyword(masked))
             throw SameSymbolGuardUnavailable("anonymous_scope_unsupported");
         var open = masked.IndexOf('{');
