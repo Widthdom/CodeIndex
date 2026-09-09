@@ -8,6 +8,12 @@ Issue #5307 tests pair multiline comments, verbatim/raw strings and closing deli
 
 Keep allocation regressions for shared prefixes and many distinct matched literals, cancellation during label lookup, builder-argument labels and ordinary/verbatim/raw interpolation-opener parity. Generic sampling tests may use another language to keep their row-cardinality contract independent of C# lexical budgets. Preserve the existing 4 Mi-character trust-source cache regression.
 
+## SQL dependency-cycle regression coverage
+
+Issue #5312 uses a real-index fixture shared across CLI and MCP to compare ordinary dependencies with raw-file SCCs. Keep qualified and quoted view cycles in separate schemas, unrelated same-leaf controls, exact edge/reference evidence counts, path/reverse/exclusion/symbol/resolution filters, noise suppression, graph-budget incompleteness and cursor replay on net8/net9.
+
+Also cover source/definition case differences and positive/negative target-symbol filters for unqualified references. The 128-view-pairs fixture counts SQL normalization callbacks: each reference resolves once, and target normalization stays linear in indexed symbols instead of growing with reference/definition pairs. The query must stay within 256 progress callbacks at 1,000 SQLite VM instructions per callback. Run both frameworks; avoid wall-clock assertions.
+
 ## Typed dependency-cycle regression coverage
 
 `QueryCommandRunnerIssue5301Tests` uses real indexing to verify partial-family collapse, same-file inter-type SCCs through local functions, namespace/generic/nested identity, bounded declaration mappings, Python and top-level file-scope retention, mixed SQL readiness, graph budgets, pagination and noise-suppressed stale-metadata fallback. Keep CLI/MCP parity and the raw-file regressions in #5197 on both net8 and net9.
@@ -1269,6 +1275,12 @@ Check the following:
 <a id="テストガイド"></a>
 
 `ProgramCliTests.Run_Unhandled*`（#5311）は、テスト専用の未作成 `--db` とログディレクトリを指定し、既存設定の探索とライフサイクルログを無効化します。環境変数は `EnvironmentVariableScope` で復元します。各例外／SQLite 終了コードについて、診断保存の成功と `last-failure.json` を同名ディレクトリで塞いだ失敗を検証し、report の案内または今回の診断を保存できなかった旨、および安全な stderr を確認します。console-sensitive collection と既存の net8 専用 production-runtime 属性を維持し、関連する `GlobalToolLogTests`・`ReportCommandRunnerTests` は net8/net9 の両方で実行してください。この確実な書き込み阻害は、過去に発生した既存保存先での障害原因を特定するものではありません。
+
+## SQL 依存循環の回帰テスト
+
+Issue #5312 は実際に索引化した共通フィクスチャを CLI/MCP で使い、通常の依存関係とファイル単位の SCC を比較します。別スキーマの修飾付き・引用符付きビューの循環、無関係な同名オブジェクト、正確な辺数・参照証拠数、パス・逆方向・除外・シンボル・解決状態のフィルター、ノイズ抑制、解析上限時の不完全性、カーソル再実行を net8/net9 で維持してください。
+
+参照と定義の大文字小文字の違い、および非修飾参照への定義名フィルターの採用・除外も検証します。128 組のビューのフィクスチャは SQL 正規化関数の呼び出しを数え、各参照の解決が一度だけで、定義名の正規化処理量が参照・定義の組み合わせ数ではなくシンボル数に比例することを確認します。SQLite の 1,000 VM 命令ごとの進捗コールバックが 256 回以内であることも確認します。両フレームワークで実行し、実時間に依存する検証は避けてください。
 
 ## 型単位の依存循環の回帰テスト
 

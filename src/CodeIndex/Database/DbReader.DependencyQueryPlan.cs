@@ -116,27 +116,9 @@ public partial class DbReader
                            AND py_import_match.kind = 'import'
                            AND python_import_target_name(snc.source_path, snc.symbol_name, snc.context, snc.column_number, " + pythonImportMatchSignature + @") = tf.symbol_name
                      ))
-                 OR (tf.target_lang = 'sql' AND (
-                        (tf.symbol_segment_count = snc.symbol_segment_count AND tf.symbol_name = snc.symbol_name COLLATE NOCASE)
-                     OR (sql_segment_count(snc.raw_symbol_name) = 1
-                         AND snc.allow_leaf_fallback = 1
-                         AND tf.symbol_segment_count > 1
-                         AND sql_leaf_name(tf.symbol_name) = snc.raw_symbol_name COLLATE NOCASE
-                         AND NOT EXISTS (
-                                SELECT 1
-                                FROM target_files tf_exact
-                                WHERE tf_exact.target_lang = tf.target_lang
-                                  AND tf_exact.symbol_segment_count = 1
-                                  AND tf_exact.symbol_name = snc.symbol_name COLLATE NOCASE
-                            )
-                         AND NOT EXISTS (
-                                SELECT 1
-                                FROM target_files tf_resolved
-                                WHERE tf_resolved.target_lang = tf.target_lang
-                                  AND tf_resolved.symbol_segment_count = snc.symbol_segment_count
-                                  AND tf_resolved.symbol_name = snc.symbol_name COLLATE NOCASE
-                            ))
-                 ))
+                 OR (tf.target_lang = 'sql' AND " + BuildSqlDependencyNameMatch(
+                     "tf.symbol_name", "tf.symbol_segment_count", "snc.symbol_name",
+                     "snc.symbol_segment_count", "snc.raw_symbol_name", "snc.allow_leaf_fallback") + @")
                 )";
 
         return new DependencyQueryExpressions(

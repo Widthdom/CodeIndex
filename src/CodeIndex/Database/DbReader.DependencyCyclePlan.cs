@@ -14,7 +14,9 @@ public partial class DbReader
         string CandidateOrder,
         string RetainedSymbolFilter,
         string ConstrainedAlias,
-        string ResolutionState);
+        string ResolutionState,
+        string SymbolNameMatch,
+        string SymbolName);
 
     private DependencyCycleQueryPlan BuildDependencyCycleQueryPlan(DependencyQueryRequest request)
     {
@@ -22,6 +24,9 @@ public partial class DbReader
         var candidates = new DependencyCycleCandidateSqlBuilder(this, request, expressions).Build();
         var evidence = new DependencyCycleEvidenceSqlBuilder(this, request, expressions).Build();
         var builder = new DependencySqlFragmentBuilder();
+        builder.Append("WITH ");
+        builder.Append(new DependencyTargetSqlBuilder(this, request, BuildDependencyQueryExpressions()).BuildCycleTargets());
+        builder.Append(BuildDependencyCycleSqlMatches());
         builder.Append(candidates.Sql);
         builder.Append(evidence.Sql);
         builder.AddParameters(candidates.Parameters);
@@ -59,6 +64,8 @@ public partial class DbReader
                                       + ") OR "
                                       + csharpNonAuthoritativeQualifiedCall
                                       + ")";
+        // Separate the SQL branch so other languages retain an indexed name lookup,
+        // rather than scanning all symbols through an OR with SQL normalization.
         return new DependencyCycleQueryExpressions(
             markdownExplicitLink,
             csharpNonAuthoritativeQualifiedCall,
@@ -71,7 +78,13 @@ public partial class DbReader
                 ? " WHERE suppression_reason IS NULL"
                 : string.Empty,
             request.Reverse ? "dst" : "src",
-            DependencyResolutionStateSql());
+            DependencyResolutionStateSql(),
+            @"s.id IN (
+                SELECT named.id FROM symbols named
+                WHERE src.lang != 'sql' AND named.name = r.symbol_name
+                UNION ALL
+                SELECT sql_match.symbol_id WHERE src.lang = 'sql')",
+            "CASE WHEN src.lang = 'sql' THEN sql_normalize_name(s.name) ELSE r.symbol_name END");
     }
 
     private static void AppendDependencyCycleTerminalParameters(
