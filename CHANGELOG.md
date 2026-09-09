@@ -130,6 +130,39 @@ Recent releases (v1.41.0 onward) remain below. Older releases retain both langua
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.48.0] - 2026-09-10
+
+#### Added
+
+- Plan replay preserves option-shaped literal filter values and carries the requested response budget across page cursors.
+
+- **Compact audit coverage and bounded partition recovery (#5299)** — `audit --all --summary-level top` omits repeated child details while retaining completion, freshness, observation counts and recovery within 64 KiB. `--partition-plan` emits deterministic paginated exact-path work units with generation/scope/recipe-bound replay and per-unit execution receipts. Plan overflow and capped single files remain explicitly non-authoritative; output limits do not relax query safety budgets or replace baseline review.
+- Callables containing interpolated strings fail explicitly because executable interpolation expressions can hide anonymous-function boundaries.
+
+- **Symbol-bounded search/audit guards (#5300)** — `--guard-scope same-symbol` and MCP `guardScope` constrain lexical before/after windows to a verified C# callable range, exclude nested-function evidence, and expose effective range metadata. Stale, incomplete, ambiguous, unsupported or over-budget ranges fail explicitly without a window fallback. See the user guide for supported callable ranges and focus-line semantics.
+- **Opt-in C# type grouping for dependency cycles (#5301)** — `deps --cycles --group-partial-types` and MCP `groupPartialTypes` group current authoritative partial-type families before SCC analysis, retain separate types and file-scope evidence, and report intra-type counts and bounded declaration mappings. Raw-file mode remains the default; stale metadata explicitly falls back to it. Cursors bind grouping and index generation, independently of graph completeness and output sampling.
+
+#### Fixed
+
+- Release preparation uses LF consistently, including the final footer newline, so prepared history passes validation on Windows too.
+
+- **Archived older bilingual changelog releases (#5294)** — recent releases remain at the root and all older history remains searchable under `docs/changelog/`, with compatibility links for former release anchors. Archive navigation stays in its respective language section across release preparation. Changelog validation and release tooling understand archives and enforce a 3 MiB history-file ceiling before release writes, leaving headroom below the standard 4 MiB indexing limit; archival remains an explicit maintenance step.
+- Size-cap omissions now produce partial CLI/MCP index results, including retries; dry-run also preserves the saved cap. CLI exit 11 can be explicitly accepted with `--allow-partial` while incomplete facts remain visible. Bounded diagnostics explain observed sizes, limits, and deliberate limit/exclusion recovery without rebuilding or silently raising the saved limit.
+- **Bound unused analysis while preserving partial-type correctness (#5296)** — Reuse partial-type reconstruction per SQL statement and bounded lexical masks per operation. `unused` now has a 30-second analysis budget, configurable with `--analysis-timeout-ms`, and live stderr progress with `--progress`. Deadline/cancellation returns explicit non-authoritative JSON without unverified candidates. Bounded pages avoid a hidden full-count scan and report lower-bound totals; explicit `--count` remains available.
+- Search and audit guard parser failures now use the versioned JSON usage-error contract when machine output is selected, regardless of option order. Invalid and missing values remain rejected with exit 1, bounded diagnostics, and recovery hints. Batch JSON summaries retain these child failures and continue without raw streams; human output and accepted guard values are unchanged.
+- Audit recipe children now support token-boundary defaults and explicit matching overrides across CLI, batch, and MCP. The process argument-list audit retains complete `ArgumentList` code uses while removing longer-identifier noise. Origin/highlight spans follow the same boundary policy, and incompatible recipe cursors, continuations, and baselines require a fresh run.
+- **Missing numeric values preserve following inline output options (#5305)** — query commands now recognize options such as `--json=array` and `--format=compact` after a missing numeric value, returning structured usage errors in either option order. The `--` literal marker, explicit inline values, negative-number validation, and existing numeric ranges remain intact.
+- **Preserve C# multiline search origins (#5307)** — Search carries block-comment, verbatim-string and raw-string state through bounded indexed context, retains source coordinates and schema/help/regex labels, and reports unknown origins for missing prefixes or exhausted bounds. CLI rows, counts, token-boundary recipes and MCP share the fix.
+- **SQL file cycles preserve qualified-name dependencies (#5312)** — CLI and MCP cycle analysis now share ordinary dependency matching for SQL schemas and scoped leaf fallback in both candidate selection and evidence, retaining target-name filters, graph budgets and cursor completeness. Normalized SQL keys are computed once per query instead of scanning every definition for each reference.
+
+#### Documentation
+
+- **Corrected contributor-guide language placement (#5310)** — Moved the unused-analysis cost and performance-regression explanations into the English sections, retaining their existing Japanese translations in the Japanese sections. Technical contracts, limits, headings used as link targets, and performance-document links are preserved.
+
+#### Internal
+
+- **Isolated unhandled-exception tests from ambient diagnostic storage (#5311)** — General and SQLite exception tests now use private storage and database provenance, exercise successful and failed failure-event persistence, and verify unchanged exit codes and safe diagnostic hints.
+
 ### [1.47.0] - 2026-09-07
 
 #### Added
@@ -616,7 +649,6 @@ Recent releases (v1.41.0 onward) remain below. Older releases retain both langua
 - **Unreadable marker fixtures no longer interfere with concurrent target-framework tests (#5019)** — the MCP marker-fingerprint fixture now uses an isolated temporary workspace outside repository build outputs, so a source-policy scan in another target framework cannot recurse into its intentionally unreadable directory.
 - **The parallel detached-snapshot fixture no longer depends on thread-pool timing or broad status diagnostics (#5033)** — its interactive batch loop now runs on a dedicated test thread, uses asynchronous completion signals, and checks generation refresh through lightweight file-count queries so the net8 test remains deterministic under suite load.
 
-
 ## 日本語
 
 ### アーカイブ
@@ -741,6 +773,39 @@ v1.41.0 以降はこのファイルに、それ以前の日英の履歴は次の
 ### [Unreleased]
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
+
+### [1.48.0] - 2026-09-10
+
+#### 追加
+
+- 計画の再実行ではオプション名と同じフィルター文字列を保持し、ページカーソルを越えて指定した応答予算を引き継ぎます。
+
+- **audit の小さな coverage 要約と上限付き分割復旧 (#5299)** — `audit --all --summary-level top` は子クエリの詳細の繰り返しを省き、完了・鮮度・観測数・復旧情報を 64 KiB 以内に保持します。`--partition-plan` は厳密なパス単位の決定的な計画をページ分割し、世代・scope・recipe を照合する再実行と単位ごとの実行記録を返します。計画の上限超過や単一ファイルの候補上限超過は明示的に非 authoritative のままとなり、出力制限による安全上限の緩和や baseline レビューの代替は行いません。
+- 補間文字列内の実行可能な式に匿名関数の境界が隠れる可能性があるため、補間文字列を含む callable は明示的に失敗します。
+
+- **検索・監査ガードをシンボル範囲で制限 (#5300)** — `--guard-scope same-symbol` と MCP の `guardScope` で字句的な前後の行窓を検証済みの C# callable 範囲に制限し、入れ子の関数の証拠を除外して有効範囲を出力します。古い・不完全・曖昧・未対応・予算超過の範囲は、window への暗黙のフォールバックなしで明示的に失敗します。対応する callable 範囲と対象行の扱いはユーザーガイドを参照してください。
+- **依存循環の C# 型単位グループ化を明示指定で利用可能にしました (#5301)** — `deps --cycles --group-partial-types` と MCP の `groupPartialTypes` は最新の確実な partial 型所属情報で SCC 解析前にグループ化し、別の型やファイル単位の参照証拠を保持して、型内参照数と上限付きの宣言パス対応表を返します。既定のファイル単位モードは維持し、メタデータが古い場合は明示的にフォールバックします。カーソルはグループ化と索引世代を検証し、グラフ解析の完全性や表示サンプルとは分離します。
+
+#### 修正
+
+- リリース準備時の改行をフッター末尾まで LF に統一し、Windows でも生成した履歴が検証を通るようにしました。
+
+- **古い変更履歴を日英ペアでアーカイブしました (#5294)** — 最近のリリースをルートに残し、過去の全履歴を検索可能な `docs/changelog/` に移動して旧リリースアンカーへの互換リンクを設けました。案内はリリース準備後も各言語のセクションに保持します。検証とリリースツールがアーカイブに対応し、書き込み前に履歴ファイルの 3 MiB 上限を確認して標準の索引上限 4 MiB まで余裕を確保します。分割は明示的な保守作業として実施します。
+- サイズ上限による省略がある場合、再試行も含め CLI/MCP のインデックス結果が partial になり、dry-run も保存済み上限を維持します。CLI の終了コード11は `--allow-partial` で明示的に許容できますが、不完全性の情報は維持します。件数上限付き診断で観測サイズ・適用上限と、上限指定または意図的な除外による復旧を案内し、再構築や保存済み上限の暗黙の引き上げを不要にします。
+- **partial 型の正確性を維持しながら unused 解析を制限しました (#5296)** — SQL statement ごとに partial 型の本文再構築を再利用し、処理ごとの字句マスクにも保持上限を設けました。`unused` の解析時間は既定で 30 秒となり、`--analysis-timeout-ms` で変更できます。`--progress` は stderr に進行状況を逐次表示します。時間上限到達・キャンセル時は未検証候補を含まない非確定 JSON を返します。バイト上限付きページは暗黙の全件集計を避け、総数を下限として表示します。明示的な `--count` は引き続き利用できます。
+- search と audit の guard 解析失敗は、機械向け出力が指定されている場合、オプション順序にかかわらずバージョン付き JSON 使用法エラーを返すようになりました。不正値・欠落値は引き続き終了コード1で拒否し、上限付きの診断と復旧ヒントを返します。batch の JSON サマリーは raw stream なしで子コマンドのエラーを保持し、後続処理を継続します。人間向け出力と受理する guard 値は変更していません。
+- 監査レシピの子クエリが、CLI・batch・MCP でトークン境界の既定値と明示的な検索方式の上書きに対応しました。プロセス引数リスト監査はコード内の完全な `ArgumentList` 使用を保持し、長い識別子のノイズを除外します。出現元とハイライトにも同じ境界方針を適用し、互換性のないレシピ cursor・continuation・baseline は再実行を必要とします。
+- **数値の値欠如時に後続のインライン出力オプションを保持します (#5305)** — クエリコマンドは、数値が欠けたオプションの直後にある `--json=array` や `--format=compact` を認識し、指定順序にかかわらず構造化された使用法エラーを返します。`--` リテラルマーカー、明示的なインライン値、負数の検証、既存の数値範囲は維持されます。
+- **C# の複数行検索 origin を維持 (#5307)** — 検索は上限付きのインデックス済みコンテキストを通じてブロックコメント、verbatim 文字列、raw 文字列の状態を引き継ぎ、元の座標と schema/help/regex ラベルを維持します。先頭部分の欠落や上限到達時は origin を不明として報告します。CLI の行・件数、token-boundary recipe、MCP で同じ修正を使用します。
+- **SQL のファイル循環で修飾名の依存関係を保持 (#5312)** — CLI/MCP の循環解析は、候補選択と証拠取得の両方で通常の依存関係検索と同じ SQL スキーマ照合・検索範囲に基づく末尾名フォールバックを使い、定義名のフィルター、解析上限、カーソルの完全性判定を維持します。SQL の正規化キーをクエリごとに一度だけ計算し、参照ごとの全定義走査を避けます。
+
+#### ドキュメント
+
+- **コントリビューター向けガイドの言語配置を修正 (#5310)** — unused 解析の処理量と性能回帰テストの英語説明を英語セクションへ移し、日本語セクションには既存の日本語訳を保持しました。技術的な契約、上限、リンク先となる見出し、性能ドキュメントへのリンクは維持しています。
+
+#### 内部変更
+
+- **未処理例外テストを既存の診断保存先から分離しました (#5311)** — 一般例外と SQLite 例外のテストに専用の保存先と DB の参照先を使用し、診断保存の成功・失敗の両方で、既存の終了コードと安全な診断案内を検証します。
 
 ### [1.47.0] - 2026-09-07
 
@@ -1228,8 +1293,8 @@ v1.41.0 以降はこのファイルに、それ以前の日英の履歴は次の
 - **読取不能な marker fixture が target framework 間の並列テストへ干渉しないようになりました (#5019)** — MCP の marker-fingerprint fixture を repository の build output 外にある独立した一時 workspace へ移し、別 target framework の source-policy scan が意図的に unreadable にした directory へ再帰進入しないようにしました。
 - **parallel detached-snapshot fixture が thread-pool timing や広範な status diagnostics に依存しなくなりました (#5033)** — interactive batch loop を専用 test thread で実行し、非同期 completion signal と軽量な file-count query で generation refresh を確認するため、suite 負荷下でも net8 test が安定して完了します。
 
-
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.47.0...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.48.0...HEAD
+[1.48.0]: https://github.com/Widthdom/CodeIndex/compare/v1.47.0...v1.48.0
 [1.47.0]: https://github.com/Widthdom/CodeIndex/compare/v1.46.1...v1.47.0
 [1.46.1]: https://github.com/Widthdom/CodeIndex/compare/v1.46.0...v1.46.1
 [1.46.0]: https://github.com/Widthdom/CodeIndex/compare/v1.45.1...v1.46.0
