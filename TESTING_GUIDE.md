@@ -12,6 +12,14 @@ If you change test code, test helpers, test execution flow, or testing conventio
 
 ## Quick Start
 
+Issue #5300 guard tests cover adjacent and nested C# callables, focus-line exclusion,
+window bounds, lexical comment/string evidence, row/count parity, CLI/MCP/recipe
+scope propagation, and explicit stale/missing/ambiguous/partial/budget failures.
+Cover anonymous functions inside regular, verbatim and raw interpolated strings, with ordinary literal controls.
+Use real temporary source files for checksum verification and stamp an unfiltered
+symbol policy in synthetic fixtures. Run these with existing guard/count (#4349)
+and parser (#5297) regressions on net8.0 and net9.0.
+
 `QueryCommandRunnerRecipeTokenBoundaryIssue5298Tests` and `McpServerIssue5298Tests` cover recipe defaults/overrides, exact positive member counts, C# verbatim and Unicode controls, mixed code/comment/string origins, external recipes, cursor/continuation and baseline compatibility. Keep batch and CLI/MCP behavior aligned on net8.0 and net9.0; Unicode escape decoding is outside the existing text matcher's contract.
 
 `QueryCommandRunnerAuditRecoveryIssue5299Tests` covers top-level JSON/NDJSON UTF-8 byte budgets, deterministic plan pagination and exact-path replay (including literal glob/quote characters), disjoint eligible scope, stale/scope/recipe token rejection before queries, and single-file/plan-budget non-authoritative fallbacks. Preserve option-shaped literal filter values and assert the original byte budget on every replayed plan page. Keep execution receipts separate from plan cursors and baseline review state, and run these alongside audit continuation/progress/scope/baseline/help/completion tests on net8.0 and net9.0.
@@ -1247,6 +1255,15 @@ Check the following:
 ## 型単位の依存循環の回帰テスト
 
 `QueryCommandRunnerIssue5301Tests` は実際の索引処理を使い、partial 型の統合、ローカル関数を経由する同一ファイル内の型間 SCC、namespace・generic・入れ子の型の識別、宣言パス対応表の上限、Python とトップレベル参照のファイル単位の保持、混在 SQL の準備状態、解析上限、ページング、ノイズ抑制時の古いメタデータへのフォールバックを検証します。CLI/MCP の一致と #5197 のファイル単位の回帰テストを net8/net9 の両方で維持してください。
+
+## シンボル範囲ガードの回帰検証
+
+Issue #5300 のテストは隣接・入れ子の C# callable、対象行の除外、行窓の制限、コメント・文字列の
+字句的証拠、行数と件数の整合、CLI/MCP/レシピの scope 伝播、古い・欠落・曖昧・不完全な範囲と
+予算超過の明示的失敗を検証します。通常・逐語的・raw 補間文字列内の匿名関数と、
+通常の文字列リテラルの対照例も検証してください。チェックサム検証には実際の一時ソースファイルを用意し、
+合成 fixture にはシンボルフィルターなしの方針を記録してください。既存の guard/count（#4349）と
+パーサー（#5297）の回帰テストとともに net8.0 / net9.0 で実行します。
 
 ## Unused performance regression coverage
 

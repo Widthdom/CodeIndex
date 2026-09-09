@@ -291,7 +291,7 @@ public static partial class QueryCommandRunner
                         if (TryNormalizeSearchGuardScope(guardScopeValue!, out var parsedGuardScope))
                             guardScope = parsedGuardScope;
                         else
-                            AddSearchGuardParseError($"Error: unsupported --guard-scope value '{ConsoleUi.FormatBoundedValue(guardScopeValue!)}'. Use window or same-line.");
+                            AddSearchGuardParseError($"Error: unsupported --guard-scope value '{ConsoleUi.FormatBoundedValue(guardScopeValue!)}'. Use window, same-line or same-symbol.");
                     }
                     else
                         AddSearchGuardParseError(guardScopeError!);

@@ -142,6 +142,7 @@ public enum SearchGuardScope
     Window,
     SameLine,
     Container,
+    SameSymbol,
 }
 
 public enum SearchGuardEvidenceKind
@@ -192,6 +193,12 @@ public sealed class SearchGuardEvidence
 
 public sealed class SearchGuardCheck
 {
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? ScopeAvailable { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? SymbolStartLine { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? SymbolEndLine { get; set; }
     public string Role { get; set; } = string.Empty;
     public string Direction { get; set; } = string.Empty;
     public string Scope { get; set; } = string.Empty;

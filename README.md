@@ -46,7 +46,7 @@ C# origin classification remains line-local for multiline comments/strings; see 
 
 ## Search guard errors
 
-Search and audit guard option errors return a versioned `E010_USAGE_ERROR` JSON object (exit 1) when JSON output is selected, including `--json=ndjson`, `--json=array`, `--format json`, and compact output. Output selection works before or after the invalid option; `--` still introduces a literal query. Missing values and invalid scopes/windows remain rejected (`--guard-scope` accepts only `window` or `same-line`). Human output retains its error, hint, and usage. `batch --json-summary` preserves the structured child error and continues subsequent commands without `--include-raw-streams`.
+Search and audit guard option errors return a versioned `E010_USAGE_ERROR` JSON object (exit 1) when JSON output is selected, including `--json=ndjson`, `--json=array`, `--format json`, and compact output. Output selection works before or after the invalid option; `--` still introduces a literal query. Missing values and invalid scopes/windows remain rejected (`--guard-scope` accepts `window`, `same-line`, or `same-symbol`). Human output retains its error, hint, and usage. `batch --json-summary` preserves the structured child error and continues subsequent commands without `--include-raw-streams`.
 
 ## Size-limited indexing
 
@@ -386,7 +386,7 @@ C# の複数行コメント／文字列の出現元分類には行単位の制�
 
 ## 検索guardのエラー
 
-search と audit の guard オプションエラーは、JSON 出力の指定時にバージョン付き `E010_USAGE_ERROR` JSON オブジェクト（終了コード1）を返します。`--json=ndjson`、`--json=array`、`--format json`、compact 出力にも対応します。出力形式は不正オプションの前後どちらでも指定でき、`--` は引き続きリテラル検索文字列を導入します。欠落値や不正な scope/window は拒否します（`--guard-scope` は `window` と `same-line` のみ受理）。人間向け出力はエラー、ヒント、使用法を維持します。`batch --json-summary` は `--include-raw-streams` なしで子コマンドの構造化エラーを保持し、後続コマンドを継続します。
+search と audit の guard オプションエラーは、JSON 出力の指定時にバージョン付き `E010_USAGE_ERROR` JSON オブジェクト（終了コード1）を返します。`--json=ndjson`、`--json=array`、`--format json`、compact 出力にも対応します。出力形式は不正オプションの前後どちらでも指定でき、`--` は引き続きリテラル検索文字列を導入します。欠落値や不正な scope/window は拒否します（`--guard-scope` は `window`、`same-line`、`same-symbol` を受理）。人間向け出力はエラー、ヒント、使用法を維持します。`batch --json-summary` は `--include-raw-streams` なしで子コマンドの構造化エラーを保持し、後続コマンドを継続します。
 
 ## unused 解析の時間上限
 

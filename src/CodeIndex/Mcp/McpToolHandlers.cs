@@ -442,7 +442,7 @@ public partial class McpServer
         if (node is null)
             return null;
         if (node is not JsonValue value || !value.TryGetValue<string>(out var rawScope))
-            return CreateToolErrorResponse(id, "'guardScope' must be a string: window or same-line.");
+            return CreateToolErrorResponse(id, "'guardScope' must be a string: window, same-line or same-symbol.");
 
         switch (rawScope.Trim().ToLowerInvariant().Replace("_", "-"))
         {
@@ -453,8 +453,12 @@ public partial class McpServer
             case "sameline":
                 guardScope = SearchGuardScope.SameLine;
                 return null;
+            case "same-symbol":
+            case "samesymbol":
+                guardScope = SearchGuardScope.SameSymbol;
+                return null;
             default:
-                return CreateToolErrorResponse(id, $"'guardScope' must be window or same-line; got '{rawScope}'.");
+                return CreateToolErrorResponse(id, $"'guardScope' must be window, same-line or same-symbol; got '{rawScope}'.");
         }
     }
 
