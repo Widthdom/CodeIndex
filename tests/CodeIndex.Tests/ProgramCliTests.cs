@@ -396,85 +396,95 @@ public class ProgramCliTests
         Assert.DoesNotContain("Hint:", stderr);
     }
 
-    [ProductionRuntimeFact]
-    public void Run_UnhandledExceptionReturnsUnhandledExitCode()
+    [ProductionRuntimeTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Run_UnhandledExceptionReturnsUnhandledExitCode(bool blockFailurePersistence)
     {
-        lock (TestConsoleLock.Gate)
-        {
-            var originalError = Console.Error;
-            using var stderr = new StringWriter();
-            try
-            {
-                Console.SetError(stderr);
-
-                var exitCode = ProgramRunner.Run(
-                    ["status"],
-                    appVersion: "1.0.0-test",
-                    beforeDispatchForTesting: () => throw new InvalidOperationException("boom"));
-
-                Assert.Equal(CommandExitCodes.UnhandledException, exitCode);
-                Assert.Contains("Error: command failed before it could complete.", stderr.ToString());
-                Assert.DoesNotContain("InvalidOperationException", stderr.ToString());
-            }
-            finally
-            {
-                Console.SetError(originalError);
-            }
-        }
+        AssertUnhandledFailure(new InvalidOperationException("boom"),
+            CommandExitCodes.UnhandledException, blockFailurePersistence);
     }
 
     [ProductionRuntimeTheory]
-    [InlineData(5)]
-    [InlineData(6)]
-    [InlineData(8)]
-    public void Run_UnhandledSqliteTransientExceptionReturnsTransientDatabaseExitCode(int sqliteErrorCode)
+    [InlineData(5, false)]
+    [InlineData(5, true)]
+    [InlineData(6, false)]
+    [InlineData(6, true)]
+    [InlineData(8, false)]
+    [InlineData(8, true)]
+    public void Run_UnhandledSqliteTransientExceptionReturnsTransientDatabaseExitCode(
+        int sqliteErrorCode, bool blockFailurePersistence)
     {
-        lock (TestConsoleLock.Gate)
-        {
-            var originalError = Console.Error;
-            using var stderr = new StringWriter();
-            try
-            {
-                Console.SetError(stderr);
-
-                var exitCode = ProgramRunner.Run(
-                    ["status"],
-                    appVersion: "1.0.0-test",
-                    beforeDispatchForTesting: () => throw new SqliteException("database unavailable", sqliteErrorCode));
-
-                Assert.Equal(CommandExitCodes.TransientDatabaseError, exitCode);
-                Assert.Contains("Error: command failed before it could complete.", stderr.ToString());
-            }
-            finally
-            {
-                Console.SetError(originalError);
-            }
-        }
+        AssertUnhandledFailure(new SqliteException("database unavailable", sqliteErrorCode),
+            CommandExitCodes.TransientDatabaseError, blockFailurePersistence);
     }
 
-    [ProductionRuntimeFact]
-    public void Run_UnhandledPermanentSqliteExceptionReturnsDatabaseExitCode()
+    [ProductionRuntimeTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Run_UnhandledPermanentSqliteExceptionReturnsDatabaseExitCode(bool blockFailurePersistence)
     {
-        lock (TestConsoleLock.Gate)
+        AssertUnhandledFailure(new SqliteException("database disk image is malformed", 11),
+            CommandExitCodes.DatabaseError, blockFailurePersistence);
+    }
+
+    private static void AssertUnhandledFailure(
+        Exception exception, int expectedExitCode, bool blockFailurePersistence)
+    {
+        var root = TestProjectHelper.CreateTempProject("cdidx_unhandled_5311");
+        var logRoot = Path.Combine(root, "logs");
+        var failurePath = Path.Combine(logRoot, LastFailureEventStore.FileName);
+        var dbPath = Path.Combine(root, "isolated", "codeindex.db");
+        try
         {
-            var originalError = Console.Error;
-            using var stderr = new StringWriter();
-            try
-            {
-                Console.SetError(stderr);
+            // Pin both storage and provenance; even pre-dispatch failures resolve a database.
+            // 保存先と provenance を固定する。dispatch 前の失敗でも DB の解決は行われる。
+            using var env = EnvironmentVariableScope.Capture(
+                CdidxConfigFile.DisableEnvVar,
+                "CDIDX_DISABLE_PERSISTENT_LOG",
+                "CDIDX_GLOBAL_TOOL_LOG_DIR",
+                CdidxConfigFile.ConfigSourceEnvironmentVariablePrefix + "CDIDX_GLOBAL_TOOL_LOG_DIR");
+            env.Set(CdidxConfigFile.DisableEnvVar, "1");
+            env.Set("CDIDX_DISABLE_PERSISTENT_LOG", "1");
+            env.Set("CDIDX_GLOBAL_TOOL_LOG_DIR", logRoot);
+            env.Set(CdidxConfigFile.ConfigSourceEnvironmentVariablePrefix + "CDIDX_GLOBAL_TOOL_LOG_DIR", null);
 
-                var exitCode = ProgramRunner.Run(
-                    ["status"],
-                    appVersion: "1.0.0-test",
-                    beforeDispatchForTesting: () => throw new SqliteException("database disk image is malformed", 11));
+            // A directory at the destination blocks replacement on every supported OS,
+            // without relying on permissions, concurrent writers, or an ambient WAL.
+            // 同名ディレクトリで置換を阻止し、権限・並行書き込み・既存 WAL に依存させない。
+            if (blockFailurePersistence)
+                Directory.CreateDirectory(failurePath);
 
-                Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
-                Assert.Contains("Error: command failed before it could complete.", stderr.ToString());
-            }
-            finally
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() => ProgramRunner.Run(
+                ["status", "--db", dbPath],
+                appVersion: "1.0.0-test",
+                configStartDirectory: root,
+                beforeDispatchForTesting: () => throw exception));
+
+            Assert.Equal(expectedExitCode, exitCode);
+            Assert.Empty(stdout);
+            Assert.DoesNotContain(exception.GetType().Name, stderr);
+            Assert.DoesNotContain(exception.Message, stderr);
+            Assert.DoesNotContain(root, stderr);
+            Assert.False(File.Exists(dbPath));
+            if (blockFailurePersistence)
             {
-                Console.SetError(originalError);
+                Assert.Equal("Error: command failed before it could complete; current failure diagnostics could not be saved.", stderr.Trim());
+                Assert.DoesNotContain("cdidx report", stderr);
+                Assert.True(Directory.Exists(failurePath));
+                Assert.False(File.Exists(failurePath));
             }
+            else
+            {
+                Assert.Equal("Error: command failed before it could complete. Run `cdidx report` for details.", stderr.Trim());
+                using var saved = JsonDocument.Parse(File.ReadAllText(failurePath));
+                Assert.Equal(expectedExitCode, saved.RootElement.GetProperty("exit_code").GetInt32());
+                Assert.Equal(exception.GetType().FullName, saved.RootElement.GetProperty("exception_type").GetString());
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(root);
         }
     }
 
