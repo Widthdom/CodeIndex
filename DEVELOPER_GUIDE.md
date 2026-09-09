@@ -12,6 +12,8 @@ Build `CSharpOriginContext` once per file prefix with cancellation and share its
 
 `deps --cycles` (MCP: `deps` with `cycles=true`) uses the same SQL qualified-name matching as ordinary dependencies. Candidate selection and reference evidence both resolve the source occurrence and its container, preserve schema identity, and apply the same scoped leaf fallback. Qualified views such as `dbo.LeftView` and `dbo.RightView` therefore form a file cycle without merging unrelated same-leaf objects in other schemas. Path/reverse, symbol and evidence filters, graph budgets, and cursor completeness retain their existing meanings; no reindex is required for this query fix.
 
+SQL cycle queries materialize normalized source keys and scoped target keys once per statement, then join exact names and leaf fallbacks in separate branches. Candidate selection and evidence reuse the resulting reference/definition pairs. Symbol filters use the normalized target definition spelling, including when source case differs or leaf fallback supplies the schema. Preserve indexed non-SQL name lookup and the normalization-work regression; no cache survives the query.
+
 ## Dependency cycles by C# type
 
 Opt in with `cdidx deps --cycles --group-partial-types --json` (MCP: `cycles=true, groupPartialTypes=true`). The default remains the original file graph. Current C# partial-family and reference-identity metadata assigns each confirmed reference endpoint to its owning type before SCC analysis. Partial declarations share a node; ordinary types remain declaration-specific. Namespaces, generic arities, nested types and multiple types in one file remain distinct. Same-file inter-type dependencies are included. Non-type, ambiguous-ownership and non-authoritative target evidence retains an explicit `file:` node; this is not a compiler-complete type graph.
@@ -4442,6 +4444,8 @@ API version 1 の互換性を維持し、新しい guard scope は contract vers
 ## SQL の依存循環
 
 `deps --cycles`（MCP: `deps` の `cycles=true`）は通常の依存関係検索と同じ SQL 修飾名の照合を使います。候補選択と参照証拠の取得の両方で、参照位置と所属コンテナから名前を解決し、スキーマの識別と検索範囲に基づく末尾名へのフォールバックを維持します。`dbo.LeftView` と `dbo.RightView` のような修飾付きビューの循環を検出し、別スキーマの無関係な同名オブジェクトを混ぜません。パス・逆方向・シンボル・証拠のフィルター、グラフ解析上限、カーソルの完全性判定の意味は変わりません。このクエリ修正のための再索引は不要です。
+
+SQL 循環クエリは正規化した参照キーと検索範囲内の定義キーを文ごとに一度だけ具体化し、完全一致と末尾名フォールバックを別々に結合します。候補選択と証拠取得で同じ参照・定義の組を再利用します。シンボルフィルターは、参照の大文字小文字が異なる場合やフォールバックでスキーマを補う場合も、正規化した定義名の綴りを使います。非 SQL の名前インデックス検索と正規化処理量の回帰検証を維持し、クエリ終了後にキャッシュを残さないでください。
 
 ## C# 型単位の依存循環
 

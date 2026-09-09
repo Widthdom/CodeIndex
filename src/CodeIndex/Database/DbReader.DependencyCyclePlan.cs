@@ -15,9 +15,8 @@ public partial class DbReader
         string RetainedSymbolFilter,
         string ConstrainedAlias,
         string ResolutionState,
-        string ReferenceLineJoin,
         string SymbolNameMatch,
-        string ReferenceName);
+        string SymbolName);
 
     private DependencyCycleQueryPlan BuildDependencyCycleQueryPlan(DependencyQueryRequest request)
     {
@@ -27,6 +26,7 @@ public partial class DbReader
         var builder = new DependencySqlFragmentBuilder();
         builder.Append("WITH ");
         builder.Append(new DependencyTargetSqlBuilder(this, request, BuildDependencyQueryExpressions()).BuildCycleTargets());
+        builder.Append(BuildDependencyCycleSqlMatches());
         builder.Append(candidates.Sql);
         builder.Append(evidence.Sql);
         builder.AddParameters(candidates.Parameters);
@@ -64,13 +64,6 @@ public partial class DbReader
                                       + ") OR "
                                       + csharpNonAuthoritativeQualifiedCall
                                       + ")";
-        var context = ReferenceContextSql("r");
-        var referenceName = BuildLogicalReferenceNameExpr("src.lang", "r.symbol_name", context, "r.container_name", "r.column_number");
-        var sqlNameMatch = BuildSqlDependencyNameMatch(
-            "sql_normalize_name(sql_target.name)", "sql_segment_count(sql_target.name)", referenceName,
-            BuildLogicalReferenceSegmentCountExpr("src.lang", "r.symbol_name", context, "r.container_name", "r.column_number"),
-            "r.symbol_name",
-            BuildLogicalReferenceLeafFallbackAllowedExpr("src.lang", "r.symbol_name", context, "r.container_name", "r.column_number"));
         // Separate the SQL branch so other languages retain an indexed name lookup,
         // rather than scanning all symbols through an OR with SQL normalization.
         return new DependencyCycleQueryExpressions(
@@ -86,15 +79,12 @@ public partial class DbReader
                 : string.Empty,
             request.Reverse ? "dst" : "src",
             DependencyResolutionStateSql(),
-            ReferenceLineJoinSql("r"),
-            $@"s.id IN (
+            @"s.id IN (
                 SELECT named.id FROM symbols named
                 WHERE src.lang != 'sql' AND named.name = r.symbol_name
                 UNION ALL
-                SELECT sql_target.id FROM symbols sql_target
-                JOIN files sql_target_file ON sql_target_file.id = sql_target.file_id
-                WHERE src.lang = 'sql' AND sql_target_file.lang = 'sql' AND {sqlNameMatch})",
-            "CASE WHEN src.lang = 'sql' THEN " + referenceName + " ELSE r.symbol_name END");
+                SELECT sql_match.symbol_id WHERE src.lang = 'sql')",
+            "CASE WHEN src.lang = 'sql' THEN sql_normalize_name(s.name) ELSE r.symbol_name END");
     }
 
     private static void AppendDependencyCycleTerminalParameters(

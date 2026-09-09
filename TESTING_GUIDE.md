@@ -12,6 +12,8 @@ Keep allocation regressions for shared prefixes and many distinct matched litera
 
 Issue #5312 uses a real-index fixture shared across CLI and MCP to compare ordinary dependencies with raw-file SCCs. Keep qualified and quoted view cycles in separate schemas, unrelated same-leaf controls, exact edge/reference evidence counts, path/reverse/exclusion/symbol/resolution filters, noise suppression, graph-budget incompleteness and cursor replay on net8/net9.
 
+Also cover source/definition case differences and positive/negative target-symbol filters for unqualified references. The 128-view-pairs fixture counts SQL normalization callbacks: each reference resolves once, and target normalization stays linear in indexed symbols instead of growing with reference/definition pairs. The query must stay within 256 progress callbacks at 1,000 SQLite VM instructions per callback. Run both frameworks; avoid wall-clock assertions.
+
 ## Typed dependency-cycle regression coverage
 
 `QueryCommandRunnerIssue5301Tests` uses real indexing to verify partial-family collapse, same-file inter-type SCCs through local functions, namespace/generic/nested identity, bounded declaration mappings, Python and top-level file-scope retention, mixed SQL readiness, graph budgets, pagination and noise-suppressed stale-metadata fallback. Keep CLI/MCP parity and the raw-file regressions in #5197 on both net8 and net9.
@@ -1277,6 +1279,8 @@ Check the following:
 ## SQL 依存循環の回帰テスト
 
 Issue #5312 は実際に索引化した共通フィクスチャを CLI/MCP で使い、通常の依存関係とファイル単位の SCC を比較します。別スキーマの修飾付き・引用符付きビューの循環、無関係な同名オブジェクト、正確な辺数・参照証拠数、パス・逆方向・除外・シンボル・解決状態のフィルター、ノイズ抑制、解析上限時の不完全性、カーソル再実行を net8/net9 で維持してください。
+
+参照と定義の大文字小文字の違い、および非修飾参照への定義名フィルターの採用・除外も検証します。128 組のビューのフィクスチャは SQL 正規化関数の呼び出しを数え、各参照の解決が一度だけで、定義名の正規化処理量が参照・定義の組み合わせ数ではなくシンボル数に比例することを確認します。SQLite の 1,000 VM 命令ごとの進捗コールバックが 256 回以内であることも確認します。両フレームワークで実行し、実時間に依存する検証は避けてください。
 
 ## 型単位の依存循環の回帰テスト
 

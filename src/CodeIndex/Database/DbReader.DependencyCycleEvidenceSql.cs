@@ -31,7 +31,7 @@ public partial class DbReader
         private void AppendCandidateSymbols()
         {
             _sql.Append(@"
-            candidate_symbols AS (
+            candidate_symbols AS MATERIALIZED (
                 SELECT " + (_request.GroupPartialTypes ? _reader.DependencyCycleSourceNodeSql() : "candidate_edges.source_path") + @" AS source_path,
                        " + (_request.GroupPartialTypes ? _reader.DependencyCycleTargetNodeSql() : "candidate_edges.target_path") + @" AS target_path,
                        r.id AS reference_id,
@@ -57,21 +57,21 @@ public partial class DbReader
                 FROM candidate_edges
                 JOIN files src ON src.path = candidate_edges.source_path
                 JOIN symbol_references r ON r.file_id = src.id
-                " + _expressions.ReferenceLineJoin + @"
-                JOIN symbols s ON " + _expressions.SymbolNameMatch + @"
-                JOIN files dst ON s.file_id = dst.id
+                LEFT JOIN cycle_sql_matches sql_match ON src.lang = 'sql' AND sql_match.reference_id = r.id
+                CROSS JOIN symbols s ON " + _expressions.SymbolNameMatch + @"
+                CROSS JOIN files dst ON s.file_id = dst.id
                  AND dst.path = candidate_edges.target_path
                 WHERE " + (_request.GroupPartialTypes ? $"(src.path != dst.path OR ({_reader.DependencyCycleSourceNodeSql()} != 'file:' || src.path OR {_reader.DependencyCycleTargetNodeSql()} != 'file:' || dst.path))" : "src.path != dst.path") + @"
                   AND src.lang = dst.lang");
             _sql.Append(_reader.BuildDependencyEvidenceFilter(_request.EvidenceFilter, "cycleAggregateEvidence"));
             _sql.Append(BuildDependencySymbolFilter(
-                _expressions.ReferenceName,
+                _expressions.SymbolName,
                 _request.DependencySymbols,
                 _request.DependencySymbolFamilies,
                 suppressDependencyNoise: false,
                 parameterPrefix: "cycleAggregateNames"));
             _sql.Append(BuildDependencySymbolFilter(
-                _expressions.ReferenceName,
+                _expressions.SymbolName,
                 dependencySymbols: null,
                 dependencySymbolFamilies: null,
                 suppressDependencyNoise: _request.SuppressDependencyNoise,

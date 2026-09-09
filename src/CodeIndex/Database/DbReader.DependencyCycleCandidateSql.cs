@@ -30,6 +30,8 @@ public partial class DbReader
 
         private void AppendCandidateEdgeQuery()
         {
+            // CROSS JOIN keeps matched definition IDs before target files in the
+            // join order, avoiding a scan of every definition in each target file.
             _sql.Append(@"
             candidate_edges AS (
                 SELECT src.path AS source_path,
@@ -37,9 +39,9 @@ public partial class DbReader
                        MAX(CASE WHEN " + _expressions.SuppressedEvidenceScope + @" THEN 0 ELSE 1 END) AS retained_evidence
             FROM symbol_references r
             JOIN files src ON r.file_id = src.id
-            " + _expressions.ReferenceLineJoin + @"
-            JOIN symbols s ON " + _expressions.SymbolNameMatch + @"
-            JOIN files dst ON s.file_id = dst.id
+            LEFT JOIN cycle_sql_matches sql_match ON src.lang = 'sql' AND sql_match.reference_id = r.id
+            CROSS JOIN symbols s ON " + _expressions.SymbolNameMatch + @"
+            CROSS JOIN files dst ON s.file_id = dst.id
             WHERE " + (_request.GroupPartialTypes ? "1 = 1" : "src.path != dst.path") + @"
               AND src.lang = dst.lang");
         }
@@ -89,13 +91,13 @@ public partial class DbReader
         private void AppendCandidateFilters()
         {
             _sql.Append(BuildDependencySymbolFilter(
-                _expressions.ReferenceName,
+                _expressions.SymbolName,
                 _request.DependencySymbols,
                 _request.DependencySymbolFamilies,
                 suppressDependencyNoise: false,
                 parameterPrefix: "cycleDependencyNames"));
             _sql.Append(BuildDependencySymbolFilter(
-                _expressions.ReferenceName,
+                _expressions.SymbolName,
                 dependencySymbols: null,
                 dependencySymbolFamilies: null,
                 suppressDependencyNoise: _request.SuppressDependencyNoise,

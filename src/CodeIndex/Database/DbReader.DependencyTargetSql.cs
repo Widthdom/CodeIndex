@@ -31,11 +31,21 @@ public partial class DbReader
 
         internal DependencySqlFragment BuildCycleTargets()
         {
-            AppendTargetFiles();
-            _sql.Append(" AND dst.lang = 'sql'");
+            // Keep definition IDs and normalized keys without ordinary deps' per-file aggregation.
+            _sql.Append(@"
+                target_files AS MATERIALIZED (
+                    SELECT s.id AS symbol_id,
+                           dst.path AS target_path,
+                           dst.lang AS target_lang,
+                           sql_normalize_name(s.name) AS symbol_name,
+                           sql_segment_count(s.name) AS symbol_segment_count,
+                           sql_leaf_name(s.name) AS symbol_leaf_name
+                    FROM symbols s
+                    JOIN files dst ON dst.id = s.file_id
+                    WHERE dst.lang = 'sql'");
+            AppendTargetLanguageAndGeneratedScope();
             AppendTargetScope();
-            _sql.Append(" GROUP BY dst.path, dst.lang, " + _expressions.TargetLogicalSymbolName
-                + ", " + _expressions.TargetLogicalSymbolSegmentCount + "),");
+            _sql.Append("),");
             return _sql.Build();
         }
 
@@ -77,6 +87,11 @@ public partial class DbReader
                 FROM symbols s
                 JOIN files dst ON s.file_id = dst.id
                 WHERE 1 = 1");
+            AppendTargetLanguageAndGeneratedScope();
+        }
+
+        private void AppendTargetLanguageAndGeneratedScope()
+        {
             var languagePredicate = _reader.BuildDependencyGraphLanguagePredicate(TargetAlias, "depsTargetLang");
             _sql.Append(" AND " + languagePredicate.Sql);
             _sql.AddParameters(languagePredicate.Parameters);

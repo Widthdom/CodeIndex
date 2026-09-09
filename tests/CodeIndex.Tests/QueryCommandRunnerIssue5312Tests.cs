@@ -1,6 +1,8 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using CodeIndex.Cli;
+using CodeIndex.Database;
+using CodeIndex.Indexer;
 using CodeIndex.Mcp;
 using static CodeIndex.Tests.QueryCommandTestSupport;
 
@@ -8,14 +10,62 @@ namespace CodeIndex.Tests;
 
 public partial class QueryCommandRunnerTests
 {
+    [Fact]
+    public void RunDeps_SqlCycleNormalizationWorkScalesWithRows_Issue5312()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_sql_cycle_work_5312");
+        const int namesPerFile = 128;
+        File.WriteAllLines(Path.Combine(project.Root, "left.sql"), Enumerable.Range(0, namesPerFile)
+            .Select(i => $"CREATE VIEW dbo.Left{i} AS SELECT * FROM dbo.Right{i};"));
+        File.WriteAllLines(Path.Combine(project.Root, "right.sql"), Enumerable.Range(0, namesPerFile)
+            .Select(i => $"CREATE VIEW dbo.Right{i} AS SELECT * FROM dbo.Left{i};"));
+        var dbPath = Path.Combine(project.Root, ".cdidx", "codeindex.db");
+        Assert.Equal(0, CaptureConsole(() => IndexCommandRunner.Run([project.Root, "--db", dbPath, "--json", "--quiet"], _jsonOptions)).Result);
+        using var db = new DbContext(DbOpenIntent.QueryOnly, dbPath);
+        using var reader = new DbReader(db);
+        var targetNormalizations = 0;
+        var referenceNormalizations = 0;
+        db.Connection.CreateFunction("sql_normalize_name", (string? name) =>
+        {
+            targetNormalizations++;
+            return SqlNameResolver.NormalizeQualifiedName(name);
+        });
+        db.Connection.CreateFunction("sql_resolve_reference_name_at", (string? name, string? context, string? container, long? column) =>
+        {
+            referenceNormalizations++;
+            return SqlNameResolver.ResolveReferenceNameAtColumn(name, context, container, (int?)column);
+        });
+
+        var vmCallbacks = 0;
+        SQLitePCL.delegate_progress progress = _ => { vmCallbacks++; return 0; };
+        SQLitePCL.raw.sqlite3_progress_handler(db.Connection.Handle, 1000, progress, null!);
+        try
+        {
+            var edges = reader.GetFileDependencyCycleCandidates(2, out var candidates, lang: "sql");
+            Assert.Equal(2, candidates);
+            Assert.Equal(2, edges.Count);
+            Assert.All(edges, edge => Assert.Equal(namesPerFile, edge.ReferenceCount));
+        }
+        finally
+        {
+            SQLitePCL.raw.sqlite3_progress_handler(db.Connection.Handle, 0, null!, null!);
+            GC.KeepAlive(progress);
+        }
+        Assert.Equal(2 * namesPerFile, referenceNormalizations);
+        Assert.InRange(targetNormalizations, 2 * namesPerFile, 8 * namesPerFile);
+        Assert.InRange(vmCallbacks, 1, 256);
+    }
+
     [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public void RunDeps_SqlQualifiedCyclesPreserveSchemasEvidenceFiltersAndCursors_Issue5312(bool qualified)
+    [InlineData(true, false)]
+    [InlineData(false, false)]
+    [InlineData(true, true)]
+    [InlineData(false, true)]
+    public void RunDeps_SqlQualifiedCyclesPreserveSchemasEvidenceFiltersAndCursors_Issue5312(bool qualified, bool differentCase)
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_sql_cycles_5312");
-        File.WriteAllText(Path.Combine(project.Root, "dbo-left.sql"), $"CREATE VIEW dbo.LeftView AS SELECT * FROM {(qualified ? "dbo." : "")}RightView;\n");
-        File.WriteAllText(Path.Combine(project.Root, "dbo-right.sql"), $"CREATE VIEW dbo.RightView AS SELECT * FROM {(qualified ? "dbo." : "")}LeftView;\n");
+        File.WriteAllText(Path.Combine(project.Root, "dbo-left.sql"), $"CREATE VIEW dbo.LeftView AS SELECT * FROM {(qualified ? "dbo." : "")}{(differentCase ? "rightview" : "RightView")};\n");
+        File.WriteAllText(Path.Combine(project.Root, "dbo-right.sql"), $"CREATE VIEW dbo.RightView AS SELECT * FROM {(qualified ? "dbo." : "")}{(differentCase ? "leftview" : "LeftView")};\n");
         File.WriteAllText(Path.Combine(project.Root, "sales-left.sql"), "CREATE VIEW [sales].[LeftView] AS SELECT * FROM [sales].[RightView];\n");
         File.WriteAllText(Path.Combine(project.Root, "sales-right.sql"), "CREATE VIEW [sales].[RightView] AS SELECT * FROM [sales].[LeftView];\n");
         File.WriteAllText(Path.Combine(project.Root, "decoy.sql"), "CREATE VIEW audit.LeftView AS SELECT 1;\nCREATE VIEW audit.RightView AS SELECT 2;\n");
@@ -61,14 +111,14 @@ public partial class QueryCommandRunnerTests
             new[] { "--reverse", "--path", "dbo-*" },
             new[] { "--exclude-path", "sales-*" },
             new[] { "--symbol", "dbo.LeftView", "--symbol", "dbo.RightView" },
+            new[] { "--symbol-family", "dbo." },
         })
         {
-            if (!qualified && extra[0] == "--symbol")
-                continue;
             var filtered = Run(["--cycles", .. extra]);
             Assert.Equal(cycles[0].GetProperty("nodes").GetRawText(), Assert.Single(filtered.GetProperty("cycles").EnumerateArray()).GetProperty("nodes").GetRawText());
             Assert.Equal(Run(extra).GetProperty("edges").GetArrayLength(), filtered.GetProperty("graph_edge_count").GetInt32());
         }
+        Assert.Equal(0, Run("--cycles", "--symbol", "LeftView", "--symbol", "RightView").GetProperty("graph_edge_count").GetInt32());
         Assert.Equal(0, Run("--cycles", "--resolution-state", "resolved").GetProperty("graph_edge_count").GetInt32());
         Assert.Equal(expectedEdgeCount, Run("--cycles", "--suppress-noise", "--lang", "sql").GetProperty("graph_edge_count").GetInt32());
         var bounded = Run("--cycles", "--graph-budget", "1");
