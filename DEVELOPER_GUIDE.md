@@ -2,6 +2,14 @@
 
 > **[日本語版はこちら / Japanese version](#開発者ガイド)**
 
+## Dependency cycles by C# type
+
+Opt in with `cdidx deps --cycles --group-partial-types --json` (MCP: `cycles=true, groupPartialTypes=true`). The default remains the original file graph. Current C# partial-family and reference-identity metadata assigns each confirmed reference endpoint to its owning type before SCC analysis. Partial declarations share a node; ordinary types remain declaration-specific. Namespaces, generic arities, nested types and multiple types in one file remain distinct. Same-file inter-type dependencies are included. Non-type, ambiguous-ownership and non-authoritative target evidence retains an explicit `file:` node; this is not a compiler-complete type graph.
+
+`cycle_grouping` reports intra-type edges/references separately from inter-node edges/references, including representative internal symbols. Intra-type edges do not produce SCCs. Counts describe the bounded typed candidate graph, and a reference reaching multiple declarations of the same family counts once per typed edge. `raw_candidate_edge_count` describes the selected raw file pairs; `--graph-budget` bounds both raw pairs and resulting typed edges independently, so grouping never turns a budget-limited scan into complete analysis. `analysis_complete`, grouping state and output sampling remain separate. Filters, noise suppression and graph evidence retain their existing meanings.
+
+`node_mappings` contains at most 40 nodes from returned/largest SCCs and internal-edge evidence, with at most 20 indexed declaration paths per node and exact count/omission metadata. The mapping can include declarations outside the selected edge scope. `--all-cycle-nodes` expands SCC node IDs, not these mapping limits. Opaque type IDs are generation-specific. Cursors bind grouping mode, metadata readiness and index generation; restart after indexing or changing modes. Missing/stale C# family or reference-identity metadata produces an explicit `raw_file_fallback_metadata_unavailable` result with the original file graph. Refresh the index to enable grouping; no rebuild is required. CLI grouping currently requires a single database.
+
 ## Symbol-bounded lexical guards
 
 `DbSearchReader.SymbolGuards.cs` owns the additive `same-symbol` guard contract.
@@ -4414,6 +4422,15 @@ Unused partial-type SQL materializes type identity/ancestor arity and reconstruc
 The CLI applies a cancellable analysis deadline, registers SQLite interruption, and reports incomplete/cancelled JSON without unverified results. SQLite callbacks can surface cancellation as `SQLITE_ERROR`, so the unused boundary handles that only when its token is cancelled. Bounded page envelopes avoid an implicit second count analysis and preserve lower-bound count authority. Explicit count/summary commands retain full analysis. See [unused performance validation](docs/unused-performance.md) for operation-count budgets and measurements.
 
 # 開発者ガイド
+
+## C# 型単位の依存循環
+
+`cdidx deps --cycles --group-partial-types --json`（MCP: `cycles=true, groupPartialTypes=true`）で明示的に有効化します。既定は従来のファイルグラフです。最新の C# partial 型と参照 ID のメタデータを使い、確実に解決された参照の両端を所属型へ割り当ててから SCC を解析します。partial 宣言は同じノードへ統合し、通常の型は宣言ごとに区別します。namespace、generic arity、入れ子の型、同一ファイル内の複数型を区別し、同一ファイル内の型間依存も含めます。型外の参照、所属が曖昧な参照、確実な参照先 ID を持たない証拠は明示的な `file:` ノードに残します。コンパイラと同等の完全な型グラフではありません。
+
+`cycle_grouping` は型内の辺数・参照数とノード間の辺数・参照数を分け、型内参照の代表的なシンボルも示します。型内の辺は SCC を生成しません。件数は上限付きの型ノード候補グラフに対するもので、同一 family の複数宣言へ到達する参照は型ノード間の辺ごとに1回数えます。`raw_candidate_edge_count` は選択された元のファイル対数です。`--graph-budget` は元のファイル対と変換後の型ノード間の辺の双方を個別に制限するため、グループ化によって上限到達時の解析を完全と判定することはありません。`analysis_complete`、グループ化状態、表示サンプルは独立しています。フィルター、ノイズ抑制、参照証拠の既存の意味は維持します。
+
+`node_mappings` は返却 SCC・最大 SCC・型内参照の証拠から最大40ノードを含み、各ノードにつき最大20個の索引済み宣言パスと正確な総数・省略数を返します。選択した辺の範囲外の宣言を含む場合もあります。`--all-cycle-nodes` は SCC のノード ID を展開しますが、対応表の上限は変えません。不透明な型 ID は索引世代に紐づきます。カーソルはグループ化モード、メタデータの準備状態、索引世代を検証するため、索引更新やモード変更後は再実行してください。C# family または参照 ID のメタデータが欠落・古い場合は `raw_file_fallback_metadata_unavailable` を明示し、従来のファイルグラフを返します。通常の索引更新でグループ化を有効化でき、rebuild は不要です。CLI のグループ化は現在、単一 DB が対象です。
+
 
 ## 監査レシピのトークン境界
 

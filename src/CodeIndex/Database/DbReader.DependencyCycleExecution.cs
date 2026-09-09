@@ -16,6 +16,7 @@ public partial class DbReader
         BindDependencyQueryParameters(command, plan.Parameters);
 
         var results = new List<FileDependencyResult>();
+        var rawCandidateCount = 0;
         using var cancellationRegistration = cancellationToken.Register(
             static state => ((SqliteCommand)state!).Cancel(),
             command);
@@ -25,6 +26,10 @@ public partial class DbReader
             while (reader.TrackedRead())
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                if (reader.FieldCount > 5)
+                    rawCandidateCount = reader.GetInt32(5);
+                if (reader.IsDBNull(0))
+                    continue;
                 candidateRowCount++;
                 var result = ProjectDependencyRow(reader);
                 result.RankingScore = result.ReferenceCount;
@@ -36,6 +41,8 @@ public partial class DbReader
             throw new OperationCanceledException(cancellationToken);
         }
 
+        candidateRowCount = Math.Max(candidateRowCount, rawCandidateCount);
+        DependencyCycleRawCandidateCount = rawCandidateCount;
         return results;
     }
 }

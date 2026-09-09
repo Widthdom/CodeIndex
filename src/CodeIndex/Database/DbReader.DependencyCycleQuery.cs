@@ -16,7 +16,8 @@ public partial class DbReader
         IReadOnlyList<string>? dependencySymbols = null,
         IReadOnlyList<string>? dependencySymbolFamilies = null,
         bool suppressDependencyNoise = false,
-        DependencyEvidenceFilter? evidenceFilter = null)
+        DependencyEvidenceFilter? evidenceFilter = null,
+        bool groupPartialTypes = false)
     {
         candidateRowCount = 0;
         lang = NormalizeQueryLanguage(lang);
@@ -34,7 +35,8 @@ public partial class DbReader
             dependencySymbols,
             dependencySymbolFamilies,
             suppressDependencyNoise,
-            evidenceFilter);
+            evidenceFilter,
+            groupPartialTypes && DependencyCycleGroupingReady);
         return ExecuteDependencyCycleQuery(
             BuildDependencyCycleQueryPlan(request),
             cancellationToken,

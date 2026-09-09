@@ -39,7 +39,7 @@ public partial class DbReader
             JOIN files src ON r.file_id = src.id
             JOIN symbols s ON s.name = r.symbol_name
             JOIN files dst ON s.file_id = dst.id
-            WHERE src.path != dst.path
+            WHERE " + (_request.GroupPartialTypes ? "1 = 1" : "src.path != dst.path") + @"
               AND src.lang = dst.lang");
         }
 
