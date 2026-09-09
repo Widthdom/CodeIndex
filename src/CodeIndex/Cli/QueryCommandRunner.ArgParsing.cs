@@ -41,6 +41,10 @@ public static partial class QueryCommandRunner
             case "sameline":
                 scope = SearchGuardScope.SameLine;
                 return true;
+            case "same-symbol":
+            case "samesymbol":
+                scope = SearchGuardScope.SameSymbol;
+                return true;
             default:
                 scope = SearchGuardScope.Window;
                 return false;
@@ -51,6 +55,7 @@ public static partial class QueryCommandRunner
         => scope switch
         {
             SearchGuardScope.SameLine => "same-line",
+            SearchGuardScope.SameSymbol => "same-symbol",
             SearchGuardScope.Container => "container",
             _ => "window",
         };

@@ -153,6 +153,9 @@ public partial class DbReader
         var normalizedQuery = rawQuery ? query : NormalizeLiteralSearchQuery(query, lang);
         var coverageTokens = exactSearch ? new List<string>() : GetSearchCoverageTokens(normalizedQuery, rawQuery);
         var hasGuardFilters = guardFilters is { Count: > 0 };
+        var symbolGuardFiles = new Dictionary<string, List<SameSymbolGuardRange>>(StringComparer.Ordinal);
+        if (hasGuardFilters && guardFilters!.Any(filter => (filter.Scope ?? guardScope) == SearchGuardScope.SameSymbol))
+            ValidateSameSymbolGuardContract();
         var hasContextRanking = resultRanking == SearchResultRanking.CredentialContext;
         var hasCandidatePostProcessing = hasGuardFilters || tokenBoundary || hasContextRanking;
         var searchMatchLineContext = SearchMatchLineContext.Create(query, lang, exactSearch);
@@ -299,11 +302,11 @@ public partial class DbReader
                 if (tokenBoundary)
                 {
                     foreach (var tokenBoundaryResult in FilterSearchResultByTokenBoundary(result, searchMatchLineContext.ForResult(result)))
-                        raw.AddRange(FilterSearchResultByGuards(tokenBoundaryResult, guardMatchContext!, guardFilters!, guardWindow, guardScope, guardLineWindowCache!));
+                        raw.AddRange(FilterSearchResultByGuards(tokenBoundaryResult, guardMatchContext!, guardFilters!, guardWindow, guardScope, guardLineWindowCache!, symbolGuardFiles));
                 }
                 else
                 {
-                    raw.AddRange(FilterSearchResultByGuards(result, guardMatchContext!, guardFilters!, guardWindow, guardScope, guardLineWindowCache!));
+                    raw.AddRange(FilterSearchResultByGuards(result, guardMatchContext!, guardFilters!, guardWindow, guardScope, guardLineWindowCache!, symbolGuardFiles));
                 }
             }
         }
@@ -1594,7 +1597,8 @@ public partial class DbReader
         IReadOnlyList<SearchGuardFilter> guardFilters,
         int guardWindow,
         SearchGuardScope guardScope,
-        Dictionary<SearchGuardLineWindowKey, SortedDictionary<int, string>> lineWindowCache)
+        Dictionary<SearchGuardLineWindowKey, SortedDictionary<int, string>> lineWindowCache,
+        Dictionary<string, List<SameSymbolGuardRange>> symbolGuardFiles)
     {
         guardWindow = Math.Clamp(guardWindow, 0, MaxSearchGuardWindow);
         var filtered = new List<SearchResult>();
@@ -1606,7 +1610,7 @@ public partial class DbReader
             foreach (var filter in guardFilters)
             {
                 var effectiveGuardScope = filter.Scope ?? guardScope;
-                var evaluation = FindGuardEvidence(result.Path, primaryMatch, filter, guardWindow, effectiveGuardScope, primaryMatchContext.GetEffectiveLang(result), lineWindowCache);
+                var evaluation = FindGuardEvidence(result.Path, primaryMatch, filter, guardWindow, effectiveGuardScope, primaryMatchContext.GetEffectiveLang(result), lineWindowCache, symbolGuardFiles);
                 var matched = evaluation.Evidence != null;
                 var passed = filter.Role == SearchGuardRole.Require ? matched : !matched;
                 guardChecks.Add(CreateSearchGuardCheck(filter, effectiveGuardScope, evaluation, matched, passed));
@@ -1958,7 +1962,9 @@ public partial class DbReader
         int WindowStartLine,
         int WindowEndLine,
         SearchGuardEvidence? Evidence,
-        List<SearchGuardEvidence>? RejectedEvidence = null);
+        List<SearchGuardEvidence>? RejectedEvidence = null,
+        int? SymbolStartLine = null,
+        int? SymbolEndLine = null);
 
     private SearchGuardEvaluation FindGuardEvidence(
         string path,
@@ -1967,13 +1973,17 @@ public partial class DbReader
         int guardWindow,
         SearchGuardScope guardScope,
         string? lang,
-        Dictionary<SearchGuardLineWindowKey, SortedDictionary<int, string>> lineWindowCache)
+        Dictionary<SearchGuardLineWindowKey, SortedDictionary<int, string>> lineWindowCache,
+        Dictionary<string, List<SameSymbolGuardRange>> symbolGuardFiles)
     {
         if (filter.EvidenceKind != SearchGuardEvidenceKind.Text)
             return FindStructuralGuardEvidence(path, primaryMatch, filter, lang, lineWindowCache);
 
         if (guardScope == SearchGuardScope.SameLine)
             return FindSameLineGuardEvidence(path, primaryMatch, filter, lang);
+
+        if (guardScope == SearchGuardScope.SameSymbol)
+            return FindSameSymbolGuardEvidence(path, primaryMatch, filter, guardWindow, lang, lineWindowCache, symbolGuardFiles);
 
         var focusLine = primaryMatch.LineNumber;
         var windowStart = filter.Direction == SearchGuardDirection.Before
@@ -2135,6 +2145,9 @@ public partial class DbReader
             Summary = FormatSearchGuardSummary(name, filter.Query, passed, evaluation.Evidence),
             WindowStartLine = evaluation.WindowStartLine,
             WindowEndLine = evaluation.WindowEndLine,
+            ScopeAvailable = evaluation.SymbolStartLine.HasValue ? true : null,
+            SymbolStartLine = evaluation.SymbolStartLine,
+            SymbolEndLine = evaluation.SymbolEndLine,
             Evidence = evaluation.Evidence,
             RejectedEvidence = evaluation.RejectedEvidence,
         };
@@ -2166,6 +2179,7 @@ public partial class DbReader
         => scope switch
         {
             SearchGuardScope.SameLine => "same_line",
+            SearchGuardScope.SameSymbol => "same_symbol",
             SearchGuardScope.Container => "container",
             _ => "window",
         };

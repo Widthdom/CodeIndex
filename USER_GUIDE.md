@@ -1564,8 +1564,8 @@ limit before/after checks to the same source line and the primary match column
 ordering instead of nearby lines. JSON search results include
 `guard_evidence` for matched guards and `guard_checks` for each guard evaluated
 on a returned match. Guard evidence includes the guard name, pattern,
-before/after relationship, scope (`window`, `same_line`, or the recipe-only
-`container` scope), 1-based span, origin category, and source line. Built-in
+before/after relationship, scope (`window`, `same_line`, `same_symbol`, or the
+recipe-only `container` scope), 1-based span, origin category, and source line. Built-in
 whole-file-read and filesystem-traversal recipes use bounded C# structural
 checks instead of line proximity: they correlate the same path through a
 size/control guard or resolved bounded writer, and resolve the
@@ -1583,6 +1583,35 @@ text, `--lang`, `--path`, `--exclude-tests`, or a smaller MCP cursor offset.
 The MCP `search` tool exposes the same mode as camelCase arguments:
 `requireBefore`, `requireAfter`, `rejectBefore`, `rejectAfter`, and
 `guardWindow` / `guardScope`.
+
+`--guard-scope same-symbol` (MCP `guardScope: "same-symbol"`) intersects the
+normal before/after line window with the smallest unambiguous indexed C# callable
+range. Block bodies and simple expression bodies are supported; expression bodies
+containing braces or another lambda arrow are unavailable. The focus line is
+excluded, including in one-line methods; use `same-line`
+for column-ordered guards on that line. `--guard-window` still limits the distance
+(default 8, maximum 200). Strictly nested local functions own their lines and
+cannot supply guards for a parent or sibling. Comments and strings remain literal
+guard evidence, just as in `window`; this is lexical co-location, not dataflow,
+dominance, same-variable ownership, or proof of secure cleanup.
+
+Returned `guard_checks` include `scope_available: true`, `symbol_start_line`,
+`symbol_end_line`, and the effective inclusive `window_start_line` / `window_end_line`
+(start greater than end denotes an empty window). Missing/stale ranges, incomplete
+indexes or source, overlapping/shared declaration boundary lines, lambdas,
+anonymous delegates and ambiguous expression bodies fail with `same_symbol_scope_unavailable`.
+Callables containing interpolated strings are also unavailable: the lexical mask
+cannot establish ownership of executable expressions inside those strings.
+There is no implicit fallback. Refresh the index, narrow to supported C# callable
+ranges, or explicitly choose `window`. Current extractor stamps and matching live
+source checksums are required; an offline archive cannot establish this scope.
+Lookup is bounded to 512 callable ranges per file and 256 files per query;
+each selected range is limited to 2,048 lines and 262,144 decoded characters
+across at most 128 indexed chunks (including overlapping chunk content).
+Live checksum reads are limited to 4 MiB per file. Existing candidate and output
+budgets still apply. Empty results do not certify symbol coverage outside examined
+candidates. This additive scope uses guard contract version 1 within API version 1;
+existing recipe-specific structural scopes retain their own semantics.
 
 Machine-readable search exports include enough context for downstream tools to
 triage results without reparsing human text. `--format csv` and `--format tsv`
@@ -5493,7 +5522,7 @@ guard-aware search は primary の `search` 一致を近傍の literal guard で
 before / after を評価します。JSON の検索結果には
 一致した guard の `guard_evidence` と、返却された一致に対して評価した各 guard の
 `guard_checks` が含まれます。guard evidence には guard 名、pattern、before/after の関係、
-scope（`window`、`same_line`、または recipe 専用の `container`）、1-based span、
+scope（`window`、`same_line`、recipe 専用の `container`、`same_symbol`）、1-based span、
 origin category、ソース行、簡潔な pass/fail summary が入ります。組み込みの whole-file-read と
 filesystem-traversal recipe は行の近接性ではなく、上限付きの C# 構造判定を使います。同じ path の
 size / control guard または解決済み bounded writer を関連付け、`Directory.Enumerate*` に実際に
@@ -5507,7 +5536,31 @@ guard filter を使う検索は pagination 前に上限付きの候補集合だ�
 fallback hint が含まれます。query text、`--lang`、`--path`、`--exclude-tests` で絞り込むか、
 MCP cursor の offset を小さくしてください。
 MCP `search` tool では同じ mode を camelCase 引数 `requireBefore`, `requireAfter`,
-`rejectBefore`, `rejectAfter`, `guardWindow` で指定できます。
+`rejectBefore`, `rejectAfter`, `guardWindow`, `guardScope` で指定できます。
+
+`--guard-scope same-symbol`（MCP では `guardScope: "same-symbol"`）は通常の前後の行窓を、
+曖昧さのない最内側の索引済み C# callable 範囲で制限します。
+ブロック本体と単純な式本体に対応し、波括弧や別のラムダ矢印を含む式本体は未対応です。対象行自体は1行メソッドでも
+除外します。同じ行の列順序を調べる場合は `same-line` を使ってください。
+`--guard-window` による距離制限（既定8、最大200）は引き続き適用されます。
+厳密に内包されるローカル関数の行は、その親や兄弟のガードにはなりません。
+コメントや文字列も `window` と同様にリテラルの証拠として扱います。これは字句的な位置関係であり、
+データフロー、支配関係、同じ変数の所有権、安全なクリーンアップの証明ではありません。
+
+返却する `guard_checks` には `scope_available: true`、`symbol_start_line`、
+`symbol_end_line` と、有効な両端を含む `window_start_line` / `window_end_line` が入ります。
+開始行が終了行より大きい場合は空の行窓です。範囲の欠落・古さ、不完全な索引やソース、宣言境界の
+重複・共有、ラムダ、匿名 delegate、曖昧な式本体は `same_symbol_scope_unavailable` で失敗します。
+補間文字列を含む callable も未対応です。字句マスクでは文字列内の実行可能な式の所有範囲を
+確定できないためです。
+暗黙のフォールバックはありません。再索引するか、対応する C# callable 範囲へ検索を絞るか、
+明示的に `window` を選んでください。現行の抽出バージョンと実ファイルのチェックサム一致が必須で、
+オフラインのアーカイブだけではこの範囲を確定できません。検索1回につき最大256ファイル、
+ファイルごとに512個の callable 範囲を調べます。選択範囲は最大2,048行で、重複チャンクの内容を
+含めて128個の索引チャンク・262,144文字までです。実ファイルのチェックサム読み取りは各4 MiBまでです。
+既存の候補数・出力上限も維持します。0件の結果は、未検査の候補のシンボル範囲を保証しません。
+この追加機能は API version 1 内の guard contract version 1 を使い、レシピ固有の構造的 scope は
+従来の意味を維持します。
 
 機械可読な search export は、下流ツールが人間向けテキストを再解析せずに triage できる
 文脈を含みます。`--format csv` と `--format tsv` は file location、label、query、

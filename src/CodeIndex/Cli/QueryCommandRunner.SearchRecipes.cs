@@ -5143,6 +5143,7 @@ public static partial class QueryCommandRunner
         {
             FtsQuerySyntaxException => "query_syntax_invalid",
             SearchGuardCandidateLimitException => "query_guard_limit_exceeded",
+            CodeIndexException { Code: "same_symbol_scope_unavailable" } => "same_symbol_scope_unavailable",
             SearchQueryLimitException => "query_limit_exceeded",
             _ => string.Empty,
         };
@@ -6232,6 +6233,7 @@ public static partial class QueryCommandRunner
                 {
                     SearchGuardScope.Window => "window",
                     SearchGuardScope.SameLine => "same_line",
+                    SearchGuardScope.SameSymbol => "same_symbol",
                     SearchGuardScope.Container => "container",
                     _ => null,
                 },

@@ -290,6 +290,13 @@ public static partial class QueryCommandRunner
             query["guard_filters"] = BuildSearchGuardFiltersJson(options.GuardFilters);
             query["guard_window"] = options.GuardWindow;
             query["guard_scope"] = FormatSearchGuardScope(options.GuardScope);
+            if (options.GuardFilters.Any(filter => (filter.Scope ?? options.GuardScope) == SearchGuardScope.SameSymbol))
+            {
+                query["guard_scope_contract_version"] = 1;
+                query["guard_scope_supported_language"] = "csharp";
+                query["guard_scope_unavailable_policy"] = "error";
+                query["guard_scope_focus_line"] = "excluded";
+            }
         }
         if (options.RawKinds)
             query["raw_kinds"] = true;
