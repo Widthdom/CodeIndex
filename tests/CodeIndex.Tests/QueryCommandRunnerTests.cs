@@ -6233,14 +6233,14 @@ public partial class QueryCommandRunnerTests
     // 今は recognized-option token を検知して "requires a value" でクリーンに失敗させ、値欠落は
     // 黙って隣接フラグを飲み込まず fail-close する、という契約に合わせる。
     [Theory]
-    [InlineData(new[] { "search", "hello", "--limit", "--lang", "rust" }, "--limit requires a value.")]
-    [InlineData(new[] { "search", "hello", "--lang", "--limit", "5" }, "--lang requires a value.")]
-    [InlineData(new[] { "search", "hello", "--snippet-lines", "--limit", "5" }, "--snippet-lines requires a value.")]
-    [InlineData(new[] { "search", "hello", "--snippet-focus", "--limit", "5" }, "--snippet-focus requires a value.")]
-    [InlineData(new[] { "search", "hello", "--max-line-width", "--limit", "5" }, "--max-line-width requires a value.")]
-    [InlineData(new[] { "symbols", "hello", "--kind", "--lang", "rust" }, "--kind requires a value.")]
-    [InlineData(new[] { "impact", "hello", "--depth", "--lang", "rust" }, "--depth requires a value.")]
-    public void QueryEntrypoints_RecognizedOptionAsValueFailsClosed_Issue184(string[] commandAndArgs, string expectedFragment)
+    [InlineData(new[] { "search", "hello", "--limit", "--lang", "rust" }, "--limit requires a value.", true)]
+    [InlineData(new[] { "search", "hello", "--lang", "--limit", "5" }, "--lang requires a value.", false)]
+    [InlineData(new[] { "search", "hello", "--snippet-lines", "--limit", "5" }, "--snippet-lines requires a value.", true)]
+    [InlineData(new[] { "search", "hello", "--snippet-focus", "--limit", "5" }, "--snippet-focus requires a value.", false)]
+    [InlineData(new[] { "search", "hello", "--max-line-width", "--limit", "5" }, "--max-line-width requires a value.", true)]
+    [InlineData(new[] { "symbols", "hello", "--kind", "--lang", "rust" }, "--kind requires a value.", false)]
+    [InlineData(new[] { "impact", "hello", "--depth", "--lang", "rust" }, "--depth requires a value.", true)]
+    public void QueryEntrypoints_RecognizedOptionAsValueFailsClosed_Issue184(string[] commandAndArgs, string expectedFragment, bool structuredError)
     {
         var command = commandAndArgs[0];
         using var project = TestProjectHelper.CreateTempProjectScope($"cdidx_issue184_{command}_{expectedFragment.GetHashCode():x}");
@@ -6262,9 +6262,20 @@ public partial class QueryCommandRunnerTests
         });
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
-        Assert.Equal(string.Empty, stdout);
-        Assert.Contains(expectedFragment, stderr);
-        Assert.Contains("Hint: fix the invalid or missing option value", stderr);
+        if (structuredError)
+        {
+            Assert.Empty(stderr);
+            using var error = JsonDocument.Parse(stdout);
+            Assert.Equal(CommandErrorCodes.UsageError, error.RootElement.GetProperty("error_code").GetString());
+            Assert.Contains(expectedFragment, error.RootElement.GetProperty("message").GetString());
+            Assert.Contains("fix the invalid or missing option value", error.RootElement.GetProperty("hint").GetString());
+        }
+        else
+        {
+            Assert.Empty(stdout);
+            Assert.Contains(expectedFragment, stderr);
+            Assert.Contains("Hint: fix the invalid or missing option value", stderr);
+        }
     }
 
     // Regression lock for #184: non-repeatable value-taking options specified more than once
