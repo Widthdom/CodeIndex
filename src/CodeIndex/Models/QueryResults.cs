@@ -49,7 +49,7 @@ public class SearchResult
     [JsonIgnore]
     internal SearchResult? MatchOriginContext { get; set; }
     [JsonIgnore]
-    internal IReadOnlyDictionary<int, string>? CSharpOriginLines { get; set; }
+    internal SearchMatchClassifier.CSharpOriginContext? CSharpOrigins { get; set; }
 }
 
 public sealed class SearchDiagnostic

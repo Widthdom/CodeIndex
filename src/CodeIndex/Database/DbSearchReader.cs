@@ -402,24 +402,34 @@ public partial class DbReader
                 SELECT c.start_line, substr(c.content, 1, @characters + 1)
                 FROM chunks c JOIN files f ON c.file_id = f.id
                 WHERE f.path = @path AND c.start_line <= @endLine
-                ORDER BY c.start_line, c.id LIMIT 128";
+                ORDER BY c.start_line, c.id LIMIT @chunks";
             SqliteCommandPolicy.Add(cmd, "@path", group.Key);
             SqliteCommandPolicy.Add(cmd, "@endLine", endLine);
             SqliteCommandPolicy.Add(cmd, "@characters", budget);
+            SqliteCommandPolicy.Add(cmd, "@chunks", SearchMatchClassifier.CSharpContextChunkLimit);
             using var reader = cmd.ExecuteTrackedReader();
             while (reader.TrackedRead())
             {
                 ThrowIfCancellationRequested();
                 var content = reader.GetString(1);
-                if (content.Length > budget)
-                    break;
+                var truncated = content.Length > budget;
+                if (truncated)
+                {
+                    // A capped row can still prove complete preceding lines. Never admit its partial tail.
+                    var lastNewline = budget == 0 ? -1 : content.LastIndexOf('\n', budget - 1, budget);
+                    content = lastNewline < 0 ? string.Empty : content[..(lastNewline + 1)];
+                }
                 budget -= content.Length;
                 var start = reader.GetInt32(0);
-                foreach (var (offset, value) in EnumerateContentLines(content, 0, endLine - start))
+                var lastOffset = truncated ? Math.Min(endLine - start, content.Count(ch => ch == '\n') - 1) : endLine - start;
+                foreach (var (offset, value) in EnumerateContentLines(content, 0, lastOffset))
                     lines.TryAdd(start + offset, value);
+                if (truncated)
+                    break;
             }
+            var origins = new SearchMatchClassifier.CSharpOriginContext(group.Key, lines, _cancellation);
             foreach (var result in group)
-                result.CSharpOriginLines = lines;
+                result.CSharpOrigins = origins;
         }
     }
 

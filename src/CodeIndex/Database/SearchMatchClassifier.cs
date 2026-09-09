@@ -18,9 +18,10 @@ internal static partial class SearchMatchClassifier
         int column,
         int length,
         string? enclosingSymbolKind = null,
-        IReadOnlyDictionary<int, string>? lineContext = null)
+        IReadOnlyDictionary<int, string>? lineContext = null,
+        CSharpOriginContext? csharpContext = null)
     {
-        var origin = ClassifyOrigin(path, lang, line, text, column, enclosingSymbolKind, lineContext);
+        var origin = ClassifyOrigin(path, lang, line, text, column, enclosingSymbolKind, lineContext, csharpContext);
         var testFile = IsLikelyTestPath(path);
         var testSymbol = string.Equals(enclosingSymbolKind, "test.method", StringComparison.OrdinalIgnoreCase);
         var testFixture = (testFile || testSymbol) && IsStringLikeOrigin(origin);
@@ -100,7 +101,8 @@ internal static partial class SearchMatchClassifier
         string text,
         int column,
         string? enclosingSymbolKind,
-        IReadOnlyDictionary<int, string>? lineContext)
+        IReadOnlyDictionary<int, string>? lineContext,
+        CSharpOriginContext? csharpContext)
     {
         if (text.Length == 0)
             return Code;
@@ -108,7 +110,7 @@ internal static partial class SearchMatchClassifier
         var index = Math.Clamp(column - 1, 0, Math.Max(0, text.Length - 1));
         var normalizedLang = lang?.ToLowerInvariant();
         if (string.Equals(normalizedLang, "csharp", StringComparison.Ordinal))
-            return ClassifyCSharp(path, line, text, index, lineContext);
+            return csharpContext?.GetOrigin(line, text, index) ?? ClassifyCSharp(path, line, text, index, lineContext);
 
         if (normalizedLang is "shell" or "bash" or "zsh")
             return ClassifyShell(path, text, index);

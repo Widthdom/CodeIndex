@@ -11817,7 +11817,8 @@ public partial class QueryCommandRunnerTests
                 "src/overlap.cs",
                 new ChunkRecord { ChunkIndex = 0, StartLine = 1, EndLine = 20, Content = "Console.WriteLine(ex.Message);\n" },
                 new ChunkRecord { ChunkIndex = 1, StartLine = 1, EndLine = 20, Content = "Console.WriteLine(ex.Message);\n" },
-                new ChunkRecord { ChunkIndex = 2, StartLine = 40, EndLine = 60, Content = "Console.WriteLine(ex.Message);\n" });
+                new ChunkRecord { ChunkIndex = 2, StartLine = 40, EndLine = 60, Content = "Console.WriteLine(ex.Message);\n" },
+                new ChunkRecord { ChunkIndex = 3, StartLine = 2, EndLine = 39, Content = new string('\n', 37) });
 
             var (firstExitCode, firstStdout, firstStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 ["--recipe", "risky-code/raw-diagnostic-echo", "--db", dbPath, "--format", "compact", "--limit", "1"],
@@ -11863,13 +11864,13 @@ public partial class QueryCommandRunnerTests
             ReplaceIndexedChunks(
                 dbPath,
                 "src/selection-a.cs",
-                new ChunkRecord { ChunkIndex = 0, StartLine = 1, EndLine = 5, Content = "Console.WriteLine(ex.Message); // a1\n" },
-                new ChunkRecord { ChunkIndex = 1, StartLine = 10, EndLine = 15, Content = "Console.WriteLine(ex.Message); // a2\n" },
+                new ChunkRecord { ChunkIndex = 0, StartLine = 1, EndLine = 9, Content = "Console.WriteLine(ex.Message); // a1" + new string('\n', 8) },
+                new ChunkRecord { ChunkIndex = 1, StartLine = 10, EndLine = 19, Content = "Console.WriteLine(ex.Message); // a2" + new string('\n', 9) },
                 new ChunkRecord { ChunkIndex = 2, StartLine = 20, EndLine = 25, Content = "Console.WriteLine(ex.Message); // a3\n" });
             ReplaceIndexedChunks(
                 dbPath,
                 "src/selection-b.cs",
-                new ChunkRecord { ChunkIndex = 0, StartLine = 1, EndLine = 5, Content = "Console.WriteLine(ex.Message); // b1\n" },
+                new ChunkRecord { ChunkIndex = 0, StartLine = 1, EndLine = 9, Content = "Console.WriteLine(ex.Message); // b1" + new string('\n', 8) },
                 new ChunkRecord { ChunkIndex = 1, StartLine = 10, EndLine = 15, Content = "Console.WriteLine(ex.Message); // b2\n" });
 
             var (sampleExitCode, sampleStdout, sampleStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
@@ -12056,8 +12057,8 @@ public partial class QueryCommandRunnerTests
                     {
                         ChunkIndex = chunkIndex,
                         StartLine = (chunkIndex * 10) + 1,
-                        EndLine = (chunkIndex * 10) + 5,
-                        Content = $"Console.WriteLine(ex.Message); // file {fileIndex}, chunk {chunkIndex}\n"
+                        EndLine = (chunkIndex * 10) + 10,
+                        Content = $"Console.WriteLine(ex.Message); // file {fileIndex}, chunk {chunkIndex}" + new string('\n', 9)
                     })]);
             }
 
@@ -12483,7 +12484,8 @@ public partial class QueryCommandRunnerTests
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/sample.cs", "csharp", "Console.WriteLine(ex.Message);\n");
+            // Sampling cardinality is language-independent; C# prefix budgets have separate coverage.
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/sample.cs", "javascript", "Console.WriteLine(ex.Message);\n");
             ReplaceIndexedChunks(
                 dbPath,
                 "src/sample.cs",

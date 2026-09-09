@@ -6,7 +6,7 @@
 
 Search origin filters and facets carry C# block-comment, verbatim-string and raw-string state across indexed lines. Ordinary search, token-boundary recipes, counts and MCP use the same classification and original coordinates. Schema, regex and help-string labels follow the string's opening line. This is lexical classification: encountering an interpolation expression makes subsequent origins `unknown`; escaped braces and literal text before an expression retain their string labels.
 
-Classification reads an indexed prefix bounded by 4,096 lines, 1,048,576 UTF-16 characters and 128 chunks per file (overlapping chunk characters count toward the read budget). Missing prefix lines or exhausted bounds produce `unknown`, which does not satisfy `--origin code`. It does not read live source or require a rebuild. Inspect unknown matches without an origin filter when reviewing incomplete or large files.
+Classification reads an indexed prefix bounded by 4,096 lines, 8,388,608 UTF-16 characters and 128 chunks per file (overlapping chunk characters count toward the read budget). Missing prefix lines or exhausted bounds produce `unknown`, which does not satisfy `--origin code`. It does not read live source or require a rebuild. Inspect unknown matches without an origin filter when reviewing incomplete or large files.
 
 ## Dependency cycles by C# type
 
@@ -367,7 +367,7 @@ A deadline returns exit `11`; cancellation returns `130`. JSON reports `analysis
 
 検索の origin フィルターと facet は、C# のブロックコメント、verbatim 文字列、raw 文字列の状態をインデックス済みの行をまたいで引き継ぎます。通常検索、token-boundary recipe、件数、MCP は同じ分類と元の座標を使用します。schema、regex、help 文字列のラベルは文字列の開始行に従います。これは字句分類です。補間式に到達した後の origin は `unknown` となり、エスケープした波括弧や式より前のリテラル部分は文字列のラベルを維持します。
 
-分類は各ファイルのインデックス済み先頭部分を、4,096 行、UTF-16 で 1,048,576 文字、128 チャンクを上限として読み取ります（重複チャンクの文字も読み取り上限に含みます）。先頭からの行が欠けている場合や上限を超える場合は `unknown` となり、`--origin code` には一致しません。実ファイルの読み取りや rebuild は不要です。不完全なファイルや大きなファイルのレビューでは、origin フィルターを外して不明な一致も確認してください。
+分類は各ファイルのインデックス済み先頭部分を、4,096 行、UTF-16 で 8,388,608 文字、128 チャンクを上限として読み取ります（重複チャンクの文字も読み取り上限に含みます）。先頭からの行が欠けている場合や上限を超える場合は `unknown` となり、`--origin code` には一致しません。実ファイルの読み取りや rebuild は不要です。不完全なファイルや大きなファイルのレビューでは、origin フィルターを外して不明な一致も確認してください。
 
 ## C# 型単位の依存循環
 

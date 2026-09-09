@@ -598,8 +598,9 @@ public class SearchSnippetFormatterTests
 
             var large = SearchSnippetFormatter.ToCompactResult(largeResult, query, maxLines: 1, maxLineWidth: 80);
 
-            Assert.Equal(1, large.FocusLine);
-            Assert.Equal("unknown", Assert.Single(large.MatchFacets, facet => facet.Line == 19).Origin);
+            Assert.Equal(19, large.FocusLine);
+            Assert.Equal(1, large.FocusColumn);
+            Assert.Equal(codeExpression, large.Snippet);
             Assert.Equal(18, large.DroppedMatchLineCount);
         }
         else

@@ -35,6 +35,7 @@ public partial class QueryCommandRunnerTests
             ("var x = $@\"\n{Call(\"x\")} needle\n\";", "unknown"),
             ("var x = $$\"\"\"\n{{Call(\"x\")}} needle\n\"\"\";", "unknown"),
             ("var x = $\"{Call(\"x\")} needle\";", "unknown"),
+            ("var x = $\"" + new string('{', 65536) + "needle\";", "string_literal"),
         ];
         foreach (var (source, expected) in cases)
         {
@@ -62,13 +63,15 @@ public partial class QueryCommandRunnerTests
         }
         var lines = Enumerable.Range(1, SearchMatchClassifier.CSharpContextLineLimit + 1)
             .ToDictionary(i => i, _ => "");
+        lines[lines.Count] = "needle";
+        lines[lines.Count - 1] = "needle";
         Assert.Equal("unknown", SearchMatchClassifier.Classify("src/a.cs", "csharp", lines.Count,
             "needle", 1, 6, lineContext: lines).Origin);
         Assert.Equal("code", SearchMatchClassifier.Classify("src/a.cs", "csharp", lines.Count - 1,
             "needle", 1, 6, lineContext: lines).Origin);
         var exactBudget = new string(' ', SearchMatchClassifier.CSharpContextCharacterLimit - 6) + "needle";
         Assert.Equal("code", SearchMatchClassifier.Classify("src/a.cs", "csharp", 1,
-            exactBudget, exactBudget.Length - 5, 6, lineContext: new Dictionary<int, string>()).Origin);
+            exactBudget, exactBudget.Length - 5, 6, lineContext: new Dictionary<int, string> { [1] = exactBudget }).Origin);
         var schema = new Dictionary<int, string>
         {
             [1] = "[\"description\"] = @\"",
@@ -80,6 +83,91 @@ public partial class QueryCommandRunnerTests
         schema[1] = "[\"description\"] = \"\"\"\"";
         Assert.Equal("schema_description", SearchMatchClassifier.Classify(
             "src/CodeIndex/Mcp/McpToolCatalog.cs", "csharp", 2, "needle", 1, 6, lineContext: schema).Origin);
+
+        foreach (var (source, expected) in new[]
+        {
+            ("var s = $\"{Call()}\";", "unknown"),
+            ("var s = $@\"{Call()}\";", "unknown"),
+            ("var s = $$\"\"\"{{Call()}}\"\"\";", "unknown"),
+            ("var s = $\"{{Call()}}\";", "string_literal"),
+            ("var s = $@\"{{Call()}}\";", "string_literal"),
+            ("var s = $$\"\"\"{Call()}\"\"\";", "string_literal"),
+        })
+        {
+            var brace = source.IndexOf('{');
+            var origins = new SearchMatchClassifier.CSharpOriginContext("src/a.cs", new Dictionary<int, string> { [1] = source });
+            Assert.Equal(expected, origins.GetOrigin(1, source, brace));
+        }
+    }
+
+    [Fact]
+    public void SearchMatchClassifier_SharesBoundedPrefixAndLazySchemaLabels_Issue5307()
+    {
+        var source = string.Join('\n', Enumerable.Repeat("var s = \"literal\";" + new string(' ', 200), 2000)) +
+            "\nneedle(); needle(); needle(); needle(); needle();";
+        var result = new SearchResult
+        {
+            Path = "src/CodeIndex/Mcp/McpToolCatalog.cs",
+            Lang = "csharp",
+            StartLine = 1,
+            EndLine = 2001,
+            Content = source,
+        };
+        // Warm up the formatter before measuring its complete shared-prefix path.
+        SearchSnippetFormatter.ToCompactResult(new SearchResult { Path = "a.cs", Lang = "csharp", StartLine = 1, Content = "needle();" }, "needle");
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var compact = SearchSnippetFormatter.ToCompactResult(result, "needle", maxLines: 1, exposeLiteralHighlights: true);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.True(allocated < 16 * 1024 * 1024, $"Shared prefix allocated {allocated} bytes.");
+        Assert.Equal(5, compact.MatchFacets.Count);
+        Assert.All(compact.MatchFacets, facet => Assert.Equal("code", facet.Origin));
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+        Assert.Throws<OperationCanceledException>(() => new SearchMatchClassifier.CSharpOriginContext(
+            result.Path, new Dictionary<int, string> { [1] = source }, cancelled.Token));
+    }
+
+    [Fact]
+    public void SearchMatchClassifier_ChunkBudgetSharesOriginsAcrossRows_Issue5307()
+    {
+        var project = TestProjectHelper.CreateTempProject("cdidx_csharp_chunk_budget_5307");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(project);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            var writer = new DbWriter(db.Connection);
+            var count = SearchMatchClassifier.CSharpContextChunkLimit + 2;
+            var fileId = writer.UpsertFile(new FileRecord
+            {
+                Path = "src/Chunks.cs",
+                Lang = "csharp",
+                Lines = count,
+                Size = count * 40,
+                Modified = DateTime.UtcNow,
+                Checksum = "fixture",
+            });
+            writer.InsertChunks(Enumerable.Range(0, count).Select(i => new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = i,
+                StartLine = i + 1,
+                EndLine = i + 1,
+                Content = $"info.ArgumentList.Add(value); // {i}",
+            }).ToList());
+            var reader = new DbReader(db.Connection);
+            var rows = reader.Search("ArgumentList", count + 1, exact: true, deduplicate: false, tokenBoundary: true);
+            Assert.Equal(count, rows.Count);
+            Assert.NotNull(rows[0].CSharpOrigins);
+            Assert.All(rows, row => Assert.Same(rows[0].CSharpOrigins, row.CSharpOrigins));
+            var compact = SearchSnippetFormatter.ToCompactResults(rows, "ArgumentList", exposeLiteralHighlights: true).ToArray();
+            Assert.Equal(SearchMatchClassifier.CSharpContextChunkLimit,
+                compact.Count(row => Assert.Single(row.MatchFacets).Origin == "code"));
+            Assert.Equal(2, compact.Count(row => Assert.Single(row.MatchFacets).Origin == "unknown"));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(project);
+        }
     }
 
     [Fact]
