@@ -14499,7 +14499,7 @@ public partial class QueryCommandRunnerTests
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             TestProjectHelper.InsertIndexedFile(dbPath, "README.md", "markdown", "sample");
 
-            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
                 ["README.md", "--db", dbPath, "--start", "1", "--focus-column", "--json"],
                 _jsonOptions));
 
@@ -14509,7 +14509,17 @@ public partial class QueryCommandRunnerTests
             // rather than the older TryParsePositiveInt-level "requires a positive integer" message.
             // `--focus-column --json` は TryReadRawOptionValue の既知オプション判定で TryParsePositiveInt
             // 実行前に値欠如として短絡するため、旧メッセージではなく "requires a value" となる。
-            Assert.Contains("--focus-column requires a value", stderr);
+            Assert.Empty(stderr);
+            using var error = JsonDocument.Parse(stdout);
+            Assert.Equal(CommandErrorCodes.UsageError, error.RootElement.GetProperty("error_code").GetString());
+            Assert.Contains("--focus-column requires a value", error.RootElement.GetProperty("message").GetString());
+            Assert.Equal("excerpt", error.RootElement.GetProperty("command").GetString());
+            Assert.False(string.IsNullOrWhiteSpace(error.RootElement.GetProperty("hint").GetString()));
+            var (humanExit, humanOut, humanError) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
+                ["README.md", "--db", dbPath, "--focus-column"], _jsonOptions));
+            Assert.Equal(CommandExitCodes.UsageError, humanExit);
+            Assert.Empty(humanOut);
+            Assert.Contains("--focus-column requires a value", humanError);
         }
         finally
         {

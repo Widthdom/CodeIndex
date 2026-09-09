@@ -18,6 +18,10 @@ If you change test code, test helpers, test execution flow, or testing conventio
 
 ## Quick Start
 
+`QueryCommandRunnerNumericBoundaryIssue5305Tests.cs` shares an isolated database across all non-guard numeric reader callers and aliases. Cover missing values with separated/inline output selectors in both orders, the `--` literal marker with and without explicit JSON, numeric range/overflow rejection, option-shaped inline values, and valid limit endpoints. Run alongside the #5297 guard parser regressions on net8.0 and net9.0.
+
+The existing #184 entrypoint theory distinguishes numeric JSON errors from unchanged string-value diagnostics. Excerpt, references, and inspect missing-value regressions assert JSON error identity and retain human-output controls in the same fixture.
+
 Issue #5300 guard tests cover adjacent and nested C# callables, focus-line exclusion,
 window bounds, lexical comment/string evidence, row/count parity, CLI/MCP/recipe
 scope propagation, and explicit stale/missing/ambiguous/partial/budget failures.
@@ -31,6 +35,10 @@ and parser (#5297) regressions on net8.0 and net9.0.
 `QueryCommandRunnerAuditRecoveryIssue5299Tests` covers top-level JSON/NDJSON UTF-8 byte budgets, deterministic plan pagination and exact-path replay (including literal glob/quote characters), disjoint eligible scope, stale/scope/recipe token rejection before queries, and single-file/plan-budget non-authoritative fallbacks. Preserve option-shaped literal filter values and assert the original byte budget on every replayed plan page. Keep execution receipts separate from plan cursors and baseline review state, and run these alongside audit continuation/progress/scope/baseline/help/completion tests on net8.0 and net9.0.
 
 `QueryCommandRunnerSearchGuardIssue5297Tests.cs` shares one isolated database across search/audit guard parser failures, JSON selectors before/after invalid options, missing/inline values, bounded control-character diagnostics, and human/literal-query controls. Missing guard values immediately before `--` must preserve JSON-looking literals, both with and without a separate explicit JSON selector. Keep sequential and parallel batch continuation coverage without raw streams, and run both net8.0 and net9.0.
+
+## Unused performance regression coverage
+
+`QueryCommandRunnerUnusedIssue5296Tests` uses 16 sibling partial declarations and 192 private members whose references are deliberately removed. Require no false unused fields, at most 64 reconstructed chunk pieces, and at most 2,000 SQLite progress callbacks at 1,000 VM instructions per callback. These deterministic budgets catch repeated per-candidate reconstruction without wall-clock assertions on shared CI. Retain #5089, #4834 and #3673 as correctness controls, including unrelated chunks, missing content and legacy chunk ordering. Tests also interrupt active native SQLite work on deadline/caller cancellation, verify parseable bounded non-authoritative JSON, observe a heartbeat before completion, and confirm connection/token reuse and read-only behavior. Run both net8.0 and net9.0 lanes; see [performance measurements](docs/unused-performance.md).
 
 `IndexCommandRunnerIssue5295Tests` uses a 128-byte cap for full/scoped boundary, retry, partial opt-in, graph preservation, persisted-policy, status/workspace, CLI/MCP dry-run cap parity and non-mutation, and MCP recovery checks on net8.0 and net9.0. Keep console/environment changes in the SQLite pool sensitive collection.
 
@@ -1271,10 +1279,6 @@ Issue #5300 のテストは隣接・入れ子の C# callable、対象行の除�
 合成 fixture にはシンボルフィルターなしの方針を記録してください。既存の guard/count（#4349）と
 パーサー（#5297）の回帰テストとともに net8.0 / net9.0 で実行します。
 
-## Unused performance regression coverage
-
-`QueryCommandRunnerUnusedIssue5296Tests` uses 16 sibling partial declarations and 192 private members whose references are deliberately removed. Require no false unused fields, at most 64 reconstructed chunk pieces, and at most 2,000 SQLite progress callbacks at 1,000 VM instructions per callback. These deterministic budgets catch repeated per-candidate reconstruction without wall-clock assertions on shared CI. Retain #5089, #4834 and #3673 as correctness controls, including unrelated chunks, missing content and legacy chunk ordering. Tests also interrupt active native SQLite work on deadline/caller cancellation, verify parseable bounded non-authoritative JSON, observe a heartbeat before completion, and confirm connection/token reuse and read-only behavior. Run both net8.0 and net9.0 lanes; see [performance measurements](docs/unused-performance.md).
-
 # テストガイド
 
 ## C# 複数行検索 origin の検証
@@ -1282,6 +1286,10 @@ Issue #5300 のテストは隣接・入れ子の C# callable、対象行の除�
 Issue #5307 のテストは、複数行コメント、verbatim/raw 文字列、閉じ区切りと実行コードの対照を組み合わせます。引用符のエスケープ、区切りの長さ、schema/help/regex ラベル、先頭行の欠落、字句処理上限、元の座標、CLI の行／件数／recipe と MCP の一致を net8.0 と net9.0 で維持してください。C# origin が既知であることを検証する合成 snippet fixture は、前のインデックス済み行を明示的に渡します。
 
 先頭部分の共有と多数の異なるリテラルに一致する場合の割り当て量、ラベル照会時のキャンセル、builder 引数ラベル、通常／verbatim／raw の補間開始位置の分類一致を検証してください。汎用サンプリングテストは行数の契約を C# 字句処理上限から独立させるため別言語を使用できます。既存の 4 Mi 文字の trust-source cache 回帰テストも維持してください。
+
+`QueryCommandRunnerNumericBoundaryIssue5305Tests.cs` は、guard 以外の数値読み取り処理の全呼び出し元と別名について、分離した DB を共有して検証します。値欠如と分離形式／インライン形式の出力指定の前後順、明示的 JSON 指定の有無と `--` リテラルマーカー、数値の範囲外／オーバーフロー、オプションに似たインライン値、許容される limit の上下限を確認してください。#5297 の guard パーサー回帰テストとともに net8.0／net9.0 で実行します。
+
+既存の #184 のエントリーポイントの theory は、数値の JSON エラーと変更しない文字列値の診断を区別します。excerpt、references、inspect の値欠如テストは、JSON のエラー識別情報を検証し、同じ fixture 内に人間向け出力の対照ケースを保持します。
 
 `QueryCommandRunnerRecipeTokenBoundaryIssue5298Tests` と `McpServerIssue5298Tests` は、レシピの既定値／上書き、実際のメンバー使用の正確な件数、C# の verbatim 表記と Unicode、同一行のコード・コメント・文字列、外部レシピ、cursor・continuation・baseline の互換性を検証します。net8.0／net9.0 で batch・CLI・MCP の整合性を保ってください。Unicode エスケープの復号は既存のテキスト検索の契約に含みません。
 
