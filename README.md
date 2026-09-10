@@ -82,6 +82,8 @@ Shell search origins distinguish executable `$()` and backtick command substitut
 
 ## Local audit baselines
 
+Origin-filtered recipes can produce complete baselines when the raw candidates are fully examined and every match origin is known, including zero-hit child queries. Identical compatible runs then report `unchanged`; verified removals can become `resolved`. `origin_classification_incomplete` requires inspecting unknown origins and `origin_unavailable` diagnostics with an unfiltered search and reviewing the affected paths manually; increasing row limits or refreshing unchanged source cannot repair lexical classification limits. Other unverified filtering and raw candidate caps retain explicit coverage reasons and recovery guidance. A single user `--limit` or `--total-limit` replaces its internal default without a duplicate warning; genuine repeated options still warn and use the rightmost value.
+
 Changing index exclusions cannot turn an existing excluded file into a resolution. Comparison verifies prior path coverage, distinguishes physical deletion from sparse/ignored paths, and detects when the same database location now indexes another project. Empty incomparable comparisons also return exit `11`.
 
 `cdidx audit baseline-export .cdidx/audit-baseline.json --recipe risky-code` runs the existing audit engine and saves a local baseline. Omit `--recipe` to select all registered recipes. Refresh the index after source changes, then run `cdidx audit baseline-compare .cdidx/audit-baseline.json --recipe risky-code --json`. Use the same filters and limits for comparable runs. Each command accepts `--db`, `--lang`, `--path`, `--exclude-path`, `--exclude-tests`, `--audit-scope`, `--since`, `--limit`, and `--total-limit` as shown in command help; defaults are 1,000 rows per query and 10,000 total rows.
@@ -443,6 +445,8 @@ index、status、workspace health の `size_omissions` は対象件数、最大2
 Shell検索の由来分類は、二重引用符内で実行される `$()` やバッククォートによるコマンド置換と、その周囲のリテラルを区別します。通常・名前付き・recipe検索は同じ分類を共有し、`--origin code` は実行部分を保持し、`--exclude-strings` はリテラル部分を除外します。バッククォート内はエスケープ解除後に入れ子のコマンドを解釈し、`case` のパターン区切りを置換の終端と誤認しません。単一引用符内やエスケープされたリテラル例は文字列またはヘルプとして扱い、一致・ハイライト位置は変えません。これは完全なShellパーサーではなく、1行単位のヒューリスティックです。行頭から最大65,536文字を調べ、置換の入れ子は63段、同時に扱う `case` は64個、走査・前処理の反復は262,144回を上限とします。範囲外の一致や解析上限の超過時は `unknown` を返します。複数行のShell構文はこの保証の対象外です。
 
 ### ローカル監査 baseline
+
+origin フィルター付きレシピでも、生の候補をすべて確認し、全一致の origin が判明していれば、0件の子クエリを含めて完全な baseline を作成できます。同一条件の互換実行は `unchanged`、確認済みの削除は `resolved` になります。`origin_classification_incomplete` の場合は、フィルターなしの search で不明な origin と `origin_unavailable` 診断を確認し、対象パスを手動レビューしてください。行上限の増加や変更のないソースの索引更新では字句分類の制限を解消できません。他の未検証フィルターや生の候補上限にも、具体的な理由と復旧案内を示します。`--limit`／`--total-limit` の単一指定は重複警告なしで内部既定値を置き換え、実際の重複指定は警告と最後の値の優先を維持します。
 
 索引の除外設定を変更しても、存在する除外ファイルを解決済みとは判定しません。以前のパスの対象範囲を確認し、物理的削除と sparse／除外パスを区別し、同じ DB 保存先が別プロジェクトの索引に置き換わった場合も検出します。空の比較不能結果も終了コード `11` を返します。
 

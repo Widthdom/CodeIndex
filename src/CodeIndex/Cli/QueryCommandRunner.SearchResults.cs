@@ -1115,7 +1115,8 @@ public static partial class QueryCommandRunner
         bool exact,
         string? queryOverride = null,
         bool? rawFtsOverride = null,
-        SearchAuditRecipeQuery? recipeQuery = null)
+        SearchAuditRecipeQuery? recipeQuery = null,
+        Action<bool>? originCoverageObserver = null)
     {
         var rows = new List<SearchDisplayRow>(results.Count);
         var seenMatchLocations = options.NoDedup ? null : new HashSet<string>(StringComparer.Ordinal);
@@ -1159,6 +1160,12 @@ public static partial class QueryCommandRunner
 
             if (!effectiveRawFts && compact.MatchLines.Count == 0 && compact.Highlights.Count == 0)
                 continue;
+
+            // Observe every candidate before filtering; rejected unknown origins must
+            // not turn absence in a filtered baseline into a resolved finding.
+            if (HasSearchOriginFilters(facetFilters))
+                originCoverageObserver?.Invoke(compact.MatchFacets.Count > 0
+                    && compact.MatchFacets.All(facet => facet.Origin != SearchMatchClassifier.Unknown));
 
             if (!ApplySearchOriginFilters(compact, facetFilters))
                 continue;

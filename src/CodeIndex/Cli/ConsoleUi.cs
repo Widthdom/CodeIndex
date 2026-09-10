@@ -225,7 +225,7 @@ public static partial class ConsoleUi
         ("config-show", "Example: `cdidx config show --json --show-paths`."),
         ("recipes-list", "Read-only alias form for recipe discovery; filters and bounded JSON options match the parent `recipes` command."),
         ("recipes-list", "Example: `cdidx recipes list --names --json`."),
-        ("audit-baseline-export", "Example: `cdidx audit baseline-export .cdidx/audit-baseline.json --recipe risky-code --json`. Existing files require --overwrite; incomplete coverage remains explicit."),
+        ("audit-baseline-export", "Example: `cdidx audit baseline-export .cdidx/audit-baseline.json --recipe risky-code --json`. Existing files require --overwrite. Fully evaluated origin-filtered evidence can be complete; unknown origins and candidate caps remain incomplete with specific recovery guidance. Limit defaults apply only when omitted."),
         ("audit-baseline-compare", "Example: `cdidx audit baseline-compare .cdidx/audit-baseline.json --recipe risky-code --json`. Refresh the index first and preserve filters. Incomplete absence stays unknown."),
         ("audit-baseline-review", "Example: `cdidx audit baseline-review .cdidx/audit-baseline.json <id> --actor reviewer --reason 'Validated guard' --overwrite`. Only unchanged compatible evidence inherits the annotation."),
         ("db", "schema defaults to the full sqlite_master dump for support bundles; use --summary-only, --limit, --max-sql-chars, and --exclude-internal for bounded diagnostics."),

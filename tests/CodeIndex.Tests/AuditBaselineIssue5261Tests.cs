@@ -10,6 +10,128 @@ namespace CodeIndex.Tests;
 public sealed class AuditBaselineIssue5261Tests
 {
     [Fact]
+    public void Cli_OriginFilteredCoverageAndForwardedLimits_Issue5322()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("audit_origin_5322");
+        var first = Path.Combine(project.Root, "One.cs");
+        File.WriteAllText(first, "class One { void Issue5322Needle() {} }\n// Issue5322Needle\n");
+        File.WriteAllText(Path.Combine(project.Root, "Two.cs"), "class Two { void Issue5322Needle(int value) {} }\n");
+        var db = Path.Combine(project.Root, ".cdidx", "codeindex.db");
+        var baseline = Path.Combine(project.Root, ".cdidx", "baseline.json");
+        var query = new SearchAuditRecipeQuery("needle", "Issue5322Needle", "fixture", [], "Review.") { MatchOrigins = ["code"] };
+        var registry = new SearchAuditRecipeRegistry([new SearchAuditRecipe("fixture", "fixture",
+            [query, query with { Name = "zero", Query = "Absent5322" }])], []);
+        Assert.Equal(0, CaptureConsole(() => IndexCommandRunner.Run([project.Root, "--db", db, "--json"], JsonOptions)).Result);
+
+        foreach (var limits in new[] { Array.Empty<string>(), new[] { "--limit", "5" }, new[] { "--total-limit", "20" },
+            new[] { "--limit", "5", "--total-limit", "20" },
+            new[] { "--limit", "2", "--total-limit", "20" },
+            new[] { "--limit", "1", "--limit", "5", "--total-limit", "1", "--total-limit", "20" } })
+        {
+            var (exit, output, error) = CaptureConsole(() => QueryCommandRunner.RunAuditBaseline(
+                ["export", baseline, "--overwrite", "--db", db, "--json", .. limits], JsonOptions, registryForTesting: registry));
+            Assert.Equal(0, exit);
+            Assert.True(JsonNode.Parse(output)!["complete"]!.GetValue<bool>());
+            Assert.Equal(2, AuditBaselineStore.Read(baseline)["entries"]!.AsArray().Count);
+            if (limits.Length > 4)
+            {
+                Assert.Contains("--limit", error, StringComparison.Ordinal);
+                Assert.Contains("--total-limit", error, StringComparison.Ordinal);
+            }
+            else Assert.Equal(string.Empty, error);
+            var (compareExit, compareOutput, _) = CaptureConsole(() => QueryCommandRunner.RunAuditBaseline(
+                ["compare", baseline, "--db", db, "--json", .. limits], JsonOptions, registryForTesting: registry));
+            Assert.Equal(0, compareExit);
+            AssertCounts(JsonNode.Parse(compareOutput)!.AsObject(), 0, 2, 0, 0);
+        }
+
+        var stored = AuditBaselineStore.Read(baseline);
+        var safeId = stored["entries"]!.AsArray().OfType<JsonObject>().Single(entry => entry["path"]!.GetValue<string>() == "Two.cs")["id"]!.GetValue<string>();
+        AuditBaselineStore.Review(stored, safeId, "reviewer", "Checked evidence.");
+        AuditBaselineStore.Write(baseline, stored, true);
+        foreach (var variant in new[] { "scope", "recipe", "cap", "total_cap" })
+        {
+            var (exit, output, _) = CaptureConsole(() => QueryCommandRunner.RunAuditBaseline(
+                ["compare", baseline, "--db", db, "--json", "--limit", variant == "cap" ? "1" : "5", "--total-limit", variant == "total_cap" ? "2" : "20",
+                    .. variant == "scope" ? new[] { "--path", "One.cs" } : Array.Empty<string>()], JsonOptions,
+                registryForTesting: variant == "recipe" ? new SearchAuditRecipeRegistry([registry.Recipes[0] with { Queries = [query with { Description = "changed" }] }], []) : registry));
+            Assert.Equal(CommandExitCodes.PartialResult, exit);
+            Assert.False(JsonNode.Parse(output)!["comparable"]!.GetValue<bool>());
+            Assert.Equal(0, JsonNode.Parse(output)!["totals"]!["resolved"]!.GetValue<int>());
+        }
+        File.Delete(first);
+        var (staleExit, staleOutput, _) = CaptureConsole(() => QueryCommandRunner.RunAuditBaseline(
+            ["compare", baseline, "--db", db, "--json", "--limit", "5", "--total-limit", "20"], JsonOptions, registryForTesting: registry));
+        Assert.Equal(CommandExitCodes.PartialResult, staleExit);
+        AssertCounts(JsonNode.Parse(staleOutput)!.AsObject(), 0, 0, 0, 2);
+        Assert.Equal(0, CaptureConsole(() => IndexCommandRunner.Run([project.Root, "--db", db, "--json"], JsonOptions)).Result);
+        var (deletedExit, deletedOutput, _) = CaptureConsole(() => QueryCommandRunner.RunAuditBaseline(
+            ["compare", baseline, "--db", db, "--json", "--limit", "5", "--total-limit", "20"], JsonOptions, registryForTesting: registry));
+        Assert.Equal(0, deletedExit);
+        var comparison = JsonNode.Parse(deletedOutput)!.AsObject();
+        AssertCounts(comparison, 0, 1, 1, 0);
+        Assert.True(comparison["results"]!.AsArray().Single(row => row!["id"]!.GetValue<string>() == safeId)!["review_applies"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public void Cli_RawCandidateCapBeforeDeduplicationRemainsIncomplete_Issue5322()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("audit_raw_cap_5322");
+        File.WriteAllText(Path.Combine(project.Root, "One.cs"), "class Issue5322Needle {}\n");
+        var db = Path.Combine(project.Root, ".cdidx", "codeindex.db");
+        var baseline = Path.Combine(project.Root, ".cdidx", "baseline.json");
+        var registry = new SearchAuditRecipeRegistry([new SearchAuditRecipe("fixture", "fixture",
+            [new SearchAuditRecipeQuery("needle", "Issue5322Needle", "fixture", [], "Review.") { MatchOrigins = ["code"] }])], []);
+        Assert.Equal(0, CaptureConsole(() => IndexCommandRunner.Run([project.Root, "--db", db, "--json"], JsonOptions)).Result);
+        using (var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={db};Pooling=False"))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                WITH RECURSIVE positions(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM positions WHERE n < 9999)
+                INSERT INTO chunks(file_id, chunk_index, start_line, end_line, content)
+                SELECT f.id, positions.n, 1, 1, 'class Issue5322Needle {}' FROM positions, files f WHERE f.path = 'One.cs';
+                """;
+            command.ExecuteNonQuery();
+        }
+        var (exit, output, error) = CaptureConsole(() => QueryCommandRunner.RunAuditBaseline(
+            ["export", baseline, "--db", db, "--json", "--limit", "5", "--total-limit", "20"], JsonOptions, registryForTesting: registry));
+        Assert.Equal(string.Empty, error);
+        Assert.Equal(CommandExitCodes.PartialResult, exit);
+        Assert.Contains("raw_candidate_window_exhausted", output, StringComparison.Ordinal);
+        var stored = AuditBaselineStore.Read(baseline);
+        Assert.False(stored["complete"]!.GetValue<bool>());
+        Assert.Single(stored["entries"]!.AsArray());
+        Assert.DoesNotContain("index_not_current", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("index_incomplete", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Cli_UnknownOriginsBeforeFilteringCannotResolvePriorEvidence_Issue5322()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("audit_unknown_origin_5322");
+        var source = Path.Combine(project.Root, "One.cs");
+        const string content = "class One { void Issue5322Needle() {} }\n";
+        File.WriteAllText(source, content);
+        var db = Path.Combine(project.Root, ".cdidx", "codeindex.db");
+        var baseline = Path.Combine(project.Root, ".cdidx", "baseline.json");
+        var registry = new SearchAuditRecipeRegistry([new SearchAuditRecipe("fixture", "fixture",
+            [new SearchAuditRecipeQuery("needle", "Issue5322Needle", "fixture", [], "Review.") { MatchOrigins = ["code"] }])], []);
+        Assert.Equal(0, CaptureConsole(() => IndexCommandRunner.Run([project.Root, "--db", db, "--json"], JsonOptions)).Result);
+        Assert.Equal(0, CaptureConsole(() => QueryCommandRunner.RunAuditBaseline(
+            ["export", baseline, "--db", db, "--json"], JsonOptions, registryForTesting: registry)).Result);
+        // The current index is complete, but the origin classifier cannot read beyond its prefix budget.
+        File.WriteAllText(source, new string('\n', 4100) + content);
+        Assert.Equal(0, CaptureConsole(() => IndexCommandRunner.Run([project.Root, "--db", db, "--json"], JsonOptions)).Result);
+        var (exit, output, _) = CaptureConsole(() => QueryCommandRunner.RunAuditBaseline(
+            ["compare", baseline, "--db", db, "--json"], JsonOptions, registryForTesting: registry));
+        Assert.Equal(CommandExitCodes.PartialResult, exit);
+        AssertCounts(JsonNode.Parse(output)!.AsObject(), 0, 0, 0, 1);
+        Assert.Contains("origin_classification_incomplete", output, StringComparison.Ordinal);
+        Assert.Contains("cannot repair lexical classification limits", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Compare_ReconcilesMovementChangesReviewsAndIncompleteCoverage()
     {
         var baseline = Snapshot(Entry("src/One.cs", "first"), Entry("src/Two.cs", "second"));
