@@ -72,6 +72,7 @@ internal static partial class SearchMatchClassifier
                             dollars = expression.Dollars;
                             quote = '"';
                             label = expression.Label;
+                            schema = expression.Schema;
                             expressions.Pop();
                             continue;
                         }
@@ -206,7 +207,8 @@ internal static partial class SearchMatchClassifier
                                 }
                                 i += state == 3 ? run : 1;
                                 parsed.Add(startIndex, i, StringLiteral, label);
-                                expressions.Push(new InterpolationFrame(state, quotes, dollars, label));
+                                expressions.Push(new InterpolationFrame(state, quotes, dollars, label, schema));
+                                schema = schema is null ? null : new CSharpSchemaCalls();
                                 state = 0;
                                 enteredExpression = true;
                                 break;
@@ -258,7 +260,7 @@ internal static partial class SearchMatchClassifier
                     if (state == 0 && expressions.Count == 0)
                         pendingLine = 0;
                 }
-                if (state == 4)
+                if (state == 4 || state == 5 && expressions.TryPeek(out var format) && format.State == 4)
                 {
                     SetUnknown(pendingLine > 0 ? pendingLine : line, pendingLine > 0 ? pendingColumn : 0,
                         "unterminated_ordinary_string");
@@ -271,12 +273,13 @@ internal static partial class SearchMatchClassifier
                 SetUnknown(CSharpContextLineLimit + 1, 0, "line_budget_exhausted");
         }
 
-        private sealed class InterpolationFrame(int state, int quotes, int dollars, CSharpStringLabel? label)
+        private sealed class InterpolationFrame(int state, int quotes, int dollars, CSharpStringLabel? label, CSharpSchemaCalls? schema)
         {
             public int State { get; } = state;
             public int Quotes { get; } = quotes;
             public int Dollars { get; } = dollars;
             public CSharpStringLabel? Label { get; } = label;
+            public CSharpSchemaCalls? Schema { get; } = schema;
             public Stack<char> Delimiters { get; } = new();
         }
 

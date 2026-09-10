@@ -1,4 +1,6 @@
 using System.Text.Json.Nodes;
+using CodeIndex.Database;
+using CodeIndex.Models;
 
 namespace CodeIndex.Tests;
 
@@ -41,6 +43,32 @@ public partial class McpServerTests
                         Assert.Equal("unbalanced_interpolation", row["matchFacets"]![0]!["originUnavailable"]!["reason"]!.GetValue<string>());
                 }
             }
+        }
+        var writer = new DbWriter(_db.Connection);
+        var id = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/CrossChunk.cs", Lang = "csharp", Lines = 2, Size = 100,
+            Modified = DateTime.UtcNow, Checksum = "fixture",
+        });
+        writer.InsertChunks([
+            new ChunkRecord { FileId = id, ChunkIndex = 0, StartLine = 1, EndLine = 1, Content = "var s = $@\"{CrossChunkNeedle()}" },
+            new ChunkRecord { FileId = id, ChunkIndex = 1, StartLine = 2, EndLine = 2, Content = "\"; CrossChunkNeedle();" },
+        ]);
+        foreach (var limit in new[] { 1, 10 })
+        {
+            var response = _server.HandleMessage(new JsonObject
+            {
+                ["jsonrpc"] = "2.0", ["id"] = 5321, ["method"] = "tools/call",
+                ["params"] = new JsonObject
+                {
+                    ["name"] = "search",
+                    ["arguments"] = new JsonObject { ["query"] = "CrossChunkNeedle", ["exactSubstring"] = true, ["limit"] = limit },
+                },
+            })!;
+            var rows = response["result"]!["structuredContent"]!["results"]!.AsArray();
+            Assert.NotEmpty(rows);
+            Assert.All(rows, row => Assert.All(row!["matchFacets"]!.AsArray(),
+                facet => Assert.Equal("code", facet!["origin"]!.GetValue<string>())));
         }
     }
 }

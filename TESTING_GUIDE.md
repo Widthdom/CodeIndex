@@ -4,6 +4,8 @@
 
 ## C# multiline search-origin coverage
 
+Keep cross-chunk closing evidence independent of row limits in database, CLI counts and MCP tests; include schema alignment commas/nested builders and ordinary-format newline rejection with verbatim/raw controls.
+
 Issue #5321 extends this fixture with interpolation recovery before row/count/recipe/MCP matches and chunk-budget boundaries. The focused classifier matrix covers expression code, nested strings/comments, ordinary/verbatim/raw forms, escaped braces, malformed delimiters, format text, nesting limits, Unicode coordinates and bounded unavailability metadata. Run both net8/net9 lanes with the #5307 negative controls.
 
 Issue #5307 tests pair multiline comments, verbatim/raw strings and closing delimiters with executable controls. Preserve escaped quotes, delimiter lengths, schema/help/regex labels, missing prefix lines and lexical budgets, original coordinates, and CLI row/count/recipe plus MCP parity on net8.0 and net9.0. Synthetic snippet fixtures that assert known C# origins must supply the preceding indexed lines explicitly.
@@ -1300,6 +1302,8 @@ Issue #5300 のテストは隣接・入れ子の C# callable、対象行の除�
 # テストガイド
 
 ## C# 複数行検索 origin の検証
+
+チャンクをまたぐ終端の証拠が行数上限に依存しないことを、DB・CLI 件数・MCP のテストで維持してください。schema の配置指定カンマ／入れ子の builder と、通常書式での改行拒否および verbatim/raw の対照も含めます。
 
 Issue #5321 は同じ fixture に、行／件数／recipe／MCP の一致より前の補間回復とチャンク上限境界を追加します。分類器の専用マトリクスでは、式のコード、入れ子の文字列／コメント、通常／verbatim／raw 形式、波括弧のエスケープ、不正な区切り、書式部分、入れ子の上限、Unicode 座標、上限付きの分類不能メタデータを検証します。#5307 の負例とともに net8/net9 の両方で実行してください。
 

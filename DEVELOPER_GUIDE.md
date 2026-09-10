@@ -4,6 +4,8 @@
 
 ## C# search-origin context
 
+Read the bounded prefix independently of the last returned chunk so later closing delimiters cannot change earlier origins across pages. Interpolation frames isolate schema-call state (including alignment commas) while retaining nested builder detection. Ordinary interpolation format text cannot cross a physical newline; verbatim/raw formats can.
+
 Issue #5321 resumes ordinary/verbatim/raw interpolation with at most 64 active interpolation frames and 64 balanced delimiters per expression. Nested comments/strings are consumed by the same cancellable prefix pass. Merge adjacent literal spans, preserve UTF-16 coordinates, and keep unsupported formats or unbalanced/missing context unknown with bounded `SearchMatchFacet.OriginUnavailable` reason/start/extent evidence. No work budget depends on requested matches or pagination.
 
 `DbSearchReader.AttachCSharpOriginLines` supplies shared, indexed file prefixes to the snippet classifier. Preserve the per-file 4,096-line, 8 Mi-character and 128-chunk read limits, including overlap accounting; query pagination must not change those budgets. The character limit leaves room above existing 4 Mi-character semantic-analysis windows. Keep missing lines absent so the lexical classifier returns `unknown` rather than assuming code. Ordinary/token-boundary row and count paths and MCP must retain identical origin decisions and original UTF-16 coordinates. No persisted schema changes are involved.
@@ -4438,6 +4440,8 @@ API version 1 の互換性を維持し、新しい guard scope は contract vers
 # 開発者ガイド
 
 ## C# 検索 origin のコンテキスト
+
+返す最後のチャンクとは独立して上限付きの先頭部分を読み取り、後続の閉じ区切りによってページ間で先行箇所の origin が変わらないようにします。補間フレームは配置指定のカンマを含む schema 呼び出し状態を分離し、入れ子の builder 検出も維持します。通常の補間書式部分では物理改行を許可せず、verbatim/raw の書式部分では許可します。
 
 Issue #5321 は、同時に開いている補間フレームを最大 64、式ごとの対応する区切りを最大 64 として、通常／verbatim／raw 補間から走査を再開します。入れ子のコメントと文字列も同じキャンセル可能な先頭部分の走査で処理します。隣接するリテラル区間を結合し、UTF-16 座標を保持してください。未対応の書式や不均衡・欠落した文脈は、上限付きの `SearchMatchFacet.OriginUnavailable` の理由・開始位置・範囲を伴う不明状態にします。処理上限は一致数やページングに依存しません。
 
