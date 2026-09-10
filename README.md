@@ -58,6 +58,8 @@ C# origin classification remains line-local for multiline comments/strings; see 
 
 ## Search guard errors
 
+Early `search` / `find` validation failures also return a versioned JSON error with command identity, usage category, exit 1, and a recovery hint when JSON (including array/NDJSON and `--format json` / `compact`) is requested. This covers blank/missing queries, invalid options and missing/conflicting find scopes. JSON selectors work on either side of invalid input; inline option values and literals protected by `--` are not selectors. `find --origin` remains unsupported. Human diagnostics are unchanged, and `batch --json-summary` retains these child failures while continuing later requests.
+
 Missing numeric option values also preserve following inline output selectors: `cdidx search Return --limit --json=array` returns an `E010_USAGE_ERROR` JSON object with exit 1, just like placing the output selector first. This applies to search/audit numeric options and aliases, including counts, snippet limits, and byte budgets. A following `--` still protects a literal query; explicit inline values and existing numeric ranges are unchanged. Without machine output, the error, hint, and usage remain on stderr.
 
 Search and audit guard option errors return a versioned `E010_USAGE_ERROR` JSON object (exit 1) when JSON output is selected, including `--json=ndjson`, `--json=array`, `--format json`, and compact output. Output selection works before or after the invalid option; `--` still introduces a literal query. Missing values and invalid scopes/windows remain rejected (`--guard-scope` accepts `window`, `same-line`, or `same-symbol`). Human output retains its error, hint, and usage. `batch --json-summary` preserves the structured child error and continues subsequent commands without `--include-raw-streams`.
@@ -411,6 +413,8 @@ C# の複数行コメント／文字列の出現元分類には行単位の制�
 新規計画は全単位を pending とします。実行ごとの `partition` 記録を binding/id ごとに収集してください。ページカーソルは実行済みの証拠ではなく、再実行では観測が重複し得ます。単一ファイルでも候補上限に達すれば pending・非 authoritative のままで、ソースの手動確認が必要です。計画は対象となる索引内パスを扱い、未索引ファイルや人手レビューの完了を保証しません。上限は 10,000 パス、延べ 100,000 索引行、512 クエリ、10 秒、1 ページ 10 単位です。超過時は利用不可の計画と絞り込み案内を返します。出力予算で作業上限は増えず、baseline レビューの注釈とも独立しています。
 
 ## 検索guardのエラー
+
+`search` / `find` の早期検証失敗も、JSON（array／NDJSON、`--format json`／`compact` を含む）指定時は、コマンド名、usage カテゴリー、終了コード1、復旧ヒントを持つバージョン付き JSON エラーを返します。空・欠落クエリ、不正なオプション、find のスコープ欠落・競合が対象です。出力指定は不正入力の前後どちらでも有効ですが、オプションのインライン値や `--` で保護したリテラルを出力指定とは扱いません。`find --origin` は引き続き未対応です。人間向け診断は変わらず、`batch --json-summary` は構造化した子エラーを保持して後続要求を実行します。
 
 数値オプションの値欠如時も、後続のインライン出力指定を保持します。`cdidx search Return --limit --json=array` は、出力指定を先に置いた場合と同じく `E010_USAGE_ERROR` JSON オブジェクトと終了コード1を返します。search／audit の件数、スニペット上限、バイト予算などの数値オプションと別名が対象です。後続の `--` は引き続きリテラル検索文字列を保護し、明示的なインライン値と既存の数値範囲は変わりません。機械向け出力を指定しない場合、エラー、ヒント、使用法は stderr に出力されます。
 

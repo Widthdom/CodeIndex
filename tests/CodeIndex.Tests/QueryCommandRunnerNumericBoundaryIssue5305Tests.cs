@@ -93,9 +93,11 @@ public partial class QueryCommandRunnerTests
                 var (exit, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                     ["Return", "--db", dbPath, "--json", .. inline ? new[] { "--limit=" + value } : new[] { "--limit", value }], _jsonOptions));
                 Assert.Equal(CommandExitCodes.UsageError, exit);
-                Assert.Empty(stdout);
-                Assert.Contains(value == "10001" ? "--limit must be less than or equal" : "--limit requires an integer between 1 and 10000", stderr);
-                Assert.DoesNotContain("requires a value", stderr);
+                Assert.Empty(stderr);
+                using var error = JsonDocument.Parse(stdout);
+                var message = error.RootElement.GetProperty("message").GetString();
+                Assert.Contains(value == "10001" ? "--limit must be less than or equal" : "--limit requires an integer between 1 and 10000", message);
+                Assert.DoesNotContain("requires a value", message);
             }
         }
 

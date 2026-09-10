@@ -533,8 +533,10 @@ public class JsonEnvelopeWrapperTests
             "1.0.0-test"));
 
         Assert.NotEqual(CommandExitCodes.Success, exitCode);
-        Assert.Contains($"{option} requires a value", stderr);
+        Assert.Empty(stderr);
         using var document = JsonDocument.Parse(stdout);
+        Assert.Contains($"{option} requires a value",
+            document.RootElement.GetProperty("results")[0].GetProperty("message").GetString());
         Assert.Equal(
             exitCode,
             document.RootElement.GetProperty("metadata").GetProperty("exit_code").GetInt32());

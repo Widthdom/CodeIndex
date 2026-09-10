@@ -1,5 +1,9 @@
 # Testing Guide
 
+## Early search/find validation coverage
+
+`QueryCommandRunnerEarlyUsageIssue5323Tests.cs` shares an isolated database across blank/missing query, unsupported/missing-value option, find scope, output ordering/alias, bounded diagnostic and human controls. Keep JSON-looking query/inline values separate from actual selectors and test `--` boundaries. Sequential/parallel batch summaries must retain structured failures and continue a successful child without raw streams. Run on net8/net9 alongside #5297/#5305; invalid numeric search values now produce JSON when requested.
+
 > **[日本語版はこちら / Japanese version](#テストガイド)**
 
 ## Installer inherited-pipe regression coverage
@@ -1313,6 +1317,10 @@ Issue #5300 のテストは隣接・入れ子の C# callable、対象行の除�
 パーサー（#5297）の回帰テストとともに net8.0 / net9.0 で実行します。
 
 # テストガイド
+
+## search/find の早期検証テスト
+
+`QueryCommandRunnerEarlyUsageIssue5323Tests.cs` は分離した DB を共有し、空・欠落クエリ、未対応・値欠落オプション、find スコープ、出力指定の順序・別名、上限付き診断、人間向け出力を検証します。JSON 風のクエリ・インライン値と実際の出力指定を区別し、`--` 境界を確認してください。逐次・並列 batch summary は raw stream なしで構造化エラーを保持し、後続の正常な子コマンドも実行する必要があります。#5297/#5305 とともに net8/net9 で実行します。不正な search 数値も JSON 指定時は JSON エラーになります。
 
 ## インストーラーの継承パイプに関する回帰テスト
 

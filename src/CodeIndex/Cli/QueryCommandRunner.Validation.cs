@@ -10,6 +10,14 @@ public static partial class QueryCommandRunner
         if (options.ExtraNames.Count == 0)
             return false;
 
+        if (commandName == "search" && UsesEarlySearchJson(options))
+        {
+            WriteEarlyUsageJson(commandName, options.InvocationJsonOptions!,
+                $"unexpected extra positional arguments for search: {string.Join(", ", options.ExtraNames.Take(10).Select(name => ConsoleUi.FormatBoundedValue(name, 120)))}.",
+                BuildUnexpectedExtraPositionalsHint(commandName, options));
+            return true;
+        }
+
         CommandErrorWriter.Write(
             $"unexpected extra positional {ConsoleUi.Counted(options.ExtraNames.Count, "argument")} for {commandName}: {string.Join(", ", options.ExtraNames.Select(name => $"`{name}`"))}.",
             BuildUnexpectedExtraPositionalsHint(commandName, options),
@@ -177,6 +185,11 @@ public static partial class QueryCommandRunner
         string? errorCode = null)
     {
         var invocationContext = options.InvocationContext;
+        if (UsesEarlySearchJson(options))
+        {
+            WriteEarlyUsageJson(invocationContext.CommandName, options.InvocationJsonOptions!, message, hint, errorCode);
+            return;
+        }
         if (options.InvocationMachineErrorOutputRequested
             && invocationContext.StructuredMachineUsageErrors
             && options.InvocationJsonOptions != null)
@@ -212,7 +225,7 @@ public static partial class QueryCommandRunner
         string fallbackCommandName,
         string hint)
     {
-        if (options.InvocationContext.StructuredMachineUsageErrors)
+        if (options.InvocationContext.StructuredMachineUsageErrors || UsesEarlySearchJson(options))
         {
             WriteUsageError(message, options, hint);
             return;
@@ -223,7 +236,7 @@ public static partial class QueryCommandRunner
 
     private static void WriteSearchValidationError(string message, QueryCommandOptions options, string hint)
     {
-        if (options.InvocationContext.StructuredMachineUsageErrors)
+        if (options.InvocationContext.StructuredMachineUsageErrors || UsesEarlySearchJson(options))
         {
             WriteUsageError(message, options, hint);
             return;
@@ -250,6 +263,13 @@ public static partial class QueryCommandRunner
             return false;
         if (!string.IsNullOrWhiteSpace(options.Query))
             return false;
+        if (commandName == "search" && UsesEarlySearchJson(options))
+        {
+            WriteEarlyUsageJson(commandName, options.InvocationJsonOptions!,
+                $"{commandName} query cannot be empty or whitespace-only",
+                $"Pass a non-empty value after `{commandName}`; empty or whitespace-only arguments (e.g. `\"\"` or `\"   \"`) are rejected.");
+            return true;
+        }
         WriteUsageError(
             $"{commandName} query cannot be empty or whitespace-only",
             GetUsageLineOrThrow(commandName),

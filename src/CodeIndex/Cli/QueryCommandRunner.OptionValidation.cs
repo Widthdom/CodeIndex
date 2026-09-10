@@ -69,6 +69,7 @@ public static partial class QueryCommandRunner
                 out _,
                 out _);
         var machineErrorOutput = responseBudgetMachineError
+            || UsesEarlySearchJson(options)
             || options.Json
                && jsonOptions != null
                && (!invocationContext.StructuredMachineUsageErrors
@@ -171,6 +172,15 @@ public static partial class QueryCommandRunner
                     CommandErrorWriter.MinimumResponseBytesUnavailableBeforeMaterialization,
                 usage: invocationContext.UsageLine,
                 additionalJsonProperties: additionalJsonProperties);
+            return;
+        }
+
+        if (UsesEarlySearchJson(options))
+        {
+            WriteEarlyUsageJson(invocationContext.CommandName, options.InvocationJsonOptions!, error,
+                hint == "fix the invalid or missing option value, then rerun with the command shape below."
+                    ? "Fix the invalid or missing option value, then rerun; use `cdidx search --help` for command syntax."
+                    : hint);
             return;
         }
 
@@ -443,6 +453,11 @@ public static partial class QueryCommandRunner
 
         void WriteOptionError(string message, string hint, string? errorCode = null)
         {
+            if (options != null && UsesEarlySearchJson(options))
+            {
+                WriteEarlyUsageJson(commandName, options.InvocationJsonOptions!, message, hint, errorCode);
+                return;
+            }
             if (jsonOptions != null
                 && ProgramRunner.ContainsJsonOutputFlag(cmdArgs))
             {

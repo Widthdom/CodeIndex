@@ -1,5 +1,9 @@
 # Developer Guide
 
+## Early query usage errors
+
+Search/find determine early JSON error intent from original tokens before validation. Skip owned option values and stop at the literal marker; never parse rendered stderr. Route failures through `CommandErrorWriter` with bounded, control-safe messages and hints, public command identity and existing error codes. Preserve human diagnostics and batch child-error extraction; this does not add find origin support or change successful query formats.
+
 > **[日本語版はこちら / Japanese version](#開発者ガイド)**
 
 ## Installer output lifetime
@@ -4457,6 +4461,10 @@ CLI、レシピの再実行・フィンガープリント、MCP スキーマ、`
 API version 1 の互換性を維持し、新しい guard scope は contract version 1 を公開します。
 
 # 開発者ガイド
+
+## クエリの早期 usage エラー
+
+search/find は検証前に元のトークン列から JSON エラーの出力指定を判定します。オプションが所有する値を飛ばし、リテラルマーカーで停止してください。描画済み stderr を解析してはいけません。上限と制御文字対策を持つメッセージ・ヒント、公開コマンド名、既存のエラーコードを保ち、`CommandErrorWriter` で失敗を出力します。人間向け診断と batch の子エラー抽出は維持し、find の origin 対応や正常時の出力形式は変更しません。
 
 ## インストーラー出力の読み取り期間
 
