@@ -1697,6 +1697,171 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_NamedSelectionPreservesPerQueryAccounting_Issue5325()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_named_selection");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            foreach (var path in new[] { "src/一.js", "src/two.js", "src/three.js" })
+            {
+                TestProjectHelper.InsertIndexedFile(dbPath, path, "javascript", "needle();\n");
+                ReplaceIndexedChunks(dbPath, path, [.. Enumerable.Range(0, 3).Select(i => new ChunkRecord
+                {
+                    ChunkIndex = i, StartLine = i == 2 ? 1 : i * 10 + 1,
+                    EndLine = i == 2 ? 1 : i * 10 + 1, Content = "needle();\n",
+                })]);
+            }
+            foreach (var named in new[]
+            {
+                new[] { "--named-query=one=needle" },
+                new[] { "--named-query=one=needle", "--named-query=two=needle", "--named-query=empty=absent5325" },
+                new[] { "--named-query=empty=absent5325" },
+            })
+                foreach (var selectors in new[]
+                {
+                new[] { "--first-per-file" }, new[] { "--sample", "4" },
+                new[] { "--first-per-file", "--sample", "2" },
+            })
+                    foreach (var format in new[]
+                    {
+                new[] { "--json" }, new[] { "--format", "compact" },
+                new[] { "--json", "--search-fields", "path,line,query_name" },
+                new[] { "--format", "compact", "--search-fields", "path,line" },
+            })
+                    {
+                        string[] args = [.. named, .. selectors, .. format, "--db", dbPath, "--limit", "1", "--total-limit", "1"];
+                        var (exit, output, error) = CaptureConsole(() => QueryCommandRunner.RunSearch(args, _jsonOptions));
+                        Assert.Equal(CommandExitCodes.Success, exit);
+                        Assert.Empty(error);
+                        using var document = ParseJsonOutput(output);
+                        var queries = document.RootElement.GetProperty("queries").EnumerateArray().ToArray();
+                        Assert.Equal(named.Length, queries.Length);
+                        var expectedReturned = named[0].Contains("empty", StringComparison.Ordinal) ? 0 : 1;
+                        Assert.Equal(expectedReturned, document.RootElement.GetProperty("result_count").GetInt32());
+                        for (var i = 0; i < queries.Length; i++)
+                        {
+                            var query = queries[i];
+                            var empty = query.GetProperty("name").GetString() == "empty";
+                            var selected = empty ? 0 : selectors.Length == 1 ? 3 : selectors.Length == 2 ? 4 : 2;
+                            var returned = empty || i > 0 ? 0 : 1;
+                            var accounting = query.GetProperty("selection_accounting");
+                            Assert.Equal("per_query", accounting.GetProperty("scope").GetString());
+                            Assert.Equal(empty ? 0 : 6, accounting.GetProperty("source_total").GetInt32());
+                            Assert.True(accounting.GetProperty("source_total_authoritative").GetBoolean());
+                            Assert.False(accounting.TryGetProperty("source_total_lower_bound", out _));
+                            Assert.Equal(selected, accounting.GetProperty("selected_total").GetInt32());
+                            Assert.Equal(returned, accounting.GetProperty("returned").GetInt32());
+                            Assert.Equal((empty ? 0 : 6) - selected, accounting.GetProperty("selector_omitted_count").GetInt32());
+                            Assert.Equal(selected - returned, accounting.GetProperty("limit_omitted_count").GetInt32());
+                            Assert.Equal(0, accounting.GetProperty("byte_limit_omitted_count").GetInt32());
+                            Assert.Equal(returned, query.GetProperty("count").GetInt32());
+                            Assert.Equal(returned, query.GetProperty("results").GetArrayLength());
+                            var stages = accounting.GetProperty("selectors").EnumerateArray().ToArray();
+                            Assert.Equal(selectors.Length == 3 ? 2 : 1, stages.Length);
+                            if (stages.Length == 2)
+                            {
+                                Assert.Equal("first_per_file", stages[0].GetProperty("mode").GetString());
+                                Assert.Equal("sample", stages[1].GetProperty("mode").GetString());
+                                Assert.Equal(stages[0].GetProperty("output_total").GetInt32(), stages[1].GetProperty("input_total").GetInt32());
+                            }
+                        }
+                        var (_, repeated, _) = CaptureConsole(() => QueryCommandRunner.RunSearch(args, _jsonOptions));
+                        Assert.Equal(output, repeated);
+                        var bytes = Encoding.UTF8.GetByteCount(output);
+                        foreach (var budget in new[] { bytes, bytes - 1 })
+                        {
+                            var (boundedExit, boundedOutput, boundedError) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                                [.. args, "--max-json-bytes", budget.ToString(CultureInfo.InvariantCulture)], _jsonOptions));
+                            Assert.Empty(boundedError);
+                            if (budget == bytes)
+                            {
+                                Assert.Equal(CommandExitCodes.Success, boundedExit);
+                                Assert.Equal(output, boundedOutput);
+                            }
+                            else
+                            {
+                                Assert.Equal(CommandExitCodes.UsageError, boundedExit);
+                                using var failure = ParseJsonOutput(boundedOutput);
+                                Assert.Equal(CommandErrorCodes.ResponseBudgetTooSmall, failure.RootElement.GetProperty("error_code").GetString());
+                            }
+                        }
+                    }
+
+            string[] sharedArgs = ["--named-query=one=needle", "--named-query=two=needle", "--first-per-file", "--sample", "2", "--db", dbPath];
+            var (fullExit, fullOutput, _) = CaptureConsole(() => QueryCommandRunner.RunSearch([.. sharedArgs, "--json"], _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, fullExit);
+            using var full = ParseJsonOutput(fullOutput);
+            var fullQueries = full.RootElement.GetProperty("queries").EnumerateArray().ToArray();
+            Assert.Equal(fullQueries[0].GetProperty("results").GetRawText(), fullQueries[1].GetProperty("results").GetRawText());
+            Assert.False(fullQueries[0].GetProperty("truncated").GetBoolean());
+            var (textExit, textOutput, _) = CaptureConsole(() => QueryCommandRunner.RunSearch(sharedArgs, _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, textExit);
+            Assert.Contains("source=6 (authoritative), selected=2, returned=2, selector_omitted=4, limit_omitted=0", textOutput);
+            var (guardExit, guardOutput, _) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [.. sharedArgs, "--json", "--reject-after", "absent5325"], _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, guardExit);
+            using var guarded = ParseJsonOutput(guardOutput);
+            Assert.All(guarded.RootElement.GetProperty("queries").EnumerateArray(), query =>
+            {
+                var accounting = query.GetProperty("selection_accounting");
+                Assert.False(accounting.GetProperty("source_total_authoritative").GetBoolean());
+                Assert.Equal(accounting.GetProperty("source_total").GetInt32(), accounting.GetProperty("source_total_lower_bound").GetInt32());
+            });
+            foreach (var incompatible in new[]
+            {
+                new[] { "--count" }, new[] { "--format", "count" }, new[] { "--summary-only" },
+                new[] { "--results-only" }, new[] { "--json=ndjson" }, new[] { "--json=array" },
+                new[] { "--cursor", "0:1:1" }, new[] { "--count-by", "file" },
+            })
+            {
+                var (invalidExit, invalidOutput, invalidError) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                    [.. sharedArgs, "--json", .. incompatible], _jsonOptions));
+                Assert.Equal(CommandExitCodes.UsageError, invalidExit);
+                Assert.Empty(invalidError);
+                using var invalid = ParseJsonOutput(invalidOutput);
+                Assert.True(invalid.RootElement.TryGetProperty("error_code", out _));
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_NamedSelectionRetainsRawCandidateExhaustion_Issue5325()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_named_selection_cap");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/cap.js", "javascript", "needle();\n");
+            ReplaceIndexedChunks(dbPath, "src/cap.js", [.. Enumerable.Range(0, 10_001).Select(i => new ChunkRecord
+            {
+                ChunkIndex = i, StartLine = 1, EndLine = 1, Content = "needle();\n",
+            })]);
+            var (exit, output, error) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--named-query=cap=needle", "--first-per-file", "--sample", "2", "--json", "--db", dbPath], _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, exit);
+            Assert.Empty(error);
+            using var document = ParseJsonOutput(output);
+            var query = Assert.Single(document.RootElement.GetProperty("queries").EnumerateArray());
+            Assert.True(query.GetProperty("truncated").GetBoolean());
+            var accounting = query.GetProperty("selection_accounting");
+            Assert.True(accounting.GetProperty("candidate_window_exhausted").GetBoolean());
+            Assert.False(accounting.GetProperty("source_total_authoritative").GetBoolean());
+            Assert.Equal(1, accounting.GetProperty("source_total_lower_bound").GetInt32());
+            Assert.Equal(1, accounting.GetProperty("selected_total").GetInt32());
+            Assert.Equal(1, accounting.GetProperty("returned").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_NamedQueriesCountSummaryJsonCountsAllMatches_Issue4308()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_named_queries_count_4308");
@@ -12826,7 +12991,7 @@ public partial class QueryCommandRunnerTests
         {
             (Args: new[] { "needle", "--count", "--sample", "1" }, Expected: "cannot be combined with count or aggregation"),
             (Args: new[] { "needle", "--count-by", "file", "--first-per-file" }, Expected: "cannot be combined with count or aggregation"),
-            (Args: new[] { "--named-query", "one=needle", "--sample", "1" }, Expected: "not supported with --named-query"),
+            (Args: new[] { "--named-query", "one=needle", "--sample", "1", "--count" }, Expected: "named-query row-selection controls require grouped row output"),
             (Args: new[] { "--list-recipes", "--first-per-file" }, Expected: "not supported with --list-recipes"),
             (Args: new[] { "needle", "--json", "--results-only", "--sample", "1" }, Expected: "cannot be combined with --results-only"),
             (Args: new[] { "needle", "--json=array", "--sample", "1" }, Expected: "metadata-free --json=array"),
