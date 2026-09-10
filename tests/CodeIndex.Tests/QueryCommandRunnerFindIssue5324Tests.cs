@@ -128,6 +128,27 @@ public sealed class QueryCommandRunnerFindIssue5324Tests
         using var unknown = JsonDocument.Parse(unknownOutput);
         Assert.False(unknown.RootElement.GetProperty("metadata").GetProperty("total_count_authoritative").GetBoolean());
         Assert.Contains("origin_classification", unknownOutput, StringComparison.Ordinal);
+
+        TestProjectHelper.InsertIndexedFile(db, "src/triple.txt", "text", "Needle Needle Needle\n");
+        cursor = null;
+        for (var page = 0; page < 3; page++)
+        {
+            var unknownArgs = new[] { "find", "Needle", "--regex", "--origin", "unknown", "--path", "src/triple.txt",
+                "--db", db, "--json", "--limit", "1", "--max-json-bytes", "6000" };
+            var (exit, output, _) = CaptureConsole(() => ProgramRunner.Run(
+                cursor is null ? unknownArgs : [.. unknownArgs, "--cursor", cursor], JsonOptions, "test"));
+            Assert.Equal(CommandExitCodes.PartialResult, exit);
+            using var document = JsonDocument.Parse(output);
+            var metadata = document.RootElement.GetProperty("metadata");
+            var terminal = metadata.GetProperty("stream_terminal");
+            // The next-match lookahead is observed, but pre-cursor matches must not be recounted.
+            Assert.Equal(page == 2 ? 1 : 2, terminal.GetProperty("unknown_origin_matches").GetInt32());
+            Assert.False(metadata.GetProperty("total_count_authoritative").GetBoolean());
+            cursor = metadata.GetProperty("next_cursor").GetString();
+            if (page < 2)
+                Assert.NotNull(cursor);
+        }
+        Assert.Null(cursor);
     }
 
     [Fact]

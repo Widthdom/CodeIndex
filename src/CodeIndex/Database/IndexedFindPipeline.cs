@@ -154,6 +154,14 @@ public partial class DbReader
                         request.FocusColumn))
                     {
                         request.CancellationToken.ThrowIfCancellationRequested();
+                        if (request.Resume.MatchOrdinal is { } resumeOrdinal
+                            && string.Equals(file.Path, request.Resume.Path, StringComparison.Ordinal)
+                            && indexedLine.Number == request.Resume.Line
+                            && matchOrdinal < resumeOrdinal)
+                        {
+                            matchOrdinal++;
+                            continue;
+                        }
                         var classifiedMatch = lineMatch;
                         if (request.SemanticFilters is { } filters)
                         {
