@@ -4741,6 +4741,9 @@ internal sealed record SearchRecipeQueryResultJsonResult(
 
     [JsonIgnore]
     public bool CandidateWindowExhausted { get; init; }
+
+    [JsonIgnore]
+    public string? CoverageRestriction { get; init; }
 }
 
 internal sealed record SearchNamedBatchCountSummaryRunJsonResult(

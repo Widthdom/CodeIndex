@@ -14,6 +14,19 @@ internal static class AuditBaselineStore
     internal const int ResultLimit = 200;
     internal const string Recovery = "Refresh the index and repeat the same recipes and filters with sufficient --limit and --total-limit. Review unknown or changed evidence manually; never treat unknown as resolved.";
 
+    internal static string RecoveryFor(params JsonNode?[] coverage)
+    {
+        var reasons = coverage.OfType<JsonArray>().SelectMany(array => array)
+            .OfType<JsonValue>().Select(value => value.GetValue<string>()).ToHashSet(StringComparer.Ordinal);
+        if (reasons.Contains("origin_classification_incomplete"))
+            return "Origin classification could not evaluate every candidate. Inspect unknown match origins and origin_unavailable diagnostics with an unfiltered search; review those paths manually. Larger result limits or an unchanged index refresh cannot repair lexical classification limits. Never treat unknown as resolved.";
+        if (reasons.Overlaps(["guard_filter_coverage_unverified", "file_reject_coverage_unverified", "semantic_filter_coverage_unverified", "result_kind_filter_coverage_unverified"]))
+            return "This recipe's guard, file-rejection, semantic, or result-kind filtering does not provide verified coverage for baselines. Review its evidence manually or explicitly choose a supported recipe and export a new baseline for that scope. Increasing result limits cannot establish filtering coverage. Never treat unknown as resolved.";
+        if (reasons.Contains("raw_candidate_window_exhausted"))
+            return "The raw candidate window was exhausted before complete filtering coverage could be established. Narrow the recipe/path scope and export a new baseline with the same narrowed comparison arguments; output limits do not enlarge audit candidate safety budgets. Never treat unknown as resolved.";
+        return Recovery;
+    }
+
     internal static string Hash(params string[] parts)
         => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(string.Join("\0", parts)))).ToLowerInvariant();
 
@@ -194,7 +207,7 @@ internal static class AuditBaselineStore
             ["baseline_observation_count"] = oldEntries.Length,
             ["current_observation_count"] = newEntries.Length,
             ["results"] = results,
-            ["recovery_guidance"] = Recovery,
+            ["recovery_guidance"] = RecoveryFor(baseline["coverage_reasons"], current["coverage_reasons"]),
         };
     }
 

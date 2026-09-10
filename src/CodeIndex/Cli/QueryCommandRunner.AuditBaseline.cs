@@ -21,7 +21,9 @@ public static partial class QueryCommandRunner
             var path = args[1];
             var overwrite = false;
             string? recipeName = null, actor = null, reason = null, id = null;
-            var forwarded = new List<string> { "--all", "--limit", "1000", "--total-limit", "10000", "--snippet-lines", "20" };
+            var forwarded = new List<string> { "--all", "--snippet-lines", "20" };
+            var userLimit = false;
+            var userTotalLimit = false;
             if (json) forwarded.Add("--json");
             for (var i = 2; i < args.Length; i++)
             {
@@ -41,8 +43,15 @@ public static partial class QueryCommandRunner
                 if (flag == "--recipe") recipeName = value;
                 else if (flag == "--actor") actor = value;
                 else if (flag == "--reason") reason = value;
-                else forwarded.AddRange([flag, value]);
+                else
+                {
+                    userLimit |= flag == "--limit";
+                    userTotalLimit |= flag == "--total-limit";
+                    forwarded.AddRange([flag, value]);
+                }
             }
+            if (!userLimit) forwarded.AddRange(["--limit", "1000"]);
+            if (!userTotalLimit) forwarded.AddRange(["--total-limit", "10000"]);
             if (verb == "review")
             {
                 if (!overwrite || id == null || actor == null || reason == null)
@@ -87,7 +96,7 @@ public static partial class QueryCommandRunner
                         ["complete"] = snapshot["complete"]!.DeepClone(),
                         ["coverage_reasons"] = snapshot["coverage_reasons"]!.DeepClone(),
                         ["entry_count"] = snapshot["entries"]!.AsArray().Count,
-                        ["recovery_guidance"] = AuditBaselineStore.Recovery,
+                        ["recovery_guidance"] = AuditBaselineStore.RecoveryFor(snapshot["coverage_reasons"]),
                     };
                 }
                 WriteBaselineResult(output, json);
@@ -165,13 +174,13 @@ public static partial class QueryCommandRunner
             foreach (var row in result["results"]!.AsArray().OfType<JsonObject>())
                 Console.WriteLine($"{row["classification"]}: {row["path"]}:{row["line"]} {row["recipe"]}/{row["query"]} id={row["id"]} reason={row["reason"]} reviewed_safe={row["review_applies"]}");
             Console.WriteLine($"Comparison reasons: {result["reasons"]}; baseline coverage: {result["baseline_coverage_reasons"]}; current coverage: {result["current_coverage_reasons"]}.");
-            Console.WriteLine(AuditBaselineStore.Recovery);
+            Console.WriteLine(result["recovery_guidance"]);
         }
         else if (result["id"] != null) Console.WriteLine($"Reviewed safe: {result["id"]}. Annotation saved.");
         else
         {
             Console.WriteLine($"{result["mode"]}: saved. Entries={result["entry_count"]}; complete={result["complete"]}; coverage reasons={result["coverage_reasons"]}.");
-            Console.WriteLine(AuditBaselineStore.Recovery);
+            Console.WriteLine(result["recovery_guidance"]);
         }
         return CommandExitCodes.Success;
     }
@@ -223,6 +232,8 @@ public static partial class QueryCommandRunner
                 if (query.Result == null || query.Status != "completed" || query.Result.Truncated
                     || !query.Result.SourceTotalAuthoritative || query.Result.MinimumOmittedResultCount > 0 || query.ByteOmittedResultCount > 0)
                     reasons.Add("query_coverage_incomplete");
+                if (query.Result?.CoverageRestriction is { } restriction) reasons.Add(restriction);
+                if (query.Result?.CandidateWindowExhausted == true) reasons.Add("raw_candidate_window_exhausted");
                 foreach (var row in query.Result?.Results ?? [])
                 {
                     string path;
