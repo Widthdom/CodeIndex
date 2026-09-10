@@ -80,12 +80,14 @@ public sealed class QueryCommandRunnerFindIssue4621Tests
     [Fact]
     public void RunFind_CompactContextErrorNamesSymmetricFlag_Issue4621()
     {
-        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
             ["needle", "--path", "src/**", "--format", "compact", "--context", "1"],
             JsonOptions));
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
-        Assert.Contains("--context", stderr, StringComparison.Ordinal);
+        Assert.Empty(stderr);
+        using var error = JsonDocument.Parse(stdout);
+        Assert.Contains("--context", error.RootElement.GetProperty("message").GetString());
     }
 
     [Fact]

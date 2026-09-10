@@ -69,6 +69,9 @@ public static partial class QueryCommandRunner
         out SearchRoutePlan route)
     {
         route = default;
+        var machineErrorOutput = invocationContext == QueryCommandInvocationContext.Search
+            ? RequestsEarlyUsageJson(validationArgs)
+            : ProgramRunner.ContainsJsonOutputFlag(validationArgs);
         var previewOptionError = ValidatePreviewOptions("search", cmdArgs, allowMaxLineWidth: true, allowFocusOptions: false);
         if (previewOptionError != null)
         {
@@ -82,8 +85,9 @@ public static partial class QueryCommandRunner
             allowIssueDraftsFormat: true,
             applySearchSourceDefaults: true);
         options.InvocationContext = invocationContext;
+        options.EarlySearchValidation = true;
         options.InvocationJsonOptions = jsonOptions;
-        options.InvocationMachineErrorOutputRequested = ProgramRunner.ContainsJsonOutputFlag(validationArgs);
+        options.InvocationMachineErrorOutputRequested = machineErrorOutput;
         if (options.SearchGuardValidationError && options.Json)
             options.InvocationMachineErrorOutputRequested = true;
         if (ReferenceEquals(invocationContext, QueryCommandInvocationContext.Search)
@@ -98,12 +102,13 @@ public static partial class QueryCommandRunner
             acceptedFlags,
             options,
             options.Query,
-            invocationContext.StructuredMachineUsageErrors ? jsonOptions : null))
+            invocationContext.StructuredMachineUsageErrors || UsesEarlySearchJson(options) ? jsonOptions : null))
             return false;
         if (TryWriteParseError(
             options,
             invocationContext,
-            options.LanguageValidationError
+            UsesEarlySearchJson(options)
+                || options.LanguageValidationError
                 || options.SearchGuardValidationError
                 || invocationContext.StructuredMachineUsageErrors
                 || options.Json
@@ -140,6 +145,7 @@ public static partial class QueryCommandRunner
         if (!TryCreateSearchRoutePlan(cmdArgs, options, exact, cancellationToken, out route))
             return false;
 
+        options.EarlySearchValidation = false;
         return true;
     }
 

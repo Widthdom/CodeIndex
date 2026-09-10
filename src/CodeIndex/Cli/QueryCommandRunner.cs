@@ -85,6 +85,7 @@ public sealed class QueryCommandOptions
     internal QueryCommandInvocationContext InvocationContext { get; set; } = QueryCommandInvocationContext.Search;
     internal JsonSerializerOptions? InvocationJsonOptions { get; set; }
     internal bool InvocationMachineErrorOutputRequested { get; set; }
+    internal bool EarlySearchValidation { get; set; }
     internal string[] InvocationArgs { get; init; } = [];
     internal string? InvocationGenerationFingerprint { get; set; }
     public string DbPath { get; init; } = Path.Combine(".cdidx", "codeindex.db");

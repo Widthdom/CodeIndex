@@ -123,8 +123,19 @@ public class QueryCommandRunnerFindIssue4578Tests
                     QueryCommandRunner.RunFind([.. args], JsonOptions));
 
                 Assert.Equal(CommandExitCodes.UsageError, exitCode);
-                Assert.Equal(string.Empty, stdout);
-                Assert.Contains("streaming NDJSON", stderr, StringComparison.Ordinal);
+                if (formatArgs.Any(arg => arg.StartsWith("--json", StringComparison.Ordinal) || arg == "compact"))
+                {
+                    Assert.Equal(string.Empty, stderr);
+                    using var error = JsonDocument.Parse(stdout);
+                    Assert.Equal("error", error.RootElement.GetProperty("status").GetString());
+                    Assert.Equal("find", error.RootElement.GetProperty("command").GetString());
+                    Assert.Contains("streaming NDJSON", error.RootElement.GetProperty("message").GetString(), StringComparison.Ordinal);
+                }
+                else
+                {
+                    Assert.Equal(string.Empty, stdout);
+                    Assert.Contains("streaming NDJSON", stderr, StringComparison.Ordinal);
+                }
             }
 
             var (normalizedExitCode, normalizedStdout, normalizedStderr) = CaptureConsole(() =>

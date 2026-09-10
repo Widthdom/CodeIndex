@@ -126,12 +126,14 @@ public class QueryCommandRunnerSearchIssue4906Tests
                 "1.0.0-test"));
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
-        Assert.Equal(string.Empty, stdout);
+        Assert.Empty(stderr);
+        using var document = JsonDocument.Parse(stdout);
+        var hint = document.RootElement.GetProperty("hint").GetString();
         Assert.Contains(
             "cdidx find --query TODO --all --regex --format count",
-            stderr,
+            hint,
             StringComparison.Ordinal);
-        Assert.DoesNotContain("--regex --count", stderr, StringComparison.Ordinal);
+        Assert.DoesNotContain("--regex --count", hint, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -185,6 +187,12 @@ public class QueryCommandRunnerSearchIssue4906Tests
                 ProgramRunner.Run(args, JsonOptions, "1.0.0-test"));
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            if (args[2] == "--json")
+            {
+                Assert.Empty(stdout);
+                Assert.Contains("cdidx find --query --json", stderr, StringComparison.Ordinal);
+                continue;
+            }
             Assert.Equal(string.Empty, stderr);
             using var document = JsonDocument.Parse(stdout);
             var argv = document.RootElement
