@@ -10,7 +10,8 @@ Use `cdidx find 'XmlReader\.Create' --regex --path src/ --origin code --json`.
 `--regex`. Inclusive origin/kind lists use OR within a list and AND between
 filters; exclusions win. Repeated and comma-separated values are accepted.
 Filtering happens per exact regex occurrence before counts, offsets and limits.
-All semantic options bind continuation cursors.
+All semantic options bind continuation cursors. A row page resumed from a native find scan position reports only
+its scan segment; its bounded `total_count_authoritative` remains false.
 
 This v1 reuses search's bounded C# indexed-prefix classifier (4,096 lines,
 8 Mi characters, 128 chunks) and line-local shell classifier. Other languages,
@@ -87,7 +88,8 @@ text or JSON output when context from `--before`, `--after`, or
 `--exclude-comments`、`--exclude-strings`、`--exclude-fixtures` は `--regex` が必要です。
 指定値のリスト内は OR、フィルター間は AND で、除外指定を優先します。繰り返し指定と
 カンマ区切りに対応します。正規表現の各一致を件数・offset・limit の適用前に分類し、
-すべての意味フィルターを継続カーソルへ紐づけます。
+すべての意味フィルターを継続カーソルへ紐づけます。find の走査位置から再開した行ページはその走査区間だけを
+報告するため、上限付き出力の `total_count_authoritative` は false を維持します。
 
 v1 は search と共通の C# 索引済みプレフィックス分類器（4,096 行、8 Mi 文字、128 チャンク）と
 行単位の shell 分類器を使います。それ以外の言語、C# 文脈の欠落・上限超過、行末のゼロ幅位置は

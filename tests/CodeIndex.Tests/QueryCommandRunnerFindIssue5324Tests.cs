@@ -108,6 +108,8 @@ public sealed class QueryCommandRunnerFindIssue5324Tests
             Assert.True(System.Text.Encoding.UTF8.GetByteCount(output) <= 6000);
             using var document = JsonDocument.Parse(output);
             var root = document.RootElement;
+            if (page > 0)
+                Assert.False(root.GetProperty("metadata").GetProperty("total_count_authoritative").GetBoolean());
             var row = Assert.Single(root.GetProperty("results").EnumerateArray());
             Assert.Equal(0, row.GetProperty("length").GetInt32());
             Assert.Equal("code", row.GetProperty("match_facets")[0].GetProperty("origin").GetString());

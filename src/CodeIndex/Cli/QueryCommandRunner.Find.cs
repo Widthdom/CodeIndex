@@ -311,7 +311,7 @@ public static partial class QueryCommandRunner
             if (semanticFilters is not null)
                 JsonEnvelopeWrapper.ReportBoundedResponseTotal("find",
                     results.Count + JsonEnvelopeWrapper.GetBoundedResponseOffset("find") + (findResults.Scan.ResultLimitReached ? 1 : 0),
-                    !findResults.Scan.Truncated && !findResults.Scan.ResultLimitReached && findResults.Scan.UnknownOriginMatches == 0);
+                    resumePath is null && !findResults.Scan.Truncated && !findResults.Scan.ResultLimitReached && findResults.Scan.UnknownOriginMatches == 0);
             var findResume = BuildFindResumeCursor(cmdArgs, reader, findResults.Scan);
             if (results.Count == 0)
             {

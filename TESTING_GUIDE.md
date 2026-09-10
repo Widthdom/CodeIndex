@@ -6,7 +6,7 @@
 
 > **[日本語版はこちら / Japanese version](#テストガイド)**
 
-`QueryCommandRunnerFindIssue5324Tests` covers mixed code/comment/string/fixture/unknown matches, exact and zero-width coordinates, pre-pagination counts, exclusion/kind filters, bounded JSON/cursors, scan-cap recovery, cancellation and timeout. Semantic-filter usage failures must retain the early JSON error contract from #5323. Same-line unknown-origin cursor replay must not recount pre-cursor occurrences; next-match lookahead remains observed. Run both net8/net9 with existing find, CLI schema/help and search-classification regressions.
+`QueryCommandRunnerFindIssue5324Tests` covers mixed code/comment/string/fixture/unknown matches, exact and zero-width coordinates, pre-pagination counts, exclusion/kind filters, bounded JSON/cursors, scan-cap recovery, cancellation and timeout. Resumed filtered row totals must remain non-authoritative. Semantic-filter usage failures must retain the early JSON error contract from #5323. Same-line unknown-origin cursor replay must not recount pre-cursor occurrences; next-match lookahead remains observed. Run both net8/net9 with existing find, CLI schema/help and search-classification regressions.
 
 ## Installer inherited-pipe regression coverage
 
@@ -1324,7 +1324,7 @@ Issue #5300 のテストは隣接・入れ子の C# callable、対象行の除�
 
 # テストガイド
 
-`QueryCommandRunnerFindIssue5324Tests` は code/comment/string/fixture/unknown の混在、元の座標とゼロ幅一致、ページ分割前の件数、除外・kind フィルター、上限付き JSON とカーソル、走査上限からの再開、キャンセルとタイムアウトを検証します。意味フィルターの usage エラーでも #5323 の早期 JSON エラー契約を維持します。同一行の unknown origin のカーソル再開では再開位置より前の一致を再計上せず、次の一致の先読みは観測件数に残します。既存の find、CLI スキーマ・ヘルプ、検索分類の回帰テストとともに net8/net9 で実行してください。
+`QueryCommandRunnerFindIssue5324Tests` は code/comment/string/fixture/unknown の混在、元の座標とゼロ幅一致、ページ分割前の件数、除外・kind フィルター、上限付き JSON とカーソル、走査上限からの再開、キャンセルとタイムアウトを検証します。フィルター付き行ページの再開後は全体件数を非確定に保ちます。意味フィルターの usage エラーでも #5323 の早期 JSON エラー契約を維持します。同一行の unknown origin のカーソル再開では再開位置より前の一致を再計上せず、次の一致の先読みは観測件数に残します。既存の find、CLI スキーマ・ヘルプ、検索分類の回帰テストとともに net8/net9 で実行してください。
 
 #5322 の回帰検証には `QueryCommandRunnerAuditSarifIssue4903Tests` も含めてください。SARIF の UTF-8 バイト上限で結果を丸ごと省略しても、origin フィルターの全候補を評価済みなら元の件数は確定したままです。上限ちょうど、省略数、部分結果の終了コード、明示的な許容、カーソル再実行、最小出力の検証を net8/net9 の両方で維持してください。
 
