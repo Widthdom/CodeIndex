@@ -85,8 +85,12 @@ public partial class QueryCommandRunnerTests
                 var writer = new DbWriter(db.Connection);
                 var id = writer.UpsertFile(new FileRecord
                 {
-                    Path = "src/a.cs", Lang = "csharp", Lines = 3, Size = 100,
-                    Modified = DateTime.UtcNow, Checksum = "fixture",
+                    Path = "src/a.cs",
+                    Lang = "csharp",
+                    Lines = 3,
+                    Size = 100,
+                    Modified = DateTime.UtcNow,
+                    Checksum = "fixture",
                 });
                 writer.InsertChunks([
                     new ChunkRecord { FileId = id, ChunkIndex = 0, StartLine = 1, EndLine = 1, Content = "var s = $@\"{needle()}" },

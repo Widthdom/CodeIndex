@@ -47,8 +47,12 @@ public partial class McpServerTests
         var writer = new DbWriter(_db.Connection);
         var id = writer.UpsertFile(new FileRecord
         {
-            Path = "src/CrossChunk.cs", Lang = "csharp", Lines = 2, Size = 100,
-            Modified = DateTime.UtcNow, Checksum = "fixture",
+            Path = "src/CrossChunk.cs",
+            Lang = "csharp",
+            Lines = 2,
+            Size = 100,
+            Modified = DateTime.UtcNow,
+            Checksum = "fixture",
         });
         writer.InsertChunks([
             new ChunkRecord { FileId = id, ChunkIndex = 0, StartLine = 1, EndLine = 1, Content = "var s = $@\"{CrossChunkNeedle()}" },
@@ -58,7 +62,9 @@ public partial class McpServerTests
         {
             var response = _server.HandleMessage(new JsonObject
             {
-                ["jsonrpc"] = "2.0", ["id"] = 5321, ["method"] = "tools/call",
+                ["jsonrpc"] = "2.0",
+                ["id"] = 5321,
+                ["method"] = "tools/call",
                 ["params"] = new JsonObject
                 {
                     ["name"] = "search",
