@@ -1067,11 +1067,21 @@ public class ProgramRunnerTests
                 || arg.StartsWith("--json=", StringComparison.Ordinal));
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Empty(stdout);
-            Assert.Contains(
-                $"{streamOption} cannot be combined with --format count",
-                stderr,
-                StringComparison.Ordinal);
+            if (args.Any(arg => arg.StartsWith("--json=", StringComparison.Ordinal)
+                                || arg == "--format=count" || arg == "count"))
+            {
+                Assert.Empty(stderr);
+                using var error = JsonDocument.Parse(stdout);
+                Assert.Equal("search", error.RootElement.GetProperty("command").GetString());
+                Assert.Contains($"{streamOption} cannot be combined with --format count",
+                    error.RootElement.GetProperty("message").GetString(), StringComparison.Ordinal);
+            }
+            else
+            {
+                Assert.Empty(stdout);
+                Assert.Contains($"{streamOption} cannot be combined with --format count",
+                    stderr, StringComparison.Ordinal);
+            }
         }
     }
 
@@ -1209,9 +1219,12 @@ public class ProgramRunnerTests
             appVersion: "1.10.0"));
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
-        Assert.Empty(stdout);
-        Assert.Contains("--json format must be one of ndjson or array", stderr, StringComparison.Ordinal);
-        Assert.DoesNotContain("cannot be combined", stderr, StringComparison.Ordinal);
+        Assert.Empty(stderr);
+        using var error = JsonDocument.Parse(stdout);
+        var message = error.RootElement.GetProperty("message").GetString();
+        Assert.Equal("search", error.RootElement.GetProperty("command").GetString());
+        Assert.Contains("--json format must be one of ndjson or array", message, StringComparison.Ordinal);
+        Assert.DoesNotContain("cannot be combined", message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1222,9 +1235,12 @@ public class ProgramRunnerTests
             appVersion: "1.10.0"));
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
-        Assert.Empty(stdout);
-        Assert.Contains("--unsupported is not supported for search", stderr, StringComparison.Ordinal);
-        Assert.DoesNotContain("cannot be combined", stderr, StringComparison.Ordinal);
+        Assert.Empty(stderr);
+        using var error = JsonDocument.Parse(stdout);
+        var message = error.RootElement.GetProperty("message").GetString();
+        Assert.Equal("search", error.RootElement.GetProperty("command").GetString());
+        Assert.Contains("--unsupported is not supported for search", message, StringComparison.Ordinal);
+        Assert.DoesNotContain("cannot be combined", message, StringComparison.Ordinal);
     }
 
     [Theory]
@@ -1238,9 +1254,21 @@ public class ProgramRunnerTests
             appVersion: "1.10.0"));
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
-        Assert.Empty(stdout);
-        Assert.Contains($"--unsupported is not supported for {command}", stderr, StringComparison.Ordinal);
-        Assert.DoesNotContain("--pretty cannot be combined", stderr, StringComparison.Ordinal);
+        if (command == "search")
+        {
+            Assert.Empty(stderr);
+            using var error = JsonDocument.Parse(stdout);
+            var message = error.RootElement.GetProperty("message").GetString();
+            Assert.Equal(command, error.RootElement.GetProperty("command").GetString());
+            Assert.Contains("--unsupported is not supported for search", message, StringComparison.Ordinal);
+            Assert.DoesNotContain("--pretty cannot be combined", message, StringComparison.Ordinal);
+        }
+        else
+        {
+            Assert.Empty(stdout);
+            Assert.Contains($"--unsupported is not supported for {command}", stderr, StringComparison.Ordinal);
+            Assert.DoesNotContain("--pretty cannot be combined", stderr, StringComparison.Ordinal);
+        }
     }
 
     [Fact]
