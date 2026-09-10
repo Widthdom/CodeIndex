@@ -60,6 +60,7 @@ internal static partial class ProgramRunner
             installerResult is { ExitCode: not CommandExitCodes.Success } ? installerResult.StdoutTail : null,
             installerResult is { ExitCode: not CommandExitCodes.Success } ? installerResult.StderrTail : null,
             installerResult is { ExitCode: not CommandExitCodes.Success } ? installerResult.OutputTruncated : null,
+            installerResult?.OutputIncomplete,
             installDirectoryError,
             result.LatestVersion is null ? null : verificationPolicy,
             manifestProvenanceVerified,

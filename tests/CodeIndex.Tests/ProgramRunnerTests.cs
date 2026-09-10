@@ -3873,6 +3873,7 @@ exit 7
 
                 Assert.Equal(7, result.ExitCode);
                 Assert.True(result.OutputTruncated);
+                Assert.False(result.OutputIncomplete);
                 Assert.True(result.StdoutTail!.Length <= ProgramRunner.InstallerSuppressedOutputTailChars);
                 Assert.True(result.StderrTail!.Length <= ProgramRunner.InstallerSuppressedOutputTailChars);
                 Assert.Contains("stdout-tail-0699", result.StdoutTail);
@@ -3884,6 +3885,68 @@ exit 7
             {
                 TestProjectHelper.DeleteDirectory(root);
             }
+        }
+    }
+
+    [Theory]
+    [InlineData(0, "stdout", "exit")]
+    [InlineData(0, "stderr", "exit")]
+    [InlineData(7, "stdout", "exit")]
+    [InlineData(7, "stderr", "exit")]
+    [InlineData(0, "both", "exit")]
+    [InlineData(7, "both", "exit")]
+    [InlineData(0, "stdout", "cancel-after-exit")]
+    [InlineData(0, "stderr", "cancel-after-exit")]
+    [InlineData(0, "stdout", "cancel")]
+    [InlineData(0, "stderr", "cancel")]
+    [InlineData(0, "stdout", "timeout")]
+    [InlineData(0, "stderr", "timeout")]
+    public async Task RunInstallerProcessDetailed_InheritedPipesHaveBoundedLifetime_Issue5320(
+        int parentExitCode, string pipe, string termination)
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        using var fixture = new InstallerPipeFixture(parentExitCode, pipe);
+        using var cancellation = new CancellationTokenSource();
+        var timeout = termination == "timeout" ? TimeSpan.FromSeconds(3) : TimeSpan.FromSeconds(30);
+        var run = Task.Run(() => ProgramRunner.RunInstallerProcessDetailed(
+            fixture.CreateStartInfo(), timeout, cancellation.Token, suppressOutput: true));
+        try
+        {
+            await fixture.WaitUntilReadyAsync();
+            if (termination is "exit" or "cancel-after-exit")
+            {
+                fixture.ReleaseParent();
+                await fixture.WaitForParentExitAsync();
+            }
+            if (termination.StartsWith("cancel", StringComparison.Ordinal))
+                cancellation.Cancel();
+
+            // A generous watchdog is shorter than the holder's lifetime, without 100 ms CI races.
+            // 保持時間より短い余裕付き watchdog により、CI で100msの競合に依存しません。
+            if (termination.StartsWith("cancel", StringComparison.Ordinal))
+            {
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+                    await run.WaitAsync(TimeSpan.FromSeconds(10)));
+            }
+            else
+            {
+                var result = await run.WaitAsync(TimeSpan.FromSeconds(10));
+                Assert.Equal(termination == "timeout" ? CommandExitCodes.InstallError : parentExitCode, result.ExitCode);
+                Assert.True(result.OutputIncomplete);
+                Assert.False(result.OutputTruncated);
+                Assert.Contains("stdout-before-exit", result.StdoutTail);
+                Assert.Contains("stderr-before-exit", result.StderrTail);
+            }
+            Assert.True(fixture.HolderIsRunning, "The descendant must still hold the pipe when the operation completes.");
+        }
+        finally
+        {
+            cancellation.Cancel();
+            fixture.Dispose();
+            try { await run.WaitAsync(TimeSpan.FromSeconds(10)); }
+            catch (OperationCanceledException) { }
         }
     }
 
@@ -4414,8 +4477,10 @@ exit 7
         }
     }
 
-    [Fact]
-    public void RunUpgrade_JsonUpdateAvailable_EmitsSingleJsonInstallResult()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void RunUpgrade_JsonUpdateAvailable_EmitsSingleJsonInstallResult(bool inheritedPipes)
     {
         if (OperatingSystem.IsWindows())
             return;
@@ -4428,12 +4493,16 @@ exit 7
             env.Set(UpdateChecker.DisableEnvVar, null);
             WriteFreshUpdateCheckCache(cacheRoot, "v9.9.9");
 
+            using var pipeFixture = new InstallerPipeFixture(0, "both");
+            pipeFixture.ReleaseParent();
             var installerScript = """
 #!/bin/sh
 echo SHOULD_NOT_LEAK_STDOUT
 echo SHOULD_NOT_LEAK_STDERR >&2
 exit 0
 """;
+            if (inheritedPipes)
+                installerScript = pipeFixture.Script;
             var installerSha256 = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(installerScript))).ToLowerInvariant();
             var checksumManifest = $"{installerSha256}  install.sh\n";
             var previousFactory = ProgramRunner.UpgradeHttpClientFactory;
@@ -4466,6 +4535,9 @@ exit 0
                 Assert.True(root.GetProperty("install_attempted").GetBoolean());
                 Assert.Equal(CommandExitCodes.Success, root.GetProperty("install_exit_code").GetInt32());
                 Assert.True(root.GetProperty("install_succeeded").GetBoolean());
+                Assert.Equal(inheritedPipes, root.GetProperty("installer_output_incomplete").GetBoolean());
+                Assert.False(root.TryGetProperty("installer_stdout_tail", out _));
+                Assert.False(root.TryGetProperty("installer_stderr_tail", out _));
                 Assert.Equal("strict", root.GetProperty("verification_policy").GetString());
                 Assert.True(root.GetProperty("manifest_provenance_verified").GetBoolean());
                 Assert.True(root.GetProperty("installer_provenance_verified").GetBoolean());
@@ -4534,6 +4606,7 @@ exit 7
                 Assert.Equal(7, root.GetProperty("install_exit_code").GetInt32());
                 Assert.Equal("installer_exit_code_7", root.GetProperty("error").GetString());
                 Assert.True(root.GetProperty("installer_output_truncated").GetBoolean());
+                Assert.False(root.GetProperty("installer_output_incomplete").GetBoolean());
                 Assert.Contains("json-stdout-0699", root.GetProperty("installer_stdout_tail").GetString(), StringComparison.Ordinal);
                 Assert.Contains("json-stderr-0699", root.GetProperty("installer_stderr_tail").GetString(), StringComparison.Ordinal);
                 Assert.DoesNotContain("json-stdout-0000", root.GetProperty("installer_stdout_tail").GetString(), StringComparison.Ordinal);

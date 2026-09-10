@@ -22,6 +22,8 @@ namespace CodeIndex.Cli;
 
 internal static partial class ProgramRunner
 {
+    internal static readonly TimeSpan InstallerOutputDrainGrace = TimeSpan.FromSeconds(1);
+
     internal static int RunInstallerProcess(
         ProcessStartInfo startInfo,
         TimeSpan timeout,
@@ -68,78 +70,66 @@ internal static partial class ProgramRunner
 
         using (process)
         {
+            using var drainCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             var outputDrainTask = suppressOutput
-                ? DrainSuppressedInstallerOutputAsync(process)
+                ? DrainSuppressedInstallerOutputAsync(process, drainCts.Token)
                 : Task.FromResult(SuppressedInstallerOutputResult.Empty);
-
+            var exitCode = CommandExitCodes.InstallError;
             try
             {
-                var waitTask = process.WaitForExitAsync(cancellationToken);
                 using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                var timeoutTask = Task.Delay(ToWaitMilliseconds(timeout), timeoutCts.Token);
-                var completedTask = Task.WhenAny(waitTask, timeoutTask).GetAwaiter().GetResult();
-                if (completedTask == waitTask)
+                timeoutCts.CancelAfter(ToWaitMilliseconds(timeout));
+                try
                 {
-                    timeoutCts.Cancel();
-                    waitTask.GetAwaiter().GetResult();
-                    var output = outputDrainTask.GetAwaiter().GetResult();
-                    return new InstallerProcessResult(
-                        process.ExitCode,
-                        output.StdoutTail,
-                        output.StderrTail,
-                        output.Truncated);
+                    process.WaitForExitAsync(timeoutCts.Token).GetAwaiter().GetResult();
+                    exitCode = process.ExitCode;
+                }
+                catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested)
+                {
+                    if (!cancellationToken.IsCancellationRequested && process.HasExited)
+                    {
+                        exitCode = process.ExitCode;
+                    }
+                    else
+                    {
+                        TryKillProcessTree(process);
+                        var exited = process.WaitForExit(ToWaitMilliseconds(InstallerKillWaitTimeout));
+                        if (!suppressOutput)
+                        {
+                            if (!exited)
+                            {
+                                var reason = cancellationToken.IsCancellationRequested ? "cancelled" : "timed out";
+                                CommandErrorWriter.WriteStderr($"Error: install.sh {reason} and did not exit after cancellation.");
+                            }
+                            else if (!cancellationToken.IsCancellationRequested)
+                            {
+                                CommandErrorWriter.WriteStderr($"Error: install.sh timed out after {FormatDuration(timeout)}.");
+                            }
+                            if (!cancellationToken.IsCancellationRequested)
+                                CommandErrorWriter.WriteStderr("Hint: rerun `install.sh` manually for the desired release.");
+                        }
+                    }
                 }
 
-                if (cancellationToken.IsCancellationRequested)
-                    waitTask.GetAwaiter().GetResult();
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                TryKillProcessTree(process);
-                if (!process.WaitForExit(ToWaitMilliseconds(InstallerKillWaitTimeout)))
-                {
-                    if (!suppressOutput)
-                        CommandErrorWriter.WriteStderr("Error: install.sh was cancelled and did not exit after cancellation.");
-                }
-                else
-                {
-                    outputDrainTask.GetAwaiter().GetResult();
-                }
-                throw;
-            }
-
-            if (process.HasExited)
-            {
+                // One shared grace covers both pipes, even after a parent exit or failed kill.
+                // 親の終了・kill 失敗後も、両パイプで共有する猶予は1回だけです。
+                drainCts.CancelAfter(InstallerOutputDrainGrace);
                 var output = outputDrainTask.GetAwaiter().GetResult();
+                cancellationToken.ThrowIfCancellationRequested();
                 return new InstallerProcessResult(
-                    process.ExitCode,
+                    exitCode,
                     output.StdoutTail,
                     output.StderrTail,
-                    output.Truncated);
+                    output.Truncated,
+                    output.Incomplete);
             }
-
-            TryKillProcessTree(process);
-            if (!process.WaitForExit(ToWaitMilliseconds(InstallerKillWaitTimeout)))
+            finally
             {
-                if (!suppressOutput)
-                    CommandErrorWriter.WriteStderr("Error: install.sh timed out and did not exit after cancellation.");
-            }
-            else
-            {
+                // Join cancelled reads before disposing process handles; never abandon a drain task.
+                // ハンドル破棄前に中断した読み取りを回収し、タスクを残しません。
+                drainCts.Cancel();
                 outputDrainTask.GetAwaiter().GetResult();
-                if (!suppressOutput)
-                    CommandErrorWriter.WriteStderr($"Error: install.sh timed out after {FormatDuration(timeout)}.");
             }
-            if (!suppressOutput)
-                CommandErrorWriter.WriteStderr("Hint: rerun `install.sh` manually for the desired release.");
-            var timeoutOutput = outputDrainTask.IsCompletedSuccessfully
-                ? outputDrainTask.GetAwaiter().GetResult()
-                : SuppressedInstallerOutputResult.Empty;
-            return new InstallerProcessResult(
-                CommandExitCodes.InstallError,
-                timeoutOutput.StdoutTail,
-                timeoutOutput.StderrTail,
-                timeoutOutput.Truncated);
         }
     }
 
@@ -150,38 +140,54 @@ internal static partial class ProgramRunner
             or DirectoryNotFoundException
             or UnauthorizedAccessException;
 
-    private static async Task<SuppressedInstallerOutputResult> DrainSuppressedInstallerOutputAsync(Process process)
+    private static async Task<SuppressedInstallerOutputResult> DrainSuppressedInstallerOutputAsync(
+        Process process, CancellationToken cancellationToken)
     {
+        using var stdout = CancellableInstallerOutputStream.CreateReader(process.StandardOutput);
+        using var stderr = CancellableInstallerOutputStream.CreateReader(process.StandardError);
+        // Queue both pumps so synchronous reads cannot starve the other pipe or deadline setup.
+        // 同期完了の連続でも他方のパイプや期限設定を妨げないよう、両方をキューに入れます。
         var outputs = await Task.WhenAll(
-            DrainSuppressedInstallerOutputAsync(process.StandardOutput),
-            DrainSuppressedInstallerOutputAsync(process.StandardError)).ConfigureAwait(false);
+            Task.Run(() => DrainSuppressedInstallerOutputAsync(stdout, cancellationToken)),
+            Task.Run(() => DrainSuppressedInstallerOutputAsync(stderr, cancellationToken))).ConfigureAwait(false);
         return new SuppressedInstallerOutputResult(
             outputs[0].Tail,
             outputs[1].Tail,
-            outputs[0].Truncated || outputs[1].Truncated);
+            outputs[0].Truncated || outputs[1].Truncated,
+            outputs[0].Incomplete || outputs[1].Incomplete);
     }
 
-    private static async Task<SuppressedInstallerOutput> DrainSuppressedInstallerOutputAsync(TextReader reader)
+    private static async Task<SuppressedInstallerOutput> DrainSuppressedInstallerOutputAsync(
+        TextReader reader, CancellationToken cancellationToken)
     {
         var buffer = new char[InstallerSuppressedOutputDrainBufferChars];
         var tail = new SuppressedOutputTail(InstallerSuppressedOutputTailChars);
-        while (true)
+        try
         {
-            var read = await reader.ReadAsync(buffer.AsMemory()).ConfigureAwait(false);
-            if (read == 0)
-                break;
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var read = await reader.ReadAsync(buffer.AsMemory(), cancellationToken).ConfigureAwait(false);
+                if (read == 0)
+                    break;
 
-            tail.Append(buffer.AsSpan(0, read));
+                tail.Append(buffer.AsSpan(0, read));
+            }
+        }
+        catch (Exception ex) when (ex is IOException || ex is OperationCanceledException && cancellationToken.IsCancellationRequested)
+        {
+            return new SuppressedInstallerOutput(tail.Value, tail.Truncated, Incomplete: true);
         }
 
-        return new SuppressedInstallerOutput(tail.Value, tail.Truncated);
+        return new SuppressedInstallerOutput(tail.Value, tail.Truncated, Incomplete: false);
     }
 
     internal sealed record InstallerProcessResult(
         int ExitCode,
         string? StdoutTail,
         string? StderrTail,
-        bool OutputTruncated)
+        bool OutputTruncated,
+        bool OutputIncomplete = false)
     {
         internal static InstallerProcessResult Failure(int exitCode) => new(exitCode, null, null, false);
     }
@@ -189,12 +195,13 @@ internal static partial class ProgramRunner
     private sealed record SuppressedInstallerOutputResult(
         string? StdoutTail,
         string? StderrTail,
-        bool Truncated)
+        bool Truncated,
+        bool Incomplete)
     {
-        internal static SuppressedInstallerOutputResult Empty { get; } = new(null, null, false);
+        internal static SuppressedInstallerOutputResult Empty { get; } = new(null, null, false, false);
     }
 
-    private sealed record SuppressedInstallerOutput(string? Tail, bool Truncated);
+    private sealed record SuppressedInstallerOutput(string? Tail, bool Truncated, bool Incomplete);
 
     private sealed class SuppressedOutputTail(int maxChars)
     {
