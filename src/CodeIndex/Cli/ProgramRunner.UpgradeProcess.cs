@@ -143,13 +143,13 @@ internal static partial class ProgramRunner
     private static async Task<SuppressedInstallerOutputResult> DrainSuppressedInstallerOutputAsync(
         Process process, CancellationToken cancellationToken)
     {
-        using var stdout = CancellableInstallerOutputStream.CreateReader(process.StandardOutput);
-        using var stderr = CancellableInstallerOutputStream.CreateReader(process.StandardError);
+        using var stdout = CancellableInstallerOutputStream.CreateReader(process.StandardOutput, cancellationToken, out var stdoutStream);
+        using var stderr = CancellableInstallerOutputStream.CreateReader(process.StandardError, cancellationToken, out var stderrStream);
         // Queue both pumps so synchronous reads cannot starve the other pipe or deadline setup.
         // 同期完了の連続でも他方のパイプや期限設定を妨げないよう、両方をキューに入れます。
         var outputs = await Task.WhenAll(
-            Task.Run(() => DrainSuppressedInstallerOutputAsync(stdout, cancellationToken)),
-            Task.Run(() => DrainSuppressedInstallerOutputAsync(stderr, cancellationToken))).ConfigureAwait(false);
+            Task.Run(() => DrainSuppressedInstallerOutputAsync(stdout, stdoutStream)),
+            Task.Run(() => DrainSuppressedInstallerOutputAsync(stderr, stderrStream))).ConfigureAwait(false);
         return new SuppressedInstallerOutputResult(
             outputs[0].Tail,
             outputs[1].Tail,
@@ -158,28 +158,22 @@ internal static partial class ProgramRunner
     }
 
     private static async Task<SuppressedInstallerOutput> DrainSuppressedInstallerOutputAsync(
-        TextReader reader, CancellationToken cancellationToken)
+        TextReader reader, CancellableInstallerOutputStream stream)
     {
         var buffer = new char[InstallerSuppressedOutputDrainBufferChars];
         var tail = new SuppressedOutputTail(InstallerSuppressedOutputTailChars);
-        try
+        while (true)
         {
-            while (true)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                var read = await reader.ReadAsync(buffer.AsMemory(), cancellationToken).ConfigureAwait(false);
-                if (read == 0)
-                    break;
+            // The byte adapter owns cancellation; let StreamReader return its partial character buffer.
+            // 中断はバイト側に任せ、StreamReader の途中まで取得した文字も確定させます。
+            var read = await reader.ReadAsync(buffer.AsMemory()).ConfigureAwait(false);
+            if (read == 0)
+                break;
 
-                tail.Append(buffer.AsSpan(0, read));
-            }
-        }
-        catch (Exception ex) when (ex is IOException || ex is OperationCanceledException && cancellationToken.IsCancellationRequested)
-        {
-            return new SuppressedInstallerOutput(tail.Value, tail.Truncated, Incomplete: true);
+            tail.Append(buffer.AsSpan(0, read));
         }
 
-        return new SuppressedInstallerOutput(tail.Value, tail.Truncated, Incomplete: false);
+        return new SuppressedInstallerOutput(tail.Value, tail.Truncated, stream.Incomplete);
     }
 
     internal sealed record InstallerProcessResult(

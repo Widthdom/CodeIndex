@@ -3895,6 +3895,9 @@ exit 7
     [InlineData(7, "stderr", "exit")]
     [InlineData(0, "both", "exit")]
     [InlineData(7, "both", "exit")]
+    [InlineData(0, "stdout", "aligned-exit")]
+    [InlineData(7, "stderr", "aligned-exit")]
+    [InlineData(7, "both", "aligned-exit")]
     [InlineData(0, "stdout", "cancel-after-exit")]
     [InlineData(0, "stderr", "cancel-after-exit")]
     [InlineData(0, "stdout", "cancel")]
@@ -3907,7 +3910,7 @@ exit 7
         if (OperatingSystem.IsWindows())
             return;
 
-        using var fixture = new InstallerPipeFixture(parentExitCode, pipe);
+        using var fixture = new InstallerPipeFixture(parentExitCode, pipe, termination == "aligned-exit");
         using var cancellation = new CancellationTokenSource();
         var timeout = termination == "timeout" ? TimeSpan.FromSeconds(3) : TimeSpan.FromSeconds(30);
         var run = Task.Run(() => ProgramRunner.RunInstallerProcessDetailed(
@@ -3915,7 +3918,7 @@ exit 7
         try
         {
             await fixture.WaitUntilReadyAsync();
-            if (termination is "exit" or "cancel-after-exit")
+            if (termination is "exit" or "aligned-exit" or "cancel-after-exit")
             {
                 fixture.ReleaseParent();
                 await fixture.WaitForParentExitAsync();
@@ -3936,8 +3939,16 @@ exit 7
                 Assert.Equal(termination == "timeout" ? CommandExitCodes.InstallError : parentExitCode, result.ExitCode);
                 Assert.True(result.OutputIncomplete);
                 Assert.False(result.OutputTruncated);
-                Assert.Contains("stdout-before-exit", result.StdoutTail);
-                Assert.Contains("stderr-before-exit", result.StderrTail);
+                if (termination == "aligned-exit")
+                {
+                    Assert.Equal(new string('0', 1024), result.StdoutTail);
+                    Assert.Equal(new string('0', 1024), result.StderrTail);
+                }
+                else
+                {
+                    Assert.Contains("stdout-before-exit", result.StdoutTail);
+                    Assert.Contains("stderr-before-exit", result.StderrTail);
+                }
             }
             Assert.True(fixture.HolderIsRunning, "The descendant must still hold the pipe when the operation completes.");
         }

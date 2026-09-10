@@ -3,30 +3,48 @@ using System.Runtime.InteropServices;
 
 namespace CodeIndex.Cli;
 
-// Windows Process pipes are synchronous: only read bytes PeekNamedPipe says are available.
-// Windows の Process パイプは同期式のため、PeekNamedPipe で確認したバイトだけ読みます。
-internal sealed class CancellableInstallerOutputStream(SafeHandle handle) : Stream
+// End interrupted byte reads as EOF so StreamReader returns characters it already decoded.
+// 中断したバイト読み取りを EOF として扱い、StreamReader が復号済みの文字を返せるようにします。
+internal sealed class CancellableInstallerOutputStream(Stream source, CancellationToken drainToken) : Stream
 {
     private readonly byte[] _buffer = new byte[4096];
+    internal bool Incomplete { get; private set; }
 
-    internal static StreamReader CreateReader(StreamReader reader)
-        => OperatingSystem.IsWindows()
-            ? new StreamReader(new CancellableInstallerOutputStream(reader.BaseStream switch
-                {
-                    PipeStream pipe => pipe.SafePipeHandle,
-                    FileStream file => file.SafeFileHandle,
-                    _ => throw new NotSupportedException("Unsupported installer output pipe."),
-                }),
-                reader.CurrentEncoding, detectEncodingFromByteOrderMarks: true)
-            : reader;
+    internal static StreamReader CreateReader(StreamReader reader, CancellationToken drainToken,
+        out CancellableInstallerOutputStream stream)
+    {
+        stream = new CancellableInstallerOutputStream(reader.BaseStream, drainToken);
+        return new StreamReader(stream, reader.CurrentEncoding, detectEncodingFromByteOrderMarks: true);
+    }
 
     public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
     {
         if (buffer.IsEmpty)
             return 0;
+        try
+        {
+            if (!OperatingSystem.IsWindows())
+                return await source.ReadAsync(buffer, drainToken).ConfigureAwait(false);
+            return await ReadWindowsPipeAsync(buffer).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is IOException || ex is OperationCanceledException && drainToken.IsCancellationRequested)
+        {
+            Incomplete = true;
+            return 0;
+        }
+    }
+
+    private async ValueTask<int> ReadWindowsPipeAsync(Memory<byte> buffer)
+    {
+        SafeHandle handle = source switch
+        {
+            PipeStream pipe => pipe.SafePipeHandle,
+            FileStream file => file.SafeFileHandle,
+            _ => throw new NotSupportedException("Unsupported installer output pipe."),
+        };
         while (true)
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            drainToken.ThrowIfCancellationRequested();
             if (!PeekNamedPipe(handle, IntPtr.Zero, 0, IntPtr.Zero, out var available, IntPtr.Zero))
             {
                 var error = Marshal.GetLastPInvokeError();
@@ -42,7 +60,7 @@ internal sealed class CancellableInstallerOutputStream(SafeHandle handle) : Stre
                 _buffer.AsMemory(0, read).CopyTo(buffer);
                 return read;
             }
-            await Task.Delay(20, cancellationToken).ConfigureAwait(false);
+            await Task.Delay(20, drainToken).ConfigureAwait(false);
         }
     }
 

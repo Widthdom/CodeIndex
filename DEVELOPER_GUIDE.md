@@ -11,7 +11,10 @@ by runtime timeout + five seconds + one second (plus scheduling/OS call overhead
 Cancellation cancels reads immediately, joins both drain tasks before disposing
 handles, and propagates `OperationCanceledException`. Unix uses cancellable stream
 reads; Windows synchronous process pipes use `PeekNamedPipe` and read only available
-bytes, with a cancellable 20 ms polling delay. Neither path leaves a pending read.
+bytes, with a cancellable 20 ms polling delay. The byte adapter records interruption
+or I/O failure as incomplete and presents EOF to the decoder, allowing partially
+decoded character buffers to reach the tail before it stops. Do not pass cancellation
+directly to `StreamReader`, which can discard those buffers. Neither path leaves a pending read.
 Keep BOM/encoding detection and 4,096-character tails intact. An EOF shortfall or I/O
 failure sets `OutputIncomplete` / JSON `installer_output_incomplete`, independently
 of tail-size truncation. Known parent exits retain their code; a still-running parent
@@ -4459,8 +4462,11 @@ API version 1 の互換性を維持し、新しい guard scope は contract vers
 OS 呼び出しの負荷を除く）が上限です。キャンセルは即座に読み取りへ伝播し、ハンドルの
 破棄前に両タスクを回収して `OperationCanceledException` を返します。Unix ではキャンセル
 可能なストリーム読み取りを使い、Windows の同期パイプでは `PeekNamedPipe` で確認した
-データだけを読み、データがなければキャンセル可能な20ms待ちを行います。どちらも未完了の
-読み取りを残しません。BOM・文字コードの検出と末尾4,096文字の保持を維持してください。
+データだけを読み、データがなければキャンセル可能な20ms待ちを行います。バイト側の
+アダプターは中断・I/O 失敗を未完了として記録し、復号側には EOF を渡すことで、途中まで
+復号した文字も末尾出力へ確定させます。この文字列を失う可能性があるため、`StreamReader`
+にはキャンセルを直接渡さないでください。どちらも未完了の読み取りを残しません。
+BOM・文字コードの検出と末尾4,096文字の保持を維持してください。
 EOF 未到達や I/O 失敗は、サイズ超過による切り詰めとは独立して `OutputIncomplete` /
 JSON の `installer_output_incomplete` に記録します。判明した親の終了コードは維持し、
 タイムアウト時に動作中なら `InstallError` を返します。GitHub CLI のバージョン確認は

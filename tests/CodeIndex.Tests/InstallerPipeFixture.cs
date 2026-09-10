@@ -14,15 +14,15 @@ internal sealed class InstallerPipeFixture : IDisposable
 
     internal string Script { get; }
 
-    internal InstallerPipeFixture(int exitCode, string pipe)
+    internal InstallerPipeFixture(int exitCode, string pipe, bool alignedOutput = false)
     {
         var redirect = pipe == "stdout" ? "2>/dev/null" : pipe == "stderr" ? ">/dev/null" : "";
         Script = $"""
             #!/bin/sh
             echo $$ > {Quote("parent.pid")}
             (sleep 60 {redirect} & echo $! > {Quote("holder.pid")})
-            echo stdout-before-exit
-            echo stderr-before-exit >&2
+            {(alignedOutput ? "printf '%01024d' 0" : "echo stdout-before-exit")}
+            {(alignedOutput ? "printf '%01024d' 0 >&2" : "echo stderr-before-exit >&2")}
             echo ready > {Quote("ready")}
             while [ ! -f {Quote("release")} ]; do sleep 0.02; done
             exit {exitCode}
