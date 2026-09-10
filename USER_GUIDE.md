@@ -1206,6 +1206,18 @@ running binary in place. It prints a NuGet handoff command such as
 page and `CodeIndex-win-*.zip` asset URL; JSON output carries those values in
 `handoff_command`, `handoff_url`, `handoff_asset`, and `handoff_asset_url`.
 
+The installer runtime limit is five minutes. After parent exit or timeout cleanup,
+capturing stdout/stderr in `upgrade --json` has one shared one-second drain grace;
+timeout/cancellation cleanup may also wait up to five seconds for the killed parent.
+Caller cancellation stops capture immediately and remains cancellation. A descendant
+holding a pipe cannot extend these waits indefinitely. A known parent exit code
+(including success) is preserved even if capture is incomplete; an installer still
+running at the runtime deadline fails with the install-error exit code.
+`installer_output_incomplete` reports whether either captured stream failed to reach
+EOF, independently of `installer_output_truncated` (the bounded-tail size limit).
+Failure results retain the last 4,096 characters per stream in
+`installer_stdout_tail` / `installer_stderr_tail`; successful results omit those tails.
+
 ### Option B: NuGet Global Tool
 
 Requires the [.NET 8.x SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
@@ -5134,6 +5146,18 @@ Windows では `cdidx upgrade` は同じ release を選択しますが、実行�
 と、対応する release page / `CodeIndex-win-*.zip` asset URL を表示します。JSON 出力では
 `handoff_command`、`handoff_url`、`handoff_asset`、`handoff_asset_url` に
 同じ値が入ります。
+
+インストーラーの実行上限は5分です。`upgrade --json` の stdout/stderr 収集には、
+親プロセスの終了またはタイムアウト後の停止処理から、両ストリームで共有する1秒の
+読み取り猶予を設けています。タイムアウト・キャンセル時には、kill した親の終了を
+さらに最大5秒待ちます。呼び出し元のキャンセルでは収集を即座に中断し、キャンセルの
+扱いを維持します。子孫がパイプを保持していても無期限には待ちません。
+収集が未完了でも、判明した親の終了コード（成功を含む）は維持します。実行上限に
+達しても動作中のインストーラーはインストールエラーの終了コードを返します。
+`installer_output_incomplete` は、いずれかの収集ストリームが EOF に到達しなかった
+ことを示し、末尾保持のサイズ上限を示す `installer_output_truncated` とは独立です。
+失敗時には `installer_stdout_tail` / `installer_stderr_tail` に各ストリームの末尾
+最大4,096文字を保持します。成功時にはこれらの末尾出力を省略します。
 
 ### 方法B: NuGet グローバルツール
 

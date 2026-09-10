@@ -364,6 +364,7 @@ internal sealed record UpgradeJsonResult(
     [property: JsonPropertyName("installer_stdout_tail")] string? InstallerStdoutTail,
     [property: JsonPropertyName("installer_stderr_tail")] string? InstallerStderrTail,
     [property: JsonPropertyName("installer_output_truncated")] bool? InstallerOutputTruncated,
+    [property: JsonPropertyName("installer_output_incomplete")] bool? InstallerOutputIncomplete,
     [property: JsonPropertyName("install_directory_error")] string? InstallDirectoryError,
     [property: JsonPropertyName("verification_policy")] string? VerificationPolicy,
     [property: JsonPropertyName("manifest_provenance_verified")] bool? ManifestProvenanceVerified,

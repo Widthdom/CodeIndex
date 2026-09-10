@@ -2,6 +2,25 @@
 
 > **[日本語版はこちら / Japanese version](#開発者ガイド)**
 
+## Installer output lifetime
+
+`RunInstallerProcessDetailed` drains both suppressed streams concurrently and gives
+them one shared one-second grace after parent exit or timeout cleanup. The existing
+five-second kill wait remains separate: after process startup, the waits are bounded
+by runtime timeout + five seconds + one second (plus scheduling/OS call overhead).
+Cancellation cancels reads immediately, joins both drain tasks before disposing
+handles, and propagates `OperationCanceledException`. Unix uses cancellable stream
+reads; Windows synchronous process pipes use `PeekNamedPipe` and read only available
+bytes, with a cancellable 20 ms polling delay. The byte adapter records interruption
+or I/O failure as incomplete and presents EOF to the decoder, allowing partially
+decoded character buffers to reach the tail before it stops. Do not pass cancellation
+directly to `StreamReader`, which can discard those buffers. Neither path leaves a pending read.
+Keep BOM/encoding detection and 4,096-character tails intact. An EOF shortfall or I/O
+failure sets `OutputIncomplete` / JSON `installer_output_incomplete`, independently
+of tail-size truncation. Known parent exits retain their code; a still-running parent
+at timeout returns `InstallError`. A GitHub CLI version probe requires complete,
+untruncated output. Attestation still relies on the verifier's exit status.
+
 ## C# search-origin context
 
 Read the bounded prefix independently of the last returned chunk so later closing delimiters cannot change earlier origins across pages. Interpolation frames isolate schema-call state (including alignment commas) while retaining nested builder detection. Ordinary interpolation format text cannot cross a physical newline; verbatim/raw formats can.
@@ -4438,6 +4457,24 @@ CLI、レシピの再実行・フィンガープリント、MCP スキーマ、`
 API version 1 の互換性を維持し、新しい guard scope は contract version 1 を公開します。
 
 # 開発者ガイド
+
+## インストーラー出力の読み取り期間
+
+`RunInstallerProcessDetailed` は抑制した両ストリームを並行して読み取り、親の終了または
+タイムアウト後の停止処理から、共有する1秒の猶予を設けます。既存の kill 後の5秒待ちは
+別枠のため、プロセス起動後の待ち時間は実行タイムアウト + 5秒 + 1秒（スケジューリング・
+OS 呼び出しの負荷を除く）が上限です。キャンセルは即座に読み取りへ伝播し、ハンドルの
+破棄前に両タスクを回収して `OperationCanceledException` を返します。Unix ではキャンセル
+可能なストリーム読み取りを使い、Windows の同期パイプでは `PeekNamedPipe` で確認した
+データだけを読み、データがなければキャンセル可能な20ms待ちを行います。バイト側の
+アダプターは中断・I/O 失敗を未完了として記録し、復号側には EOF を渡すことで、途中まで
+復号した文字も末尾出力へ確定させます。この文字列を失う可能性があるため、`StreamReader`
+にはキャンセルを直接渡さないでください。どちらも未完了の読み取りを残しません。
+BOM・文字コードの検出と末尾4,096文字の保持を維持してください。
+EOF 未到達や I/O 失敗は、サイズ超過による切り詰めとは独立して `OutputIncomplete` /
+JSON の `installer_output_incomplete` に記録します。判明した親の終了コードは維持し、
+タイムアウト時に動作中なら `InstallError` を返します。GitHub CLI のバージョン確認は
+完全かつ切り詰めのない出力を必須とし、attestation は引き続き検証器の終了状態を使います。
 
 ## C# 検索 origin のコンテキスト
 

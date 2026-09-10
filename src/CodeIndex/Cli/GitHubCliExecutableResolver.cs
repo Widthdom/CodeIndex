@@ -268,6 +268,7 @@ internal static class GitHubCliExecutableResolver
             suppressOutput: true);
         return result.ExitCode == CommandExitCodes.Success
                && !result.OutputTruncated
+               && !result.OutputIncomplete
                && result.StdoutTail?.TrimStart().StartsWith("gh version ", StringComparison.OrdinalIgnoreCase) == true;
     }
 

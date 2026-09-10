@@ -2,6 +2,19 @@
 
 > **[日本語版はこちら / Japanese version](#テストガイド)**
 
+## Installer inherited-pipe regression coverage
+
+Issue #5320 uses `InstallerPipeFixture` on POSIX with private PID/readiness files:
+an intermediate shell exits while its child keeps stdout, stderr, or both open.
+Test successful/nonzero parent exits, cancellation before/after exit, and timeout
+while the holder is still alive. Use the 10-second watchdog against the fixture's
+60-second hold, then kill only fixture-owned processes and observe the runner task
+in `finally`. Preserve #3831 bounded tails and JSON success/failure completeness
+checks on net8/net9, including exactly 1,024 output bytes with an inherited writer
+to catch loss of partially decoded buffers at cancellation. A cross-platform
+anonymous-pipe test covers a live writer, cancellation, BOM/Unicode decoding, and
+EOF; Windows runs it through the synchronous-pipe adapter.
+
 ## C# multiline search-origin coverage
 
 Keep cross-chunk closing evidence independent of row limits in database, CLI counts and MCP tests; include schema alignment commas/nested builders and ordinary-format newline rejection with verbatim/raw controls.
@@ -1300,6 +1313,17 @@ Issue #5300 のテストは隣接・入れ子の C# callable、対象行の除�
 パーサー（#5297）の回帰テストとともに net8.0 / net9.0 で実行します。
 
 # テストガイド
+
+## インストーラーの継承パイプに関する回帰テスト
+
+Issue #5320 は POSIX 上の `InstallerPipeFixture` と専用の PID・準備完了ファイルを使います。
+中間シェルの終了後も子が stdout、stderr、または両方を保持する状態で、親の成功・非ゼロ終了、
+終了前後のキャンセル、タイムアウトを検証します。60秒のパイプ保持に対して10秒の watchdog
+を使い、`finally` では fixture 所有プロセスだけを停止して実行タスクを回収してください。
+net8/net9 で #3831 の末尾保持と JSON 成功・失敗時の収集完了フラグを維持します。子孫が
+パイプを保持したまま正確に1,024バイト出力するケースも含め、中断時の復号済みバッファの
+欠落を検出してください。全 OS 共通の匿名パイプのテストで、書き込み側を開いたままの
+中断、BOM・Unicode の復号、EOF を確認し、Windows では同期パイプ用アダプターを通します。
 
 ## C# 複数行検索 origin の検証
 
