@@ -1,4 +1,5 @@
 using CodeIndex.Cli;
+using System.Text.Json;
 using static CodeIndex.Tests.QueryCommandTestSupport;
 
 namespace CodeIndex.Tests;
@@ -71,11 +72,13 @@ public sealed class QueryCommandRunnerFindIssue4350Tests
     [InlineData("--snippet-lines", "3")]
     public void RunFind_CompactRejectsContextFlags_Issue4350(string flag, string value)
     {
-        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
             ["needle", "--path", "src/app.txt", "--format", "compact", flag, value],
             JsonOptions));
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
-        Assert.Contains("find --format compact does not include snippets", stderr);
+        Assert.Empty(stderr);
+        using var error = JsonDocument.Parse(stdout);
+        Assert.Contains("find --format compact does not include snippets", error.RootElement.GetProperty("message").GetString());
     }
 }

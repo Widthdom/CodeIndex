@@ -18,9 +18,12 @@ public static partial class QueryCommandRunner
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        var machineErrorOutput = RequestsEarlyUsageJson(cmdArgs);
         var preparedFindArgs = PrepareFindArgs(cmdArgs, out var preparationError);
         if (preparationError != null)
         {
+            if (machineErrorOutput)
+                return WriteEarlyUsageJson("find", jsonOptions, preparationError);
             CommandErrorWriter.WriteStderr(preparationError);
             CommandErrorWriter.WriteStderr(FindUsage);
             return CommandExitCodes.UsageError;
@@ -28,6 +31,8 @@ public static partial class QueryCommandRunner
 
         if (!TryExtractFindLineScanLimit(preparedFindArgs, out var normalizedFindArgs, out var findLineScanLimit, out var lineScanLimitError))
         {
+            if (machineErrorOutput)
+                return WriteEarlyUsageJson("find", jsonOptions, lineScanLimitError!);
             CommandErrorWriter.WriteStderr(lineScanLimitError!);
             CommandErrorWriter.WriteStderr(FindUsage);
             return CommandExitCodes.UsageError;
@@ -39,6 +44,8 @@ public static partial class QueryCommandRunner
         var findValidationError = ValidateFindArgs(parserFindArgs);
         if (findValidationError != null)
         {
+            if (machineErrorOutput)
+                return WriteEarlyUsageJson("find", jsonOptions, findValidationError);
             CommandErrorWriter.WriteStderr(findValidationError);
             CommandErrorWriter.WriteStderr(FindUsage);
             return CommandExitCodes.UsageError;
@@ -53,6 +60,10 @@ public static partial class QueryCommandRunner
             options.Lang);
         if (options.ParseError != null)
         {
+            if (machineErrorOutput
+                && !(options.LanguageValidationError && options.Json
+                    && TryExtractNonPositiveMaxJsonBytes(options.ParseError, out _, out _, out _)))
+                return WriteEarlyUsageJson("find", jsonOptions, options.ParseError);
             if (options.LanguageValidationError && TryWriteParseError(options, "find", jsonOptions))
                 return CommandExitCodes.UsageError;
             CommandErrorWriter.WriteStderr(options.ParseError);
@@ -61,6 +72,8 @@ public static partial class QueryCommandRunner
         }
         if (options.Query is not null && string.IsNullOrWhiteSpace(options.Query))
         {
+            if (machineErrorOutput)
+                return WriteEarlyUsageJson("find", jsonOptions, "Error: find query cannot be empty or whitespace-only", "Pass a non-empty value after `find`; empty or whitespace-only arguments (e.g. `\"\"` or `\"   \"`) are rejected.");
             CommandErrorWriter.WriteStderr("Error: find query cannot be empty or whitespace-only");
             CommandErrorWriter.WriteStderr("Hint: Pass a non-empty value after `find`; empty or whitespace-only arguments (e.g. `\"\"` or `\"   \"`) are rejected.");
             CommandErrorWriter.WriteStderr(FindUsage);
@@ -69,17 +82,20 @@ public static partial class QueryCommandRunner
         if (string.IsNullOrWhiteSpace(options.Query))
         {
             return CommandErrorWriter.WriteJsonOrHuman(
-                options.Json,
+                options.Json || machineErrorOutput,
                 jsonOptions,
                 "find requires a query argument",
                 CommandExitCodes.UsageError,
                 "Pass the text to find after the command and scope it with --path <glob> or --all.",
                 FindUsage,
                 CommandErrorCodes.UsageError,
-                category: "usage");
+                category: "usage",
+                command: "find");
         }
         if (options.Query.Length > QueryLimits.MaxQueryLength)
         {
+            if (machineErrorOutput)
+                return WriteEarlyUsageJson("find", jsonOptions, $"Error: {QueryLimits.FormatQueryTooLongError()}", "Shorten the find text or split generated input into smaller queries before running `cdidx find`.");
             CommandErrorWriter.WriteStderr($"Error: {QueryLimits.FormatQueryTooLongError()}");
             CommandErrorWriter.WriteStderr("Hint: Shorten the find text or split generated input into smaller queries before running `cdidx find`.");
             CommandErrorWriter.WriteStderr(FindUsage);
@@ -88,6 +104,8 @@ public static partial class QueryCommandRunner
 
         if (options.PathPatterns.Count == 0 && !options.All)
         {
+            if (machineErrorOutput)
+                return WriteEarlyUsageJson("find", jsonOptions, "Error: find requires at least one --path <glob> or explicit --all to scope the search", "use --path <glob> for a bounded file set, or --all to scan all indexed files with safety caps.");
             CommandErrorWriter.WriteStderr("Error: find requires at least one --path <glob> or explicit --all to scope the search");
             CommandErrorWriter.WriteStderr("Hint: use --path <glob> for a bounded file set, or --all to scan all indexed files with safety caps.");
             CommandErrorWriter.WriteStderr(FindUsage);
@@ -95,6 +113,8 @@ public static partial class QueryCommandRunner
         }
         if (options.PathPatterns.Count > 0 && options.All)
         {
+            if (machineErrorOutput)
+                return WriteEarlyUsageJson("find", jsonOptions, "Error: find accepts either --path <glob> or --all, not both", "remove --all when using explicit path filters, or remove --path to scan all indexed files with caps.");
             CommandErrorWriter.WriteStderr("Error: find accepts either --path <glob> or --all, not both");
             CommandErrorWriter.WriteStderr("Hint: remove --all when using explicit path filters, or remove --path to scan all indexed files with caps.");
             CommandErrorWriter.WriteStderr(FindUsage);
@@ -102,6 +122,8 @@ public static partial class QueryCommandRunner
         }
         if (!options.All && findLineScanLimit.HasValue)
         {
+            if (machineErrorOutput)
+                return WriteEarlyUsageJson("find", jsonOptions, "Error: --line-scan-limit is only supported with find --all", "remove --line-scan-limit for scoped --path searches, or use --all to run a capped repository-wide scan.");
             CommandErrorWriter.WriteStderr("Error: --line-scan-limit is only supported with find --all");
             CommandErrorWriter.WriteStderr("Hint: remove --line-scan-limit for scoped --path searches, or use --all to run a capped repository-wide scan.");
             CommandErrorWriter.WriteStderr(FindUsage);
@@ -109,6 +131,8 @@ public static partial class QueryCommandRunner
         }
         if (options.OutputFormat == OutputFormatCompact && HasFindContextOption(normalizedFindArgs))
         {
+            if (machineErrorOutput)
+                return WriteEarlyUsageJson("find", jsonOptions, "Error: find --format compact does not include snippets, so it cannot be combined with --context, --before, --after, or --snippet-lines", "use default text or JSON output when you need context, or omit context flags for compact locations.");
             CommandErrorWriter.WriteStderr("Error: find --format compact does not include snippets, so it cannot be combined with --context, --before, --after, or --snippet-lines");
             CommandErrorWriter.WriteStderr("Hint: use default text or JSON output when you need context, or omit context flags for compact locations.");
             CommandErrorWriter.WriteStderr(FindUsage);
@@ -119,6 +143,8 @@ public static partial class QueryCommandRunner
             && (options.OutputFormat != OutputFormatText || options.Json)
             && !IsFindAllNdjson(options))
         {
+            if (machineErrorOutput)
+                return WriteEarlyUsageJson("find", jsonOptions, "Error: find --all row output requires default text or streaming NDJSON so scan authority and recovery metadata can be represented", "use `find <query> --all --json=ndjson`, use default text output, or add --count for a single JSON object with scan metadata.");
             CommandErrorWriter.WriteStderr("Error: find --all row output requires default text or streaming NDJSON so scan authority and recovery metadata can be represented");
             CommandErrorWriter.WriteStderr("Hint: use `find <query> --all --json=ndjson`, use default text output, or add --count for a single JSON object with scan metadata.");
             CommandErrorWriter.WriteStderr(FindUsage);
@@ -132,6 +158,8 @@ public static partial class QueryCommandRunner
         if (semanticFilters is not null && (!options.Regex
             || options.ResultKinds.Any(kind => kind is "declaration" or "call_site")))
         {
+            if (machineErrorOutput)
+                return WriteEarlyUsageJson("find", jsonOptions, "Error: find semantic filters require --regex; result kinds support origins and identifier only.");
             CommandErrorWriter.WriteStderr("Error: find semantic filters require --regex; result kinds support origins and identifier only.");
             return CommandExitCodes.UsageError;
         }
@@ -139,6 +167,8 @@ public static partial class QueryCommandRunner
             && (options.OutputFormat != OutputFormatJson || options.JsonOutputFormat == JsonOutputFormatArray)
             && !options.CountOnly)
         {
+            if (machineErrorOutput)
+                return WriteEarlyUsageJson("find", jsonOptions, "Error: filtered regex find requires text, JSON/NDJSON, or count output so classification authority remains visible.");
             CommandErrorWriter.WriteStderr("Error: filtered regex find requires text, JSON/NDJSON, or count output so classification authority remains visible.");
             return CommandExitCodes.UsageError;
         }
@@ -177,7 +207,7 @@ public static partial class QueryCommandRunner
                         resumeMatchOrdinal: countResumeMatchOrdinal,
                         resumeByteOffset: countResumeByteOffset,
                         cancellationToken: cancellationToken,
-                    semanticFilters: semanticFilters);
+                        semanticFilters: semanticFilters);
                 }
                 catch (FindContinuationException ex)
                 {

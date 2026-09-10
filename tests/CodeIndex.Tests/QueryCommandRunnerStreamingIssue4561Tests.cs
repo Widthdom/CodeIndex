@@ -258,12 +258,22 @@ public partial class QueryCommandRunnerTests
                         _jsonOptions),
                 };
 
-                foreach (var command in commands)
+                for (var commandIndex = 0; commandIndex < commands.Length; commandIndex++)
                 {
-                    var (exitCode, stdout, stderr) = CaptureConsole(command);
+                    var (exitCode, stdout, stderr) = CaptureConsole(commands[commandIndex]);
                     Assert.Equal(CommandExitCodes.UsageError, exitCode);
-                    Assert.Equal(string.Empty, stdout);
-                    Assert.Contains("--max-json-bytes cannot be combined", stderr, StringComparison.Ordinal);
+                    if (commandIndex == 0)
+                    {
+                        Assert.Empty(stderr);
+                        Assert.True(Encoding.UTF8.GetByteCount(stdout) <= 650);
+                        using var error = JsonDocument.Parse(stdout);
+                        Assert.Contains("--max-json-bytes cannot be combined", error.RootElement.GetProperty("message").GetString(), StringComparison.Ordinal);
+                    }
+                    else
+                    {
+                        Assert.Equal(string.Empty, stdout);
+                        Assert.Contains("--max-json-bytes cannot be combined", stderr, StringComparison.Ordinal);
+                    }
                 }
             }
 

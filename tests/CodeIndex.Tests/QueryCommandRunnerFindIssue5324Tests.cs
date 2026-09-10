@@ -182,10 +182,21 @@ public sealed class QueryCommandRunnerFindIssue5324Tests
         foreach (var options in new[] { new[] { "--origin", "code" }, new[] { "--regex", "--result-kind", "call_site" },
                      new[] { "--regex", "--origin", "code", "--json=array" } })
         {
-            var (exit, _, error) = CaptureConsole(() => QueryCommandRunner.RunFind(
-                ["Needle", "--all", .. options], JsonOptions));
-            Assert.Equal(CommandExitCodes.UsageError, exit);
-            Assert.NotEmpty(error);
+            foreach (var json in new[] { false, true })
+            {
+                var (exit, output, error) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                    ["Needle", "--path", "src/", .. options, .. json ? new[] { "--json" } : Array.Empty<string>()], JsonOptions));
+                Assert.Equal(CommandExitCodes.UsageError, exit);
+                if (json || options.Contains("--json=array"))
+                {
+                    Assert.Empty(error);
+                    using var document = JsonDocument.Parse(output);
+                    Assert.Equal("find", document.RootElement.GetProperty("command").GetString());
+                    Assert.Equal(CommandErrorCodes.UsageError, document.RootElement.GetProperty("error_code").GetString());
+                }
+                else
+                    Assert.NotEmpty(error);
+            }
         }
     }
 

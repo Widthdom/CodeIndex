@@ -152,7 +152,7 @@ public static partial class QueryCommandRunner
             : $"Use `find` for literal or regular-expression file scans, but no exact command was generated: {reason}";
 
         WriteSearchFindAlternativeError(
-            ProgramRunner.ContainsJsonOutputFlag(cmdArgs),
+            options.InvocationMachineErrorOutputRequested,
             jsonOptions,
             options.MaxJsonBytes,
             $"{triggeringOptions} not supported for search.",

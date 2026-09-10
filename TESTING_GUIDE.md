@@ -1,8 +1,12 @@
 # Testing Guide
 
+## Early search/find validation coverage
+
+`QueryCommandRunnerEarlyUsageIssue5323Tests.cs` shares an isolated database across blank/missing query, unsupported/missing-value option, find scope, output ordering/alias, bounded diagnostic and human controls. Keep JSON-looking query/inline values separate from actual selectors and test `--` boundaries. Sequential/parallel batch summaries must retain structured failures and continue a successful child without raw streams. Run on net8/net9 alongside #5297/#5305; invalid numeric search values now produce JSON when requested.
+
 > **[日本語版はこちら / Japanese version](#テストガイド)**
 
-`QueryCommandRunnerFindIssue5324Tests` covers mixed code/comment/string/fixture/unknown matches, exact and zero-width coordinates, pre-pagination counts, exclusion/kind filters, bounded JSON/cursors, scan-cap recovery, cancellation and timeout. Same-line unknown-origin cursor replay must not recount pre-cursor occurrences; next-match lookahead remains observed. Run both net8/net9 with existing find, CLI schema/help and search-classification regressions.
+`QueryCommandRunnerFindIssue5324Tests` covers mixed code/comment/string/fixture/unknown matches, exact and zero-width coordinates, pre-pagination counts, exclusion/kind filters, bounded JSON/cursors, scan-cap recovery, cancellation and timeout. Semantic-filter usage failures must retain the early JSON error contract from #5323. Same-line unknown-origin cursor replay must not recount pre-cursor occurrences; next-match lookahead remains observed. Run both net8/net9 with existing find, CLI schema/help and search-classification regressions.
 
 ## Installer inherited-pipe regression coverage
 
@@ -51,7 +55,7 @@ Issue #5322 extends `AuditBaselineIssue5261Tests` with a tiny origin-filtered fi
 
 `QueryCommandRunnerNumericBoundaryIssue5305Tests.cs` shares an isolated database across all non-guard numeric reader callers and aliases. Cover missing values with separated/inline output selectors in both orders, the `--` literal marker with and without explicit JSON, numeric range/overflow rejection, option-shaped inline values, and valid limit endpoints. Run alongside the #5297 guard parser regressions on net8.0 and net9.0.
 
-The existing #184 entrypoint theory distinguishes numeric JSON errors from unchanged string-value diagnostics. Excerpt, references, and inspect missing-value regressions assert JSON error identity and retain human-output controls in the same fixture.
+The existing #184 entrypoint theory checks JSON errors for both numeric and string-value search options, while preserving other commands' contracts. Excerpt, references, and inspect missing-value regressions assert JSON error identity and retain human-output controls in the same fixture.
 
 Issue #5300 guard tests cover adjacent and nested C# callables, focus-line exclusion,
 window bounds, lexical comment/string evidence, row/count parity, CLI/MCP/recipe
@@ -1320,11 +1324,15 @@ Issue #5300 のテストは隣接・入れ子の C# callable、対象行の除�
 
 # テストガイド
 
-`QueryCommandRunnerFindIssue5324Tests` は code/comment/string/fixture/unknown の混在、元の座標とゼロ幅一致、ページ分割前の件数、除外・kind フィルター、上限付き JSON とカーソル、走査上限からの再開、キャンセルとタイムアウトを検証します。同一行の unknown origin のカーソル再開では再開位置より前の一致を再計上せず、次の一致の先読みは観測件数に残します。既存の find、CLI スキーマ・ヘルプ、検索分類の回帰テストとともに net8/net9 で実行してください。
+`QueryCommandRunnerFindIssue5324Tests` は code/comment/string/fixture/unknown の混在、元の座標とゼロ幅一致、ページ分割前の件数、除外・kind フィルター、上限付き JSON とカーソル、走査上限からの再開、キャンセルとタイムアウトを検証します。意味フィルターの usage エラーでも #5323 の早期 JSON エラー契約を維持します。同一行の unknown origin のカーソル再開では再開位置より前の一致を再計上せず、次の一致の先読みは観測件数に残します。既存の find、CLI スキーマ・ヘルプ、検索分類の回帰テストとともに net8/net9 で実行してください。
 
 #5322 の回帰検証には `QueryCommandRunnerAuditSarifIssue4903Tests` も含めてください。SARIF の UTF-8 バイト上限で結果を丸ごと省略しても、origin フィルターの全候補を評価済みなら元の件数は確定したままです。上限ちょうど、省略数、部分結果の終了コード、明示的な許容、カーソル再実行、最小出力の検証を net8/net9 の両方で維持してください。
 
 Issue #5322 は `AuditBaselineIssue5261Tests` の小さな origin フィルター fixture で、同一比較、0件の子クエリ、行上限ちょうどの完全性、実際の上限超過、範囲・レシピ変更、安全確認済みの証拠、古い索引と確認済み削除、フィルター適用前に除外される字句予算超過の不明な origin、既定・単一・重複の上限転送を検証します。baseline と監査再開・レシピ選択・token-boundary の回帰を net8/net9 の両方で実行し、既存の不完全性・由来・識別・以前のパスの検証を維持してください。
+
+## search/find の早期検証テスト
+
+`QueryCommandRunnerEarlyUsageIssue5323Tests.cs` は分離した DB を共有し、空・欠落クエリ、未対応・値欠落オプション、find スコープ、出力指定の順序・別名、上限付き診断、人間向け出力を検証します。JSON 風のクエリ・インライン値と実際の出力指定を区別し、`--` 境界を確認してください。逐次・並列 batch summary は raw stream なしで構造化エラーを保持し、後続の正常な子コマンドも実行する必要があります。#5297/#5305 とともに net8/net9 で実行します。不正な search 数値も JSON 指定時は JSON エラーになります。
 
 ## インストーラーの継承パイプに関する回帰テスト
 
@@ -1349,7 +1357,7 @@ Issue #5307 のテストは、複数行コメント、verbatim/raw 文字列、�
 
 `QueryCommandRunnerNumericBoundaryIssue5305Tests.cs` は、guard 以外の数値読み取り処理の全呼び出し元と別名について、分離した DB を共有して検証します。値欠如と分離形式／インライン形式の出力指定の前後順、明示的 JSON 指定の有無と `--` リテラルマーカー、数値の範囲外／オーバーフロー、オプションに似たインライン値、許容される limit の上下限を確認してください。#5297 の guard パーサー回帰テストとともに net8.0／net9.0 で実行します。
 
-既存の #184 のエントリーポイントの theory は、数値の JSON エラーと変更しない文字列値の診断を区別します。excerpt、references、inspect の値欠如テストは、JSON のエラー識別情報を検証し、同じ fixture 内に人間向け出力の対照ケースを保持します。
+既存の #184 のエントリーポイントの theory は、search の数値・文字列値オプション両方の JSON エラーを検証し、他コマンドの契約を維持します。excerpt、references、inspect の値欠如テストは、JSON のエラー識別情報を検証し、同じ fixture 内に人間向け出力の対照ケースを保持します。
 
 `QueryCommandRunnerRecipeTokenBoundaryIssue5298Tests` と `McpServerIssue5298Tests` は、レシピの既定値／上書き、実際のメンバー使用の正確な件数、C# の verbatim 表記と Unicode、同一行のコード・コメント・文字列、外部レシピ、cursor・continuation・baseline の互換性を検証します。net8.0／net9.0 で batch・CLI・MCP の整合性を保ってください。Unicode エスケープの復号は既存のテキスト検索の契約に含みません。
 

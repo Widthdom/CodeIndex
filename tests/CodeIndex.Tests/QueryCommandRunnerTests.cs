@@ -6181,7 +6181,16 @@ public partial class QueryCommandRunnerTests
         });
 
         var expectsStructuredRangeError = command == "excerpt" && option is "--start" or "--end";
-        if (expectsStructuredRangeError)
+        if (command == "search")
+        {
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Empty(stderr);
+            using var error = JsonDocument.Parse(stdout);
+            Assert.Equal(CommandErrorCodes.UsageError, error.RootElement.GetProperty("error_code").GetString());
+            Assert.Contains(expectedErrorFragment, error.RootElement.GetProperty("message").GetString());
+            Assert.Contains($"got '{value}'", error.RootElement.GetProperty("message").GetString());
+        }
+        else if (expectsStructuredRangeError)
         {
             Assert.Equal(CommandExitCodes.InvalidArgument, exitCode);
             Assert.Equal(string.Empty, stderr);
@@ -6234,9 +6243,9 @@ public partial class QueryCommandRunnerTests
     // 黙って隣接フラグを飲み込まず fail-close する、という契約に合わせる。
     [Theory]
     [InlineData(new[] { "search", "hello", "--limit", "--lang", "rust" }, "--limit requires a value.", true)]
-    [InlineData(new[] { "search", "hello", "--lang", "--limit", "5" }, "--lang requires a value.", false)]
+    [InlineData(new[] { "search", "hello", "--lang", "--limit", "5" }, "--lang requires a value.", true)]
     [InlineData(new[] { "search", "hello", "--snippet-lines", "--limit", "5" }, "--snippet-lines requires a value.", true)]
-    [InlineData(new[] { "search", "hello", "--snippet-focus", "--limit", "5" }, "--snippet-focus requires a value.", false)]
+    [InlineData(new[] { "search", "hello", "--snippet-focus", "--limit", "5" }, "--snippet-focus requires a value.", true)]
     [InlineData(new[] { "search", "hello", "--max-line-width", "--limit", "5" }, "--max-line-width requires a value.", true)]
     [InlineData(new[] { "symbols", "hello", "--kind", "--lang", "rust" }, "--kind requires a value.", false)]
     [InlineData(new[] { "impact", "hello", "--depth", "--lang", "rust" }, "--depth requires a value.", true)]
@@ -6363,9 +6372,10 @@ public partial class QueryCommandRunnerTests
         var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(args, _jsonOptions));
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
-        Assert.Equal(string.Empty, stdout);
-        Assert.Contains($"{optionName} requires a value", stderr);
-        Assert.Contains($"pass it as `{optionName}=<value>`", stderr);
+        Assert.Empty(stderr);
+        using var error = JsonDocument.Parse(stdout);
+        Assert.Contains($"{optionName} requires a value", error.RootElement.GetProperty("message").GetString());
+        Assert.Contains($"pass it as `{optionName}=<value>`", error.RootElement.GetProperty("message").GetString());
     }
 
 
@@ -6457,10 +6467,21 @@ public partial class QueryCommandRunnerTests
         });
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
-        Assert.Equal(string.Empty, stdout);
-        Assert.Contains($"--max-line-width must be less than or equal to {LineWidthFormatter.MaxAllowedLineWidth}", stderr);
-        Assert.Contains($"got '{value}'", stderr);
-        Assert.Contains($"Usage: {ConsoleUi.GetUsageLine(command)}", stderr);
+        if (command is "search" or "find")
+        {
+            Assert.Empty(stderr);
+            using var error = JsonDocument.Parse(stdout);
+            Assert.Equal(CommandErrorCodes.UsageError, error.RootElement.GetProperty("error_code").GetString());
+            Assert.Contains($"--max-line-width must be less than or equal to {LineWidthFormatter.MaxAllowedLineWidth}", error.RootElement.GetProperty("message").GetString());
+            Assert.Contains($"got '{value}'", error.RootElement.GetProperty("message").GetString());
+        }
+        else
+        {
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains($"--max-line-width must be less than or equal to {LineWidthFormatter.MaxAllowedLineWidth}", stderr);
+            Assert.Contains($"got '{value}'", stderr);
+            Assert.Contains($"Usage: {ConsoleUi.GetUsageLine(command)}", stderr);
+        }
     }
 
 

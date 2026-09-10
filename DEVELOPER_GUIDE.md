@@ -1,5 +1,9 @@
 # Developer Guide
 
+## Early query usage errors
+
+Search/find determine early JSON error intent from original tokens before validation. Skip owned option values and stop at the literal marker; never parse rendered stderr. Route failures through `CommandErrorWriter` with bounded, control-safe messages and hints, public command identity and existing error codes. Preserve human diagnostics and batch child-error extraction; this does not add find origin support or change successful query formats.
+
 > **[日本語版はこちら / Japanese version](#開発者ガイド)**
 
 Regex find semantic filters (#5324) run in `IndexedFindPipeline` before either collector; retain raw match ordinals for cursor replay. Reuse `SearchMatchClassifier` and bounded indexed C# prefixes without literal rematching. Preserve zero-width spans and unknown evidence before exclusions. See [the v1 contract](docs/find-scan-controls.md#regex-origin-filters-5324).
@@ -4463,6 +4467,10 @@ API version 1 の互換性を維持し、新しい guard scope は contract vers
 # 開発者ガイド
 
 正規表現 find の意味フィルター (#5324) は `IndexedFindPipeline` で両 collector の前に適用します。カーソル再開用の元の一致 ordinal を維持し、リテラルで再検索せず `SearchMatchClassifier` と上限付き C# 索引プレフィックスを共有します。ゼロ幅座標と除外前の unknown 証拠を保持します。[v1 契約](docs/find-scan-controls.md#正規表現の-origin-フィルター-5324)を参照してください。
+
+## クエリの早期 usage エラー
+
+search/find は検証前に元のトークン列から JSON エラーの出力指定を判定します。オプションが所有する値を飛ばし、リテラルマーカーで停止してください。描画済み stderr を解析してはいけません。上限と制御文字対策を持つメッセージ・ヒント、公開コマンド名、既存のエラーコードを保ち、`CommandErrorWriter` で失敗を出力します。人間向け診断と batch の子エラー抽出は維持し、find の origin 対応や正常時の出力形式は変更しません。
 
 ## インストーラー出力の読み取り期間
 
