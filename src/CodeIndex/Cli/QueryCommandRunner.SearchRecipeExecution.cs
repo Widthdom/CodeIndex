@@ -35,7 +35,8 @@ public static partial class QueryCommandRunner
     private readonly record struct SearchRecipeQueryMaterializationResult(
         List<SearchDisplayRow> Rows,
         bool SourceTotalAuthoritative,
-        bool CandidateWindowExhausted);
+        bool CandidateWindowExhausted,
+        string? CoverageRestriction);
 
     private static SearchRecipeQueryMaterializationResult MaterializeSearchRecipeQuery(
         in SearchRecipeQueryMaterializationRequest request)
@@ -72,33 +73,35 @@ public static partial class QueryCommandRunner
                 ? GetSearchRecipeResultRanking(request.RecipeQuery.ResultRanking, request.ResultLimit.Value)
                 : SearchResultRanking.Default,
             candidateWindowObserver: exhausted => candidateWindowExhausted = exhausted);
-        var sourceTotalAuthoritative = request.ResultLimit.HasValue
-            && !candidateWindowExhausted
-            && IsSearchRecipeSourceTotalAuthoritative(
-                request.Options,
-                request.RecipeQuery,
-                guardFilters,
-                results.Count,
-                fetchLimit);
+        var coverageRestriction = candidateWindowExhausted ? "raw_candidate_window_exhausted"
+            : guardFilters.Count > 0 ? "guard_filter_coverage_unverified"
+            : request.RecipeQuery.RejectFileQueries.Count > 0 ? "file_reject_coverage_unverified"
+            : request.RecipeQuery.SemanticFilter != SearchRecipeSemanticFilter.None ? "semantic_filter_coverage_unverified"
+            : BuildSearchDisplayFacetFilters(request.Options, request.RecipeQuery).ResultKinds.Count > 0 ? "result_kind_filter_coverage_unverified"
+            : null;
         results = ApplySearchRecipeFileRejectQueries(
             request.Reader,
             results,
             request.Options,
             request.RecipeQuery);
+        var originCoverageComplete = true;
         var rows = BuildSearchDisplayRows(
             results,
             request.Options,
             request.Exact,
             request.RecipeQuery.Query,
             rawFtsOverride: request.RawFtsOverride,
-            recipeQuery: request.RecipeQuery);
+            recipeQuery: request.RecipeQuery,
+            originCoverageObserver: complete => originCoverageComplete &= complete);
+        if (!originCoverageComplete) coverageRestriction = "origin_classification_incomplete";
+        var sourceTotalAuthoritative = request.ResultLimit.HasValue && coverageRestriction == null;
         rows = ApplySearchRecipeSemanticFilter(
             request.Reader,
             request.Options,
             request.RecipeQuery,
             rows);
         MarkSearchRecipeQueryExecuted(request.Scope, request.RecipeQuery.Name);
-        return new SearchRecipeQueryMaterializationResult(rows, sourceTotalAuthoritative, candidateWindowExhausted);
+        return new SearchRecipeQueryMaterializationResult(rows, sourceTotalAuthoritative, candidateWindowExhausted, coverageRestriction);
     }
 
     private static List<SearchRecipeQueryResultJsonResult> CollectSearchRecipeQueryResults(
@@ -233,6 +236,7 @@ public static partial class QueryCommandRunner
                     SummaryEvidencePathCount = summaryEvidencePathCount,
                     SummaryEvidencePathCountAuthoritative = materialization.SourceTotalAuthoritative,
                     CandidateWindowExhausted = materialization.CandidateWindowExhausted,
+                    CoverageRestriction = materialization.CoverageRestriction,
                 });
                 if (freshnessContext != null)
                 {
@@ -375,18 +379,6 @@ public static partial class QueryCommandRunner
             && selection.TruncationReason is "first_per_file" or "sample"
                 ? selection.TruncationReason
                 : null;
-
-    private static bool IsSearchRecipeSourceTotalAuthoritative(
-        QueryCommandOptions options,
-        SearchAuditRecipeQuery recipeQuery,
-        IReadOnlyCollection<SearchGuardFilter> guardFilters,
-        int resultCount,
-        int fetchLimit)
-        => guardFilters.Count == 0
-           && recipeQuery.RejectFileQueries.Count == 0
-           && recipeQuery.SemanticFilter == SearchRecipeSemanticFilter.None
-           && !HasSearchOriginFilters(BuildSearchDisplayFacetFilters(options, recipeQuery))
-           && resultCount < fetchLimit;
 
     private static int GetSearchRecipeFetchLimit(
         QueryCommandOptions options,

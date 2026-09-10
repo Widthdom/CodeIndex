@@ -43,6 +43,10 @@ If you change test code, test helpers, test execution flow, or testing conventio
 
 ## Quick Start
 
+Include `QueryCommandRunnerAuditSarifIssue4903Tests` in the #5322 regression set. Fully evaluated origin-filtered source counts stay authoritative even when the SARIF UTF-8 byte budget omits whole results; retain exact-boundary, omitted-count, partial-exit, opt-in, cursor-replay and minimum-output assertions on net8/net9.
+
+Issue #5322 extends `AuditBaselineIssue5261Tests` with a tiny origin-filtered fixture: identical/zero-child/exact-row-limit coverage, true caps, changed scope/recipe, reviewed evidence, stale and verified deletion, lexical-budget unknowns rejected before filtering, and default/single/duplicate limit forwarding. Run the baseline tests with audit continuation, recipe selection and token-boundary regressions on both net8/net9. Keep legacy incomplete/provenance/identity and prior-path controls intact.
+
 `QueryCommandRunnerNumericBoundaryIssue5305Tests.cs` shares an isolated database across all non-guard numeric reader callers and aliases. Cover missing values with separated/inline output selectors in both orders, the `--` literal marker with and without explicit JSON, numeric range/overflow rejection, option-shaped inline values, and valid limit endpoints. Run alongside the #5297 guard parser regressions on net8.0 and net9.0.
 
 The existing #184 entrypoint theory distinguishes numeric JSON errors from unchanged string-value diagnostics. Excerpt, references, and inspect missing-value regressions assert JSON error identity and retain human-output controls in the same fixture.
@@ -1313,6 +1317,10 @@ Issue #5300 のテストは隣接・入れ子の C# callable、対象行の除�
 パーサー（#5297）の回帰テストとともに net8.0 / net9.0 で実行します。
 
 # テストガイド
+
+#5322 の回帰検証には `QueryCommandRunnerAuditSarifIssue4903Tests` も含めてください。SARIF の UTF-8 バイト上限で結果を丸ごと省略しても、origin フィルターの全候補を評価済みなら元の件数は確定したままです。上限ちょうど、省略数、部分結果の終了コード、明示的な許容、カーソル再実行、最小出力の検証を net8/net9 の両方で維持してください。
+
+Issue #5322 は `AuditBaselineIssue5261Tests` の小さな origin フィルター fixture で、同一比較、0件の子クエリ、行上限ちょうどの完全性、実際の上限超過、範囲・レシピ変更、安全確認済みの証拠、古い索引と確認済み削除、フィルター適用前に除外される字句予算超過の不明な origin、既定・単一・重複の上限転送を検証します。baseline と監査再開・レシピ選択・token-boundary の回帰を net8/net9 の両方で実行し、既存の不完全性・由来・識別・以前のパスの検証を維持してください。
 
 ## インストーラーの継承パイプに関する回帰テスト
 

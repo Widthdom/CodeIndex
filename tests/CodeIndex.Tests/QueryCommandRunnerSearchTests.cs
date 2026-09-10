@@ -11891,8 +11891,8 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(4, sampleSummary.GetProperty("selector_omitted_count").GetInt32());
             Assert.Equal(0, sampleSummary.GetProperty("limit_omitted_count").GetInt32());
             Assert.False(sampleSummary.GetProperty("cursoring_available").GetBoolean());
-            Assert.False(sampleSummary.GetProperty("source_total_authoritative").GetBoolean());
-            Assert.Equal(5, sampleSummary.GetProperty("source_total_lower_bound").GetInt32());
+            Assert.True(sampleSummary.GetProperty("source_total_authoritative").GetBoolean());
+            Assert.False(sampleSummary.TryGetProperty("source_total_lower_bound", out _));
             var sampleQuery = Assert.Single(sampleDocument.RootElement.GetProperty("queries").EnumerateArray());
             Assert.Equal(1, sampleQuery.GetProperty("count").GetInt32());
             Assert.Equal(1, sampleQuery.GetProperty("emitted_count").GetInt32());
@@ -11901,8 +11901,8 @@ public partial class QueryCommandRunnerTests
             Assert.Equal("sample", sampleQuery.GetProperty("selection_reason").GetString());
             Assert.Equal(4, sampleQuery.GetProperty("selection_omitted_count").GetInt32());
             Assert.Equal(5, sampleQuery.GetProperty("source_total").GetInt32());
-            Assert.False(sampleQuery.GetProperty("source_total_authoritative").GetBoolean());
-            Assert.Equal(5, sampleQuery.GetProperty("source_total_lower_bound").GetInt32());
+            Assert.True(sampleQuery.GetProperty("source_total_authoritative").GetBoolean());
+            Assert.False(sampleQuery.TryGetProperty("source_total_lower_bound", out _));
             Assert.Equal(1, sampleQuery.GetProperty("selected_total").GetInt32());
             Assert.Equal(1, sampleQuery.GetProperty("returned").GetInt32());
             Assert.Equal(4, sampleQuery.GetProperty("selector_omitted_count").GetInt32());
@@ -11955,8 +11955,8 @@ public partial class QueryCommandRunnerTests
             Assert.Equal("sample", compactQuery.GetProperty("selection_reason").GetString());
             Assert.Equal(4, compactQuery.GetProperty("selection_omitted_count").GetInt32());
             Assert.Equal(5, compactQuery.GetProperty("source_total").GetInt32());
-            Assert.False(compactQuery.GetProperty("source_total_authoritative").GetBoolean());
-            Assert.Equal(5, compactQuery.GetProperty("source_total_lower_bound").GetInt32());
+            Assert.True(compactQuery.GetProperty("source_total_authoritative").GetBoolean());
+            Assert.False(compactQuery.TryGetProperty("source_total_lower_bound", out _));
             Assert.Equal(1, compactQuery.GetProperty("selected_total").GetInt32());
             Assert.Equal(1, compactQuery.GetProperty("returned").GetInt32());
             Assert.Equal(4, compactQuery.GetProperty("selector_omitted_count").GetInt32());
@@ -11999,8 +11999,8 @@ public partial class QueryCommandRunnerTests
             Assert.Equal("sample", draft.GetProperty("source").GetProperty("selection_reason").GetString());
             Assert.Equal(4, draft.GetProperty("source").GetProperty("selection_omitted_count").GetInt32());
             Assert.Equal(5, draft.GetProperty("source").GetProperty("source_total").GetInt32());
-            Assert.False(draft.GetProperty("source").GetProperty("source_total_authoritative").GetBoolean());
-            Assert.Equal(5, draft.GetProperty("source").GetProperty("source_total_lower_bound").GetInt32());
+            Assert.True(draft.GetProperty("source").GetProperty("source_total_authoritative").GetBoolean());
+            Assert.False(draft.GetProperty("source").TryGetProperty("source_total_lower_bound", out _));
             Assert.Equal(1, draft.GetProperty("source").GetProperty("selected_total").GetInt32());
             Assert.Equal(1, draft.GetProperty("source").GetProperty("returned").GetInt32());
             Assert.Equal(4, draft.GetProperty("source").GetProperty("selector_omitted_count").GetInt32());
@@ -12023,8 +12023,8 @@ public partial class QueryCommandRunnerTests
             Assert.Equal("sample", ndjsonTerminal.RootElement.GetProperty("selection_reason").GetString());
             Assert.Equal(4, ndjsonTerminal.RootElement.GetProperty("selection_omitted_count").GetInt32());
             Assert.Equal(5, ndjsonTerminal.RootElement.GetProperty("source_total").GetInt32());
-            Assert.False(ndjsonTerminal.RootElement.GetProperty("source_total_authoritative").GetBoolean());
-            Assert.Equal(5, ndjsonTerminal.RootElement.GetProperty("source_total_lower_bound").GetInt32());
+            Assert.True(ndjsonTerminal.RootElement.GetProperty("source_total_authoritative").GetBoolean());
+            Assert.False(ndjsonTerminal.RootElement.TryGetProperty("source_total_lower_bound", out _));
             Assert.Equal(1, ndjsonTerminal.RootElement.GetProperty("selected_total").GetInt32());
             Assert.Equal(1, ndjsonTerminal.RootElement.GetProperty("returned").GetInt32());
             Assert.Equal(4, ndjsonTerminal.RootElement.GetProperty("selector_omitted_count").GetInt32());
@@ -12085,8 +12085,8 @@ public partial class QueryCommandRunnerTests
             var repeatQuery = Assert.Single(repeatDocument.RootElement.GetProperty("queries").EnumerateArray());
 
             Assert.Equal(126, sampleQuery.GetProperty("source_total").GetInt32());
-            Assert.False(sampleQuery.GetProperty("source_total_authoritative").GetBoolean());
-            Assert.Equal(126, sampleQuery.GetProperty("source_total_lower_bound").GetInt32());
+            Assert.True(sampleQuery.GetProperty("source_total_authoritative").GetBoolean());
+            Assert.False(sampleQuery.TryGetProperty("source_total_lower_bound", out _));
             Assert.Equal(5, sampleQuery.GetProperty("selected_total").GetInt32());
             Assert.Equal(5, sampleQuery.GetProperty("returned").GetInt32());
             Assert.Equal(121, sampleQuery.GetProperty("selector_omitted_count").GetInt32());
@@ -13434,15 +13434,15 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(1, limitedRawDiagnosticSummary.GetProperty("result_count").GetInt32());
             Assert.Equal(7, limitedRawDiagnosticSummary.GetProperty("minimum_matched_count").GetInt32());
             Assert.Equal(7, limitedRawDiagnosticSummary.GetProperty("file_count").GetInt32());
-            Assert.False(limitedRawDiagnosticSummary.GetProperty("file_count_authoritative").GetBoolean());
-            Assert.Equal(7, limitedRawDiagnosticSummary.GetProperty("file_count_lower_bound").GetInt32());
+            Assert.True(limitedRawDiagnosticSummary.GetProperty("file_count_authoritative").GetBoolean());
+            Assert.False(limitedRawDiagnosticSummary.TryGetProperty("file_count_lower_bound", out _));
             Assert.Equal(7, limitedRawDiagnosticSummary.GetProperty("evidence_path_count").GetInt32());
-            Assert.False(limitedRawDiagnosticSummary.GetProperty("evidence_path_count_authoritative").GetBoolean());
-            Assert.Equal(7, limitedRawDiagnosticSummary.GetProperty("evidence_path_count_lower_bound").GetInt32());
+            Assert.True(limitedRawDiagnosticSummary.GetProperty("evidence_path_count_authoritative").GetBoolean());
+            Assert.False(limitedRawDiagnosticSummary.TryGetProperty("evidence_path_count_lower_bound", out _));
             Assert.Equal(5, limitedRawDiagnosticSummary.GetProperty("evidence_paths_returned_count").GetInt32());
             Assert.Equal(2, limitedRawDiagnosticSummary.GetProperty("evidence_paths_omitted_count").GetInt32());
-            Assert.False(limitedRawDiagnosticSummary.GetProperty("evidence_paths_omitted_count_authoritative").GetBoolean());
-            Assert.Equal(2, limitedRawDiagnosticSummary.GetProperty("evidence_paths_omitted_count_lower_bound").GetInt32());
+            Assert.True(limitedRawDiagnosticSummary.GetProperty("evidence_paths_omitted_count_authoritative").GetBoolean());
+            Assert.False(limitedRawDiagnosticSummary.TryGetProperty("evidence_paths_omitted_count_lower_bound", out _));
 
             var fullByteCount = Encoding.UTF8.GetByteCount(summaryStdout);
             var truncatedBudget = fullByteCount - 1;
