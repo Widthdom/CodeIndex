@@ -95,7 +95,8 @@ public class QueryCommandRunnerAuditSarifIssue4903Tests
             Assert.Equal(2, querySummaries.Length);
             Assert.Equal(results.Length, properties.GetProperty("result_count").GetInt32());
             Assert.Equal(16, properties.GetProperty("source_result_count").GetInt32());
-            Assert.False(properties.GetProperty("source_result_count_authoritative").GetBoolean());
+            // All origin-filtered candidates were evaluated; byte admission only omits output rows (#5322).
+            Assert.True(properties.GetProperty("source_result_count_authoritative").GetBoolean());
             Assert.Equal(boundedBudget, byteBudget.GetProperty("max_json_bytes").GetInt32());
             Assert.Equal("utf8_bytes_including_final_newline", byteBudget.GetProperty("measurement").GetString());
             Assert.Equal("omit_whole_results", byteBudget.GetProperty("strategy").GetString());
@@ -108,7 +109,8 @@ public class QueryCommandRunnerAuditSarifIssue4903Tests
                 StringComparison.Ordinal);
             Assert.All(querySummaries, query =>
             {
-                Assert.False(query.GetProperty("source_result_count_authoritative").GetBoolean());
+                Assert.Equal(8, query.GetProperty("source_result_count").GetInt32());
+                Assert.True(query.GetProperty("source_result_count_authoritative").GetBoolean());
                 Assert.True(query.GetProperty("omitted_by_byte_budget").GetInt32() >= 0);
                 Assert.False(string.IsNullOrWhiteSpace(query.GetProperty("replay_command").GetString()));
             });
