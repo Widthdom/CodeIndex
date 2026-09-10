@@ -4,7 +4,9 @@
 
 ## C# multiline search origins
 
-Search origin filters and facets carry C# block-comment, verbatim-string and raw-string state across indexed lines. Ordinary search, token-boundary recipes, counts and MCP use the same classification and original coordinates. Schema, regex and help-string labels follow the string's opening line. This is lexical classification: encountering an interpolation expression makes subsequent origins `unknown`; escaped braces and literal text before an expression retain their string labels.
+Search origin filters and facets carry C# block-comment, verbatim-string and raw-string state across indexed lines. Ordinary search, token-boundary recipes, counts and MCP use the same classification and original coordinates. Schema, regex and help-string labels follow the string's opening line. Bounded lexical handling classifies supported interpolation expressions as code and resumes after terminated ordinary, verbatim and raw interpolated strings. Escaped braces, literal text, nested strings and comments keep their respective labels.
+
+Interpolation nesting and expression delimiters each have a depth limit of 64. Unbalanced or unsupported interpolation (including quoted/braced format components) remains `unknown` from the outer string onward. Unknown C# match facets expose `origin_unavailable` (MCP: `originUnavailable`) with a fixed `reason`, one-based `start_line` / `start_column` (MCP: `startLine` / `startColumn`) and `extent=remaining_file` (`line` for mismatched indexed text). Inspect these facets without an origin filter, or with `--origin unknown`; a code-only zero count cannot establish absence when classification is unavailable.
 
 Classification reads an indexed prefix bounded by 4,096 lines, 8,388,608 UTF-16 characters and 128 chunks per file (overlapping chunk characters count toward the read budget). Missing prefix lines or exhausted bounds produce `unknown`, which does not satisfy `--origin code`. It does not read live source or require a rebuild. Inspect unknown matches without an origin filter when reviewing incomplete or large files.
 
@@ -371,7 +373,9 @@ A deadline returns exit `11`; cancellation returns `130`. JSON reports `analysis
 
 ## C# の複数行検索 origin
 
-検索の origin フィルターと facet は、C# のブロックコメント、verbatim 文字列、raw 文字列の状態をインデックス済みの行をまたいで引き継ぎます。通常検索、token-boundary recipe、件数、MCP は同じ分類と元の座標を使用します。schema、regex、help 文字列のラベルは文字列の開始行に従います。これは字句分類です。補間式に到達した後の origin は `unknown` となり、エスケープした波括弧や式より前のリテラル部分は文字列のラベルを維持します。
+検索の origin フィルターと facet は、C# のブロックコメント、verbatim 文字列、raw 文字列の状態をインデックス済みの行をまたいで引き継ぎます。通常検索、token-boundary recipe、件数、MCP は同じ分類と元の座標を使用します。schema、regex、help 文字列のラベルは文字列の開始行に従います。上限付きの字句処理によって対応する補間式をコードとして分類し、通常・verbatim・raw 補間文字列の終端後に走査を再開します。エスケープした波括弧、リテラル部分、入れ子の文字列、コメントはそれぞれのラベルを維持します。
+
+補間の入れ子と式の区切りの深さには、それぞれ 64 の上限があります。不均衡または未対応の補間（引用符や波括弧を含む書式部分など）は、外側の文字列以降を `unknown` とします。不明な C# の一致 facet には `origin_unavailable`（MCP: `originUnavailable`）を付け、固定の `reason`、1 始まりの `start_line` / `start_column`（MCP: `startLine` / `startColumn`）、`extent=remaining_file`（インデックス済みテキストの不一致では `line`）を示します。origin フィルターを外すか `--origin unknown` で確認してください。分類できない場合、コードのみの件数がゼロでも不存在を証明できません。
 
 分類は各ファイルのインデックス済み先頭部分を、4,096 行、UTF-16 で 8,388,608 文字、128 チャンクを上限として読み取ります（重複チャンクの文字も読み取り上限に含みます）。先頭からの行が欠けている場合や上限を超える場合は `unknown` となり、`--origin code` には一致しません。実ファイルの読み取りや rebuild は不要です。不完全なファイルや大きなファイルのレビューでは、origin フィルターを外して不明な一致も確認してください。
 

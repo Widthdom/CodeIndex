@@ -394,7 +394,8 @@ public partial class DbReader
         foreach (var group in results.Where(r => string.Equals(r.Lang, "csharp", StringComparison.OrdinalIgnoreCase))
                      .GroupBy(r => r.Path, StringComparer.Ordinal))
         {
-            var endLine = Math.Min(SearchMatchClassifier.CSharpContextLineLimit, group.Max(r => r.EndLine));
+            // Closing interpolation evidence can occur after the last returned match.
+            var endLine = SearchMatchClassifier.CSharpContextLineLimit;
             var budget = SearchMatchClassifier.CSharpContextCharacterLimit;
             var lines = new Dictionary<int, string>();
             using var cmd = _conn.CreateCommand();

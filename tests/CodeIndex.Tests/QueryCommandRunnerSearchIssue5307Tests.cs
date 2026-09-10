@@ -32,9 +32,9 @@ public partial class QueryCommandRunnerTests
             ("var x = @\"\"\"\nneedle\n\";", "string_literal"),
             ("var x = $@\"\n{{needle}}\n\";", "string_literal"),
             ("var x = $$\"\"\"\n{needle}\n\"\"\";", "string_literal"),
-            ("var x = $@\"\n{Call(\"x\")} needle\n\";", "unknown"),
-            ("var x = $$\"\"\"\n{{Call(\"x\")}} needle\n\"\"\";", "unknown"),
-            ("var x = $\"{Call(\"x\")} needle\";", "unknown"),
+            ("var x = $@\"\n{Call(\"x\")} needle\n\";", "string_literal"),
+            ("var x = $$\"\"\"\n{{Call(\"x\")}} needle\n\"\"\";", "string_literal"),
+            ("var x = $\"{Call(\"x\")} needle\";", "string_literal"),
             ("var x = $\"" + new string('{', 65536) + "needle\";", "string_literal"),
         ];
         foreach (var (source, expected) in cases)
@@ -86,9 +86,9 @@ public partial class QueryCommandRunnerTests
 
         foreach (var (source, expected) in new[]
         {
-            ("var s = $\"{Call()}\";", "unknown"),
-            ("var s = $@\"{Call()}\";", "unknown"),
-            ("var s = $$\"\"\"{{Call()}}\"\"\";", "unknown"),
+            ("var s = $\"{Call()}\";", "string_literal"),
+            ("var s = $@\"{Call()}\";", "string_literal"),
+            ("var s = $$\"\"\"{{Call()}}\"\"\";", "string_literal"),
             ("var s = $\"{{Call()}}\";", "string_literal"),
             ("var s = $@\"{{Call()}}\";", "string_literal"),
             ("var s = $$\"\"\"{Call()}\"\"\";", "string_literal"),
@@ -189,7 +189,7 @@ public partial class QueryCommandRunnerTests
                 ChunkIndex = i,
                 StartLine = i + 1,
                 EndLine = i + 1,
-                Content = $"info.ArgumentList.Add(value); // {i}",
+                Content = $"var s = $\"{{value}}\"; info.ArgumentList.Add(value); // {i}",
             }).ToList());
             var reader = new DbReader(db.Connection);
             var rows = reader.Search("ArgumentList", count + 1, exact: true, deduplicate: false, tokenBoundary: true);
@@ -200,6 +200,15 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(SearchMatchClassifier.CSharpContextChunkLimit,
                 compact.Count(row => Assert.Single(row.MatchFacets).Origin == "code"));
             Assert.Equal(2, compact.Count(row => Assert.Single(row.MatchFacets).Origin == "unknown"));
+            foreach (var pageLimit in new[] { 1, count })
+            {
+                var page = reader.Search("ArgumentList", pageLimit, exact: true,
+                    deduplicate: false, tokenBoundary: true).Last();
+                var full = rows.Single(row => row.StartLine == page.StartLine);
+                var column = page.Content.IndexOf("ArgumentList", StringComparison.Ordinal);
+                Assert.Equal(full.CSharpOrigins!.GetOrigin(page.StartLine, page.Content, column),
+                    page.CSharpOrigins!.GetOrigin(page.StartLine, page.Content, column));
+            }
         }
         finally
         {
@@ -217,7 +226,7 @@ public partial class QueryCommandRunnerTests
             TestProjectHelper.InsertIndexedFile(db, "src/Comment.cs", "csharp", "/*\ninfo.ArgumentList.Add(value);\n*/\n");
             TestProjectHelper.InsertIndexedFile(db, "src/String.cs", "csharp", "var text = @\"\ninfo.ArgumentList.Add(value);\n\";\n");
             TestProjectHelper.InsertIndexedFile(db, "src/Raw.cs", "csharp", "var text = \"\"\"\ninfo.ArgumentList.Add(value);\n\"\"\";\n");
-            TestProjectHelper.InsertIndexedFile(db, "src/Code.cs", "csharp", "/* example */\ninfo.ArgumentList.Add(value);\n");
+            TestProjectHelper.InsertIndexedFile(db, "src/Code.cs", "csharp", "var text = $\"{Call(\"x\")}\";\ninfo.ArgumentList.Add(value);\n");
             using (var context = new DbContext(DbOpenIntent.WriteIndex, db))
             {
                 var writer = new DbWriter(context.Connection);
@@ -257,6 +266,12 @@ public partial class QueryCommandRunnerTests
                             {
                                 var facet = Assert.Single(row.GetProperty("match_facets").EnumerateArray());
                                 Assert.Equal(origin, facet.GetProperty("origin").GetString());
+                                if (origin == "unknown")
+                                {
+                                    var unavailable = facet.GetProperty("origin_unavailable");
+                                    Assert.Equal("indexed_prefix_unavailable", unavailable.GetProperty("reason").GetString());
+                                    Assert.Equal("remaining_file", unavailable.GetProperty("extent").GetString());
+                                }
                                 Assert.Equal(2, facet.GetProperty("line").GetInt32());
                                 Assert.Equal(6, facet.GetProperty("column").GetInt32());
                                 Assert.Equal(12, facet.GetProperty("length").GetInt32());
