@@ -1672,8 +1672,17 @@ public partial class QueryCommandRunnerTests
                         ["--named-query=restore=TryValidateCheckpointManifest", "--db", dbPath,
                         .. (formatFirst ? incompatible : fieldsArgs), .. (formatFirst ? fieldsArgs : incompatible)], _jsonOptions));
                     Assert.Equal(CommandExitCodes.UsageError, invalidExit);
-                    Assert.Empty(invalidOutput);
-                    Assert.Contains("not supported", invalidError);
+                    if (incompatible[0].StartsWith("--json=", StringComparison.Ordinal))
+                    {
+                        Assert.Empty(invalidError);
+                        using var error = JsonDocument.Parse(invalidOutput);
+                        Assert.Contains("not supported", error.RootElement.GetProperty("message").GetString());
+                    }
+                    else
+                    {
+                        Assert.Empty(invalidOutput);
+                        Assert.Contains("not supported", invalidError);
+                    }
                 }
             var (invalidFieldExit, invalidFieldOutput, invalidFieldError) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 ["--named-query=restore=TryValidateCheckpointManifest", "--db", dbPath, "--search-fields", "path,invalid5276"], _jsonOptions));
@@ -2785,12 +2794,14 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void RunSearch_JsonFormatRejectsUnknownValue_Issue1850()
     {
-        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
             ["Authenticate", "--json=pretty"],
             _jsonOptions));
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
-        Assert.Contains("--json format must be one of ndjson or array", stderr);
+        Assert.Empty(stderr);
+        using var error = JsonDocument.Parse(stdout);
+        Assert.Contains("--json format must be one of ndjson or array", error.RootElement.GetProperty("message").GetString());
     }
 
     [Fact]
@@ -8466,8 +8477,9 @@ public partial class QueryCommandRunnerTests
             _jsonOptions));
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
-        Assert.Equal(string.Empty, stdout);
-        Assert.Contains("--json=array is not supported with --list-recipes", stderr);
+        Assert.Empty(stderr);
+        using var error = JsonDocument.Parse(stdout);
+        Assert.Contains("--json=array is not supported with --list-recipes", error.RootElement.GetProperty("message").GetString());
     }
 
     [Theory]
@@ -12559,8 +12571,17 @@ public partial class QueryCommandRunnerTests
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(testCase.Args, _jsonOptions));
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Equal(string.Empty, stdout);
-            Assert.Contains(testCase.Expected, stderr);
+            if (testCase.Args.Contains("--json") || testCase.Args.Contains("--format"))
+            {
+                Assert.Empty(stderr);
+                using var error = JsonDocument.Parse(stdout);
+                Assert.Contains(testCase.Expected, error.RootElement.GetProperty("message").GetString());
+            }
+            else
+            {
+                Assert.Equal(string.Empty, stdout);
+                Assert.Contains(testCase.Expected, stderr);
+            }
         }
     }
 
@@ -12818,8 +12839,17 @@ public partial class QueryCommandRunnerTests
                 QueryCommandRunner.RunSearch(testCase.Args, _jsonOptions));
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Equal(string.Empty, stdout);
-            Assert.Contains(testCase.Expected, stderr, StringComparison.Ordinal);
+            if (testCase.Args.Any(arg => arg is "--json" or "--json=array"))
+            {
+                Assert.Empty(stderr);
+                using var error = JsonDocument.Parse(stdout);
+                Assert.Contains(testCase.Expected, error.RootElement.GetProperty("message").GetString(), StringComparison.Ordinal);
+            }
+            else
+            {
+                Assert.Equal(string.Empty, stdout);
+                Assert.Contains(testCase.Expected, stderr, StringComparison.Ordinal);
+            }
         }
     }
 
@@ -12873,8 +12903,17 @@ public partial class QueryCommandRunnerTests
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch([.. args], _jsonOptions));
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Equal(string.Empty, stdout);
-            Assert.Contains("Error:", stderr, StringComparison.Ordinal);
+            if (controls.Contains("--json=ndjson"))
+            {
+                Assert.Empty(stderr);
+                using var error = JsonDocument.Parse(stdout);
+                Assert.Equal(CommandErrorCodes.UsageError, error.RootElement.GetProperty("error_code").GetString());
+            }
+            else
+            {
+                Assert.Equal(string.Empty, stdout);
+                Assert.Contains("Error:", stderr, StringComparison.Ordinal);
+            }
         }
     }
 
@@ -12886,8 +12925,9 @@ public partial class QueryCommandRunnerTests
             _jsonOptions));
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
-        Assert.Equal(string.Empty, stdout);
-        Assert.Contains("--json=array is not supported with --recipe", stderr);
+        Assert.Empty(stderr);
+        using var error = JsonDocument.Parse(stdout);
+        Assert.Contains("--json=array is not supported with --recipe", error.RootElement.GetProperty("message").GetString());
     }
 
     [Fact]
@@ -14815,10 +14855,12 @@ public partial class QueryCommandRunnerTests
             _jsonOptions));
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
-        Assert.Equal(string.Empty, stdout);
-        Assert.Contains("--json format must be one of ndjson or array", stderr);
-        Assert.Contains("<truncated; original length", stderr);
-        Assert.DoesNotContain(value, stderr);
+        Assert.Empty(stderr);
+        using var error = JsonDocument.Parse(stdout);
+        var message = error.RootElement.GetProperty("message").GetString();
+        Assert.Contains("--json format must be one of ndjson or array", message);
+        Assert.Contains("<truncated; original length", message);
+        Assert.DoesNotContain(value, message);
     }
 
     [Fact]
@@ -16783,9 +16825,10 @@ public partial class QueryCommandRunnerTests
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Equal(string.Empty, stdout);
-            Assert.Contains("streaming NDJSON", stderr, StringComparison.Ordinal);
-            Assert.Contains("scan authority and recovery metadata", stderr, StringComparison.Ordinal);
+            Assert.Empty(stderr);
+            using var error = JsonDocument.Parse(stdout);
+            Assert.Contains("streaming NDJSON", error.RootElement.GetProperty("message").GetString(), StringComparison.Ordinal);
+            Assert.Contains("scan authority and recovery metadata", error.RootElement.GetProperty("message").GetString(), StringComparison.Ordinal);
         }
         finally
         {

@@ -179,7 +179,7 @@ public static partial class QueryCommandRunner
         {
             WriteEarlyUsageJson(invocationContext.CommandName, options.InvocationJsonOptions!, error,
                 hint == "fix the invalid or missing option value, then rerun with the command shape below."
-                    ? "Fix the invalid or missing option value, then rerun; use `cdidx search --help` for command syntax."
+                    ? "fix the invalid or missing option value, then rerun; use `cdidx search --help` for command syntax."
                     : hint);
             return;
         }

@@ -60,10 +60,12 @@ public static partial class QueryCommandRunner
             options.Lang);
         if (options.ParseError != null)
         {
+            if (machineErrorOutput
+                && !(options.LanguageValidationError && options.Json
+                    && TryExtractNonPositiveMaxJsonBytes(options.ParseError, out _, out _, out _)))
+                return WriteEarlyUsageJson("find", jsonOptions, options.ParseError);
             if (options.LanguageValidationError && TryWriteParseError(options, "find", jsonOptions))
                 return CommandExitCodes.UsageError;
-            if (machineErrorOutput)
-                return WriteEarlyUsageJson("find", jsonOptions, options.ParseError);
             CommandErrorWriter.WriteStderr(options.ParseError);
             CommandErrorWriter.WriteStderr(FindUsage);
             return CommandExitCodes.UsageError;

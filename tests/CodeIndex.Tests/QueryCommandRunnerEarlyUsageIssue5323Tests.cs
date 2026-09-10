@@ -71,6 +71,34 @@ public partial class QueryCommandRunnerTests
                 Assert.Contains("Error", humanError);
             }
 
+            if (command == "find")
+            {
+                foreach (var output in new string[][]
+                {
+                    ["--json=invalid"],
+                    ["--json", "--format=bad\u001b[31m\n\t" + new string('x', 10000)],
+                })
+                {
+                    var (exit, stdout, stderr) = CaptureConsole(() => Run(
+                        ["--db", dbPath, "Return", "--path", "src/**", "--allow-unknown-lang", .. output]));
+                    Assert.Equal(CommandExitCodes.UsageError, exit);
+                    Assert.Empty(stderr);
+                    using var error = JsonDocument.Parse(stdout);
+                    Assert.Equal("find", error.RootElement.GetProperty("command").GetString());
+                    Assert.Equal(CommandErrorCodes.UsageError, error.RootElement.GetProperty("error_code").GetString());
+                    var message = error.RootElement.GetProperty("message").GetString()!;
+                    Assert.True(message.Length < 2048);
+                    Assert.DoesNotContain('\n', message);
+                    Assert.DoesNotContain('\u001b', message);
+                }
+                var (budgetExit, budgetOut, budgetError) = CaptureConsole(() => Run(
+                    ["--db", dbPath, "Return", "--path", "src/**", "--allow-unknown-lang", "--json", "--max-json-bytes=0"]));
+                Assert.Equal(CommandExitCodes.UsageError, budgetExit);
+                Assert.Empty(budgetError);
+                using var budget = JsonDocument.Parse(budgetOut);
+                Assert.Equal(CommandErrorCodes.ResponseBudgetTooSmall, budget.RootElement.GetProperty("error_code").GetString());
+            }
+
             // A literal JSON token is data. Missing options before -- cannot eat the marker.
             foreach (var literal in new[] { "--json", "--json=array", "--format=compact" })
             {

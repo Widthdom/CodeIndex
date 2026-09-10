@@ -49,7 +49,7 @@ If you change test code, test helpers, test execution flow, or testing conventio
 
 `QueryCommandRunnerNumericBoundaryIssue5305Tests.cs` shares an isolated database across all non-guard numeric reader callers and aliases. Cover missing values with separated/inline output selectors in both orders, the `--` literal marker with and without explicit JSON, numeric range/overflow rejection, option-shaped inline values, and valid limit endpoints. Run alongside the #5297 guard parser regressions on net8.0 and net9.0.
 
-The existing #184 entrypoint theory distinguishes numeric JSON errors from unchanged string-value diagnostics. Excerpt, references, and inspect missing-value regressions assert JSON error identity and retain human-output controls in the same fixture.
+The existing #184 entrypoint theory checks JSON errors for both numeric and string-value search options, while preserving other commands' contracts. Excerpt, references, and inspect missing-value regressions assert JSON error identity and retain human-output controls in the same fixture.
 
 Issue #5300 guard tests cover adjacent and nested C# callables, focus-line exclusion,
 window bounds, lexical comment/string evidence, row/count parity, CLI/MCP/recipe
@@ -1345,7 +1345,7 @@ Issue #5307 のテストは、複数行コメント、verbatim/raw 文字列、�
 
 `QueryCommandRunnerNumericBoundaryIssue5305Tests.cs` は、guard 以外の数値読み取り処理の全呼び出し元と別名について、分離した DB を共有して検証します。値欠如と分離形式／インライン形式の出力指定の前後順、明示的 JSON 指定の有無と `--` リテラルマーカー、数値の範囲外／オーバーフロー、オプションに似たインライン値、許容される limit の上下限を確認してください。#5297 の guard パーサー回帰テストとともに net8.0／net9.0 で実行します。
 
-既存の #184 のエントリーポイントの theory は、数値の JSON エラーと変更しない文字列値の診断を区別します。excerpt、references、inspect の値欠如テストは、JSON のエラー識別情報を検証し、同じ fixture 内に人間向け出力の対照ケースを保持します。
+既存の #184 のエントリーポイントの theory は、search の数値・文字列値オプション両方の JSON エラーを検証し、他コマンドの契約を維持します。excerpt、references、inspect の値欠如テストは、JSON のエラー識別情報を検証し、同じ fixture 内に人間向け出力の対照ケースを保持します。
 
 `QueryCommandRunnerRecipeTokenBoundaryIssue5298Tests` と `McpServerIssue5298Tests` は、レシピの既定値／上書き、実際のメンバー使用の正確な件数、C# の verbatim 表記と Unicode、同一行のコード・コメント・文字列、外部レシピ、cursor・continuation・baseline の互換性を検証します。net8.0／net9.0 で batch・CLI・MCP の整合性を保ってください。Unicode エスケープの復号は既存のテキスト検索の契約に含みません。
 
