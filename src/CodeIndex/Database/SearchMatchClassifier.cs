@@ -21,6 +21,8 @@ internal static partial class SearchMatchClassifier
         IReadOnlyDictionary<int, string>? lineContext = null,
         CSharpOriginContext? csharpContext = null)
     {
+        if (csharpContext is null && lineContext is not null && string.Equals(lang, "csharp", StringComparison.OrdinalIgnoreCase))
+            csharpContext = new CSharpOriginContext(path, lineContext);
         var origin = ClassifyOrigin(path, lang, line, text, column, enclosingSymbolKind, lineContext, csharpContext);
         var testFile = IsLikelyTestPath(path);
         var testSymbol = string.Equals(enclosingSymbolKind, "test.method", StringComparison.OrdinalIgnoreCase);
@@ -31,6 +33,7 @@ internal static partial class SearchMatchClassifier
             Column = Math.Max(1, column),
             Length = Math.Max(1, length),
             Origin = origin,
+            OriginUnavailable = origin == Unknown ? csharpContext?.GetUnavailable(line, text) : null,
             TestFile = testFile,
             TestSymbol = testSymbol,
             TestFixture = testFixture,

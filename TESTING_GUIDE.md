@@ -4,6 +4,8 @@
 
 ## C# multiline search-origin coverage
 
+Issue #5321 extends this fixture with interpolation recovery before row/count/recipe/MCP matches and chunk-budget boundaries. The focused classifier matrix covers expression code, nested strings/comments, ordinary/verbatim/raw forms, escaped braces, malformed delimiters, format text, nesting limits, Unicode coordinates and bounded unavailability metadata. Run both net8/net9 lanes with the #5307 negative controls.
+
 Issue #5307 tests pair multiline comments, verbatim/raw strings and closing delimiters with executable controls. Preserve escaped quotes, delimiter lengths, schema/help/regex labels, missing prefix lines and lexical budgets, original coordinates, and CLI row/count/recipe plus MCP parity on net8.0 and net9.0. Synthetic snippet fixtures that assert known C# origins must supply the preceding indexed lines explicitly.
 
 Keep allocation regressions for shared prefixes and many distinct matched literals, cancellation during label lookup, builder-argument labels and ordinary/verbatim/raw interpolation-opener parity. Generic sampling tests may use another language to keep their row-cardinality contract independent of C# lexical budgets. Preserve the existing 4 Mi-character trust-source cache regression.
@@ -1298,6 +1300,8 @@ Issue #5300 のテストは隣接・入れ子の C# callable、対象行の除�
 # テストガイド
 
 ## C# 複数行検索 origin の検証
+
+Issue #5321 は同じ fixture に、行／件数／recipe／MCP の一致より前の補間回復とチャンク上限境界を追加します。分類器の専用マトリクスでは、式のコード、入れ子の文字列／コメント、通常／verbatim／raw 形式、波括弧のエスケープ、不正な区切り、書式部分、入れ子の上限、Unicode 座標、上限付きの分類不能メタデータを検証します。#5307 の負例とともに net8/net9 の両方で実行してください。
 
 Issue #5307 のテストは、複数行コメント、verbatim/raw 文字列、閉じ区切りと実行コードの対照を組み合わせます。引用符のエスケープ、区切りの長さ、schema/help/regex ラベル、先頭行の欠落、字句処理上限、元の座標、CLI の行／件数／recipe と MCP の一致を net8.0 と net9.0 で維持してください。C# origin が既知であることを検証する合成 snippet fixture は、前のインデックス済み行を明示的に渡します。
 

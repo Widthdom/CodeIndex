@@ -9,7 +9,8 @@ public partial class McpServerTests
     {
         InsertIndexedFile("src/Comment.cs", "csharp", "/*\ninfo.ArgumentList.Add(value);\n*/\n");
         InsertIndexedFile("src/String.cs", "csharp", "var text = @\"\ninfo.ArgumentList.Add(value);\n\";\n");
-        InsertIndexedFile("src/Code.cs", "csharp", "info.ArgumentList.Add(value);\n");
+        InsertIndexedFile("src/Code.cs", "csharp", "var text = $\"{Call(\"x\")}\";\ninfo.ArgumentList.Add(value);\n");
+        InsertIndexedFile("src/Unknown.cs", "csharp", "var text = $\"{Call(}\";\ninfo.ArgumentList.Add(value);\n");
         foreach (var recipe in new[] { false, true })
         {
             var arguments = recipe
@@ -27,15 +28,17 @@ public partial class McpServerTests
             if (recipe)
                 payload = payload["queries"]!.AsArray().Single(q => q!["name"]!.GetValue<string>() == "process-argument-list")!;
             Assert.True(payload["count"] is not null, payload.ToJsonString());
-            Assert.Equal(recipe ? 1 : 3, payload["count"]!.GetValue<int>());
+            Assert.Equal(recipe ? 1 : 4, payload["count"]!.GetValue<int>());
             if (!recipe)
             {
                 var rows = payload["results"]!.AsArray();
-                foreach (var (path, origin) in new[] { ("src/Comment.cs", "comment"), ("src/String.cs", "string_literal"), ("src/Code.cs", "code") })
+                foreach (var (path, origin) in new[] { ("src/Comment.cs", "comment"), ("src/String.cs", "string_literal"), ("src/Code.cs", "code"), ("src/Unknown.cs", "unknown") })
                 {
                     var row = rows.Single(r => r!["path"]!.GetValue<string>() == path)!;
                     Assert.True(row["matchFacets"] is not null, row.ToJsonString());
                     Assert.Equal(origin, row["matchFacets"]![0]!["origin"]!.GetValue<string>());
+                    if (origin == "unknown")
+                        Assert.Equal("unbalanced_interpolation", row["matchFacets"]![0]!["originUnavailable"]!["reason"]!.GetValue<string>());
                 }
             }
         }

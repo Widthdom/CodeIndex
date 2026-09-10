@@ -21,6 +21,7 @@ internal static partial class SearchMatchClassifier
         private readonly CancellationToken _cancellation;
         private int _unknownLine = int.MaxValue;
         private int _unknownColumn;
+        private string _unknownReason = "indexed_prefix_unavailable";
 
         public CSharpOriginContext(string path, IReadOnlyDictionary<int, string> context,
             CancellationToken cancellation = default)
@@ -28,15 +29,23 @@ internal static partial class SearchMatchClassifier
             _cancellation = cancellation;
             var schema = IsSchemaDescriptionPath(path) ? new CSharpSchemaCalls() : null;
             var remaining = CSharpContextCharacterLimit;
-            var state = 0; // code, block comment, verbatim string, raw string
+            var state = 0; // code, block comment, verbatim string, raw string, ordinary string, format
             var quotes = 0;
             var dollars = 0;
+            var quote = '"';
+            var expressions = new Stack<InterpolationFrame>();
+            var pendingLine = 0;
+            var pendingColumn = 0;
             CSharpStringLabel? label = null;
             for (var line = 1; line <= CSharpContextLineLimit; line++)
             {
                 cancellation.ThrowIfCancellationRequested();
                 if (!context.TryGetValue(line, out var source) || source.Length > remaining)
-                    break;
+                {
+                    SetUnknown(pendingLine > 0 ? pendingLine : line, pendingLine > 0 ? pendingColumn : 0,
+                        source is null ? "indexed_prefix_unavailable" : "character_budget_exhausted");
+                    return;
+                }
                 remaining -= source.Length;
                 var parsed = new CSharpOriginLine(path, source, schema is not null, cancellation);
                 _lines.Add(line, parsed);
@@ -44,6 +53,64 @@ internal static partial class SearchMatchClassifier
                 while (i < source.Length)
                 {
                     cancellation.ThrowIfCancellationRequested();
+                    if ((state == 0 || state == 5) && expressions.TryPeek(out var expression))
+                    {
+                        var ch = source[i];
+                        if (ch == '}' && expression.Delimiters.Count == 0)
+                        {
+                            var run = CountRun(source, i, '}');
+                            var required = expression.State == 3 ? expression.Dollars : 1;
+                            if (run < required)
+                            {
+                                SetUnknown(pendingLine, pendingColumn, "unbalanced_interpolation");
+                                return;
+                            }
+                            parsed.Add(i, i + required, StringLiteral, expression.Label);
+                            i += required;
+                            state = expression.State;
+                            quotes = expression.Quotes;
+                            dollars = expression.Dollars;
+                            quote = '"';
+                            label = expression.Label;
+                            expressions.Pop();
+                            continue;
+                        }
+                        if (state == 5)
+                        {
+                            if (ch is '{' or '"')
+                            {
+                                SetUnknown(pendingLine, pendingColumn, "unsupported_interpolation_format");
+                                return;
+                            }
+                            parsed.Add(i, i + 1, StringLiteral, expression.Label);
+                            i++;
+                            continue;
+                        }
+                        if (ch is '(' or '[' or '{')
+                        {
+                            if (expression.Delimiters.Count == 64)
+                            {
+                                SetUnknown(pendingLine, pendingColumn, "interpolation_nesting_limit");
+                                return;
+                            }
+                            expression.Delimiters.Push(ch);
+                        }
+                        else if (ch is ')' or ']' or '}')
+                        {
+                            var expected = ch == ')' ? '(' : ch == ']' ? '[' : '{';
+                            if (!expression.Delimiters.TryPop(out var opener) || opener != expected)
+                            {
+                                SetUnknown(pendingLine, pendingColumn, "unbalanced_interpolation");
+                                return;
+                            }
+                        }
+                        else if (ch == ':' && expression.Delimiters.Count == 0 &&
+                            !(i + 1 < source.Length && source[i + 1] == ':') && !(i > 0 && source[i - 1] == ':'))
+                        {
+                            state = 5;
+                            continue;
+                        }
+                    }
                     if (state == 1 || state == 0 && source.AsSpan(i).StartsWith("/*", StringComparison.Ordinal))
                     {
                         var start = i;
@@ -60,8 +127,7 @@ internal static partial class SearchMatchClassifier
                     }
 
                     var startIndex = i;
-                    var quote = '"';
-                    var ordinary = false;
+                    var ordinary = state == 4;
                     if (state == 0)
                     {
                         if (source[i] is not ('"' or '\''))
@@ -84,7 +150,7 @@ internal static partial class SearchMatchClassifier
                                 dollars++;
                         if (dollars > 64)
                         {
-                            SetUnknown(line, i);
+                            SetUnknown(line, i, "interpolation_nesting_limit");
                             return;
                         }
                         i += raw ? run : 1;
@@ -93,16 +159,33 @@ internal static partial class SearchMatchClassifier
                             : schema?.Exhausted == true ? Unknown
                             : schema?.IsDescriptionArgument(line) == true ? SchemaDescription : null;
                         label = new CSharpStringLabel(parsed, schemaOrigin);
-                        state = raw ? 3 : verbatim ? 2 : 0;
-                        ordinary = state == 0;
+                        state = raw ? 3 : verbatim ? 2 : 4;
+                        ordinary = state == 4;
                         quotes = run;
+                        if (dollars > 0 && pendingLine == 0)
+                        {
+                            pendingLine = line;
+                            pendingColumn = startIndex;
+                        }
                     }
 
+                    var enteredExpression = false;
                     while (i < source.Length)
                     {
                         if ((i & 4095) == 0)
                             cancellation.ThrowIfCancellationRequested();
                         var ch = source[i];
+                        if (dollars > 0 && ch == '}')
+                        {
+                            var run = CountRun(source, i, '}');
+                            if (state == 3 ? run >= dollars : run % 2 != 0)
+                            {
+                                SetUnknown(pendingLine, pendingColumn, "unbalanced_interpolation");
+                                return;
+                            }
+                            i += run;
+                            continue;
+                        }
                         if (dollars > 0 && ch == '{')
                         {
                             if (state != 3 && i + 1 < source.Length && source[i + 1] == '{')
@@ -115,9 +198,18 @@ internal static partial class SearchMatchClassifier
                                 braces++;
                             if (state != 3 || braces >= dollars)
                             {
+                                var run = CountRun(source, i, '{');
+                                if (expressions.Count == 64 || state == 3 && run >= 2 * dollars)
+                                {
+                                    SetUnknown(pendingLine, pendingColumn, "interpolation_nesting_limit");
+                                    return;
+                                }
+                                i += state == 3 ? run : 1;
                                 parsed.Add(startIndex, i, StringLiteral, label);
-                                SetUnknown(line, i);
-                                return;
+                                expressions.Push(new InterpolationFrame(state, quotes, dollars, label));
+                                state = 0;
+                                enteredExpression = true;
+                                break;
                             }
                             i += braces;
                             continue;
@@ -155,14 +247,37 @@ internal static partial class SearchMatchClassifier
                             if (ch == quote)
                             {
                                 i++;
+                                state = 0;
                                 break;
                             }
                         }
                         i++;
                     }
-                    parsed.Add(startIndex, i, StringLiteral, label);
+                    if (!enteredExpression)
+                        parsed.Add(startIndex, i, StringLiteral, label);
+                    if (state == 0 && expressions.Count == 0)
+                        pendingLine = 0;
+                }
+                if (state == 4)
+                {
+                    SetUnknown(pendingLine > 0 ? pendingLine : line, pendingLine > 0 ? pendingColumn : 0,
+                        "unterminated_ordinary_string");
+                    return;
                 }
             }
+            if (pendingLine > 0)
+                SetUnknown(pendingLine, pendingColumn, "unterminated_interpolation");
+            else
+                SetUnknown(CSharpContextLineLimit + 1, 0, "line_budget_exhausted");
+        }
+
+        private sealed class InterpolationFrame(int state, int quotes, int dollars, CSharpStringLabel? label)
+        {
+            public int State { get; } = state;
+            public int Quotes { get; } = quotes;
+            public int Dollars { get; } = dollars;
+            public CSharpStringLabel? Label { get; } = label;
+            public Stack<char> Delimiters { get; } = new();
         }
 
         public string GetOrigin(int line, string text, int index)
@@ -189,10 +304,26 @@ internal static partial class SearchMatchClassifier
             return Code;
         }
 
-        private void SetUnknown(int line, int column)
+        public SearchOriginUnavailable GetUnavailable(int line, string text)
+        {
+            if (_lines.TryGetValue(line, out var parsed) && !parsed.MatchesText(text))
+                return new SearchOriginUnavailable { Reason = "indexed_text_mismatch", StartLine = line, StartColumn = 1, Extent = "line" };
+            if (line < _unknownLine && _lines.ContainsKey(line))
+                return new SearchOriginUnavailable { Reason = "schema_context_unavailable", StartLine = line, StartColumn = 1, Extent = "line" };
+            return new SearchOriginUnavailable
+            {
+                Reason = _unknownReason,
+                StartLine = _unknownLine == int.MaxValue ? line : _unknownLine,
+                StartColumn = _unknownColumn + 1,
+                Extent = "remaining_file",
+            };
+        }
+
+        private void SetUnknown(int line, int column, string reason = "indexed_prefix_unavailable")
         {
             _unknownLine = line;
             _unknownColumn = column;
+            _unknownReason = reason;
         }
 
         private static int CountRun(string source, int start, char value)
@@ -251,7 +382,15 @@ internal static partial class SearchMatchClassifier
             public void Add(int start, int end, string origin, CSharpStringLabel? label = null)
             {
                 if (end > start)
+                {
+                    if (Spans.Count > 0 && Spans[^1] is var previous && previous.End == start &&
+                        previous.Origin == origin && ReferenceEquals(previous.Label, label))
+                    {
+                        Spans[^1] = previous with { End = end };
+                        return;
+                    }
                     Spans.Add(new CSharpOriginSpan(start, end, origin, label));
+                }
             }
         }
 

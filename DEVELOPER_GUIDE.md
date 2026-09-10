@@ -4,6 +4,8 @@
 
 ## C# search-origin context
 
+Issue #5321 resumes ordinary/verbatim/raw interpolation with at most 64 active interpolation frames and 64 balanced delimiters per expression. Nested comments/strings are consumed by the same cancellable prefix pass. Merge adjacent literal spans, preserve UTF-16 coordinates, and keep unsupported formats or unbalanced/missing context unknown with bounded `SearchMatchFacet.OriginUnavailable` reason/start/extent evidence. No work budget depends on requested matches or pagination.
+
 `DbSearchReader.AttachCSharpOriginLines` supplies shared, indexed file prefixes to the snippet classifier. Preserve the per-file 4,096-line, 8 Mi-character and 128-chunk read limits, including overlap accounting; query pagination must not change those budgets. The character limit leaves room above existing 4 Mi-character semantic-analysis windows. Keep missing lines absent so the lexical classifier returns `unknown` rather than assuming code. Ordinary/token-boundary row and count paths and MCP must retain identical origin decisions and original UTF-16 coordinates. No persisted schema changes are involved.
 
 Build `CSharpOriginContext` once per file prefix with cancellation and share its origin spans across rows and occurrences. Track schema argument positions during that same lexical pass, with at most 64 active builder invocations and a 64-line lookback; overflow leaves affected labels unknown. Cache regex/help classification per opening line, with cancellation at label lookup. Do not rescan preceding lines or reconstruct schema context per match or per literal.
@@ -4436,6 +4438,8 @@ API version 1 の互換性を維持し、新しい guard scope は contract vers
 # 開発者ガイド
 
 ## C# 検索 origin のコンテキスト
+
+Issue #5321 は、同時に開いている補間フレームを最大 64、式ごとの対応する区切りを最大 64 として、通常／verbatim／raw 補間から走査を再開します。入れ子のコメントと文字列も同じキャンセル可能な先頭部分の走査で処理します。隣接するリテラル区間を結合し、UTF-16 座標を保持してください。未対応の書式や不均衡・欠落した文脈は、上限付きの `SearchMatchFacet.OriginUnavailable` の理由・開始位置・範囲を伴う不明状態にします。処理上限は一致数やページングに依存しません。
 
 `DbSearchReader.AttachCSharpOriginLines` は共有のインデックス済みファイル先頭部分を snippet 分類器へ渡します。ファイルごとの 4,096 行、8 Mi 文字、128 チャンクの読み取り上限と重複分の計上を維持し、query のページングで上限を変えないでください。文字数上限は既存の 4 Mi 文字の意味解析ウィンドウより大きく設定しています。欠落行を補わず、字句分類器がコードと推測せず `unknown` を返すようにします。通常／token-boundary の行・件数経路と MCP で同じ origin 判定と元の UTF-16 座標を維持してください。永続スキーマの変更はありません。
 

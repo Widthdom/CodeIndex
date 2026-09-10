@@ -232,9 +232,19 @@ public sealed class SearchMatchFacet
     public int Column { get; set; }
     public int Length { get; set; }
     public string Origin { get; set; } = string.Empty;
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public SearchOriginUnavailable? OriginUnavailable { get; set; }
     public bool TestFile { get; set; }
     public bool TestSymbol { get; set; }
     public bool TestFixture { get; set; }
+}
+
+public sealed class SearchOriginUnavailable
+{
+    public string Reason { get; set; } = string.Empty;
+    public int StartLine { get; set; }
+    public int StartColumn { get; set; }
+    public string Extent { get; set; } = string.Empty;
 }
 
 public sealed record FtsQueryDiagnostics(
