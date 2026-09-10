@@ -387,7 +387,7 @@ public partial class DbReader
         return pagedResults;
     }
 
-    private void AttachCSharpOriginLines(List<SearchResult> results)
+    private void AttachCSharpOriginLines(List<SearchResult> results, CancellationToken cancellationToken = default)
     {
         // Read only bounded indexed prefixes; never fill holes with invented blank lines.
         // Share each prefix between its rows. Per-file budgets must not depend on pagination.
@@ -412,6 +412,7 @@ public partial class DbReader
             while (reader.TrackedRead())
             {
                 ThrowIfCancellationRequested();
+                cancellationToken.ThrowIfCancellationRequested();
                 var content = reader.GetString(1);
                 var truncated = content.Length > budget;
                 if (truncated)
@@ -428,7 +429,7 @@ public partial class DbReader
                 if (truncated)
                     break;
             }
-            var origins = new SearchMatchClassifier.CSharpOriginContext(group.Key, lines, _cancellation);
+            var origins = new SearchMatchClassifier.CSharpOriginContext(group.Key, lines, cancellationToken.CanBeCanceled ? cancellationToken : _cancellation);
             foreach (var result in group)
                 result.CSharpOrigins = origins;
         }

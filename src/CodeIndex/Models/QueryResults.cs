@@ -108,7 +108,9 @@ public readonly record struct FindScanSummary(
     int? NextFileOrdinal = null,
     int? NextMatchOrdinal = null,
     int? NextByteOffset = null,
-    bool ResultLimitReached = false);
+    bool ResultLimitReached = false,
+    bool ClassificationApplied = false,
+    int UnknownOriginMatches = 0);
 
 public readonly record struct FindCountResult(int Count, int FileCount, FindScanSummary Scan);
 
@@ -665,6 +667,10 @@ public class ExcerptRecoveryHint
 
 public class FileFindResult
 {
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<SearchMatchFacet>? MatchFacets { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<string>? ResultKinds { get; set; }
     [JsonPropertyName("api_version")]
     public string ApiVersion { get; set; } = JsonOutputContract.ApiVersion;
     public string Path { get; set; } = string.Empty;

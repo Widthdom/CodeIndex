@@ -33,6 +33,8 @@ public partial class DbReader
                 var matchLine = snippetLinesByNumber[pending.LineNumber];
                 results.Add(new FileFindResult
                 {
+                    MatchFacets = pending.Facet is { } facet ? [facet] : null,
+                    ResultKinds = pending.Facet is { } kindFacet ? FindSemanticFilters.Kinds(kindFacet) : null,
                     Path = file.Path,
                     Lang = file.Lang,
                     Line = pending.LineNumber,

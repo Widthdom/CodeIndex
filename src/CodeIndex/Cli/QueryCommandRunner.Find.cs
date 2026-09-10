@@ -10,7 +10,7 @@ namespace CodeIndex.Cli;
 public static partial class QueryCommandRunner
 {
     internal const int MaxFindLineScanLimit = 10_000_000;
-    private const string FindUsage = "Usage: cdidx find <query> (--path <glob>|--all) [--db <path>] [--json] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--fields <csv>] [--cursor <next_cursor>] [--max-json-bytes <n>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--context <n>] [--before <n>] [--after <n>] [--snippet-lines <n>] [--focus-line <line>] [--focus-column <n>] [--max-line-width <n>] [--line-scan-limit <n>] [--allow-partial] [--exact] [--regex] [--count]\n       cdidx find --query <query> (--path <glob>|--all) [...]\n       cdidx find [options] -- <query>";
+    private const string FindUsage = "Usage: cdidx find <query> (--path <glob>|--all) [--db <path>] [--json] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--fields <csv>] [--cursor <next_cursor>] [--max-json-bytes <n>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--context <n>] [--before <n>] [--after <n>] [--snippet-lines <n>] [--focus-line <line>] [--focus-column <n>] [--max-line-width <n>] [--line-scan-limit <n>] [--allow-partial] [--exact] [--regex] [--origin <origin>] [--exclude-origin <origin>] [--result-kind <kind>] [--exclude-comments] [--exclude-strings] [--exclude-fixtures] [--count]\n       cdidx find --query <query> (--path <glob>|--all) [...]\n       cdidx find [options] -- <query>";
 
     public static int RunFind(
         string[] cmdArgs,
@@ -125,6 +125,24 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.UsageError;
         }
 
+        var semanticFilters = HasSearchOriginFilters(options)
+            ? new FindSemanticFilters(options.MatchOrigins, options.ExcludeOrigins, options.ResultKinds,
+                options.ExcludeComments, options.ExcludeStrings, options.ExcludeFixtures)
+            : null;
+        if (semanticFilters is not null && (!options.Regex
+            || options.ResultKinds.Any(kind => kind is "declaration" or "call_site")))
+        {
+            CommandErrorWriter.WriteStderr("Error: find semantic filters require --regex; result kinds support origins and identifier only.");
+            return CommandExitCodes.UsageError;
+        }
+        if (semanticFilters is not null && options.Json
+            && (options.OutputFormat != OutputFormatJson || options.JsonOutputFormat == JsonOutputFormatArray)
+            && !options.CountOnly)
+        {
+            CommandErrorWriter.WriteStderr("Error: filtered regex find requires text, JSON/NDJSON, or count output so classification authority remains visible.");
+            return CommandExitCodes.UsageError;
+        }
+
         string? findTerminalLine = null;
         return WithDb(options, jsonOptions, reader =>
         {
@@ -158,7 +176,8 @@ public static partial class QueryCommandRunner
                         resumeFileOrdinal: countResumeFileOrdinal,
                         resumeMatchOrdinal: countResumeMatchOrdinal,
                         resumeByteOffset: countResumeByteOffset,
-                        cancellationToken: cancellationToken);
+                        cancellationToken: cancellationToken,
+                    semanticFilters: semanticFilters);
                 }
                 catch (FindContinuationException ex)
                 {
@@ -194,7 +213,7 @@ public static partial class QueryCommandRunner
                                     resultStableAt: countFindResume.ResultStableAt);
                             }
                         });
-                    if (resumedCountPage)
+                    if (resumedCountPage || counts.Scan.UnknownOriginMatches > 0)
                     {
                         payload["degraded"] = true;
                         payload["authoritative_count"] = false;
@@ -243,7 +262,8 @@ public static partial class QueryCommandRunner
                     resumeMatchOrdinal: resumeMatchOrdinal,
                     resumeByteOffset: resumeByteOffset,
                     captureContinuation: true,
-                    cancellationToken: cancellationToken);
+                    cancellationToken: cancellationToken,
+                    semanticFilters: semanticFilters);
             }
             catch (FindContinuationException ex)
             {
@@ -258,6 +278,10 @@ public static partial class QueryCommandRunner
                 return WriteFindRegexTimeoutError(ex, jsonOptions, options.Json);
             }
             var results = findResults.Results;
+            if (semanticFilters is not null)
+                JsonEnvelopeWrapper.ReportBoundedResponseTotal("find",
+                    results.Count + JsonEnvelopeWrapper.GetBoundedResponseOffset("find") + (findResults.Scan.ResultLimitReached ? 1 : 0),
+                    !findResults.Scan.Truncated && !findResults.Scan.ResultLimitReached && findResults.Scan.UnknownOriginMatches == 0);
             var findResume = BuildFindResumeCursor(cmdArgs, reader, findResults.Scan);
             if (results.Count == 0)
             {
@@ -316,7 +340,7 @@ public static partial class QueryCommandRunner
                     {
                         WriteZeroResultHints(options, reader, filterHint: "try broadening --path or adding another --path value; --path is required for find.");
                     }
-                    if (options.All)
+                    if (options.All || semanticFilters is not null)
                         WriteFindScanSummary(findResults.Scan, nextCursor: findResume.Cursor);
                 }
                 return FindScanExitCode(options, findResults.Scan, ZeroResultExitCode(options));
@@ -702,6 +726,19 @@ public static partial class QueryCommandRunner
 
     private static void AddFindScanJsonFields(JsonObject payload, FindScanSummary scan)
     {
+        if (scan.ClassificationApplied)
+        {
+            payload["origin_classification_complete"] = scan.UnknownOriginMatches == 0;
+            payload["unknown_origin_matches"] = scan.UnknownOriginMatches;
+            if (scan.UnknownOriginMatches > 0)
+            {
+                payload["authoritative_count"] = false;
+                payload["authoritative_rows"] = false;
+                payload["partial_result"] = true;
+                payload["classification_incomplete_reason"] = "origin_classification_unavailable";
+                payload["classification_recovery_guidance"] = "Inspect unknown matches without semantic exclusions; classification supports bounded C# and line-local shell context. Absence is not authoritative.";
+            }
+        }
         payload["candidate_files"] = scan.CandidateFiles;
         payload["files_scanned"] = scan.FilesScanned;
         payload["lines_scanned"] = scan.LinesScanned;
@@ -720,13 +757,13 @@ public static partial class QueryCommandRunner
     }
 
     private static bool IsFindAllNdjson(QueryCommandOptions options)
-        => options.All
+        => (options.All || HasSearchOriginFilters(options))
            && options.Json
            && options.OutputFormat == OutputFormatJson
            && options.JsonOutputFormat == JsonOutputFormatNdjson;
 
     private static int FindScanExitCode(QueryCommandOptions options, FindScanSummary scan, int completeExitCode = CommandExitCodes.Success)
-        => scan.Truncated && !options.AllowPartial
+        => (scan.Truncated || scan.UnknownOriginMatches > 0) && !options.AllowPartial
             ? CommandExitCodes.PartialResult
             : completeExitCode;
 
@@ -778,7 +815,7 @@ public static partial class QueryCommandRunner
         payload["next_cursor"] = nextCursor;
         payload["result_stable_at"] = resultStableAt;
         if (!countMode)
-            payload["authoritative_rows"] = scanComplete;
+            payload["authoritative_rows"] = scanComplete && scan.UnknownOriginMatches == 0;
         if (appliedLimit.HasValue)
             payload["applied_limit"] = appliedLimit.Value;
         if (resultLimitReached)
@@ -843,8 +880,10 @@ public static partial class QueryCommandRunner
         var scanComplete = !scan.Truncated && !resultLimitReached;
         summary += $"; scan_complete={scanComplete.ToString().ToLowerInvariant()}";
         summary += countMode
-            ? $"; authoritative_count={(!scan.Truncated && !resumedCountPage).ToString().ToLowerInvariant()}"
-            : $"; authoritative_rows={scanComplete.ToString().ToLowerInvariant()}";
+            ? $"; authoritative_count={(!scan.Truncated && !resumedCountPage && scan.UnknownOriginMatches == 0).ToString().ToLowerInvariant()}"
+            : $"; authoritative_rows={(scanComplete && scan.UnknownOriginMatches == 0).ToString().ToLowerInvariant()}";
+        if (scan.UnknownOriginMatches > 0)
+            summary += $"; unknown_origin_matches={scan.UnknownOriginMatches}; absence is not authoritative";
         var continuationAction = FindScanContinuationAction(scan, resultLimitReached);
         if (continuationAction != null)
             summary += $"; continuation_action={continuationAction}";

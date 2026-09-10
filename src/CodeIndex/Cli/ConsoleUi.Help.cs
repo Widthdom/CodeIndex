@@ -121,7 +121,7 @@ public static partial class ConsoleUi
         Console.WriteLine("  callees <query>            Find callees used by a caller (--kind uses reference kind)");
         Console.WriteLine("  symbols [query]            Search symbols (functions, classes, imports)");
         Console.WriteLine("  files [query|glob]         List indexed files (* and ? positionals use path-glob semantics)");
-        Console.WriteLine("  find <query>               Find literal substring matches inside known indexed files");
+        Console.WriteLine("  find <query>               Find literal or regex matches in indexed files; --regex accepts origin filters");
         Console.WriteLine("  excerpt <path>             Reconstruct a line-range excerpt from indexed chunks");
         Console.WriteLine("  map                        Show a repo-level overview for AI orientation");
         Console.WriteLine("  inspect <query>            Bundle definition, graph, and nearby symbol context");

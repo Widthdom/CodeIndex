@@ -57,6 +57,7 @@ public partial class DbReader
             IFindScanCollector collector,
             FindScanState state)
         {
+            state.ClassificationApplied = request.SemanticFilters is not null;
             var comparison = request.Exact ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
             var regexMatcher = request.Regex
                 ? CreateFindRegexMatcher(request.Query, request.Exact)
@@ -120,6 +121,7 @@ public partial class DbReader
             StringComparison comparison,
             Regex? regexMatcher)
         {
+            var origins = request.SemanticFilters is null ? null : _owner.CreateFindOriginContext(file, request.CancellationToken);
             var firstContextLine = Math.Max(1, file.FirstEligibleLine - collector.ContextBefore);
             var stopScanning = false;
             foreach (var indexedLine in _querySource.EnumerateIndexedFileLines(file.Id))
@@ -151,7 +153,21 @@ public partial class DbReader
                         request.Exact && !request.Regex,
                         request.FocusColumn))
                     {
-                        if (collector.AcceptMatch(file, indexedLine, lineMatch, matchOrdinal))
+                        request.CancellationToken.ThrowIfCancellationRequested();
+                        var classifiedMatch = lineMatch;
+                        if (request.SemanticFilters is { } filters)
+                        {
+                            var facet = ClassifyFindMatch(file, indexedLine, lineMatch, origins);
+                            if (facet.Origin == SearchMatchClassifier.Unknown)
+                                state.UnknownOriginMatches++;
+                            if (!filters.Accepts(facet))
+                            {
+                                matchOrdinal++;
+                                continue;
+                            }
+                            classifiedMatch = lineMatch with { Facet = facet };
+                        }
+                        if (collector.AcceptMatch(file, indexedLine, classifiedMatch, matchOrdinal))
                         {
                             stopScanning = true;
                             break;

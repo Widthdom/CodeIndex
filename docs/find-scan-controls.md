@@ -2,6 +2,36 @@
 
 ## English
 
+### Regex origin filters (#5324)
+
+Use `cdidx find 'XmlReader\.Create' --regex --path src/ --origin code --json`.
+`--origin` (alias `--match-origin`), `--exclude-origin`, `--result-kind`,
+`--exclude-comments`, `--exclude-strings`, and `--exclude-fixtures` require
+`--regex`. Inclusive origin/kind lists use OR within a list and AND between
+filters; exclusions win. Repeated and comma-separated values are accepted.
+Filtering happens per exact regex occurrence before counts, offsets and limits.
+All semantic options bind continuation cursors.
+
+This v1 reuses search's bounded C# indexed-prefix classifier (4,096 lines,
+8 Mi characters, 128 chunks) and line-local shell classifier. Other languages,
+missing/capped C# context, and zero-width end-of-line positions remain `unknown`.
+Rows expose `match_facets` with original UTF-16 line/column/length, including
+zero length. `result_kinds` supports origin names and search's `identifier`
+projection for code; `declaration` and `call_site` are not supported here.
+Fixture classification uses recognized test-file paths and string-like origins;
+`test_symbol` is not inferred from regex text. There is no new MCP find surface.
+
+Filtered row output supports text and JSON/NDJSON, including bounded `--fields`,
+`--cursor` and `--max-json-bytes`; formats without terminal authority metadata
+are rejected. Count mode remains available. The terminal/count object reports
+`origin_classification_complete` and `unknown_origin_matches` for the scanned
+segment, including unknown occurrences rejected by filters. Unknowns make
+absence/count authority false and return exit `11` (`--allow-partial` accepts
+`0`). Scan completion is separate from classification completeness; inspect
+unknown matches without exclusions instead of treating filtered absence as
+proof. Regex timeouts, cancellation, scan caps and literal/indexed fast paths
+retain their existing behavior. No reindex is needed.
+
 `cdidx find --all` scans indexed files across the repository with bounded safety
 caps. The default indexed-line cap is 250,000 lines. Use
 `--line-scan-limit <n>` with `--all` to lower or raise that cap, up to
@@ -49,6 +79,30 @@ text or JSON output when context from `--before`, `--after`, or
 `--snippet-lines` is needed.
 
 ## 日本語
+
+### 正規表現の origin フィルター (#5324)
+
+`cdidx find 'XmlReader\.Create' --regex --path src/ --origin code --json` を使います。
+`--origin`（別名 `--match-origin`）、`--exclude-origin`、`--result-kind`、
+`--exclude-comments`、`--exclude-strings`、`--exclude-fixtures` は `--regex` が必要です。
+指定値のリスト内は OR、フィルター間は AND で、除外指定を優先します。繰り返し指定と
+カンマ区切りに対応します。正規表現の各一致を件数・offset・limit の適用前に分類し、
+すべての意味フィルターを継続カーソルへ紐づけます。
+
+v1 は search と共通の C# 索引済みプレフィックス分類器（4,096 行、8 Mi 文字、128 チャンク）と
+行単位の shell 分類器を使います。それ以外の言語、C# 文脈の欠落・上限超過、行末のゼロ幅位置は
+`unknown` のままです。行の `match_facets` は元の UTF-16 行・列・長さを保持し、長さ 0 にも対応します。
+`result_kinds` は origin 名と、code に対する search と同じ `identifier` 投影に対応します。
+`declaration` と `call_site` には対応しません。fixture は認識済みテストファイルのパスと文字列系 origin から
+判定し、正規表現の文字列から `test_symbol` を推測しません。MCP の find 機能は追加しません。
+
+フィルター付きの行出力は text と JSON/NDJSON に対応し、`--fields`、`--cursor`、
+`--max-json-bytes` も使用できます。終端の確定性情報を保持できない形式は拒否します。件数出力も利用できます。
+終端・件数オブジェクトには走査区間の `origin_classification_complete` と `unknown_origin_matches` を出力し、
+フィルターで除外した unknown も計上します。unknown があれば不在・件数の確定性を false にして終了コード `11` を
+返します（`--allow-partial` で `0` を許容）。走査完了と分類完了は別です。フィルター後の不在を証明とせず、
+除外指定なしで unknown の一致を確認してください。タイムアウト、キャンセル、走査上限、従来のリテラル検索と
+索引候補の高速経路は従来どおりです。再索引は不要です。
 
 `cdidx find --all` は repository 全体の index 済みファイルを safety cap 付きで
 走査します。既定の indexed-line cap は 250,000 行です。`--all` と一緒に

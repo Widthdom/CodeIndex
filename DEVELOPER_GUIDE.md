@@ -2,6 +2,8 @@
 
 > **[日本語版はこちら / Japanese version](#開発者ガイド)**
 
+Regex find semantic filters (#5324) run in `IndexedFindPipeline` before either collector; retain raw match ordinals for cursor replay. Reuse `SearchMatchClassifier` and bounded indexed C# prefixes without literal rematching. Preserve zero-width spans and unknown evidence before exclusions. See [the v1 contract](docs/find-scan-controls.md#regex-origin-filters-5324).
+
 ## Installer output lifetime
 
 `RunInstallerProcessDetailed` drains both suppressed streams concurrently and gives
@@ -4459,6 +4461,8 @@ CLI、レシピの再実行・フィンガープリント、MCP スキーマ、`
 API version 1 の互換性を維持し、新しい guard scope は contract version 1 を公開します。
 
 # 開発者ガイド
+
+正規表現 find の意味フィルター (#5324) は `IndexedFindPipeline` で両 collector の前に適用します。カーソル再開用の元の一致 ordinal を維持し、リテラルで再検索せず `SearchMatchClassifier` と上限付き C# 索引プレフィックスを共有します。ゼロ幅座標と除外前の unknown 証拠を保持します。[v1 契約](docs/find-scan-controls.md#正規表現の-origin-フィルター-5324)を参照してください。
 
 ## インストーラー出力の読み取り期間
 

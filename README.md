@@ -2,6 +2,8 @@
 
 > **[日本語版はこちら / Japanese version](#cdidx日本語)**
 
+`find --regex` supports origin/result-kind and fixture exclusion filters before counts and pagination. Unknown classifications remain non-authoritative. See [regex find controls](docs/find-scan-controls.md#regex-origin-filters-5324).
+
 ## C# multiline search origins
 
 Search origin filters and facets carry C# block-comment, verbatim-string and raw-string state across indexed lines. Ordinary search, token-boundary recipes, counts and MCP use the same classification and original coordinates. Schema, regex and help-string labels follow the string's opening line. Bounded lexical handling classifies supported interpolation expressions as code and resumes after terminated ordinary, verbatim and raw interpolated strings. Escaped braces, literal text, nested strings and comments keep their respective labels.
@@ -372,6 +374,8 @@ For commercial use, integration, and naming guidance, see
 A deadline returns exit `11`; cancellation returns `130`. JSON reports `analysis_complete: false`, `analysis_state` (`time_budget_exceeded` or `cancelled`), `analysis_timeout_ms`, and `total_count_authoritative: false`, with no unverified candidates or continuation cursor. A bounded JSON envelope retains these fields under `metadata`. Restart with narrower filters or a larger analysis budget. Completed paged envelopes report lower-bound totals and keep continuation cursors; use explicit `unused --count --json` for full totals, subject to the same analysis budget.
 
 # cdidx（日本語）
+
+`find --regex` は件数・ページ分割前の origin/result-kind と fixture 除外フィルターに対応します。分類不能な一致は確定的な不在と扱いません。[正規表現 find の制御](docs/find-scan-controls.md#正規表現の-origin-フィルター-5324)を参照してください。
 
 ## C# の複数行検索 origin
 

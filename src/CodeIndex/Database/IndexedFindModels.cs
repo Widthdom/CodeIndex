@@ -23,7 +23,8 @@ public partial class DbReader
         int? MaxLinesScanned,
         bool UseIndexedLiteralCandidates,
         FindResumePosition Resume,
-        CancellationToken CancellationToken);
+        CancellationToken CancellationToken,
+        FindSemanticFilters? SemanticFilters);
 
     private sealed record IndexedFindListRequest(
         IndexedFindScanRequest Scan,
@@ -76,17 +77,20 @@ public partial class DbReader
 
     private readonly record struct IndexedLine(int Number, string Text);
 
-    private readonly record struct FindLineMatch(int Column, int Length);
+    private readonly record struct FindLineMatch(int Column, int Length, SearchMatchFacet? Facet = null);
 
     private readonly record struct PendingFileFindMatch(
         int LineNumber,
         int Column,
         int Length,
         int SnippetStart,
-        int SnippetEnd);
+        int SnippetEnd,
+        SearchMatchFacet? Facet);
 
     private sealed class FindScanState(FindResumePosition resume)
     {
+        internal int UnknownOriginMatches { get; set; }
+        internal bool ClassificationApplied { get; set; }
         internal int CandidateFiles { get; set; }
         internal int FilesScanned { get; set; }
         internal int LinesScanned { get; set; }
@@ -167,6 +171,8 @@ public partial class DbReader
                 NextFileOrdinal,
                 NextMatchOrdinal,
                 NextByteOffset,
-                ResultLimitReached);
+                ResultLimitReached,
+                ClassificationApplied,
+                UnknownOriginMatches);
     }
 }
