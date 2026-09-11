@@ -371,6 +371,80 @@ public sealed class SymbolExtractorCSharpRegexProbeTests
     }
 
     [Fact]
+    public void Extract_CSharpMethodConfirmation_RequiresOpeningParenthesis()
+    {
+        const string content = """
+            class Example
+            {
+                public int Sum(
+                    LongDeclarationParameterType left,
+                    LongDeclarationParameterType right)
+                {
+                    return 1;
+                }
+                public int Value { get; }
+            }
+            """;
+        var baseline = Extract(content, applyOptimizations: false, out var baselineMetrics);
+        var optimized = Extract(content, applyOptimizations: true, out var optimizedMetrics);
+
+        AssertSymbolsEqual(baseline, optimized);
+        Assert.Contains(optimized, symbol => symbol.Kind == "function" && symbol.Name == "Sum");
+        Assert.Contains(optimized, symbol => symbol.Kind == "property" && symbol.Name == "Value");
+        Assert.Equal(0, baselineMetrics.MethodConfirmationLiteralSkipCount);
+        Assert.True(optimizedMetrics.MethodConfirmationLiteralSkipCount > 0);
+        Assert.True(optimizedMetrics.MethodConfirmationRegexAttemptCount > 0);
+        Assert.True(optimizedMetrics.MethodConfirmationRegexAttemptCount < baselineMetrics.MethodConfirmationRegexAttemptCount);
+    }
+
+    [Theory]
+    [InlineData("csharp")]
+    [InlineData("razor")]
+    [InlineData("blazor")]
+    [InlineData("cshtml")]
+    public void Extract_CSharpStaticLambdaGate_BoundsRepeatedSameLineDeclarations(string language)
+    {
+        var methods = string.Join(' ', Enumerable.Range(0, 64)
+            .Select(index => $"public static int Method{index}() => {index};"));
+        var content = $$"""
+            class Example { {{methods}} }
+            unsafe class Controls
+            {
+                static Controls() => Initialize();
+                public static void Initialize() { }
+                public static T Identity<T>(T value) => value;
+                void Callbacks()
+                {
+                    var typed = static int (int value) => value;
+                    var tuple = static (int Left, int Right) (int value) => (value, value);
+                    var pointer = static delegate*<int, int> () => null;
+                    var inferred = static value => value;
+                }
+            }
+            """;
+        SymbolExtractor.Extract(1, language, content);
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var symbols = SymbolExtractor.Extract(1, language, content);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        var functions = symbols.Where(symbol => symbol.Kind == "function").ToArray();
+        Assert.Equal(68, functions.Length);
+        for (var index = 0; index < 64; index++)
+        {
+            var method = Assert.Single(functions.Where(symbol => symbol.Name == $"Method{index}"));
+            Assert.Equal("Example", method.ContainerName);
+            Assert.Equal("int", method.ReturnType);
+            Assert.Equal((1, 1, 1, 1), (method.StartLine, method.EndLine, method.BodyStartLine, method.BodyEndLine));
+            Assert.Equal(content.IndexOf($"public static int Method{index}(", StringComparison.Ordinal), method.StartColumn);
+        }
+        Assert.Single(functions.Where(symbol => symbol.Name == "Controls"));
+        Assert.Single(functions.Where(symbol => symbol.Name == "Initialize"));
+        Assert.Single(functions.Where(symbol => symbol.Name == "Identity"));
+        Assert.Single(functions.Where(symbol => symbol.Name == "Callbacks"));
+        Assert.InRange(allocated, 0L, 2 * 1024 * 1024L);
+    }
+
+    [Fact]
     public void AllocationRegressionComparison_UsesMedianNoiseAllowanceAndRejectsMaterialIncrease_Issue5244()
     {
         Assert.Equal(300, SelectMedian([500, 100, 300, 200, 400]));

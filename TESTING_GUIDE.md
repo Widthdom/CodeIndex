@@ -1,5 +1,17 @@
 # Testing Guide
 
+`Extract_CSharpStaticLambdaGate_BoundsRepeatedSameLineDeclarations` checks 64
+same-line static methods with a warmed 2 MiB allocation ceiling on both runtimes,
+including C#, Razor, Blazor and CSHTML. Preserve all identities, raw start columns,
+return types and expression-body ranges. Static constructors and generic methods
+must survive; typed, tuple-return, function-pointer-return and inferred static
+lambdas must not create phantom declarations. Run the existing #4830 query corpus
+and the full symbol/reference extractor regressions alongside this fixture.
+`Extract_CSharpMethodConfirmation_RequiresOpeningParenthesis` compares every
+symbol property with optimizations disabled and requires fewer method-confirmation
+regex attempts for parameter fragments without `(`, while real multiline headers
+still reach the regex. Keep the attempt/skip counters internal to extraction tests.
+
 Confirmed C# method lookahead coverage in `SymbolExtractorCSharpRegexProbeTests`
 shares multiline methods, empty and nonempty constructor bodies, delayed body
 tokens, trailing fields and attributed accessors across C#, Razor, Blazor and
