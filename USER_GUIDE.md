@@ -1759,7 +1759,9 @@ aliases, later mutations/reassignment, ambiguous calls, unsupported syntax and
 exhausted budgets remain `needs_review`. Provenance includes bounded source paths,
 line numbers and checksums. These observations do not change production XML policy.
 Legacy guard setters such as `ProhibitDtd`, escaped identifiers and framework-name
-value shadows are unsupported and remain reviewable.
+value shadows are unsupported and remain reviewable. Types with base lists and
+repeated constant identifiers within a callable also remain reviewable.
+Type-binding checks admit at most 512 indexed declarations and a 512-character scope name.
 
 #### Audit progress
 
@@ -5752,6 +5754,8 @@ C# の分類は、一意なインデックス済みファクトリーの参照�
 出典には上限付きのパス、行番号、チェックサムを含めます。本番 XML 設定は変更しません。
 `ProhibitDtd` などの旧設定プロパティ、エスケープされた識別子、フレームワーク名を隠す
 同名の値は未対応として、レビュー対象に残します。
+基底型リストを持つ型や、呼出し可能なシンボル内で定数名が複数回現れる場合もレビュー対象に残します。
+型の参照先確認では、インデックス済み宣言512件、スコープ名512文字を上限とします。
 
 #### Audit の進捗
 

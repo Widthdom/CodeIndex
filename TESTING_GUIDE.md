@@ -7,7 +7,8 @@ JSON/compact/issue-draft/MCP classification and CLI filter-count assertions, inc
 raw replay, unsupported output rejection and the distinction between match and
 vulnerability confidence. Run the focused tests on net8/net9 with recipe, baseline,
 help and completion regressions. Include legacy setter overrides, numeric-looking
-identifiers, unrelated-type constants, escaped mutations and value-member shadows.
+identifiers, unrelated-type constants, escaped mutations and value-member shadows,
+including inherited members and generic parameter declarations.
 
 Named selection (#5325) shares a small overlapping-chunk fixture across single,
 multiple/shared-file and empty queries, selectors, total/per-query limits,
@@ -1351,6 +1352,7 @@ CLI フィルタの件数、元の証拠の再取得、未対応出力の拒否�
 区別を維持してください。net8 / net9 でレシピ、baseline、ヘルプ、補完の回帰テストと併せて実行します。
 旧設定プロパティの上書き、数値に似た識別子、別の型の定数、エスケープされた識別子による変更、
 同名の値メンバーによる参照先の隠蔽も含めてください。
+継承されたメンバーとジェネリック型の引数宣言も検証してください。
 
 Issue #5326 では51ノードの SCC と21ファイルの partial 型を使い、ノードカタログと各ノードの宣言ページを欠落・重複なく取得できることを検証します。ファイルフォールバックと generic・入れ子の識別、世代・対象ノード・破損トークンの拒否、メタデータ不足、UTF-8 バイト境界と切り詰め後の継続を含めてください。CLI/MCP の応答を比較し、生ファイル循環とヘルプ・補完の回帰検証を net8/net9 で維持します。
 

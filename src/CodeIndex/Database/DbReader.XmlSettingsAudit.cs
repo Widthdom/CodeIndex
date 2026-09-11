@@ -132,6 +132,26 @@ public partial class DbReader
 
         private void ValidateValueBindings(Target target)
         {
+            using (var scope = owner._conn.CreateCommand())
+            {
+                // Base members can shadow framework names. This subset does not
+                // resolve inheritance: reject base lists on any same-named scope
+                // declaration, including partial declarations in other files.
+                scope.CommandText = """
+                    SELECT substr(caller.container_name, 1, 513), COUNT(s.id),
+                      MAX(CASE WHEN s.signature IS NULL OR instr(s.signature, ':') > 0 THEN 1 ELSE 0 END)
+                    FROM symbols caller
+                    LEFT JOIN symbols s ON s.kind IN ('class','struct','interface','record')
+                      AND instr('.' || caller.container_name || '.', '.' || s.name || '.') > 0
+                    WHERE caller.id = @id GROUP BY caller.id
+                    """;
+                SqliteCommandPolicy.Add(scope, "@id", target.Id);
+                using var rows = scope.ExecuteTrackedReader();
+                if (!rows.TrackedRead() || rows.IsDBNull(0)) throw new Unavailable("type_binding_metadata_missing");
+                if (rows.GetString(0).Length > 512 || rows.GetInt64(1) is 0 or > 512 || rows.GetInt64(2) != 0
+                    || Matches(rows.GetString(0), @"^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$").Count != 1)
+                    throw new Unavailable("inherited_or_complex_type_binding_unresolved");
+            }
             using var cmd = owner._conn.CreateCommand();
             // Include enclosing and partial types, whose fields may be in a
             // different file. Local/parameter shadows are rejected in ReadSource.
@@ -409,7 +429,10 @@ public partial class DbReader
                 return total;
             }
             if (Matches(value, @"^[A-Za-z_]\w*$").Count != 1) return null;
-            if (Matches(body, @"\b[A-Za-z_]\w*(?:\s*\.\s*\w+)*\s*\??\s+@?" + Regex.Escape(value) + @"\b").Count > 0) return null;
+            // A declaration plus its use is already two identifier occurrences,
+            // regardless of generic/tuple/qualified parameter or local type syntax.
+            // Repeated field references conservatively stay unknown as well.
+            if (Matches(body, @"\b" + Regex.Escape(value) + @"\b").Count > 1) return null;
             int declarationLine;
             using (var binding = owner._conn.CreateCommand())
             {

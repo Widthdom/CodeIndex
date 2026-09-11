@@ -241,10 +241,25 @@ public partial class QueryCommandRunnerTests
         const string operation = "using var reader = XmlReader.Create(input, new XmlReaderSettings { DtdProcessing = DtdProcessing.Ignore, XmlResolver = null, MaxCharactersInDocument = 4096, MaxCharactersFromEntities = 256 });";
         TestProjectHelper.WriteTextFile(project.Root, "src/Bytes.cs", XmlAuditCaller("Bytes", operation) + "\n/*" + new string('x', 262144) + "*/");
         TestProjectHelper.WriteTextFile(project.Root, "src/Lines.cs", XmlAuditCaller("Lines", operation) + new string('\n', 4096));
-        TestProjectHelper.WriteTextFile(project.Root, "src/Valid.cs", XmlAuditCaller("Valid", operation));
+        TestProjectHelper.WriteTextFile(project.Root, "src/Valid.cs", XmlAuditCaller("Valid", operation).Replace("class Valid", "partial class Valid", StringComparison.Ordinal));
+        TestProjectHelper.WriteTextFile(project.Root, "src/ValidParts.cs", string.Join('\n', Enumerable.Repeat("partial class Valid { }", 40)));
         TestProjectHelper.WriteTextFile(project.Root, "src/PartialShadow.cs", XmlAuditCaller("PartialShadow", operation).Replace("class PartialShadow", "partial class PartialShadow", StringComparison.Ordinal));
         TestProjectHelper.WriteTextFile(project.Root, "src/PartialMember.cs", "partial class PartialShadow { static dynamic DtdProcessing; }");
         TestProjectHelper.WriteTextFile(project.Root, "src/ParameterShadow.cs", XmlAuditCaller("ParameterShadow", operation).Replace("string input", "string input, dynamic @DtdProcessing", StringComparison.Ordinal));
+        TestProjectHelper.WriteTextFile(project.Root, "src/InheritedShadow.cs", XmlAuditCaller("InheritedShadow", operation).Replace("class InheritedShadow", "class InheritedShadow : ShadowBase", StringComparison.Ordinal));
+        TestProjectHelper.WriteTextFile(project.Root, "src/ShadowBase.cs", "class ShadowBase { protected dynamic DtdProcessing; }");
+        TestProjectHelper.WriteTextFile(project.Root, "src/GenericParameterShadow.cs", """
+            using System.Xml;
+            class Numeric<T> { public static implicit operator long(Numeric<T> value) => 0; }
+            class GenericParameterShadow
+            {
+                const long Limit = 4096;
+                void Read(string input, Numeric<long> Limit)
+                {
+                    using var reader = XmlReader.Create(input, new XmlReaderSettings { DtdProcessing = DtdProcessing.Ignore, XmlResolver = null, MaxCharactersInDocument = Limit, MaxCharactersFromEntities = 256 });
+                }
+            }
+            """);
         TestProjectHelper.WriteTextFile(project.Root, "src/LocalConstantShadow.cs", """
             using System.Xml;
             class LocalConstantShadow
@@ -291,6 +306,16 @@ public partial class QueryCommandRunnerTests
         Assert.Equal("framework_value_binding_unresolved", Classify("PartialShadow.cs").Reason);
         Assert.Equal("alias_or_lexical_context_unsupported", Classify("ParameterShadow.cs").Reason);
         Assert.Equal("guard_combination_unproven", Classify("LocalConstantShadow.cs", 8).Reason);
+        Assert.Equal("inherited_or_complex_type_binding_unresolved", Classify("InheritedShadow.cs").Reason);
+        Assert.Equal("guard_combination_unproven", Classify("GenericParameterShadow.cs", 8).Reason);
+        foreach (var path in new[] { "InheritedShadow.cs", "GenericParameterShadow.cs" })
+        {
+            var filtered = CaptureConsole(() => QueryCommandRunner.RunAudit(["xml-parser-security", "--db", dbPath,
+                "--path", "src/" + path, "--exclude-safe-xml", "--json"], _jsonOptions));
+            Assert.Equal(0, filtered.Result);
+            using var json = ParseJsonOutput(filtered.Stdout);
+            Assert.Contains(json.RootElement.GetProperty("queries").EnumerateArray(), q => q.GetProperty("count").GetInt32() > 0);
+        }
         using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             new DbWriter(db.Connection).SetMeta(DbContext.GetSymbolExtractorVersionMetaKey("csharp"), "0");
         Assert.Equal("needs_review", Classify("Valid.cs").State);
