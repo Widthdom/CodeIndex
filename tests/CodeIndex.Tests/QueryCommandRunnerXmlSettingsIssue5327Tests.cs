@@ -80,6 +80,40 @@ public partial class QueryCommandRunnerTests
                 """),
             ["UsingAlias.cs"] = "using DtdProcessing = Other.Mode;\n" + XmlAuditCaller("UsingAlias", "using var reader = XmlReader.Create(input, new XmlReaderSettings { DtdProcessing = DtdProcessing.Ignore, XmlResolver = null, MaxCharactersInDocument = 4096, MaxCharactersFromEntities = 256 });"),
             ["OtherSettings.cs"] = XmlAuditCaller("OtherSettings", "var other = new XmlReaderSettings { DtdProcessing = DtdProcessing.Parse }; using var reader = XmlReader.Create(input, Policy.BuildSettings(DtdProcessing.Ignore));"),
+            ["LegacyOverride.cs"] = XmlAuditCaller("LegacyOverride", "using var reader = XmlReader.Create(input, new XmlReaderSettings { DtdProcessing = DtdProcessing.Ignore, XmlResolver = null, MaxCharactersInDocument = 4096, MaxCharactersFromEntities = 256, ProhibitDtd = false });"),
+            ["NumericIdentifier.cs"] = XmlAuditCaller("NumericIdentifier", "const long _4096 = 0; using var reader = XmlReader.Create(input, new XmlReaderSettings { DtdProcessing = DtdProcessing.Ignore, XmlResolver = null, MaxCharactersInDocument = _4096, MaxCharactersFromEntities = 256 });"),
+            ["EscapedMutation.cs"] = XmlAuditCaller("EscapedMutation", """
+                var settings = new XmlReaderSettings { DtdProcessing = DtdProcessing.Ignore, XmlResolver = null, MaxCharactersInDocument = 4096, MaxCharactersFromEntities = 256 };
+                s\u0065ttings.MaxCharactersInDocument = 0;
+                using var reader = XmlReader.Create(input, settings);
+                """),
+            ["Shadow.cs"] = """
+                using System.Xml;
+                class Modes { public System.Xml.DtdProcessing Prohibit => System.Xml.DtdProcessing.Parse; }
+                class Shadow
+                {
+                    static Modes DtdProcessing = new Modes();
+                    void Read(string input)
+                    {
+                        using var reader = XmlReader.Create(input, new XmlReaderSettings { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null, MaxCharactersInDocument = 4096, MaxCharactersFromEntities = 256 });
+                    }
+                }
+                """,
+            ["OtherConstant.cs"] = """
+                using System.Xml;
+                class OtherConstant
+                {
+                    static long Limit = 0;
+                    void Read(string input)
+                    {
+                        using var reader = XmlReader.Create(input, new XmlReaderSettings { DtdProcessing = DtdProcessing.Ignore, XmlResolver = null, MaxCharactersInDocument = Limit, MaxCharactersFromEntities = 256 });
+                    }
+                }
+                class UnrelatedConstant
+                {
+                    const long Limit = 4096;
+                }
+                """,
             ["Depth.cs"] = """
                 using System.Xml;
                 class Depth
@@ -112,7 +146,7 @@ public partial class QueryCommandRunnerTests
         static JsonElement Evidence(JsonElement row) => row.GetProperty("audit_classifications")[0].GetProperty("xml_settings");
         var raw = Run();
         var all = Rows(raw).ToArray();
-        foreach (var name in new[] { "SafeInline", "SafeWrapper", "SafeLocal", "Unsafe", "IgnoreOnly", "Mutated", "Alias", "Reassigned", "Lookalike", "Dynamic", "UsingAlias", "OtherSettings" })
+        foreach (var name in new[] { "SafeInline", "SafeWrapper", "SafeLocal", "Unsafe", "IgnoreOnly", "Mutated", "Alias", "Reassigned", "Lookalike", "Dynamic", "UsingAlias", "OtherSettings", "LegacyOverride", "NumericIdentifier", "EscapedMutation", "Shadow", "OtherConstant" })
         {
             var rows = all.Where(row => row.GetProperty("path").GetString() == "src/" + name + ".cs").ToArray();
             Assert.NotEmpty(rows);
@@ -126,6 +160,11 @@ public partial class QueryCommandRunnerTests
         Assert.Equal("not_established", wrapper.GetProperty("vulnerability_confidence").GetString());
         Assert.Contains(all, row => row.GetProperty("path").GetString() == "src/Depth.cs"
             && Evidence(row).GetProperty("reason").GetString() == "depth_budget_exceeded");
+        foreach (var (name, reason) in new[] { ("LegacyOverride", "initializer_side_effects_unknown"),
+            ("NumericIdentifier", "guard_combination_unproven"), ("EscapedMutation", "alias_or_lexical_context_unsupported"),
+            ("Shadow", "alias_or_lexical_context_unsupported"), ("OtherConstant", "guard_combination_unproven") })
+            Assert.Contains(Rows(Run("--path", "src/" + name + ".cs", "--exclude-safe-xml")),
+                row => Evidence(row).GetProperty("reason").GetString() == reason);
 
         foreach (var format in new[] { "json", "compact" })
         {
@@ -133,6 +172,8 @@ public partial class QueryCommandRunnerTests
             var filteredRows = Rows(filtered).ToArray();
             Assert.DoesNotContain(filteredRows, row => Evidence(row).GetProperty("state").GetString() == "safe_under_observed_guards");
             Assert.Contains(filteredRows, row => Evidence(row).GetProperty("state").GetString() == "confirmed_unsafe_configuration");
+            foreach (var name in new[] { "LegacyOverride", "NumericIdentifier", "EscapedMutation", "Shadow", "OtherConstant" })
+                Assert.Contains(filteredRows, row => row.GetProperty("path").GetString() == "src/" + name + ".cs");
             foreach (var query in filtered.GetProperty("queries").EnumerateArray())
             {
                 Assert.Equal(query.GetProperty("source_total").GetInt32(), query.GetProperty("selected_total").GetInt32() + query.GetProperty("selector_omitted_count").GetInt32());
@@ -148,6 +189,9 @@ public partial class QueryCommandRunnerTests
         var narrow = Run("--path", "src/SafeInline.cs", "--exclude-safe-xml");
         Assert.Empty(Rows(narrow));
         Assert.True(narrow.GetProperty("queries").EnumerateArray().Sum(q => q.GetProperty("selector_omitted_count").GetInt32()) > 0);
+        var emptyDrafts = Run("--path", "src/SafeInline.cs", "--exclude-safe-xml", "--format", "issue-drafts");
+        Assert.Empty(emptyDrafts.GetProperty("drafts").EnumerateArray());
+        Assert.True(emptyDrafts.GetProperty("selection_accounting").EnumerateArray().Sum(q => q.GetProperty("selector_omitted_count").GetInt32()) > 0);
         var limited = Run("--exclude-safe-xml", "--limit", "1");
         Assert.All(limited.GetProperty("queries").EnumerateArray(), q => Assert.True(q.GetProperty("count").GetInt32() <= 1));
         var human = CaptureConsole(() => QueryCommandRunner.RunAudit(["xml-parser-security", "--db", dbPath, "--exclude-safe-xml", "--format", "text"], _jsonOptions));
@@ -198,6 +242,21 @@ public partial class QueryCommandRunnerTests
         TestProjectHelper.WriteTextFile(project.Root, "src/Bytes.cs", XmlAuditCaller("Bytes", operation) + "\n/*" + new string('x', 262144) + "*/");
         TestProjectHelper.WriteTextFile(project.Root, "src/Lines.cs", XmlAuditCaller("Lines", operation) + new string('\n', 4096));
         TestProjectHelper.WriteTextFile(project.Root, "src/Valid.cs", XmlAuditCaller("Valid", operation));
+        TestProjectHelper.WriteTextFile(project.Root, "src/PartialShadow.cs", XmlAuditCaller("PartialShadow", operation).Replace("class PartialShadow", "partial class PartialShadow", StringComparison.Ordinal));
+        TestProjectHelper.WriteTextFile(project.Root, "src/PartialMember.cs", "partial class PartialShadow { static dynamic DtdProcessing; }");
+        TestProjectHelper.WriteTextFile(project.Root, "src/ParameterShadow.cs", XmlAuditCaller("ParameterShadow", operation).Replace("string input", "string input, dynamic @DtdProcessing", StringComparison.Ordinal));
+        TestProjectHelper.WriteTextFile(project.Root, "src/LocalConstantShadow.cs", """
+            using System.Xml;
+            class LocalConstantShadow
+            {
+                const long Limit = 4096;
+                void Read(string input)
+                {
+                    System.Int64 Limit = 0;
+                    using var reader = XmlReader.Create(input, new XmlReaderSettings { DtdProcessing = DtdProcessing.Ignore, XmlResolver = null, MaxCharactersInDocument = Limit, MaxCharactersFromEntities = 256 });
+                }
+            }
+            """);
         TestProjectHelper.WriteTextFile(project.Root, "src/Factories.cs", """
             using System.Xml;
             class A
@@ -229,6 +288,9 @@ public partial class QueryCommandRunnerTests
         Assert.Equal("needs_review", Classify("Bytes.cs").State);
         Assert.Equal("source_line_budget_exceeded", Classify("Lines.cs").Reason);
         Assert.Equal("factory_target_ambiguous", Classify("Factories.cs", 14).Reason);
+        Assert.Equal("framework_value_binding_unresolved", Classify("PartialShadow.cs").Reason);
+        Assert.Equal("alias_or_lexical_context_unsupported", Classify("ParameterShadow.cs").Reason);
+        Assert.Equal("guard_combination_unproven", Classify("LocalConstantShadow.cs", 8).Reason);
         using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             new DbWriter(db.Connection).SetMeta(DbContext.GetSymbolExtractorVersionMetaKey("csharp"), "0");
         Assert.Equal("needs_review", Classify("Valid.cs").State);

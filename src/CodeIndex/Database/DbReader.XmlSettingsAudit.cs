@@ -65,6 +65,7 @@ public partial class DbReader
                     Step();
                     var source = ReadSource(path);
                     var target = Container(path, line);
+                    ValidateValueBindings(target);
                     var body = Body(source, target);
                     AddSource(provenance, source, line);
                     // A row can represent several occurrences. It may be filtered
@@ -117,13 +118,35 @@ public partial class DbReader
             var code = MaskCSharpNonCode(loaded.Content);
             // Aliases, directives and interpolation can change binding or hide
             // executable expressions. Do not infer a compiler binding for them.
-            if (code.Contains('#') || Matches(code, @"\busing\s+\w+\s*=").Count > 0)
+            if (code.Contains('#') || code.Contains('\\')
+                || code.Any(ch => char.GetUnicodeCategory(ch) == UnicodeCategory.Format)
+                || Matches(code, @"\busing\s+\w+\s*=").Count > 0
+                || Matches(code, @"\b[A-Za-z_]\w*(?:\s*\.\s*\w+)*(?:\s*<[^;{}()]+>)?\s*[?]?\s+@?(?:DtdProcessing|XmlReader|XmlReaderSettings|XmlUrlResolver)\s*[,;)=]").Count > 0)
                 throw new Unavailable("alias_or_lexical_context_unsupported");
             var lines = code.Split('\n');
             if (lines.Length > 4096) throw new Unavailable("source_line_budget_exceeded");
             var source = new XmlSource(path, code, lines, loaded.Checksum);
             sources.Add(path, source);
             return source;
+        }
+
+        private void ValidateValueBindings(Target target)
+        {
+            using var cmd = owner._conn.CreateCommand();
+            // Include enclosing and partial types, whose fields may be in a
+            // different file. Local/parameter shadows are rejected in ReadSource.
+            cmd.CommandText = """
+                SELECT 1 FROM symbols s, symbols caller
+                WHERE caller.id = @id AND s.name IN ('DtdProcessing','XmlReader','XmlReaderSettings','XmlUrlResolver')
+                  AND s.kind IN ('field','property','event')
+                  AND (COALESCE(caller.container_qualified_name, caller.container_name) = COALESCE(s.container_qualified_name, s.container_name)
+                    OR substr(COALESCE(caller.container_qualified_name, caller.container_name), 1,
+                        length(COALESCE(s.container_qualified_name, s.container_name)) + 1)
+                       = COALESCE(s.container_qualified_name, s.container_name) || '.')
+                LIMIT 1
+                """;
+            SqliteCommandPolicy.Add(cmd, "@id", target.Id);
+            if (cmd.ExecuteScalar() != null) throw new Unavailable("framework_value_binding_unresolved");
         }
 
         private Target Container(string path, int line)
@@ -260,7 +283,8 @@ public partial class DbReader
                 // callbacks or assignments that can mutate an earlier guard.
                 foreach (var pair in properties)
                     if (pair.Key is not ("DtdProcessing" or "XmlResolver" or "MaxCharactersInDocument" or "MaxCharactersFromEntities")
-                        && pair.Value is not ("true" or "false")) throw new Unavailable("initializer_side_effects_unknown");
+                        && (pair.Key is not ("IgnoreComments" or "IgnoreWhitespace" or "IgnoreProcessingInstructions" or "CheckCharacters" or "CloseInput" or "Async")
+                            || pair.Value is not ("true" or "false"))) throw new Unavailable("initializer_side_effects_unknown");
                 var dtd = properties.GetValueOrDefault("DtdProcessing", "unknown");
                 dtd = arguments.GetValueOrDefault(dtd, dtd);
                 dtd = Regex.Replace(dtd, @"\s+", "", RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100));
@@ -298,6 +322,7 @@ public partial class DbReader
                     throw new Unavailable("factory_receiver_unresolved");
             }
             var factorySource = ReadSource(factory.Path);
+            ValidateValueBindings(factory);
             var factoryBody = Body(factorySource, factory);
             var parameterNames = ParseParameterNames(factory.Signature);
             var values = SplitTopLevelArguments(expression[(paren + 1)..endParen]);
@@ -367,8 +392,10 @@ public partial class DbReader
         {
             Step();
             if (expression == null || depth > 3) return null;
-            var value = expression.Trim().Replace("_", "", StringComparison.Ordinal).TrimEnd('L', 'l');
-            if (long.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var number)) return number;
+            var value = expression.Trim();
+            if (Matches(value, @"^[0-9][0-9_]*[Ll]?$").Count == 1)
+                return long.TryParse(value.Replace("_", "", StringComparison.Ordinal).TrimEnd('L', 'l'),
+                    NumberStyles.None, CultureInfo.InvariantCulture, out var number) ? number : null;
             var parts = expression.Split('*');
             if (parts.Length is > 1 and <= 4)
             {
@@ -382,23 +409,33 @@ public partial class DbReader
                 return total;
             }
             if (Matches(value, @"^[A-Za-z_]\w*$").Count != 1) return null;
-            if (Matches(body, @"\b(?:int|long|var)\s+" + Regex.Escape(value) + @"\b").Count > 0) return null;
+            if (Matches(body, @"\b[A-Za-z_]\w*(?:\s*\.\s*\w+)*\s*\??\s+@?" + Regex.Escape(value) + @"\b").Count > 0) return null;
+            int declarationLine;
             using (var binding = owner._conn.CreateCommand())
             {
                 binding.CommandText = """
-                    SELECT 1 FROM symbols s JOIN files f ON s.file_id = f.id
+                    SELECT s.start_line, s.end_line FROM symbols s JOIN files f ON s.file_id = f.id
                     WHERE f.path = @path AND s.name = @name COLLATE BINARY AND s.kind = 'field'
-                      AND s.container_name = (SELECT container_name FROM symbols WHERE id = @target) COLLATE BINARY
-                    LIMIT 1
+                      AND COALESCE(s.container_qualified_name, s.container_name) =
+                        (SELECT COALESCE(container_qualified_name, container_name) FROM symbols WHERE id = @target) COLLATE BINARY
+                    LIMIT 2
                     """;
                 SqliteCommandPolicy.Add(binding, "@path", source.Path);
                 SqliteCommandPolicy.Add(binding, "@name", value);
                 SqliteCommandPolicy.Add(binding, "@target", target.Id);
-                if (binding.ExecuteScalar() == null) return null;
+                using var rows = binding.ExecuteTrackedReader();
+                if (!rows.TrackedRead() || rows.IsDBNull(0) || rows.IsDBNull(1)) return null;
+                declarationLine = rows.GetInt32(0);
+                if (declarationLine != rows.GetInt32(1) || declarationLine < 1 || declarationLine > source.Lines.Length
+                    || rows.TrackedRead()) return null;
             }
-            var constants = Matches(source.Code, @"\bconst\s+(?:int|long)\s+" + Regex.Escape(value) + @"\s*=\s*(?<value>[^;]+);");
+            // Require the exact field's whole source line, not another type's
+            // same-named constant elsewhere in this file or on the same line.
+            var constants = Matches(source.Lines[declarationLine - 1],
+                @"^\s*(?:(?:public|private|internal|protected|new)\s+)*const\s+(?:int|long)\s+"
+                + Regex.Escape(value) + @"\s*=\s*(?<value>[^;]+);\s*$");
             if (constants.Count != 1) return null;
-            AddSource(provenance, source, 1 + source.Code[..constants[0].Index].Count(ch => ch == '\n'));
+            AddSource(provenance, source, declarationLine);
             return Number(source, target, body, constants[0].Groups["value"].Value, depth + 1, provenance);
         }
 

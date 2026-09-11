@@ -1754,10 +1754,12 @@ The C# classifier follows unique indexed factory targets and literal arguments,
 with at most 3 factory hops, 128 analysis nodes, 16 source files, 256 KiB per file,
 1 MiB of source per child query, 4,096 lines per file and 513 lines per callable.
 It supports direct initializers, one-use local settings, single-return factories,
-and same-type integer constants/products. Missing/stale metadata, changed source,
+and same-type single-line integer constants/products. Missing/stale metadata, changed source,
 aliases, later mutations/reassignment, ambiguous calls, unsupported syntax and
 exhausted budgets remain `needs_review`. Provenance includes bounded source paths,
 line numbers and checksums. These observations do not change production XML policy.
+Legacy guard setters such as `ProhibitDtd`, escaped identifiers and framework-name
+value shadows are unsupported and remain reviewable.
 
 #### Audit progress
 
@@ -5745,9 +5747,11 @@ C# の分類は、一意なインデックス済みファクトリーの参照�
 上限はファクトリー3段、解析ノード128件、ソース16ファイル、1ファイル256 KiB、
 子クエリあたり合計1 MiB、1ファイル4,096行、呼出し可能なシンボル513行です。
 直接の初期化、1回だけ使用するローカル設定、単一 return のファクトリー、同じ型の
-整数定数と積に対応します。古い／不足したメタデータ、ソース変更、別名、後続の変更・
+単一行の整数定数と積に対応します。古い／不足したメタデータ、ソース変更、別名、後続の変更・
 再代入、曖昧な呼出し、未対応構文、上限到達は `needs_review` に残します。
 出典には上限付きのパス、行番号、チェックサムを含めます。本番 XML 設定は変更しません。
+`ProhibitDtd` などの旧設定プロパティ、エスケープされた識別子、フレームワーク名を隠す
+同名の値は未対応として、レビュー対象に残します。
 
 #### Audit の進捗
 
