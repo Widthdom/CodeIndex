@@ -349,6 +349,7 @@ public partial class McpServer
                     .ToCompactResults(results, queryContext, snippetLines, exact, maxLineWidth, exposeLiteralHighlights: exact)
                     .Where(result => MatchesRecipeFacetMetadata(result, recipeQuery))
                     .ToList();
+                QueryCommandRunner.ApplyXmlSettingsAuditClassifications(reader, recipeQuery, compactResults);
                 var truncated = TrimToRequestedLimit(compactResults, limit);
                 foreach (var compact in compactResults)
                     SearchSnippetFormatter.ApplyOutputMetadata(compact, snippetLines, maxLineWidth, exact, rawFts: false);

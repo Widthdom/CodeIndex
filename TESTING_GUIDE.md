@@ -1,5 +1,13 @@
 # Testing Guide
 
+XML audit coverage (#5327) uses real indexed source shared across safe inline/local
+settings and factories, unsafe positive controls, aliases/reassignment/mutations,
+dynamic or missing targets, traversal budgets and metadata/source drift. Preserve
+JSON/compact/issue-draft/MCP classification and CLI filter-count assertions, including
+raw replay, unsupported output rejection and the distinction between match and
+vulnerability confidence. Run the focused tests on net8/net9 with recipe, baseline,
+help and completion regressions.
+
 Named selection (#5325) shares a small overlapping-chunk fixture across single,
 multiple/shared-file and empty queries, selectors, total/per-query limits,
 rich/compact/projected JSON, text, deterministic replay, UTF-8 budget boundaries,
@@ -1334,6 +1342,12 @@ Issue #5300 のテストは隣接・入れ子の C# callable、対象行の除�
 パーサー（#5297）の回帰テストとともに net8.0 / net9.0 で実行します。
 
 # テストガイド
+
+XML 監査のテスト（#5327）は実際にインデックスしたソースを共有し、安全な直接／ローカル設定と
+ファクトリー、危険な対照例、別名・再代入・変更、動的または不明な参照先、追跡上限、
+メタデータ不足とソース変更を検証します。JSON / compact / issue-draft / MCP の分類と
+CLI フィルタの件数、元の証拠の再取得、未対応出力の拒否、一致の確かさと脆弱性の確かさの
+区別を維持してください。net8 / net9 でレシピ、baseline、ヘルプ、補完の回帰テストと併せて実行します。
 
 Issue #5326 では51ノードの SCC と21ファイルの partial 型を使い、ノードカタログと各ノードの宣言ページを欠落・重複なく取得できることを検証します。ファイルフォールバックと generic・入れ子の識別、世代・対象ノード・破損トークンの拒否、メタデータ不足、UTF-8 バイト境界と切り詰め後の継続を含めてください。CLI/MCP の応答を比較し、生ファイル循環とヘルプ・補完の回帰検証を net8/net9 で維持します。
 

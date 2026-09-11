@@ -13,6 +13,13 @@ internal static class SearchAuditRecipes
     internal const string ProductionAndToolingAuditScope = "production-and-tooling";
     internal const string AllAuditScope = "all";
     internal const string DefaultQuerySeverity = "medium";
+    private static readonly SearchRecipeClassifierJsonResult XmlSettingsClassifier = new(
+        "xml_settings_evidence", "Bounded source-backed XML settings observations; not vulnerability verdicts.",
+        [new("safe_under_observed_guards", "Explicit DTD, resolver and size guards.", "Verify runtime use and input trust."),
+         new("needs_review", "Settings or context are unresolved or guards are insufficient.", "Inspect aliases, mutations and missing context manually."),
+         new("confirmed_unsafe_configuration", "DTD parsing with an external URL resolver is explicit.", "Review exposure; configuration alone does not establish exploitability.")],
+        ["xml_settings.state", "xml_settings.reason", "xml_settings.sources", "xml_settings.vulnerability_confidence"],
+        "Textual match confidence is independent of vulnerability confidence. Baseline review annotations do not prove safety.");
     internal const string RecipePathsEnvironmentVariable = "CDIDX_SEARCH_RECIPE_PATHS";
     private const string BoundedRegexAliasUsing = "using Regex = CodeIndex.Indexer.BoundedRegex";
     private const string BoundedRegexPath = "src/CodeIndex/Indexer/BoundedRegex.cs";
@@ -2709,6 +2716,7 @@ internal static class SearchAuditRecipes
                     ["audit", "security"],
                     "Expected safe settings include `DtdProcessing.Ignore` or `Prohibit` and no external resolver; tests and safe fixture parsers may be false positives.")
                 {
+                    Classifiers = [XmlSettingsClassifier],
                     MatchOrigins = ["code"],
                     RiskEvidence =
                     [
@@ -2723,6 +2731,7 @@ internal static class SearchAuditRecipes
                     ["audit", "security"],
                     "Review for `Ignore` or `Prohibit`; `Parse` requires strong justification, bounded input, and resolver controls.")
                 {
+                    Classifiers = [XmlSettingsClassifier],
                     MatchOrigins = ["code"],
                     RiskEvidence =
                     [
@@ -2737,6 +2746,7 @@ internal static class SearchAuditRecipes
                     ["audit", "security"],
                     "Safe paths usually set the resolver to null or use a tightly bounded resolver.")
                 {
+                    Classifiers = [XmlSettingsClassifier],
                     MatchOrigins = ["code"],
                     RiskEvidence =
                     [
@@ -5032,7 +5042,12 @@ internal sealed record SearchIssueDraftJsonResult(
 internal sealed record SearchIssueDraftEvidenceJsonResult(
     [property: JsonPropertyName("path")] string Path,
     [property: JsonPropertyName("line")] int Line,
-    [property: JsonPropertyName("snippet")] string Snippet);
+    [property: JsonPropertyName("snippet")] string Snippet)
+{
+    [JsonPropertyName("audit_classifications")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<SearchAuditClassificationJsonResult>? AuditClassifications { get; init; }
+}
 
 internal sealed record SearchIssueDraftSourceJsonResult(
     [property: JsonPropertyName("recipe")] string? Recipe,

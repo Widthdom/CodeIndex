@@ -72,6 +72,9 @@ public static partial class QueryCommandRunner
                 case "--show-excluded":
                     showExcluded = true;
                     break;
+                case "--exclude-safe-xml":
+                    excludeSafeXml = true;
+                    break;
                 case "--list-recipes":
                     listRecipes = true;
                     break;

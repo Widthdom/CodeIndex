@@ -944,9 +944,14 @@ public static partial class QueryCommandRunner
                     Console.WriteLine($"broad catch diagnostics: {string.Join(", ", queryResult.BroadCatchTaxonomy.DiagnosticBehaviors.Select(behavior => behavior.Name))}");
                 }
                 Console.WriteLine($"results: {queryResult.Count}");
+                if (options.ExcludeSafeXml)
+                    Console.WriteLine($"XML selection: source_total={queryResult.SourceTotal}, source_total_authoritative={queryResult.SourceTotalAuthoritative.ToString().ToLowerInvariant()}, selected_total={queryResult.SelectedTotal}, selector_omitted_count={queryResult.SelectorOmittedCount}, limit_omitted_count={queryResult.LimitOmittedCount}");
                 foreach (var result in queryResult.Results)
                 {
                     Console.WriteLine($"{result.Path}:{result.ChunkStartLine}-{result.ChunkEndLine}");
+                    foreach (var classification in result.AuditClassifications ?? [])
+                        if (classification.XmlSettings is { } xml)
+                            Console.WriteLine($"  XML settings: {xml.State} ({xml.Reason}); vulnerability_confidence=not_established");
                     foreach (var line in result.Snippet.Split('\n', StringSplitOptions.None))
                         Console.WriteLine($"  {line}");
                 }
@@ -1782,6 +1787,8 @@ public static partial class QueryCommandRunner
             AddReplayValueOption(args, "--max-json-bytes", options.MaxJsonBytes.Value.ToString(CultureInfo.InvariantCulture));
         if (options.ShowExcluded)
             args.Add("--show-excluded");
+        if (options.ExcludeSafeXml)
+            args.Add("--exclude-safe-xml");
         if (includeRecipeQuerySelectors)
         {
             foreach (var includeQuery in options.IncludeRecipeQueries)
@@ -5440,7 +5447,10 @@ public static partial class QueryCommandRunner
             if (includeSnippets && string.IsNullOrWhiteSpace(snippet))
                 continue;
 
-            evidence.Add(new SearchIssueDraftEvidenceJsonResult(result.Path, line, snippet));
+            evidence.Add(new SearchIssueDraftEvidenceJsonResult(result.Path, line, snippet)
+            {
+                AuditClassifications = result.AuditClassifications,
+            });
             if (evidence.Count >= MaxIssueDraftEvidenceItems)
                 break;
         }
@@ -5518,7 +5528,11 @@ public static partial class QueryCommandRunner
             queryResult.Severity,
             GetSearchRecipeConfidence(queryResult.Count),
             queryResult.Count,
-            BuildSearchIssueDraftDuplicateGuidance(duplicatePreflightChecked, duplicateMatchCount));
+            BuildSearchIssueDraftDuplicateGuidance(duplicatePreflightChecked, duplicateMatchCount))
+        {
+            ConfidenceScope = queryResult.Classifiers.Any(c => c.Name == "xml_settings_evidence") ? "textual_match" : null,
+            VulnerabilityConfidence = queryResult.Classifiers.Any(c => c.Name == "xml_settings_evidence") ? "not_established" : null,
+        };
 
     private static string GetSearchRecipeConfidence(int resultCount)
         => resultCount >= 3 ? "high" : resultCount >= 2 ? "medium" : "low";
@@ -5637,6 +5651,11 @@ public static partial class QueryCommandRunner
         foreach (var item in evidence)
         {
             sb.AppendLine($"- `{item.Path}:{item.Line.ToString(CultureInfo.InvariantCulture)}`");
+            foreach (var classification in item.AuditClassifications ?? [])
+            {
+                if (classification.XmlSettings is not { } xml) continue;
+                sb.AppendLine($"  XML settings: `{xml.State}` ({xml.Reason}); vulnerability confidence: `not_established`. Textual match confidence does not establish a vulnerability.");
+            }
             if (string.IsNullOrWhiteSpace(item.Snippet))
                 continue;
 
@@ -5675,6 +5694,11 @@ public static partial class QueryCommandRunner
         sb.AppendLine("## Triage metadata");
         sb.AppendLine($"- severity: `{triage.Severity}`");
         sb.AppendLine($"- confidence: `{triage.Confidence}`");
+        if (triage.ConfidenceScope != null)
+        {
+            sb.AppendLine($"- confidence_scope: `{triage.ConfidenceScope}`");
+            sb.AppendLine($"- vulnerability_confidence: `{triage.VulnerabilityConfidence}`");
+        }
         sb.AppendLine($"- evidence_count: `{triage.EvidenceCount}`");
         sb.AppendLine($"- duplicate_guidance: {triage.DuplicateGuidance}");
     }

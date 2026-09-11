@@ -416,6 +416,13 @@ public static partial class QueryCommandRunner
         QueryCommandOptions options,
         List<SearchRowSelectorJsonResult> selectors)
     {
+        if (options.ExcludeSafeXml)
+        {
+            var before = rows.Count;
+            rows = rows.Where(row => !row.Compact.AuditClassifications?.Any(classification =>
+                classification.XmlSettings?.State == "safe_under_observed_guards") ?? true).ToList();
+            selectors.Add(new SearchRowSelectorJsonResult("exclude_safe_xml", true, before, rows.Count, before - rows.Count));
+        }
         if (options.FirstPerFile)
         {
             var beforeFirstPerFile = rows.Count;
