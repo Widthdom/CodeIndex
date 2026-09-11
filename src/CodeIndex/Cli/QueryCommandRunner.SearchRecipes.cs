@@ -270,7 +270,7 @@ public static partial class QueryCommandRunner
             jsonOptions,
             commandName);
 
-    private static JsonSerializerOptions EnsureJsonNodeSerializerOptions(JsonSerializerOptions jsonOptions)
+    internal static JsonSerializerOptions EnsureJsonNodeSerializerOptions(JsonSerializerOptions jsonOptions)
     {
         if (jsonOptions.TypeInfoResolver != null)
             return jsonOptions;

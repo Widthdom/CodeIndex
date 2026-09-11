@@ -135,6 +135,16 @@ public partial class QueryCommandRunnerTests
         Assert.Equal(4, types.Length);
         Assert.Equal(4, types.Select(mapping => mapping.GetProperty("family_identity").GetString()).Distinct().Count());
         Assert.All(types, mapping => Assert.Equal(2, mapping.GetProperty("file_count").GetInt32()));
+        foreach (var mapping in mappings)
+        {
+            var navigation = CaptureConsole(() => QueryCommandRunner.RunDeps(
+                ["--db", dbPath, "--json", "--cycles", "--group-partial-types", "--node-mappings",
+                    "--cycle-node", mapping.GetProperty("id").GetString()!,
+                    "--node-generation", grouping.GetProperty("node_generation").GetString()!], _jsonOptions));
+            Assert.Equal(0, navigation.Result);
+            using var navigationJson = ParseJsonOutput(navigation.Stdout);
+            Assert.Equal(mapping.GetProperty("files").GetRawText(), navigationJson.RootElement.GetProperty("node_mappings")[0].GetProperty("files").GetRawText());
+        }
         Assert.False(document.RootElement.GetProperty("sql_graph_contract_ready").GetBoolean());
         var python = Assert.Single(document.RootElement.GetProperty("cycles").EnumerateArray(),
             cycle => cycle.GetProperty("nodes").EnumerateArray().Any(node => node.GetString() == "file:a.py"));

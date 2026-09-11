@@ -29,11 +29,19 @@ public static partial class QueryCommandRunner
         if (!applied)
             return payload;
         const int mappingLimit = 40;
+        var generation = DependencyCycleNavigation.Generation(reader);
+        payload["node_generation"] = generation;
+        payload["navigation"] = new JsonObject
+        {
+            ["cli_args"] = new JsonArray("deps", "--cycles", "--group-partial-types", "--node-mappings", "--json", "--node-generation", generation),
+            ["mcp_arguments"] = new JsonObject { ["cycles"] = true, ["groupPartialTypes"] = true, ["nodeMappings"] = true, ["nodeGeneration"] = generation },
+            ["hint"] = "Use the same database. The catalogue includes all indexed declarations, not only cycle members. Add --cycle-node <id> (MCP: cycleNode) to resolve an emitted node; follow next_mapping_cursor, or next_file_cursor with that node, using --mapping-cursor (MCP: mappingCursor).",
+        };
         var allNodes = components.SelectMany(static component => component.Nodes)
             .Concat(largest?.Nodes ?? []).Concat(internalEdges.Select(static edge => edge.SourcePath))
             .Distinct(StringComparer.Ordinal).ToList();
         payload["node_mappings"] = new JsonArray(allNodes.Take(mappingLimit)
-            .Select(node => (JsonNode?)reader.DescribeDependencyCycleNode(node)).ToArray());
+            .Select(node => (JsonNode?)DependencyCycleNavigation.Describe(reader, node, generation)).ToArray());
         payload["mapping_node_count"] = allNodes.Count;
         payload["mapping_node_limit"] = mappingLimit;
         payload["mapping_nodes_truncated"] = allNodes.Count > mappingLimit;

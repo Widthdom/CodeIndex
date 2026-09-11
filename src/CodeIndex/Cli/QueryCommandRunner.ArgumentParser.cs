@@ -161,6 +161,10 @@ public static partial class QueryCommandRunner
         private int dependencyCycleGraphBudget = DefaultDependencyCycleGraphBudget;
         private bool includeAllDependencyCycleNodes;
         private bool groupDependencyPartialTypes;
+        private bool dependencyNodeMappings;
+        private string? dependencyCycleNode;
+        private string? dependencyNodeGeneration;
+        private string? dependencyMappingCursor;
         private DependencyEvidenceFilter dependencyEvidenceFilter = DependencyEvidenceFilter.Empty;
         private readonly List<string> dependencyResolutionValues = [];
         private readonly List<string> dependencyReferenceKindValues = [];
@@ -581,6 +585,10 @@ public static partial class QueryCommandRunner
                 DependencyCycleGraphBudget = dependencyCycleGraphBudget,
                 IncludeAllDependencyCycleNodes = includeAllDependencyCycleNodes,
                 GroupDependencyPartialTypes = groupDependencyPartialTypes,
+                DependencyNodeMappings = dependencyNodeMappings,
+                DependencyCycleNode = dependencyCycleNode,
+                DependencyNodeGeneration = dependencyNodeGeneration,
+                DependencyMappingCursor = dependencyMappingCursor,
                 DependencyEvidenceFilter = dependencyEvidenceFilter,
                 DependencySuppressNoise = dependencySuppressNoise,
                 DependencySymbols = dependencySymbols,

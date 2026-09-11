@@ -588,6 +588,9 @@ public static partial class QueryCommandRunner
         if (TryWriteWorkspaceDependencyFanOutError(options))
             return CommandExitCodes.UsageError;
         var emitsJson = DepsEmitsJson(options, depsFormat);
+        if (options.DependencyNodeMappings || options.DependencyCycleNode != null
+            || options.DependencyNodeGeneration != null || options.DependencyMappingCursor != null)
+            return RunDependencyNodeMappings(options, cmdArgs, depsFormat, jsonOptions, cancellationToken);
         if (options.MaxJsonBytes.HasValue && !emitsJson)
         {
             WriteUsageError(
@@ -1611,6 +1614,18 @@ public static partial class QueryCommandRunner
                 mcpArguments);
         }
         payload["next_step_flags"] = BuildDependencyCycleNextStepFlagsJson(analysis, mcpArguments, includeAllNodes);
+        if (analysis.Grouping?["applied"]?.GetValue<bool>() == true)
+        {
+            var expansion = mcpArguments
+                ? "Set includeAllCycleNodes=true for every node ID; use nodeMappings=true with cycleNode and nodeGeneration for declaration paths."
+                : "Rerun with --all-cycle-nodes for every node ID; use --node-mappings with --cycle-node and --node-generation for declaration paths.";
+            foreach (var collection in new[] { "cycles", "cycle_summaries" })
+                if (payload[collection] is JsonArray components)
+                    foreach (var component in components.OfType<JsonObject>())
+                        if (component.ContainsKey("node_expansion")) component["node_expansion"] = expansion;
+            if (payload["largest_component"] is JsonObject largest && largest.ContainsKey("node_expansion"))
+                largest["node_expansion"] = expansion;
+        }
     }
 
     private static bool HasTruncatedDependencyCycleNodeDisplay(DependencyCycleAnalysis analysis)

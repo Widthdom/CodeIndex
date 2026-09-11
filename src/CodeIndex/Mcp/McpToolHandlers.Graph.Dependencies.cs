@@ -18,6 +18,9 @@ public partial class McpServer
 
     private JsonNode ExecuteDeps(JsonNode? id, JsonNode? args)
     {
+        if (args?["nodeMappings"]?.GetValue<bool>() == true || args?["cycleNode"] != null
+            || args?["nodeGeneration"] != null || args?["mappingCursor"] != null || args?["maxBytes"] != null)
+            return ExecuteDependencyNodeMappings(id, args);
         var adjustments = new ArgumentAdjustmentCollector();
         var limit = ReadLimit(args, QueryCommandRunner.DefaultImpactLimit, adjustments);
         var requestedGraphBudget = ReadOptionalIntArgument(args, "graphBudget");
@@ -206,6 +209,33 @@ public partial class McpServer
                 AddFreshnessHint(payload, reader);
             adjustments.ApplyTo(payload);
             return CreateToolResult(id, summary, payload);
+        });
+    }
+
+    private JsonNode ExecuteDependencyNodeMappings(JsonNode? id, JsonNode? args)
+    {
+        if (args?["nodeMappings"]?.GetValue<bool>() != true || args?["cycles"]?.GetValue<bool>() != true
+            || args?["groupPartialTypes"]?.GetValue<bool>() != true)
+            return CreateToolErrorResponse(id, "Declaration navigation requires nodeMappings=true, cycles=true and groupPartialTypes=true.");
+        var allowed = new HashSet<string>(StringComparer.Ordinal)
+            { "nodeMappings", "cycles", "groupPartialTypes", "cycleNode", "nodeGeneration", "mappingCursor", "limit", "maxBytes" };
+        if (args!.AsObject().Any(property => !allowed.Contains(property.Key)))
+            return CreateToolErrorResponse(id, "Declaration navigation accepts only nodeMappings, cycles, groupPartialTypes, cycleNode, nodeGeneration, mappingCursor, limit and maxBytes; graph filters do not select catalogue membership.");
+        return WithDbReader(id, args, reader =>
+        {
+            try
+            {
+                var payload = DependencyCycleNavigation.BuildPage(reader, args["cycleNode"]?.GetValue<string>(),
+                    args["nodeGeneration"]?.GetValue<string>(), args["mappingCursor"]?.GetValue<string>(),
+                    ReadOptionalIntArgument(args, "limit") ?? DependencyCycleNavigation.NodeLimit,
+                    ReadOptionalIntArgument(args, "maxBytes"), _jsonOptions);
+                return CreateToolResult(id, "Indexed declaration mappings (independent of cycle membership).", payload,
+                    enrichStructuredContent: false, isError: payload["status"]?.GetValue<string>() == "error");
+            }
+            catch (ArgumentException ex)
+            {
+                return CreateToolErrorResponse(id, ex.Message);
+            }
         });
     }
 
