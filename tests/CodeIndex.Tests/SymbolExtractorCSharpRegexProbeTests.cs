@@ -311,6 +311,65 @@ public sealed class SymbolExtractorCSharpRegexProbeTests
             MeasureRepresentativeAllocatedBytes(content));
     }
 
+    [Theory]
+    [InlineData("csharp")]
+    [InlineData("razor")]
+    [InlineData("blazor")]
+    [InlineData("cshtml")]
+    public void Extract_CSharpConfirmedMethodLookahead_StopsAfterAccessorRejection(string language)
+    {
+        var methods = string.Join('\n', Enumerable.Range(0, 32).Select(index => $$"""
+                static int CountOccurrences{{index}}(string value, string search)
+                {
+                    // Delay the first meaningful body token.
+
+                    return value.Length + search.Length;
+                }
+            """));
+        var content = $$"""
+            class Counter
+            {
+                public Counter()
+                    : this(0)
+                {
+                }
+
+                public Counter(int seed)
+                    : base()
+                {
+                    Sentinel = seed;
+                }
+
+            {{methods}}
+                int Sentinel;
+                int Value
+                {
+                    [System.Obsolete]
+                    get;
+                }
+            }
+            """;
+        SymbolExtractor.Extract(1, language, content);
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var symbols = SymbolExtractor.Extract(1, language, content);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.Equal(34, symbols.Count(symbol => symbol.Kind == "function"));
+        var constructors = symbols.Where(symbol => symbol.Name == "Counter" && symbol.Kind == "function").ToArray();
+        Assert.Equal(2, constructors.Length);
+        Assert.All(constructors, symbol => Assert.Equal(symbol.StartLine + 2, symbol.BodyStartLine));
+        Assert.Contains(constructors, symbol => symbol.Signature!.Contains(": this(0)"));
+        Assert.Contains(constructors, symbol => symbol.Signature!.Contains(": base()"));
+        Assert.Contains(symbols, symbol => symbol.Name == "Sentinel" && symbol.Kind == "field");
+        Assert.Contains(symbols, symbol => symbol.Name == "Value" && symbol.Kind == "property");
+        Assert.All(symbols.Where(symbol => symbol.Name.StartsWith("CountOccurrences", StringComparison.Ordinal)), symbol =>
+        {
+            Assert.Equal(symbol.StartLine + 5, symbol.EndLine);
+            Assert.Equal(symbol.StartLine + 1, symbol.BodyStartLine);
+            Assert.DoesNotContain("return", symbol.Signature!);
+        });
+        Assert.InRange(allocated, 0L, 512 * 1024L);
+    }
+
     [Fact]
     public void AllocationRegressionComparison_UsesMedianNoiseAllowanceAndRejectsMaterialIncrease_Issue5244()
     {

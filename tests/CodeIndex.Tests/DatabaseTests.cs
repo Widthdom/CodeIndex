@@ -8603,6 +8603,37 @@ public class DatabaseTests : IDisposable
         Assert.Null(id);
     }
 
+    [Theory]
+    [InlineData("csharp", 18)]
+    [InlineData("razor", 1)]
+    [InlineData("blazor", 1)]
+    [InlineData("cshtml", 1)]
+    public void GetUnchangedFileId_InvalidatesPriorCSharpLookaheadContracts(string language, int previousVersion)
+    {
+        var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var file = new FileRecord
+        {
+            Path = $"src/Counter.{language}",
+            Lang = language,
+            Size = 50,
+            Lines = 5,
+            Modified = modified,
+        };
+        _writer.UpsertFile(file);
+        _writer.SetMeta(
+            DbContext.GetSymbolExtractorVersionMetaKey(language),
+            previousVersion.ToString(CultureInfo.InvariantCulture));
+
+        Assert.Equal(SymbolExtractor.CSharpContractVersion, SymbolExtractor.GetContractVersion(language));
+        Assert.True(SymbolExtractor.GetContractVersion(language) > previousVersion);
+        Assert.Null(_writer.GetUnchangedFileId(file.Path, modified, language: language));
+        Assert.Null(_writer.GetUnchangedFileIdByStat(file.Path, modified, file.Size, language: language));
+
+        _writer.StampSymbolExtractorVersions([language]);
+        Assert.NotNull(_writer.GetUnchangedFileId(file.Path, modified, language: language));
+        Assert.NotNull(_writer.GetUnchangedFileIdByStat(file.Path, modified, file.Size, language: language));
+    }
+
     [Fact]
     public void GetUnchangedFileId_InvalidatesPriorMarkdownHeadingRangeContract_Issue4910()
     {

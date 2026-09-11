@@ -1,5 +1,13 @@
 # Testing Guide
 
+Confirmed C# method lookahead coverage in `SymbolExtractorCSharpRegexProbeTests`
+shares multiline methods, empty and nonempty constructor bodies, delayed body
+tokens, trailing fields and attributed accessors across C#, Razor, Blazor and
+CSHTML. Keep the warmed 512 KiB allocation ceiling, all declaration identities,
+signatures and body ranges on net8/net9. `DatabaseTests` verifies that both
+timestamp and stat reuse reject old C# contract 18 / alias contract 1 and resume
+after stamping contract 19. The full-scan upgrade regressions remain required.
+
 Initial fresh-source lookup coverage in `AuthoritativeFreshRawBulkInsertTests`
 shares canonical/display/legacy names, nested and tied ranges, out-of-range
 candidates and multi-file controls across C#, Python, JavaScript, TypeScript,

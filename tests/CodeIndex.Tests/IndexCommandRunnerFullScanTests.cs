@@ -6852,7 +6852,7 @@ public partial class IndexCommandRunnerTests
                 SymbolExtractor.CSharpContractVersion.ToString(
                     System.Globalization.CultureInfo.InvariantCulture),
                 versionCmd.ExecuteScalar() as string);
-            Assert.Equal(18, SymbolExtractor.CSharpContractVersion);
+            Assert.Equal(19, SymbolExtractor.CSharpContractVersion);
         }
         finally
         {
@@ -7118,7 +7118,7 @@ public partial class IndexCommandRunnerTests
                 SymbolExtractor.CSharpContractVersion.ToString(
                     System.Globalization.CultureInfo.InvariantCulture),
                 versionCmd.ExecuteScalar() as string);
-            Assert.Equal(18, SymbolExtractor.CSharpContractVersion);
+            Assert.Equal(19, SymbolExtractor.CSharpContractVersion);
         }
         finally
         {

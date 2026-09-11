@@ -1814,6 +1814,7 @@ public static partial class SymbolExtractor
 
         StringBuilder? accessorProbeBuilder = null;
         var accessorProbeStatus = CSharpAccessorProbeStatus.Rejected;
+        CSharpPropertyMatchCandidate? confirmedMethodHeader = null;
         if (openBraceLineIndex >= 0 && openBraceExclusiveEndColumn.HasValue)
         {
             accessorProbeBuilder = BuildCSharpAccessorProbeBuilder(
@@ -1831,10 +1832,12 @@ public static partial class SymbolExtractor
                     openBraceExclusiveEndColumn);
             }
 
-            if (accessorProbeStatus == CSharpAccessorProbeStatus.Rejected
-                && CSharpConfirmedMethodPrefixRegex.IsMatch(normalizedCombined))
+            if (CSharpConfirmedMethodPrefixRegex.IsMatch(normalizedCombined))
             {
-                return new CSharpPropertyMatchCandidate(normalizedCombined, currentLineIndex, currentLineIndex);
+                confirmedMethodHeader = new CSharpPropertyMatchCandidate(
+                    normalizedCombined, currentLineIndex, currentLineIndex);
+                if (accessorProbeStatus == CSharpAccessorProbeStatus.Rejected)
+                    return confirmedMethodHeader.Value;
             }
         }
 
@@ -1857,13 +1860,12 @@ public static partial class SymbolExtractor
                     openBraceExclusiveEndColumn.Value,
                     i);
                 accessorProbeStatus = ClassifyCSharpAccessorProbe(accessorProbeBuilder.ToString());
-                if (accessorProbeStatus == CSharpAccessorProbeStatus.Rejected
-                    && CSharpConfirmedMethodPrefixRegex.IsMatch(CollapseCSharpGenericTypeWhitespace(builder.ToString())))
+                var header = CollapseCSharpGenericTypeWhitespace(builder.ToString());
+                if (CSharpConfirmedMethodPrefixRegex.IsMatch(header))
                 {
-                    return new CSharpPropertyMatchCandidate(
-                        CollapseCSharpGenericTypeWhitespace(builder.ToString()),
-                        i,
-                        i);
+                    confirmedMethodHeader = new CSharpPropertyMatchCandidate(header, i, i);
+                    if (accessorProbeStatus == CSharpAccessorProbeStatus.Rejected)
+                        return confirmedMethodHeader.Value;
                 }
             }
             else if (accessorProbeBuilder != null
@@ -1871,6 +1873,17 @@ public static partial class SymbolExtractor
             {
                 AppendCSharpAccessorProbeLine(accessorProbeBuilder, csharpMatchLines[i], null);
                 accessorProbeStatus = ClassifyCSharpAccessorProbe(accessorProbeBuilder.ToString());
+            }
+
+            // A brace on its own line leaves the accessor probe pending. Once a
+            // later body token rejects it, use the already confirmed method header
+            // instead of merging the method and every following body up to a field.
+            // 単独の開きbraceではaccessor判定が保留になる。後続tokenで棄却されたら
+            // 確認済みmethod headerを返し、後続bodyまで連結し続けない。
+            if (accessorProbeStatus == CSharpAccessorProbeStatus.Rejected
+                && confirmedMethodHeader.HasValue)
+            {
+                return confirmedMethodHeader.Value;
             }
 
             if (accessorProbeStatus == CSharpAccessorProbeStatus.Found)

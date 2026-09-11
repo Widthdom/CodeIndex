@@ -36,6 +36,16 @@ instead of allocating intermediate strings per character. Already folded ASCII
 names retain their original string. Persisted keys, their contract version and
 runtime fingerprint are unchanged; readers and every writer use the same fold.
 
+C# declaration lookahead retains a confirmed method header while checking for
+property accessors. When the first body token rules out an accessor, it stops
+there instead of joining subsequent method bodies up to a later field. This
+avoids repeated large strings in files with many multiline methods, preserves
+method ranges and signatures, and recovers affected constructor declarations.
+The same extractor handles Razor, Blazor and CSHTML. All four language keys now
+use C# extractor contract 19, so an ordinary full scan refreshes old rows even
+when source files are unchanged. Comments and accessor attributes still receive
+the existing lookahead.
+
 ## 日本語
 
 空のデータベースに対する通常の CLI フルスキャンは、初回専用の一括 writer を
@@ -68,3 +78,11 @@ DB レイアウト、抽出範囲、トランザクション境界、取消・�
 維持しつつ、文字ごとの一時文字列を作らずに小文字化した scalar を直接追加します。
 変換済みの ASCII 名は元の文字列を再利用します。保存 key、契約バージョン、実行環境
 fingerprint は変わらず、reader と各 writer は同じ変換を使います。
+
+C# 宣言の先読みでは、プロパティの accessor を調べる間、確認済みのメソッド
+header を保持します。body の先頭 token で accessor でないと分かれば停止し、
+後続メソッドの body を末尾の field まで連結し続けません。複数行メソッドが多い
+ファイルで巨大な一時文字列の反復生成を避け、メソッドの範囲・signature を保ち、
+影響を受けていた constructor 宣言も回復します。同じ抽出器を使う Razor・Blazor・
+CSHTML を含む4つの言語 key は C# 抽出契約19を使い、通常のフルスキャンで未変更の
+既存ファイルも再抽出します。コメントや accessor 属性の先読みは維持します。
