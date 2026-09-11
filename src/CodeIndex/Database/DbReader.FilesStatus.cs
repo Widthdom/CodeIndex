@@ -114,7 +114,7 @@ public partial class DbReader
             ? timeout
             : BoundedRegex.DefaultMatchTimeout;
 
-    public FindResults FindInFiles(string query, int limit, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, int before = 0, int after = 0, bool exact = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, int? focusLine = null, int? focusColumn = null, bool regex = false, int? maxCandidateFiles = null, int? maxLinesScanned = null, int offset = 0, bool useIndexedLiteralCandidates = false, string? resumePath = null, int? resumeLine = null, int? resumeFileOrdinal = null, int? resumeMatchOrdinal = null, int? resumeByteOffset = null, bool captureContinuation = false, CancellationToken cancellationToken = default)
+    public FindResults FindInFiles(string query, int limit, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, int before = 0, int after = 0, bool exact = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, int? focusLine = null, int? focusColumn = null, bool regex = false, int? maxCandidateFiles = null, int? maxLinesScanned = null, int offset = 0, bool useIndexedLiteralCandidates = false, string? resumePath = null, int? resumeLine = null, int? resumeFileOrdinal = null, int? resumeMatchOrdinal = null, int? resumeByteOffset = null, bool captureContinuation = false, CancellationToken cancellationToken = default, FindSemanticFilters? semanticFilters = null)
     {
         var scanRequest = new IndexedFindScanRequest(
             query,
@@ -135,7 +135,7 @@ public partial class DbReader
                 resumeFileOrdinal,
                 resumeMatchOrdinal,
                 resumeByteOffset),
-            cancellationToken);
+            cancellationToken, semanticFilters);
         return new IndexedFindPipeline(this).Find(new IndexedFindListRequest(
             scanRequest,
             limit,
@@ -161,7 +161,7 @@ public partial class DbReader
         return SqliteCommandPolicy.ReadInt32Scalar(fileCmd, "find candidate file count");
     }
 
-    public FindCountResult CountFindInFiles(string query, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, int? focusLine = null, int? focusColumn = null, bool regex = false, int? maxCandidateFiles = null, int? maxLinesScanned = null, bool useIndexedLiteralCandidates = false, string? resumePath = null, int? resumeLine = null, int? resumeFileOrdinal = null, int? resumeMatchOrdinal = null, int? resumeByteOffset = null, CancellationToken cancellationToken = default)
+    public FindCountResult CountFindInFiles(string query, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, int? focusLine = null, int? focusColumn = null, bool regex = false, int? maxCandidateFiles = null, int? maxLinesScanned = null, bool useIndexedLiteralCandidates = false, string? resumePath = null, int? resumeLine = null, int? resumeFileOrdinal = null, int? resumeMatchOrdinal = null, int? resumeByteOffset = null, CancellationToken cancellationToken = default, FindSemanticFilters? semanticFilters = null)
     {
         return new IndexedFindPipeline(this).Count(new IndexedFindScanRequest(
             query,
@@ -182,7 +182,7 @@ public partial class DbReader
                 resumeFileOrdinal,
                 resumeMatchOrdinal,
                 resumeByteOffset),
-            cancellationToken));
+            cancellationToken, semanticFilters));
     }
 
     /// <summary>

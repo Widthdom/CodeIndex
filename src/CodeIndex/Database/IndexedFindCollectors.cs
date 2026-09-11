@@ -92,7 +92,8 @@ public partial class DbReader
                 match.Column,
                 match.Length,
                 Math.Max(1, line.Number - request.Before),
-                Math.Min(file.TotalLines, line.Number + request.After)));
+                Math.Min(file.TotalLines, line.Number + request.After),
+                match.Facet));
             _acceptedMatches++;
             return false;
         }
