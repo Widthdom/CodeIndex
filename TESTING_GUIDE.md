@@ -1,5 +1,19 @@
 # Testing Guide
 
+Parallel batch session-reuse coverage (#5332, replacing the #4872 timing ratio)
+shares a small, unchanged hot-WAL fixture across 3/12 rejected items, isolating
+session setup from command-specific DB work; retain the successful serial/parallel
+record parity and source-generation refresh tests from #4872 alongside it.
+At parallelism 3, require exactly three reader/session constructions and detached
+snapshots, each copying the main DB and WAL once at their original sizes. Verify
+every input line, ordered result, exit code, summary count, and snapshot
+cleanup. Keep the test in the SQLite pool sensitive collection and restore hooks
+in `finally`. The first-wave barrier has a 30-second synchronization watchdog;
+there is no artificial setup sleep or wall-clock performance threshold. Run
+`dotnet test tests/CodeIndex.Tests/CodeIndex.Tests.csproj --filter 'FullyQualifiedName~Issue4872|FullyQualifiedName~Issue5332'`
+on net8/net9, including Ubuntu net9 CI. The operation budget detects per-item
+reopening/recopying; it does not establish an end-to-end latency bound.
+
 XML audit coverage (#5327) uses real indexed source shared across safe inline/local
 settings and factories, unsafe positive controls, aliases/reassignment/mutations,
 dynamic or missing targets, traversal budgets and metadata/source drift. Preserve
@@ -1346,6 +1360,19 @@ Issue #5300 のテストは隣接・入れ子の C# callable、対象行の除�
 パーサー（#5297）の回帰テストとともに net8.0 / net9.0 で実行します。
 
 # テストガイド
+
+並列 batch のセッション再利用検証（#5332、#4872 の時間比率テストを置換）は、
+小さな未変更の hot WAL を持つ DB を使い、拒否コマンドを3件と12件実行して、
+セッション準備をコマンド固有の DB 処理から分離します。#4872 の正常コマンドの
+逐次・並列結果一致とソース世代更新テストも併せて維持してください。
+並列度3で reader・セッションの生成と分離スナップショットをそれぞれ正確に3回に保ち、
+各スナップショットが元のサイズの DB 本体と WAL を1回ずつコピーすることを検証します。
+全入力行、結果順序、終了コード、サマリー件数、スナップショットの削除も確認します。
+SQLite pool sensitive コレクションに配置し、フックは `finally` で復元してください。
+最初の3件の同期には30秒の監視期限を設けますが、人工的な待機や経過時間の性能閾値は使いません。
+`dotnet test tests/CodeIndex.Tests/CodeIndex.Tests.csproj --filter 'FullyQualifiedName~Issue4872|FullyQualifiedName~Issue5332'`
+を net8/net9 と Ubuntu net9 CI で実行します。処理回数の上限は項目ごとの再オープン・
+再コピーを検出しますが、処理全体の応答時間の上限を保証するものではありません。
 
 `QueryCommandRunnerFindIssue5324Tests` は code/comment/string/fixture/unknown の混在、元の座標とゼロ幅一致、ページ分割前の件数、除外・kind フィルター、上限付き JSON とカーソル、走査上限からの再開、キャンセルとタイムアウトを検証します。フィルター付き行ページの再開後は全体件数を非確定に保ちます。意味フィルターの usage エラーでも #5323 の早期 JSON エラー契約を維持します。同一行の unknown origin のカーソル再開では再開位置より前の一致を再計上せず、次の一致の先読みは観測件数に残します。既存の find、CLI スキーマ・ヘルプ、検索分類の回帰テストとともに net8/net9 で実行してください。
 
