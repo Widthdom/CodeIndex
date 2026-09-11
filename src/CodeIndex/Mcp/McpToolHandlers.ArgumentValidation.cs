@@ -273,7 +273,7 @@ public partial class McpServer
                 "exactName" or "exact" or "prefix" or "countOnly" or "includeBody" or "lsp_compatible" or
                 "lspCompatible" or
                 "regex" or "withPaths" or "rebuild" or "dryRun" or "dry_run" or "force" or
-                "optimize" or "reverse" or "cycles" or "suppressNoise" or "summaryOnly" or "includeAllCycleNodes" or "groupPartialTypes" or "config" or "logPath" or "updateCheck" or
+                "optimize" or "reverse" or "cycles" or "suppressNoise" or "summaryOnly" or "includeAllCycleNodes" or "groupPartialTypes" or "nodeMappings" or "config" or "logPath" or "updateCheck" or
                 "rawKinds" or "includeQualifiedCommonCalls" or "includeMemberReads" or "orderBySize" or "rawBytes" or "byBucket" or "memoryTrace" or "watch" or
                 "estimateOnly" or "listRecipes" => "boolean",
             "project" or "capability" or "scopes" or "fields" or "visibility" or "excludeVisibility" or "includeSymbolKind" or "excludeSymbolKind" or
@@ -282,7 +282,7 @@ public partial class McpServer
             "query" or "selector" or "uri" or "lang" or "kind" or "format" or "rankBy" or "sort" or "since" or "cursor" or "guardScope" or
                 "solution" or "symbol" or "groupBy" or "category" or "language" or "severity" or "explain" or "snippetFocus" or
                 "bucket" or "minConfidence" or "extension" or "alias" or "description" or "context" or "toolInvocationContext" or "db" or
-                "followSymlinks" or "recipe" or "auditScope" => "string",
+                "followSymlinks" or "recipe" or "auditScope" or "cycleNode" or "nodeGeneration" or "mappingCursor" => "string",
             "minEntrypointConfidence" => "number",
             "queries" or "evidencePaths" or "evidence_paths" => "array",
             _ => string.Empty,

@@ -43,6 +43,8 @@ Also cover source/definition case differences and positive/negative target-symbo
 
 ## Typed dependency-cycle regression coverage
 
+Issue #5326 extends these fixtures with a 51-node SCC and a 21-file partial family. Verify complete node-catalogue and per-node declaration pagination without loss/duplication, mixed file fallbacks and generic/nested identities, generation/node/corrupt-token rejection, absent metadata, exact UTF-8 byte boundaries and continuation after trimming. Compare CLI/MCP payloads and preserve raw-file cycle and help/completion regressions on net8/net9.
+
 `QueryCommandRunnerIssue5301Tests` uses real indexing to verify partial-family collapse, same-file inter-type SCCs through local functions, namespace/generic/nested identity, bounded declaration mappings, Python and top-level file-scope retention, mixed SQL readiness, graph budgets, pagination and noise-suppressed stale-metadata fallback. Keep CLI/MCP parity and the raw-file regressions in #5197 on both net8 and net9.
 
 `ProgramCliTests.Run_Unhandled*` (#5311) pins a private absent `--db` and log directory, disables ambient configuration and lifecycle logging, and restores environment variables through `EnvironmentVariableScope`. Each exception/SQLite exit-code case covers both a saved failure event and a directory occupying `last-failure.json`, verifying the report hint or current-diagnostics-unavailable message and safe stderr. Keep these tests in the console-sensitive collection with the existing net8-only production-runtime attributes; run the related `GlobalToolLogTests` and `ReportCommandRunnerTests` on both net8/net9. The deterministic write obstruction does not establish the cause of the historical ambient-storage failure.
@@ -1332,6 +1334,8 @@ Issue #5300 のテストは隣接・入れ子の C# callable、対象行の除�
 パーサー（#5297）の回帰テストとともに net8.0 / net9.0 で実行します。
 
 # テストガイド
+
+Issue #5326 では51ノードの SCC と21ファイルの partial 型を使い、ノードカタログと各ノードの宣言ページを欠落・重複なく取得できることを検証します。ファイルフォールバックと generic・入れ子の識別、世代・対象ノード・破損トークンの拒否、メタデータ不足、UTF-8 バイト境界と切り詰め後の継続を含めてください。CLI/MCP の応答を比較し、生ファイル循環とヘルプ・補完の回帰検証を net8/net9 で維持します。
 
 #5322 の回帰検証には `QueryCommandRunnerAuditSarifIssue4903Tests` も含めてください。SARIF の UTF-8 バイト上限で結果を丸ごと省略しても、origin フィルターの全候補を評価済みなら元の件数は確定したままです。上限ちょうど、省略数、部分結果の終了コード、明示的な許容、カーソル再実行、最小出力の検証を net8/net9 の両方で維持してください。
 

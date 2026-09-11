@@ -67,20 +67,54 @@ public partial class DbReader
             ELSE 'file:' || dst.path END
             """;
 
-    internal JsonObject DescribeDependencyCycleNode(string node)
+    internal (List<string> Nodes, long Count) ListDependencyCycleMappingNodes(int offset, int limit)
     {
-        const int pathLimit = 20;
+        using var command = _conn.CreateCommand();
+        command.CommandText = $"""
+            WITH nodes AS (
+                SELECT 'file:' || path AS node FROM files
+                UNION
+                SELECT {DependencyCycleDeclaredTypeNodeSql("s")} AS node
+                FROM symbols s JOIN files f ON f.id = s.file_id
+                WHERE f.lang = 'csharp' AND s.kind IN ('class', 'struct', 'interface', 'record', 'enum')
+            )
+            SELECT node, COUNT(*) OVER () FROM nodes ORDER BY node COLLATE BINARY LIMIT @limit OFFSET @offset
+            """;
+        command.Parameters.AddWithValue("@limit", limit);
+        command.Parameters.AddWithValue("@offset", offset);
+        using var cancellation = Cancellation.Register(command.Cancel);
+        using var rows = command.ExecuteTrackedReader();
+        var nodes = new List<string>();
+        long count = 0;
+        while (rows.TrackedRead())
+        {
+            Cancellation.ThrowIfCancellationRequested();
+            nodes.Add(rows.GetString(0));
+            count = rows.GetInt64(1);
+        }
+        return (nodes, count);
+    }
+
+    internal JsonObject DescribeDependencyCycleNode(string node, int offset = 0, int pathLimit = 20)
+    {
         if (node.StartsWith("file:", StringComparison.Ordinal))
+        {
+            using var fileCommand = _conn.CreateCommand();
+            fileCommand.CommandText = "SELECT EXISTS (SELECT 1 FROM files WHERE path = @path COLLATE BINARY)";
+            fileCommand.Parameters.AddWithValue("@path", node[5..]);
+            using var fileCancellation = Cancellation.Register(fileCommand.Cancel);
+            var exists = Convert.ToInt64(fileCommand.ExecuteScalar()) != 0;
             return new JsonObject
             {
                 ["id"] = node,
                 ["kind"] = "file_scope",
-                ["files"] = new JsonArray(node[5..]),
-                ["file_count"] = 1,
+                ["files"] = exists && offset == 0 ? new JsonArray(node[5..]) : new JsonArray(),
+                ["file_count"] = exists ? 1 : 0,
                 ["files_truncated"] = false,
                 ["files_omitted_count"] = 0,
                 ["file_limit"] = pathLimit,
             };
+        }
         using var command = _conn.CreateCommand();
         command.CommandText = $"""
             WITH members AS (
@@ -88,12 +122,13 @@ public partial class DbReader
                     s.container_qualified_name || '.' || s.name, s.name) AS family_key
                 FROM symbols s JOIN files f ON f.id = s.file_id
                 WHERE f.lang = 'csharp' AND s.kind IN ('class', 'struct', 'interface', 'record', 'enum')
-                  AND {DependencyCycleTypeNodeSql("s", "f")} = @node
+                  AND {DependencyCycleDeclaredTypeNodeSql("s")} = @node
             )
-            SELECT path, family_key, COUNT(*) OVER () FROM members ORDER BY path LIMIT @limit
+            SELECT path, family_key, COUNT(*) OVER () FROM members ORDER BY path COLLATE BINARY LIMIT @limit OFFSET @offset
             """;
         command.Parameters.AddWithValue("@node", node);
         command.Parameters.AddWithValue("@limit", pathLimit);
+        command.Parameters.AddWithValue("@offset", offset);
         using var cancellation = Cancellation.Register(command.Cancel);
         using var rows = command.ExecuteTrackedReader();
         var paths = new JsonArray();
@@ -114,8 +149,8 @@ public partial class DbReader
             ["files"] = paths,
             ["file_count"] = count,
             ["file_limit"] = pathLimit,
-            ["files_truncated"] = count > paths.Count,
-            ["files_omitted_count"] = count - paths.Count,
+            ["files_truncated"] = count > paths.Count + offset,
+            ["files_omitted_count"] = Math.Max(0, count - paths.Count - offset),
             ["mapping_scope"] = "indexed_declarations",
         };
     }

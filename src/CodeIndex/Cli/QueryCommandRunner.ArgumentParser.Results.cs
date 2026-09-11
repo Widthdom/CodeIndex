@@ -88,6 +88,24 @@ public static partial class QueryCommandRunner
                 case "--group-partial-types":
                     groupDependencyPartialTypes = true;
                     break;
+                case "--node-mappings":
+                    dependencyNodeMappings = true;
+                    break;
+                case "--cycle-node":
+                case "--node-generation":
+                case "--mapping-cursor":
+                    if (!TryReadStringOptionValue(args, ref i, normalizedArg, inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var navigationValue, out var navigationError))
+                        AddParseError(navigationError!);
+                    else if (navigationValue!.Length > (normalizedArg == "--cycle-node" ? DependencyCycleNavigation.MaxNodeLength : 256))
+                        AddParseError($"{normalizedArg} exceeds its input length limit.");
+                    else
+                    {
+                        WarnIfDuplicateSingleValueOption(normalizedArg, navigationValue);
+                        if (normalizedArg == "--cycle-node") dependencyCycleNode = navigationValue;
+                        else if (normalizedArg == "--node-generation") dependencyNodeGeneration = navigationValue;
+                        else dependencyMappingCursor = navigationValue;
+                    }
+                    break;
                 case "--all-cycle-nodes":
                     includeAllDependencyCycleNodes = true;
                     break;
