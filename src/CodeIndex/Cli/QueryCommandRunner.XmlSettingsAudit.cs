@@ -35,6 +35,6 @@ public static partial class QueryCommandRunner
                 "Source-backed XML configuration observation; not a vulnerability verdict.",
                 "Review input trust and runtime use. Unknown, ambiguous or changed settings remain reviewable. Baseline reviews do not prove safety.",
                 [$"reason:{evidence.Reason}", "match_confidence:textual_match_only", "vulnerability_confidence:not_established"])
-            { XmlSettings = evidence };
+        { XmlSettings = evidence };
     }
 }
