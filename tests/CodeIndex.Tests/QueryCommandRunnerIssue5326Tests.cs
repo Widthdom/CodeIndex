@@ -131,8 +131,13 @@ public partial class QueryCommandRunnerTests
         using (var server = new McpServer(dbPath, "test", dbPathExplicit: true))
         {
             JsonNode Call(JsonObject args)
-                => server.HandleMessage(new JsonObject { ["jsonrpc"] = "2.0", ["id"] = 1, ["method"] = "tools/call",
-                    ["params"] = new JsonObject { ["name"] = "deps", ["arguments"] = args } })!;
+                => server.HandleMessage(new JsonObject
+                {
+                    ["jsonrpc"] = "2.0",
+                    ["id"] = 1,
+                    ["method"] = "tools/call",
+                    ["params"] = new JsonObject { ["name"] = "deps", ["arguments"] = args }
+                })!;
             JsonObject Arguments() => new() { ["cycles"] = true, ["groupPartialTypes"] = true, ["nodeMappings"] = true };
             var response = Call(Arguments());
             Assert.True(JsonNode.DeepEquals(JsonNode.Parse(first.Json.GetRawText()), response["result"]!["structuredContent"]));
