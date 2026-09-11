@@ -426,6 +426,8 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
     [InlineData("go", "go")]
     [InlineData("rust", "rs")]
     [InlineData("cpp", "cpp")]
+    [InlineData("kotlin", "kt")]
+    [InlineData("vb", "vb")]
     public void ReferenceSourceLookup_PreservesMultiFileFoldFallbackAndNestedRankingAcrossBatches(
         string language,
         string extension)
@@ -437,6 +439,7 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
         long duplicateProbeSourceId;
         long legacyAsciiSourceId;
         long secondNestedSourceId;
+        long crossArmSourceId;
 
         using (var graph = _writer.BeginReferenceGraphRefreshScope(
                    forceFullRefresh: true,
@@ -470,6 +473,9 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
                 SourceSymbol(firstFileId, "ÅLegacy", line: 76, startLine: 76, endLine: 85),
                 SourceSymbol(secondFileId, "Caller", line: 1, startLine: 1, endLine: 100),
                 SourceSymbol(secondFileId, "Caller", line: 50, startLine: 50, endLine: 60),
+                SourceSymbol(firstFileId, "Caller", line: 1, startLine: 1, endLine: 2),
+                SourceSymbol(firstFileId, "AliasOwner", line: 16, startLine: 16, endLine: 18,
+                    displayNameFolded: "caller"),
             ]);
             Execute($"""
                 UPDATE symbols
@@ -503,6 +509,7 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
                   AND name = 'Caller'
                   AND start_line = 50
                 """);
+            crossArmSourceId = ScalarLong("SELECT id FROM symbols WHERE name = 'AliasOwner'");
 
             var references = Enumerable.Range(0, 40)
                 .Select(index => SourceReference(
@@ -546,6 +553,8 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
                 "second_file_probe",
                 line: 55,
                 containerName: "Caller"));
+            references.Add(SourceReference(firstFileId, "cross_arm_rank_probe", line: 18, containerName: "Caller"));
+            references.Add(SourceReference(firstFileId, "outside_all_ranges_probe", line: 101, containerName: "Caller"));
 
             _writer.InsertReferencesForNewFilesInAtomicFileScope(
                 references,
@@ -559,7 +568,7 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
                     FROM temp.{DbWriter.AuthoritativeFreshReferenceSourceSymbolsTableName}
                     """));
             Assert.Equal(
-                9L,
+                11L,
                 ScalarLong($"""
                     SELECT COUNT(*)
                     FROM temp.{DbWriter.AuthoritativeFreshReferenceSourceSymbolsTableName}
@@ -592,6 +601,8 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
         Assert.Null(SourceSymbolId("null_container_probe"));
         Assert.Null(SourceSymbolId("empty_container_probe"));
         Assert.Equal(secondNestedSourceId, SourceSymbolId("second_file_probe"));
+        Assert.Equal(crossArmSourceId, SourceSymbolId("cross_arm_rank_probe"));
+        Assert.Null(SourceSymbolId("outside_all_ranges_probe"));
 
         const string sourceSnapshotSql = """
             SELECT group_concat(COALESCE(source_symbol_id, 'null'), '|')
@@ -688,6 +699,8 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
         Assert.DoesNotContain(
             sourceLookupPlan,
             detail => detail.Contains("UNION USING TEMP B-TREE", StringComparison.OrdinalIgnoreCase));
+        Assert.Single(sourceLookupPlan.Where(detail => detail.Contains(
+            "USE TEMP B-TREE FOR ORDER BY", StringComparison.OrdinalIgnoreCase)));
 
         raw.Complete();
         transaction.Commit();
@@ -705,6 +718,70 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
                 plan.Add(reader.GetString(3));
             return plan;
         }
+    }
+
+    [Fact]
+    public void ReferenceSourceLookup_RankedOverloadsAvoidSortingEveryMatchingSymbol()
+    {
+        using var graph = _writer.BeginReferenceGraphRefreshScope(
+            forceFullRefresh: true,
+            useFreshReferenceResolutionDefaults: true);
+        using var transaction = _writer.BeginTransaction();
+        using var raw = _writer.BeginAuthoritativeFreshBulkInsertScope(
+            enabled: true,
+            CancellationToken.None)!;
+        var fileId = InsertNewFile("src/ranked-overloads.cs");
+        _writer.InsertSymbols(Enumerable.Range(1, 128).Select(index => new SymbolRecord
+        {
+            FileId = fileId,
+            Kind = "function",
+            Name = "Caller",
+            DisplayNameFolded = "caller",
+            Line = index,
+            StartLine = index,
+            EndLine = 257 - index,
+        }).ToArray());
+        raw.MaterializeReferenceSourceSymbols([new ReferenceRecord
+        {
+            FileId = fileId,
+            SymbolName = "Target",
+            ReferenceKind = "call",
+            ContainerName = "Caller",
+            Line = 128,
+        }]);
+        var expected = ScalarLong("SELECT id FROM symbols WHERE start_line = 128");
+        var lookup = DbWriter.BuildMaterializedFreshReferenceSourceSymbolValueSqlForTesting("r");
+        using var command = _db.Connection.CreateCommand();
+        command.CommandText = $"""
+            WITH RECURSIVE reference_row(ordinal, file_id, line, container_name, container_name_folded) AS (
+                SELECT 1, {fileId}, 128, 'Caller', 'caller'
+                UNION ALL
+                SELECT ordinal + 1, file_id, line, container_name, container_name_folded
+                FROM reference_row WHERE ordinal < 64
+            )
+            SELECT {lookup} FROM reference_row AS r
+            """;
+        var callbacks = 0;
+        SQLitePCL.delegate_progress progress = _ => { callbacks++; return 0; };
+        SQLitePCL.raw.sqlite3_progress_handler(_db.Connection.Handle, 1000, progress, null!);
+        try
+        {
+            using var reader = command.ExecuteReader();
+            var rows = 0;
+            while (reader.Read())
+            {
+                Assert.Equal(expected, reader.GetInt64(0));
+                rows++;
+            }
+            Assert.Equal(64, rows);
+        }
+        finally
+        {
+            SQLitePCL.raw.sqlite3_progress_handler(_db.Connection.Handle, 0, null!, null!);
+        }
+        Assert.InRange(callbacks, 1, 32);
+        raw.Complete();
+        transaction.Commit();
     }
 
     [Fact]

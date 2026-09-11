@@ -1,5 +1,13 @@
 # Testing Guide
 
+Initial fresh-source lookup coverage in `AuthoritativeFreshRawBulkInsertTests`
+shares canonical/display/legacy names, nested and tied ranges, out-of-range
+candidates and multi-file controls across C#, Python, JavaScript, TypeScript,
+Java, Go, Rust, C++, Kotlin and VB. Preserve the single final three-candidate
+sort and the 32-callback budget (1,000 SQLite VM instructions each) for 64
+lookups over 128 overlapping declarations, alongside savepoint and cancellation
+regressions. Run the suite on net8/net9; timing thresholds are not used here.
+
 #5339 extends the #5332 fixture to successful `files --format count --json`
 batches with the same three-snapshot/copy-byte budget for 3/12 items, checking
 counts, freshness and authority fields. Keep metadata-present/absent controls
