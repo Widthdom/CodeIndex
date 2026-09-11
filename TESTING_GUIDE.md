@@ -312,6 +312,8 @@ Use the full suite by default. Use targeted filters only while iterating locally
 
 ## Test Layout
 
+`DocumentationStatusContractTests` checks the status fields in `DEVELOPER_GUIDE.md` and `AGENT_GUIDE.md`, plus README links to both language versions of the developer reference. `LicensePolicyTests` keeps bilingual license notices while requiring only one README badge block.
+
 The test project mirrors the production areas closely.
 Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding `Skip =` cases; it tracks the current split sequence, skip classifications, and large-document boundaries.
 Candidate-ordered parallel-index recovery tests must prove that the fatal result returns while the earlier contract candidate remains blocked and the parallel workers have not stopped. Assert those synchronization states instead of a narrow wall-clock threshold so the regression remains detectable under full-suite contention.
@@ -1642,6 +1644,8 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - C# CodeQL lane は setup-dotnet の lock-file-keyed NuGet cache を使い、Actions だけの lane は SDK setup と package cache の両方を skip します。
 
 ## テスト構成
+
+`DocumentationStatusContractTests` は `DEVELOPER_GUIDE.md` と `AGENT_GUIDE.md` の status フィールド、および README から日英の開発者向け参照へのリンクを検証します。`LicensePolicyTests` は日英のライセンス表記と、README にバッジが1組だけあることを確認します。
 
 テストプロジェクトは、本番コードの責務にかなり近い形で分かれています。
 巨大 suite を移動する場合や `Skip =` case を追加する場合は、現在の分割順序、skip 分類、巨大ドキュメントの境界を追跡する `docs/test-doc-maintenance-plan.md` を先に確認してください。

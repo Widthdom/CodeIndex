@@ -95,7 +95,6 @@ public class DocumentationStatusContractTests
     ];
 
     [Theory]
-    [InlineData("README.md")]
     [InlineData("DEVELOPER_GUIDE.md")]
     [InlineData("AGENT_GUIDE.md")]
     public void StatusContractDocs_MentionEveryTrustField(string relativePath)
@@ -106,6 +105,21 @@ public class DocumentationStatusContractTests
         {
             Assert.Contains(field, content, StringComparison.Ordinal);
         }
+    }
+
+    [Theory]
+    [InlineData("## Documentation", "# cdidx（日本語）", "status-json-contract", "#### Status JSON contract")]
+    [InlineData("## ドキュメント", "## コントリビューション方針", "status-json-契約", "#### Status JSON 契約")]
+    public void Readme_LinksToStatusContractInEachLanguage(
+        string sectionStart, string sectionEnd, string anchor, string targetHeading)
+    {
+        var readme = RepositoryTestPaths.ReadText("README.md");
+        var start = readme.IndexOf(sectionStart, StringComparison.Ordinal);
+        Assert.True(start >= 0);
+        var end = readme.IndexOf(sectionEnd, start, StringComparison.Ordinal);
+        Assert.True(end > start);
+        Assert.Contains($"(DEVELOPER_GUIDE.md#{anchor})", readme[start..end], StringComparison.Ordinal);
+        Assert.Contains(targetHeading, RepositoryTestPaths.ReadText("DEVELOPER_GUIDE.md"), StringComparison.Ordinal);
     }
 
 }

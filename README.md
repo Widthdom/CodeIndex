@@ -1,46 +1,5 @@
 # cdidx
 
-> **[日本語版はこちら / Japanese version](#cdidx日本語)**
-
-`find --regex` supports origin/result-kind and fixture exclusion filters before counts and pagination. Unknown classifications remain non-authoritative. See [regex find controls](docs/find-scan-controls.md#regex-origin-filters-5324).
-
-## C# multiline search origins
-
-Search origin filters and facets carry C# block-comment, verbatim-string and raw-string state across indexed lines. Ordinary search, token-boundary recipes, counts and MCP use the same classification and original coordinates. Schema, regex and help-string labels follow the string's opening line. Bounded lexical handling classifies supported interpolation expressions as code and resumes after terminated ordinary, verbatim and raw interpolated strings. Escaped braces, literal text, nested strings and comments keep their respective labels.
-
-Interpolation nesting and expression delimiters each have a depth limit of 64. Unbalanced or unsupported interpolation (including quoted/braced format components) remains `unknown` from the outer string onward. Unknown C# match facets expose `origin_unavailable` (MCP: `originUnavailable`) with a fixed `reason`, one-based `start_line` / `start_column` (MCP: `startLine` / `startColumn`) and `extent=remaining_file` (`line` for mismatched indexed text). Inspect these facets without an origin filter, or with `--origin unknown`; a code-only zero count cannot establish absence when classification is unavailable.
-
-Classification reads an indexed prefix bounded by 4,096 lines, 8,388,608 UTF-16 characters and 128 chunks per file (overlapping chunk characters count toward the read budget). Missing prefix lines or exhausted bounds produce `unknown`, which does not satisfy `--origin code`. It does not read live source or require a rebuild. Inspect unknown matches without an origin filter when reviewing incomplete or large files.
-
-## SQL dependency cycles
-
-`deps --cycles` (MCP: `deps` with `cycles=true`) uses the same SQL qualified-name matching as ordinary dependencies. Candidate selection and reference evidence both resolve the source occurrence and its container, preserve schema identity, and apply the same scoped leaf fallback. Qualified views such as `dbo.LeftView` and `dbo.RightView` therefore form a file cycle without merging unrelated same-leaf objects in other schemas. Path/reverse, symbol and evidence filters, graph budgets, and cursor completeness retain their existing meanings; no reindex is required for this query fix.
-
-## Dependency cycles by C# type
-
-Declaration navigation: run `cdidx deps --cycles --group-partial-types --node-mappings --json --db <db>`. This separate catalogue contains **all indexed C# types and explicit file-fallback nodes**, including declarations outside the cycle/edge filters; catalogue membership does not establish a dependency or cycle. Graph filters, SCC cursors and alternate formats are rejected in navigation mode. No graph analysis is rerun.
-
-Follow `next_mapping_cursor` with `--mapping-cursor <token>` for the next node page. To resolve an emitted ID, add `--cycle-node <id> --node-generation <token>`, taking the token from `cycle_grouping.node_generation` (or a mapping page's `node_generation`) in the **same response as that ID**. Follow that mapping's `next_file_cursor` with the same node and generation to retrieve remaining declaration files. MCP `deps` uses `nodeMappings=true, cycles=true, groupPartialTypes=true`, `cycleNode`, `nodeGeneration` and `mappingCursor`. Use the same database throughout.
-
-Navigation defaults to 40 nodes per page and 20 paths per node; resolving one node defaults to 20 paths. A positive `--limit` / MCP `limit` can reduce the active dimension's page size. Nodes and paths are ordered by binary identity/path. Pages expose total, returned, offset and remaining counts; each mapping independently exposes file counts and continuation. Successful CLI output is capped at 65,536 UTF-8 bytes including its final newline; `--max-json-bytes` can reduce it. MCP `maxBytes` applies the same bound to `structuredContent` plus the CLI newline, excluding the transport envelope. Byte fitting retains whole mappings/paths and advances cursors only over emitted items. If even one item and continuation cannot fit, `E028_RESPONSE_BUDGET_TOO_SMALL` reports a measured minimum and consumes no page.
-
-Node IDs must travel with their generation token. Tokens bind the indexed workspace/generation, grouping contract and metadata readiness; file continuations also bind the exact node. They detect corruption and stale reuse, not authorization. After indexing or metadata changes, discard tokens and rerun the grouped query. Missing metadata rejects navigation with refresh guidance while normal grouped cycle analysis retains its raw-file fallback. Graph budgets, SCC sampling, and `analysis_complete` are unchanged.
-
-
-Opt in with `cdidx deps --cycles --group-partial-types --json` (MCP: `cycles=true, groupPartialTypes=true`). The default remains the original file graph. Current C# partial-family and reference-identity metadata assigns each confirmed reference endpoint to its owning type before SCC analysis. Partial declarations share a node; ordinary types remain declaration-specific. Namespaces, generic arities, nested types and multiple types in one file remain distinct. Same-file inter-type dependencies are included. Non-type, ambiguous-ownership and non-authoritative target evidence retains an explicit `file:` node; this is not a compiler-complete type graph.
-
-`cycle_grouping` reports intra-type edges/references separately from inter-node edges/references, including representative internal symbols. Intra-type edges do not produce SCCs. Counts describe the bounded typed candidate graph, and a reference reaching multiple declarations of the same family counts once per typed edge. `raw_candidate_edge_count` describes the selected raw file pairs; `--graph-budget` bounds both raw pairs and resulting typed edges independently, so grouping never turns a budget-limited scan into complete analysis. `analysis_complete`, grouping state and output sampling remain separate. Filters, noise suppression and graph evidence retain their existing meanings.
-
-`node_mappings` contains at most 40 nodes from returned/largest SCCs and internal-edge evidence, with at most 20 indexed declaration paths per node and exact count/omission metadata. The mapping can include declarations outside the selected edge scope. `--all-cycle-nodes` expands SCC node IDs, not these mapping limits. Opaque type IDs are generation-specific. Cursors bind grouping mode, metadata readiness and index generation; restart after indexing or changing modes. Missing/stale C# family or reference-identity metadata produces an explicit `raw_file_fallback_metadata_unavailable` result with the original file graph. Refresh the index to enable grouping; no rebuild is required. CLI grouping currently requires a single database.
-
-### Compact audit recovery
-
-Use `cdidx audit --all --db .cdidx/codeindex.db --audit-scope all --summary-level top` for completion, freshness, observation lower bounds and recovery without repeated child descriptions. `--summary-level detailed` preserves the default detail. Successful top summaries and plan pages fit 64 KiB including the final newline; `--max-json-bytes` may impose a smaller budget. JSON/NDJSON/count and `--allow-partial` retain their existing semantics. Counts sum recipe/query observations, including overlapping recipes; they are not unique findings.
-
-When continuation cannot resume a capped child, run the emitted `recovery.partition_plan.argv`, or `cdidx audit --all --db .cdidx/codeindex.db --audit-scope all --partition-plan`. Each unit contains copyable `argv` and a shell-quoted command that executes one exact indexed path with the original filters. Follow `next.argv` to enumerate further plan pages. Tokens reject changed index generations, scope or recipe definitions; regenerate the plan after such changes. Different recipe defaults remain bound to the plan when no single explicit scope applies.
-
-A new plan has every partition pending. Collect each execution's `partition` receipt by binding/id; a page cursor is not proof of execution, and retries may repeat observations. A single file that still exhausts the candidate window remains pending/non-authoritative and requires manual source inspection. Plans cover eligible indexed paths, not unindexed files or human finding review. The limits are 10,000 paths, 100,000 visited inventory rows, 512 queries, 10 seconds and 10 units per page. Overflow returns an unavailable plan with narrowing guidance. Output budgets do not enlarge those work limits, and baseline review annotations remain separate.
-
 [![Build and Test](https://github.com/Widthdom/CodeIndex/actions/workflows/dotnet.yml/badge.svg)](https://github.com/Widthdom/CodeIndex/actions/workflows/dotnet.yml)
 [![CodeQL](https://github.com/Widthdom/CodeIndex/actions/workflows/codeql.yml/badge.svg)](https://github.com/Widthdom/CodeIndex/actions/workflows/codeql.yml)
 [![Release](https://github.com/Widthdom/CodeIndex/actions/workflows/release.yml/badge.svg)](https://github.com/Widthdom/CodeIndex/actions/workflows/release.yml)
@@ -51,103 +10,13 @@ A new plan has every partition pending. Collect each execution's `partition` rec
 ![License](https://img.shields.io/badge/License-FSL--1.1--ALv2-orange)
 ![SQLite](https://img.shields.io/badge/SQLite-FTS5-003B57?logo=sqlite&logoColor=white)
 
+> **[日本語版はこちら / Japanese version](#cdidx日本語)**
+
 **CLI code indexing, MCP search, and LSP editor lookup for local repositories.**
 
-`cdidx` builds a local SQLite index of a repository so humans, scripts, AI
-agents, MCP clients, and LSP-native editors can run fast full-text, symbol,
-dependency, and inspection queries without rescanning the same tree for every query.
-
-## Audit recipe token boundaries
-
-`audit <recipe>` and `search --recipe <recipe>` accept `--token-boundary`, including batch execution. It overrides every selected child's match mode with case-sensitive full-query token boundaries. Explicit `--exact-substring` (or `--exact`) instead overrides a child's boundary default with substring matching; these flags remain mutually exclusive. Without an override, each child's `tokenBoundary` / `token_boundary` setting defaults to false and its existing substring/FTS policy remains active. MCP `search` uses the same defaults and supports explicit `tokenBoundary: false` to disable boundaries; explicit `exactSubstring`/`exact` without `tokenBoundary` selects the exact/FTS policy and disables the boundary default.
-
-`dogfood-risk-patterns/process-argument-list` defaults to complete `ArgumentList` tokens in code, retaining `.ArgumentList` and C# `.@ArgumentList` while excluding `TypeArgumentListPattern`. This is lexical evidence, not receiver-type resolution: confirm that the receiver is `ProcessStartInfo`. Unicode letters participate in boundaries; C# `@` is normalized, but Unicode escape sequences are not decoded. Comments/strings follow the recipe's origin filters; genuine substring audits retain their defaults.
-
-Recipe definition fingerprints now include boundary policy. Restart old or mismatched recipe cursors and `audit --all` continuations; export a new baseline after a recipe-policy change rather than treating old observations as resolved. Recipe row cursors bind the index generation, child definition, effective scope and replay options. No database rebuild is required.
-
-C# origin classification remains line-local for multiline comments/strings; see [#5307](https://github.com/Widthdom/CodeIndex/issues/5307). Boundary filtering does not add compiler-level lexical or type analysis.
-
-## Search guard errors
-
-Early `search` / `find` validation failures also return a versioned JSON error with command identity, usage category, exit 1, and a recovery hint when JSON (including array/NDJSON and `--format json` / `compact`) is requested. This covers blank/missing queries, invalid options and missing/conflicting find scopes. JSON selectors work on either side of invalid input; inline option values and literals protected by `--` are not selectors. `find --origin` remains unsupported. Human diagnostics are unchanged, and `batch --json-summary` retains these child failures while continuing later requests.
-
-Missing numeric option values also preserve following inline output selectors: `cdidx search Return --limit --json=array` returns an `E010_USAGE_ERROR` JSON object with exit 1, just like placing the output selector first. This applies to search/audit numeric options and aliases, including counts, snippet limits, and byte budgets. A following `--` still protects a literal query; explicit inline values and existing numeric ranges are unchanged. Without machine output, the error, hint, and usage remain on stderr.
-
-Search and audit guard option errors return a versioned `E010_USAGE_ERROR` JSON object (exit 1) when JSON output is selected, including `--json=ndjson`, `--json=array`, `--format json`, and compact output. Output selection works before or after the invalid option; `--` still introduces a literal query. Missing values and invalid scopes/windows remain rejected (`--guard-scope` accepts `window`, `same-line`, or `same-symbol`). Human output retains its error, hint, and usage. `batch --json-summary` preserves the structured child error and continues subsequent commands without `--include-raw-streams`.
-
-## Size-limited indexing
-
-A persisted `file_too_large` omission makes full and scoped CLI indexing return `status=partial`, `E022_INDEX_PARTIAL`, and exit 11, including unchanged retries and unrelated scoped writes. `--allow-partial` accepts exit 0 while preserving the partial status and incomplete facts. Intentional symbols-only and symbol-kind policies keep their existing success behavior. MCP indexing reports the same partial outcome with `isError=true` and retains successful data.
-
-`size_omissions` in index, status, and workspace health provides an affected-file count, up to 20 sanitized paths (512 characters each), truncation/omitted counts, and observed `actual_bytes` / `limit_bytes` when known. These are observations at omission time, not live file measurements; older diagnostic rows may lack exact byte evidence. Review an explicit `--max-file-bytes <bytes>` (MCP `maxFileBytes`) or deliberately exclude paths in `.cdidxignore`, then run normal indexing. Exclusion requires a full workspace scan and removes those files from searchable coverage. Rebuild is unnecessary. Repair command placeholders require a reviewed limit; no limit is raised automatically. Omitted file sizes do not raise the saved admission policy. Freshness and generation completeness remain separate facts.
-
-## Import and diff comparison limits
-
-`import --check` / `--dry-run` and `diff` return exit `3` when comparison exceeds the fixed safety budget: 1,000,000 rows per table per side, or 4 MiB per compared row. JSON errors add `comparison_budget` with `side` (`left`/`right`), `role` (`destination`/`archive` for import, otherwise `left`/`right`), `table`, `kind` (`rows_per_table_per_side`/`row_bytes`), `limit`, `observed`, and `observed_is_lower_bound=true`. The observed value is the count or accumulated row bytes at failure, not a complete table/row size. `table` identifies the primary comparison table; row counts refer to its comparison query, including joined reference candidates and any metadata-category selection, rather than raw stored row counts. Diagnostics contain fixed identities and counters, never row contents or database paths. Import retains `error_code=import_destination_comparison_budget_exceeded` and `root_cause=comparison_budget_exceeded`; diff retains its database error code.
-
-A destination-side failure means comparison against the current destination cannot complete under the existing budget. Shrinking the incoming archive cannot remedy it. A separately prepared smaller destination snapshot can support a reduced-scope comparison, but cannot validate replacement of the current destination. For archive-side file-backed tables, re-export a scope with fewer rows, or exclude the file contributing an oversized row; other constraints may still fail. File filters cannot shrink `codeindex_meta`. `--limit`, `--offset`, and `--max-json-bytes` control output, not comparison safety budgets. Both human and JSON diagnostics explain the exhausted constraint; the destination remains unchanged.
-
-## Shell search origins
-
-Shell search origins distinguish executable `$()` and backtick command substitutions inside double quotes from the surrounding literal text. Ordinary, named, and recipe searches share these facets: `--origin code` retains the executable spans, and `--exclude-strings` removes the literal spans. Backtick unescaping is applied before interpreting its nested commands, and `case` pattern delimiters do not close substitutions. Single-quoted and escaped literal examples remain strings or help text; match/highlight coordinates are unchanged. This is a line-local heuristic, not a full Shell parser: it examines a prefix of at most 65,536 characters with limits of 63 nested substitutions, 64 active `case` constructs, and 262,144 scan/preprocessing iterations. Matches beyond the prefix or exhausted parsing budgets report `unknown`. Multiline Shell syntax is outside this guarantee.
-
-## Local audit baselines
-
-Origin-filtered recipes can produce complete baselines when the raw candidates are fully examined and every match origin is known, including zero-hit child queries. Identical compatible runs then report `unchanged`; verified removals can become `resolved`. `origin_classification_incomplete` requires inspecting unknown origins and `origin_unavailable` diagnostics with an unfiltered search and reviewing the affected paths manually; increasing row limits or refreshing unchanged source cannot repair lexical classification limits. Other unverified filtering and raw candidate caps retain explicit coverage reasons and recovery guidance. A single user `--limit` or `--total-limit` replaces its internal default without a duplicate warning; genuine repeated options still warn and use the rightmost value.
-
-Changing index exclusions cannot turn an existing excluded file into a resolution. Comparison verifies prior path coverage, distinguishes physical deletion from sparse/ignored paths, and detects when the same database location now indexes another project. Empty incomparable comparisons also return exit `11`.
-
-`cdidx audit baseline-export .cdidx/audit-baseline.json --recipe risky-code` runs the existing audit engine and saves a local baseline. Omit `--recipe` to select all registered recipes. Refresh the index after source changes, then run `cdidx audit baseline-compare .cdidx/audit-baseline.json --recipe risky-code --json`. Use the same filters and limits for comparable runs. Each command accepts `--db`, `--lang`, `--path`, `--exclude-path`, `--exclude-tests`, `--audit-scope`, `--since`, `--limit`, and `--total-limit` as shown in command help; defaults are 1,000 rows per query and 10,000 total rows.
-
-Comparison reports bounded `new`, `unchanged`, `resolved`, and `unknown` identity groups, totals, observation counts, and omissions. Missing findings stay `unknown` when either run is stale, partial, capped, failed, cancelled, or has different recipes, filters, workspace, or identity contracts. Duplicate evidence and possible renames are never guessed. Line numbers are excluded from identity; changed context requires review. Exit `11` identifies incomplete coverage or unknown classifications; export may save an incomplete baseline, explicitly marked as such. Cancellation never publishes an export.
-
-To record a safe finding, copy its `id` from the baseline or comparison and run `cdidx audit baseline-review .cdidx/audit-baseline.json <id> --actor <name> --reason <text> --overwrite`. This requires a complete baseline and an unambiguous entry. The reason, actor, time, and evidence remain traceable; `review_applies` is true only for unchanged compatible evidence. Compare never edits the baseline. Export refuses replacement without `--overwrite`; explicit replacement starts a new baseline without previous annotations.
-
-Files contain hashes of bounded match/context evidence, normalized relative paths, effective filters, and index/recipe provenance, with no source snippets. Store them under `.cdidx/` or outside the indexed source scope. Limits are 8 MiB, JSON depth 16, 10,000 observations, and 200 comparison rows with omission counts. Writes are atomic and use POSIX mode `0600` (Windows inherits directory ACLs). Paths retain case; ambiguous backslashes, absolute paths, and parent segments are rejected. This CLI-only workflow needs neither GitHub credentials nor a database migration. Regenerate installed shell completions after upgrading.
-
-## Audit progress
-
-For captured audit liveness, use `cdidx audit --all --summary-only --json --progress`. Progress goes to stderr while stdout retains JSON/NDJSON. `--quiet` and `--no-progress` override it regardless of argument order. See [audit progress](USER_GUIDE.md#audit-progress).
-
-Capped `audit --all` runs return exit 11 unless `--allow-partial` is explicit. Follow `continuation.next_command` to resume accounted recipe/query observations; check execution and emission completeness separately. See [audit continuation](USER_GUIDE.md#audit-continuation).
-
-## File-size limits and freshness
-
-For indexing, a nonblank invalid `CDIDX_MAX_FILE_BYTES` value falls back to the 4 MiB default, as the warning indicates, unless an explicit valid limit is supplied.
-
-`index --max-file-bytes 8388608` (MCP: `maxFileBytes`) saves the effective limit with the index. Later indexing and dry runs use an explicit limit first, then `CDIDX_MAX_FILE_BYTES`, then the saved limit, then the 4 MiB default. Ordinary `status --check` and `workspace status --check` reuse the saved budget; an environment override is not required after indexing larger files. Scoped updates preserve the larger prior budget for untouched files. Legacy indexes use at least the largest recorded file size, bounded by the existing 2,147,483,647-byte ceiling, without a rebuild. Failed reads are reported as scan errors and unverifiable indexed files, not deletions. If a file grows beyond the saved budget, retry indexing with a sufficiently larger explicit limit; fix access failures before retrying.
-
-## Why cdidx
-
-> **Index once. Ask many times.** `cdidx` turns a repository into a local
-> retrieval runtime for repeated code investigation.
-
-| If your workflow is... | Best fit | Why |
-|---|---|---|
-| One-off string hunting | `rg` | Zero setup and a direct file scan. |
-| Repeated repository investigation | `cdidx` | Local SQLite FTS5 index, structured results, and incremental refresh. |
-| VS Code-only chat context | VS Code workspace index | Editor-managed context inside the Copilot / VS Code UX. |
-| Terminal, CI, scripts, or MCP clients | `cdidx` | Explicit CLI and MCP surfaces outside an IDE. |
-
-Details: [why cdidx](USER_GUIDE.md#why-cdidx), [cdidx vs rg](USER_GUIDE.md#cdidx-vs-rg),
-and [cdidx vs VS Code workspace index](USER_GUIDE.md#cdidx-vs-vs-code-workspace-index).
-
-## Design boundaries
-
-| Boundary | What it means |
-|---|---|
-| Local-first retrieval | CodeIndex indexes and queries local repositories; it does not provide a hosted code-search service. |
-| Lightweight extraction | Symbols and references are retrieval hints, not compiler-grade semantic analysis. |
-| External agent owns changes | Conversation, editing, commits, pull requests, and autonomous decisions belong to the tool calling `cdidx`. |
-| No AI ranking dependency | Embeddings, vector search, and LLM-based ranking are not assumptions of CodeIndex core. |
-
-## Contribution Policy
-
-Issue reports, feature requests, and improvement suggestions are welcome.
-
-This repository currently does not accept external pull requests. Pull request
-creation is restricted to collaborators, and implementation changes are handled
-by the maintainer or trusted collaborators.
+`cdidx` builds a local SQLite index for fast full-text, symbol, dependency, and
+inspection queries. Index once, then reuse it from your terminal, scripts,
+AI tools, or editor. Supports Windows, macOS, and Linux.
 
 ## Quick Start
 
@@ -159,386 +28,66 @@ dotnet tool install -g cdidx
 curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash
 ```
 
-Index once, then run focused queries:
+Index a repository and run your first query:
 
 ```bash
 cdidx .
 cdidx status --check --json
 cdidx search "handleRequest"
 cdidx definition UserService
-cdidx references UserService --limit 20
-cdidx inspect QueryCommandRunner --outline-only
-cdidx map --compact --max-json-bytes 65536
-cdidx audit risky-code --format sarif --limit 20
-cdidx audit --all --format compact --total-limit 200
-cdidx doctor --json
-cdidx doctor --integrations --json
-cdidx validate
 ```
 
-Use the indexed repository with AI tools or editors:
+For AI tools and editors, run `cdidx mcp` or
+`cdidx lsp --db .cdidx/codeindex.db`. See [AI Integration](USER_GUIDE.md#ai-integration)
+for client setup and [installation](USER_GUIDE.md#installation) for other options.
 
-```bash
-cdidx mcp
-cdidx lsp --db .cdidx/codeindex.db
-```
+## What it does
 
-| Next step | Documentation |
-|---|---|
-| Learn the query workflow | [First Query Quick Start](USER_GUIDE.md#first-query-quick-start) |
-| Browse every command | [Command reference](USER_GUIDE.md#command-reference) |
-| Keep the index current | [Keeping the index fresh](USER_GUIDE.md#keeping-the-index-fresh) and [incremental update reliability](USER_GUIDE.md#incremental-update-reliability) |
-| Control JSON size and pagination | [JSON output format](USER_GUIDE.md#json-output-format) |
-| Automate multiple queries | `batch --json-summary` preserves safe child JSON error codes and budget/retry fields; see [JSON output format](USER_GUIDE.md#json-output-format). |
-| Configure MCP, Codex, or an editor | [AI Integration](USER_GUIDE.md#ai-integration) |
-| Tune large repositories | [Performance tuning](USER_GUIDE.md#performance-tuning-for-large-repositories) |
+- Search text and symbols, inspect definitions, and trace references and dependencies.
+- Run audit recipes and inspect repository structure and potential hotspots.
+- Refresh the index incrementally and expose results through CLI, JSON, MCP, or LSP.
 
-For text- and symbol-only workflows, `cdidx . --symbols-only` provides a faster
-first pass; graph commands remain degraded until a normal `cdidx .` refresh.
-
-## Highlights
-
-| Area | What to use |
-|---|---|
-| Search and navigation | `search`, `find`, `excerpt`, `symbols`, `definition`, `references`, `callers`, `callees`, `inspect`, `map`, `deps`, `impact`, `unused`, and `hotspots`. See the [command reference](USER_GUIDE.md#command-reference). |
-| AI integration | `cdidx mcp` exposes indexed tools to MCP clients. See [AI Integration](USER_GUIDE.md#ai-integration). |
-| Editor lookup | `cdidx lsp --db .cdidx/codeindex.db` starts the read-only LSP shim. Setup and behavior are documented in [AI Integration](USER_GUIDE.md#ai-integration). |
-| Freshness | `status --check`, `--files`, `--commits`, `--changed-between`, and `--watch` keep the DB aligned with the workspace. |
-| Validation | `cdidx validate` reports encoding and line-ending issues. See [Validate indexed files](USER_GUIDE.md#validate-indexed-files). |
-| Language coverage | `cdidx languages --json` is the live capability probe. See [Supported languages](USER_GUIDE.md#supported-languages). |
-| Custom extraction | Extension aliases and regex-backed patterns are documented in [Custom Language Extraction](DEVELOPER_GUIDE.md#custom-language-extraction). |
-| Operations | Installation, upgrades, release verification, troubleshooting, and output controls live in the [User Guide](USER_GUIDE.md). |
-
-Git-scoped refreshes reconcile from the last whole-workspace verification baseline, so a
-branch switch still converges when the supplied old ref is newer than or divergent from the
-indexed baseline. `status` and `map` expose that proof as `workspace_verified_head_sha`,
-separately from the latest scoped-update HEAD. Scoped writes retain their affected paths for
-the next verified Git refresh, including when a later commit range has no net file diff.
+Extraction provides retrieval hints rather than compiler-grade analysis.
+Conversation and code changes belong to the external tool using `cdidx`.
+See [why cdidx](USER_GUIDE.md#why-cdidx), [comparison with rg](USER_GUIDE.md#cdidx-vs-rg),
+and [supported languages](USER_GUIDE.md#supported-languages).
 
 ## Documentation
 
-| Document | Contents |
+| Topic | Reference |
 |---|---|
-| [User Guide](USER_GUIDE.md) | Installation, command examples, options, output formats, languages, MCP setup, and troubleshooting. |
-| [Distribution Channels](DISTRIBUTION.md) | Install channel comparison, update paths, platform support, and package policy. |
-| [Cloud Bootstrap](CLOUD_BOOTSTRAP_PROMPT.md) | Install guidance for restricted cloud agent sessions. |
-| [Platform Support](docs/platform-support.md) | Official release RIDs, unsupported platforms, and source-build alternatives. |
-| [Developer Guide](DEVELOPER_GUIDE.md) | Architecture, database schema, status contracts, custom extraction, and release workflow. |
-| [Testing Guide](TESTING_GUIDE.md) | Test layout, helpers, cross-platform rules, and validation commands. |
-| [Agent Guide](AGENT_GUIDE.md) | Agent workflow index, repository search policy, and contract-maintenance rules. |
-| [Integration Policy](INTEGRATION_POLICY.md) | Supported CLI, JSON, MCP, and integration use. |
-| [Security Policy](SECURITY.md) | Private vulnerability reporting and coordinated disclosure. |
+| Commands and examples | [User Guide](USER_GUIDE.md#command-reference) |
+| Indexing and freshness | [Index a project](USER_GUIDE.md#index-a-project), [check status](USER_GUIDE.md#check-status) |
+| Search and audits | [Search code](USER_GUIDE.md#search-code), [regex find controls](docs/find-scan-controls.md) |
+| JSON fields and limits | [Output format](USER_GUIDE.md#json-output-format), [Status JSON contract](DEVELOPER_GUIDE.md#status-json-contract) |
+| MCP, LSP, and compatibility | [AI Integration](USER_GUIDE.md#ai-integration), [Integration Policy](INTEGRATION_POLICY.md) |
+| Installation and releases | [Distribution](DISTRIBUTION.md), [platforms](docs/platform-support.md), [release verification](USER_GUIDE.md#release-artifact-verification), [cloud bootstrap](CLOUD_BOOTSTRAP_PROMPT.md) |
+| Development | [Developer Guide](DEVELOPER_GUIDE.md), [Testing Guide](TESTING_GUIDE.md), [Agent Guide](AGENT_GUIDE.md) |
+| Changes and security | [Changelog](CHANGELOG.md), [Security Policy](SECURITY.md) |
 
-## Supported Surfaces
+## Contribution Policy
 
-| Surface | Entry point | Contract |
-|---|---|---|
-| CLI | `cdidx <command>` | Supported, versioned command-line interface. |
-| JSON | `cdidx <command> --json` | Supported structured output for automation. |
-| MCP | `cdidx mcp` | Supported JSON-RPC tools for MCP clients. |
-| LSP | `cdidx lsp --db .cdidx/codeindex.db` | Read-only editor lookup shim. |
-| Library / SDK | -- | No public library or SDK API. |
-
-See [Integration Policy](INTEGRATION_POLICY.md#api-surface-and-library-use) for
-the compatibility boundary and [AI Integration](USER_GUIDE.md#ai-integration)
-for MCP and LSP setup.
-
-## CLI JSON Error Contract
-
-Recoverable command failures use a versioned, sanitized JSON envelope in JSON
-mode and corresponding `Error`, `Hint`, and `Usage` lines in human mode. See
-the [Developer Guide](DEVELOPER_GUIDE.md#cli-recoverable-error-format) for the
-field definitions and stable code/category mapping.
-
-## Extensionless zsh Completion Functions
-
-For extensionless files and files with an unknown extension, the bounded
-first-line probe treats a token-delimited `#compdef` directive as zsh `shell`
-source. Known extensions, exact or prefix filename matches, explicit
-language-map overrides, extractor plugins, and ambiguous extensions retain
-their existing precedence. `#compdef` is not a generic remedy for source in
-other languages.
-
-## Index Dry-Run Mutation Estimates
-
-`cdidx index <project> --dry-run --json` previews file actions and bounded
-table-mutation estimates without changing the source tree or index. See the
-[User Guide indexing workflow](USER_GUIDE.md#index-a-project) for usage and the
-[Developer Guide](DEVELOPER_GUIDE.md#build--test) for implementation limits.
-
-`table_row_estimates` separates, for every affected table, `rows_deleted`,
-`rows_inserted_or_upserted`, total `row_operations`, `projected_final_rows`, and
-`projected_row_delta`. Each dimension has its own nullable `value`, `source`,
-`confidence`, and `unknown_reasons`, so a known delete count remains usable when
-parse-only insertion estimates are unavailable. TypeScript changes that can
-rebuild declaration-merging augmentation references mark every affected
-`symbol_references` dimension unknown with
-`typescript_augmentation_rebuild_required`, because rows owned by otherwise
-unchanged files can also be replaced. The legacy
-`estimated_table_mutations` / `estimated_table_mutation_details` fields remain
-as deprecated total-row-operation aliases for compatibility; the accompanying
-semantics and replacement fields point clients to
-`table_row_estimates.<table>.row_operations`, and removal is reserved for a
-future major release.
-
-Scoped `--files`, `--commits`, and `--changed-between` previews include the
-same read-only C# workspace expansion that execution requires for static
-interface contracts and qualified member-read refreshes. JSON reports
-`projection_authoritative`, `projection_unavailable_reasons`, and
-`csharp_workspace_expansion_status` / `csharp_workspace_expansion_reason`.
-Expanded paths count toward candidate and sample limits. If a cap, scan error,
-or unavailable preflight prevents an exact projection, `totals_lower_bound` is
-true and the stable reason explains why the preview is non-authoritative.
-
-## Status JSON Contract
-
-`cdidx status --json` exposes trust, freshness, compatibility, and remediation
-data for scripts, MCP clients, and release checks. The field groups remain
-visible here as a compact compatibility index.
-
-| Field group | Fields |
-|---|---|
-| Readiness and graph trust | `fold_ready`, `fold_ready_reason`, `graph_table_available`, `graph_data_current`, `reference_extraction_limits`, `reference_graph_complete`, `reference_graph_incomplete_reasons`, `reference_extraction_cap_hits`, `index_complete`, `index_incomplete_reasons`, `symbol_kind_filter_provenance_available`, `symbol_kind_filter`, `symbols_dropped_by_kind_filter`, `issues_table_available`, `file_issues_data_current`, `migration_in_progress`, `sql_graph_contract_ready`, `sql_graph_contract_degraded_reason`. |
-| Language readiness | `hotspot_family_ready`, `hotspot_family_degraded_reason`, `language_readiness`, `csharp_symbol_name_ready`, `csharp_metadata_target_ready`, `csharp_metadata_target_degraded_reason`. |
-| Workspace and HEAD freshness | `indexed_head_commit`, `worktree_head_changed`, `indexed_head_sha`, `indexed_head_branch`, `indexed_head_timestamp`, `commits_ahead_of_indexed_head`, `head_freshness`. |
-| Workspace-check path samples | `workspace_check.changed_files`, `workspace_check.missing_files`, `workspace_check.outside_sparse_cone_files`, `workspace_check.unindexed_files`, `workspace_check.unverifiable_files`, and `workspace_check.scan_errors`, each paired with authoritative `*_count`, `*_truncated`, `*_path_limit`, and `*_omitted_count` fields. |
-| Version compatibility | `index_writer_version`, `index_newer_than_reader`, `index_newer_than_reader_reason`. |
-| Extension and extractor diagnostics | `unknown_extension_file_count`, `unknown_extension_files`, `unknown_extension_files_truncated`, `unknown_extension_file_path_limit`, `unknown_extension_extension_counts`, `unknown_extension_category_counts`, `unknown_extension_groups`, `unknown_extension_group_count`, `unknown_extension_groups_truncated`, `unknown_extension_group_limit`, `unknown_extension_group_omitted_count`, `unknown_extension_guidance`, `extractors`, `hooks`, `hook_diagnostics`. |
-| Runtime trust and permissions | `trust_overrides`, `git_executable`, `github_cli_executable`, `path_case_sensitive`, `data_dir_mode`, `db_file_mode`, `database_permission_policy`, `database_permission_diagnostics`, `mac_profile`, `mac_profile_diagnostics`. |
-| Check context and run diagnostics | `stale_after_seconds`, `index_age_seconds`, `query_context.check_mode`, `query_context.stale_after_seconds`, `process`, `last_index_run`, `last_workspace_freshened_at`, `last_failed_or_partial_index_run`, `status_metadata_diagnostics`. |
-| Last-run detail | `last_index_run.bytes_read_skipped_file_count`, `last_index_run.bytes_read_incomplete`, `last_index_run.diagnostics`, `last_index_run.diagnostic_count`, `last_index_run.diagnostics_truncated`, `last_index_run.reference_extraction_cap_hits`, `last_index_run.rebuild_reclaim`, `last_failed_or_partial_index_run.progress_persisted`, `last_failed_or_partial_index_run.recovery_hint`, `last_failed_or_partial_index_run.file_errors`. |
-| SQLite and maintenance | `sqlite_connection_policy`, `db_size_bytes`, `wal_size_bytes`, `db_pragma_settings`, `prepared_command_cache`, `maintenance_guidance`, `maintenance_guidance.fts_optimization`, `threshold_writes`, `observed_writes`. |
-| WAL checkpoint diagnostics | `read_only_fallback`, `wal_checkpoint_attempted`, `wal_checkpoint_succeeded`, `wal_checkpoint_skipped_reason`, `wal_checkpoint_failure_reason`, `wal_checkpoint_busy`, `wal_checkpoint_log_page_count`, `wal_checkpoint_checkpointed_page_count`, `wal_checkpoint_remaining_page_count`, `read_only_immutable_fallback`, `wal_stale_snapshot_risk`, `wal_stale_snapshot_reason`. |
-| Database size attribution | `database_size_attribution`. |
-| Remediation | `degraded_root_cause`, `degraded_reason`, `recommended_action`, `alternative_action`, `readiness_degradations`, `repair_commands`. |
-| MCP-only session diagnostics | `mcp_session`, `mcp_session.metrics`, `queue_capacity`, `queue_depth`, `queued_event_count`, `written_event_count`, `dropped_event_count`, `queue_full_drop_count`, `serialization_failure_count`, `write_failure_count`, `rotation_failure_count`, `batch_flush_count`, `consecutive_failure_count`, `recovery_count`, `next_retry_at`, `last_recovery_at`, `last_failure`, `mcp_session.audit_log`, `queued_record_count`, `written_record_count`, `mcp.rate_limit.bucket_limit`, `mcp.rate_limit.bucket_limit_rejection_count`. |
-
-Ordinary status summaries use `last_workspace_freshened_at` as freshness evidence
-after a checksum-reused no-op update only when the runtime HEAD,
-`workspace_verified_head_sha`, and `indexed_head_sha` agree and the worktree is
-clean. Git index flags that can hide worktree changes (`skip-worktree` or
-`assume-unchanged`) make this ordinary-status proof `unknown`, while the Git
-dirtiness probe always includes untracked files even when
-`status.showUntrackedFiles=no`. Missing provenance or a future timestamp also
-yields `unknown`, as does a dirty worktree in ordinary status; an actual workspace
-difference remains `stale`. `status --check` performs the authoritative workspace
-comparison, so it may prove an already-indexed untracked path fresh even though
-ordinary status remains conservatively unknown. A status-level HEAD/branch
-transition still fails checked status and member health even when file checks
-match. CLI, workspace, and MCP status surfaces share these outcomes.
-
-Persisted JSON subdocuments for `last_index_run.reference_extraction_cap_hits`,
-`last_index_run.rebuild_reclaim`, and
-`last_failed_or_partial_index_run.file_errors` have a 512 KiB UTF-8 input limit
-and a maximum nesting depth of 16. File-error and cap-hit file lists accept at
-most 50 entries; nested reason lists accept at most 16. Paths accept 32,768
-characters, category/phase/reason codes accept 128, detail/rebuild-reason text
-accepts 4,096, and each subdocument accepts at most 262,144 decoded string
-characters in aggregate. An unavailable subdocument does not fail the rest of
-`status`; `status_metadata_diagnostics` identifies its field with the stable
-reason `raw_size_exceeded`, `invalid_json`, or `semantic_validation_failed`, the
-configured `max_utf8_bytes`, and the observed byte size when available. Human
-status output flattens persisted control characters and uses the stable bounded
-value truncation marker, while accepted JSON values remain unchanged.
-
-Full index completion, the watch initial scan, and full-scan dry runs also report
-the unknown-language file count, the top 10 extension groups, explicit omission
-metadata, and remediation guidance. `status --compact` includes the persisted
-equivalent from the most recent successful full scan.
-
-Use `cdidx status --explain <field>` for bounded field guidance. Detailed
-semantics, repair-action structure, readiness degradation, SQLite/WAL handling,
-and MCP diagnostics live in the [Developer Guide](DEVELOPER_GUIDE.md#ai-integration);
-the everyday status workflow is in [Check status](USER_GUIDE.md#check-status).
-Regular JSON keeps the full explanation. `--compact`, `--format compact`, and a
-byte-bounded explanation without explicit `--fields` use the minimum compact
-schema `api_version`, `field`, `meaning`, `interpretation`, and `remediation`.
-Envelope metadata reports that schema plus the names and count of omitted
-optional fields; a budget too small for the envelope and one compact row returns
-an explicit response-budget error with minimum-size and retry guidance.
-Selecting one of these lists through `--fields` also retains its count and
-truncation signals. Compact output keeps the signals without the paths, and a
-JSON byte budget may shorten a path sample while increasing its omitted count.
-
-## Verifying Releases
-
-GitHub releases include checksums, detached checksum signatures, SBOM assets,
-and platform archives. See [release artifact verification](USER_GUIDE.md#release-artifact-verification)
-and [platform support](docs/platform-support.md).
+Issue reports, feature requests, and improvement suggestions are welcome.
+External pull requests are currently not accepted; implementation and PR creation
+are handled by the maintainer or trusted collaborators.
 
 ## License and Fair Source Use
 
-CodeIndex and the official `cdidx` binaries are source-available /
-Fair Source-style software under [FSL-1.1-ALv2](LICENSE), unless a file or
-directory states otherwise. Marked integration materials may use
-[Apache-2.0](LICENSES/Apache-2.0.txt).
-
-For commercial use, integration, and naming guidance, see
-[COMMERCIAL_LICENSE.md](COMMERCIAL_LICENSE.md),
-[INTEGRATION_POLICY.md](INTEGRATION_POLICY.md), and
-[TRADEMARKS.md](TRADEMARKS.md).
-
-## Unused analysis budgets
-
-`unused` bounds analysis after the database opens to 30,000 ms by default. Set `--analysis-timeout-ms <1..600000>` to change that budget. This includes candidate selection, protective partial-type checks, and requested summaries; `--limit` and `--max-json-bytes` only limit output. Interactive stderr shows one progress line per second; `--progress` also enables it for captured output. `--quiet` and `--no-progress` suppress progress.
-
-A deadline returns exit `11`; cancellation returns `130`. JSON reports `analysis_complete: false`, `analysis_state` (`time_budget_exceeded` or `cancelled`), `analysis_timeout_ms`, and `total_count_authoritative: false`, with no unverified candidates or continuation cursor. A bounded JSON envelope retains these fields under `metadata`. Restart with narrower filters or a larger analysis budget. Completed paged envelopes report lower-bound totals and keep continuation cursors; use explicit `unused --count --json` for full totals, subject to the same analysis budget.
+CodeIndex and official `cdidx` binaries are source-available / Fair Source-style software
+under [FSL-1.1-ALv2](LICENSE), unless stated otherwise. Marked integration materials
+may use [Apache-2.0](LICENSES/Apache-2.0.txt).
+See [commercial licensing](COMMERCIAL_LICENSE.md), [integration policy](INTEGRATION_POLICY.md),
+and [trademarks](TRADEMARKS.md) for use and naming terms.
 
 # cdidx（日本語）
 
-`find --regex` は件数・ページ分割前の origin/result-kind と fixture 除外フィルターに対応します。分類不能な一致は確定的な不在と扱いません。[正規表現 find の制御](docs/find-scan-controls.md#正規表現の-origin-フィルター-5324)を参照してください。
-
-## C# の複数行検索 origin
-
-検索の origin フィルターと facet は、C# のブロックコメント、verbatim 文字列、raw 文字列の状態をインデックス済みの行をまたいで引き継ぎます。通常検索、token-boundary recipe、件数、MCP は同じ分類と元の座標を使用します。schema、regex、help 文字列のラベルは文字列の開始行に従います。上限付きの字句処理によって対応する補間式をコードとして分類し、通常・verbatim・raw 補間文字列の終端後に走査を再開します。エスケープした波括弧、リテラル部分、入れ子の文字列、コメントはそれぞれのラベルを維持します。
-
-補間の入れ子と式の区切りの深さには、それぞれ 64 の上限があります。不均衡または未対応の補間（引用符や波括弧を含む書式部分など）は、外側の文字列以降を `unknown` とします。不明な C# の一致 facet には `origin_unavailable`（MCP: `originUnavailable`）を付け、固定の `reason`、1 始まりの `start_line` / `start_column`（MCP: `startLine` / `startColumn`）、`extent=remaining_file`（インデックス済みテキストの不一致では `line`）を示します。origin フィルターを外すか `--origin unknown` で確認してください。分類できない場合、コードのみの件数がゼロでも不存在を証明できません。
-
-分類は各ファイルのインデックス済み先頭部分を、4,096 行、UTF-16 で 8,388,608 文字、128 チャンクを上限として読み取ります（重複チャンクの文字も読み取り上限に含みます）。先頭からの行が欠けている場合や上限を超える場合は `unknown` となり、`--origin code` には一致しません。実ファイルの読み取りや rebuild は不要です。不完全なファイルや大きなファイルのレビューでは、origin フィルターを外して不明な一致も確認してください。
-
-## SQL の依存循環
-
-`deps --cycles`（MCP: `deps` の `cycles=true`）は通常の依存関係検索と同じ SQL 修飾名の照合を使います。候補選択と参照証拠の取得の両方で、参照位置と所属コンテナから名前を解決し、スキーマの識別と検索範囲に基づく末尾名へのフォールバックを維持します。`dbo.LeftView` と `dbo.RightView` のような修飾付きビューの循環を検出し、別スキーマの無関係な同名オブジェクトを混ぜません。パス・逆方向・シンボル・証拠のフィルター、グラフ解析上限、カーソルの完全性判定の意味は変わりません。このクエリ修正のための再索引は不要です。
-
-## C# 型単位の依存循環
-
-宣言の参照には `cdidx deps --cycles --group-partial-types --node-mappings --json --db <db>` を使います。この独立したカタログは、循環・辺のフィルター外の宣言も含む**索引内の全 C# 型と明示的なファイルフォールバックノード**を列挙します。カタログへの所属は依存関係や循環への所属を意味しません。参照モードではグラフフィルター、SCC カーソル、別の出力形式を拒否し、グラフ解析を再実行しません。
-
-次のノードページは `next_mapping_cursor` を `--mapping-cursor <token>` に渡して取得します。返された ID を解決する場合は `--cycle-node <id> --node-generation <token>` を追加し、**その ID と同じ応答**の `cycle_grouping.node_generation`（またはマッピングページの `node_generation`）を使います。宣言ファイルの残りは、そのマッピングの `next_file_cursor` を同じノード・世代とともに渡して取得します。MCP の `deps` では `nodeMappings=true, cycles=true, groupPartialTypes=true` と `cycleNode`、`nodeGeneration`、`mappingCursor` を使います。一連の操作では同じ DB を指定してください。
-
-参照ページの既定は40ノード・各20パスで、単一ノードの解決は20パスです。正の `--limit` / MCP `limit` で対象の次元のページサイズを縮小できます。ノードは ID、パスはパス文字列のバイナリ順です。ページには総数・返却数・オフセット・残数、各マッピングには独立したファイル件数と継続情報を返します。CLI の成功出力は末尾改行を含む UTF-8 の65,536バイトが上限で、`--max-json-bytes` で縮小できます。MCP の `maxBytes` は転送用エンベロープを除く `structuredContent` と CLI 相当の改行に同じ上限を適用します。バイト調整ではマッピング・パスを途中で切らず、実際に返した項目の分だけカーソルを進めます。1項目と継続情報すら収まらない場合は `E028_RESPONSE_BUDGET_TOO_SMALL` と計測した最小サイズを返し、ページを消費しません。
-
-ノード ID は世代トークンと一緒に保持してください。トークンは索引対象のワークスペース・世代・グループ化契約・メタデータの準備状態に、ファイル継続はさらに対象ノードに紐づきます。破損や古いトークンの再利用を検出するもので、認可情報ではありません。索引・メタデータ更新後はトークンを破棄し、グループ化クエリを再実行してください。メタデータ不足時の参照は更新案内付きで拒否し、通常のグループ化循環解析は既存の生ファイルへのフォールバックを維持します。グラフ上限、SCC サンプル、`analysis_complete` の意味は変わりません。
-
-
-`cdidx deps --cycles --group-partial-types --json`（MCP: `cycles=true, groupPartialTypes=true`）で明示的に有効化します。既定は従来のファイルグラフです。最新の C# partial 型と参照 ID のメタデータを使い、確実に解決された参照の両端を所属型へ割り当ててから SCC を解析します。partial 宣言は同じノードへ統合し、通常の型は宣言ごとに区別します。namespace、generic arity、入れ子の型、同一ファイル内の複数型を区別し、同一ファイル内の型間依存も含めます。型外の参照、所属が曖昧な参照、確実な参照先 ID を持たない証拠は明示的な `file:` ノードに残します。コンパイラと同等の完全な型グラフではありません。
-
-`cycle_grouping` は型内の辺数・参照数とノード間の辺数・参照数を分け、型内参照の代表的なシンボルも示します。型内の辺は SCC を生成しません。件数は上限付きの型ノード候補グラフに対するもので、同一 family の複数宣言へ到達する参照は型ノード間の辺ごとに1回数えます。`raw_candidate_edge_count` は選択された元のファイル対数です。`--graph-budget` は元のファイル対と変換後の型ノード間の辺の双方を個別に制限するため、グループ化によって上限到達時の解析を完全と判定することはありません。`analysis_complete`、グループ化状態、表示サンプルは独立しています。フィルター、ノイズ抑制、参照証拠の既存の意味は維持します。
-
-`node_mappings` は返却 SCC・最大 SCC・型内参照の証拠から最大40ノードを含み、各ノードにつき最大20個の索引済み宣言パスと正確な総数・省略数を返します。選択した辺の範囲外の宣言を含む場合もあります。`--all-cycle-nodes` は SCC のノード ID を展開しますが、対応表の上限は変えません。不透明な型 ID は索引世代に紐づきます。カーソルはグループ化モード、メタデータの準備状態、索引世代を検証するため、索引更新やモード変更後は再実行してください。C# family または参照 ID のメタデータが欠落・古い場合は `raw_file_fallback_metadata_unavailable` を明示し、従来のファイルグラフを返します。通常の索引更新でグループ化を有効化でき、rebuild は不要です。CLI のグループ化は現在、単一 DB が対象です。
-
-
-## 監査レシピのトークン境界
-
-`audit <recipe>` と `search --recipe <recipe>` は、batch 実行を含めて `--token-boundary` を受理します。選択した各子クエリを、大文字小文字を区別するクエリ全体のトークン境界一致に上書きします。明示的な `--exact-substring`（または `--exact`）は子の境界既定値を部分一致に上書きし、これらのフラグは引き続き併用できません。指定がなければ子の `tokenBoundary` / `token_boundary` は既定で false となり、従来の部分一致／FTS 方針を維持します。MCP `search` も同じ既定値を使い、明示的な `tokenBoundary: false` で境界を無効化できます。`tokenBoundary` なしで `exactSubstring` / `exact` を明示すると、exact／FTS 方針を選択し、境界既定値を無効化します。
-
-`dogfood-risk-patterns/process-argument-list` はコード内の完全な `ArgumentList` トークンを既定で検索し、`.ArgumentList` や C# の `.@ArgumentList` を保持して `TypeArgumentListPattern` を除外します。字句上の証拠であり型解決ではないため、受信側が `ProcessStartInfo` かは確認してください。Unicode の文字は境界判定に含まれ、C# の `@` は正規化されますが、Unicode エスケープ列は復号しません。コメント／文字列にはレシピの出現元フィルターを適用し、部分一致を意図した監査の既定値は維持します。
-
-レシピ定義の fingerprint に境界方針を含めます。旧形式や条件不一致のレシピ cursor と `audit --all` continuation は最初から再実行してください。方針変更後は旧観測を解決済み扱いせず、新しい baseline を export します。レシピの行 cursor は index 世代、子定義、実効 scope、再実行オプションに結び付きます。DB の再構築は不要です。
-
-C# の複数行コメント／文字列の出現元分類には行単位の制限が残ります（[#5307](https://github.com/Widthdom/CodeIndex/issues/5307)）。境界フィルターはコンパイラー相当の字句解析や型解析を追加するものではありません。
-
-### audit の小さな要約と復旧
-
-`cdidx audit --all --db .cdidx/codeindex.db --audit-scope all --summary-level top` は子クエリの説明を繰り返さず、完了・鮮度・観測数の下限・復旧情報を返します。`--summary-level detailed` は既定の詳細出力を維持します。成功した最上位要約と計画ページは末尾改行込みで最大 64 KiB となり、`--max-json-bytes` でさらに小さく制限できます。JSON/NDJSON/count と `--allow-partial` の既存の意味は維持されます。件数は重複する recipe も含む recipe/query ごとの観測数の合計であり、一意な指摘数ではありません。
-
-候補上限に達した子クエリを継続できない場合は、出力された `recovery.partition_plan.argv`、または `cdidx audit --all --db .cdidx/codeindex.db --audit-scope all --partition-plan` を実行します。各単位には元の条件を維持して索引内の厳密な 1 パスを実行する `argv` と、シェル用に引用されたコマンドがあります。`next.argv` で次の計画ページを取得します。索引世代・scope・recipe 定義が変わるとトークンは拒否されるため、計画を再作成してください。単一の明示 scope を適用できない異なる recipe 既定値も計画に照合されます。
-
-新規計画は全単位を pending とします。実行ごとの `partition` 記録を binding/id ごとに収集してください。ページカーソルは実行済みの証拠ではなく、再実行では観測が重複し得ます。単一ファイルでも候補上限に達すれば pending・非 authoritative のままで、ソースの手動確認が必要です。計画は対象となる索引内パスを扱い、未索引ファイルや人手レビューの完了を保証しません。上限は 10,000 パス、延べ 100,000 索引行、512 クエリ、10 秒、1 ページ 10 単位です。超過時は利用不可の計画と絞り込み案内を返します。出力予算で作業上限は増えず、baseline レビューの注釈とも独立しています。
-
-## 検索guardのエラー
-
-`search` / `find` の早期検証失敗も、JSON（array／NDJSON、`--format json`／`compact` を含む）指定時は、コマンド名、usage カテゴリー、終了コード1、復旧ヒントを持つバージョン付き JSON エラーを返します。空・欠落クエリ、不正なオプション、find のスコープ欠落・競合が対象です。出力指定は不正入力の前後どちらでも有効ですが、オプションのインライン値や `--` で保護したリテラルを出力指定とは扱いません。`find --origin` は引き続き未対応です。人間向け診断は変わらず、`batch --json-summary` は構造化した子エラーを保持して後続要求を実行します。
-
-数値オプションの値欠如時も、後続のインライン出力指定を保持します。`cdidx search Return --limit --json=array` は、出力指定を先に置いた場合と同じく `E010_USAGE_ERROR` JSON オブジェクトと終了コード1を返します。search／audit の件数、スニペット上限、バイト予算などの数値オプションと別名が対象です。後続の `--` は引き続きリテラル検索文字列を保護し、明示的なインライン値と既存の数値範囲は変わりません。機械向け出力を指定しない場合、エラー、ヒント、使用法は stderr に出力されます。
-
-search と audit の guard オプションエラーは、JSON 出力の指定時にバージョン付き `E010_USAGE_ERROR` JSON オブジェクト（終了コード1）を返します。`--json=ndjson`、`--json=array`、`--format json`、compact 出力にも対応します。出力形式は不正オプションの前後どちらでも指定でき、`--` は引き続きリテラル検索文字列を導入します。欠落値や不正な scope/window は拒否します（`--guard-scope` は `window`、`same-line`、`same-symbol` を受理）。人間向け出力はエラー、ヒント、使用法を維持します。`batch --json-summary` は `--include-raw-streams` なしで子コマンドの構造化エラーを保持し、後続コマンドを継続します。
-
-## unused 解析の時間上限
-
-`unused` は DB を開いた後の解析を既定で 30,000 ms に制限します。`--analysis-timeout-ms <1..600000>` で変更できます。候補選択、partial 型の保護チェック、要求した集計を含む上限であり、`--limit` と `--max-json-bytes` は出力量だけを制限します。対話的 stderr には毎秒進行状況を表示し、`--progress` を付けると出力取得時にも表示します。`--quiet` と `--no-progress` は進行表示を抑制します。
-
-時間上限到達は終了コード `11`、キャンセルは `130` です。JSON は `analysis_complete: false`、`analysis_state`（`time_budget_exceeded` または `cancelled`）、`analysis_timeout_ms`、`total_count_authoritative: false` を返し、未検証候補や継続 cursor を含めません。バイト上限付き JSON envelope ではこれらを `metadata` に保持します。フィルターを絞るか解析時間を増やして再実行してください。完了したページの envelope は総数を下限として示し、継続 cursor を維持します。全件の集計には明示的な `unused --count --json` を使用します。この集計にも同じ解析時間上限が適用されます。
-
-## サイズ上限によるインデックスの省略
-
-保存済みの `file_too_large` が残る場合、CLI の全件・差分インデックスは `status=partial`、`E022_INDEX_PARTIAL`、終了コード11を返します。変更のない再試行や別ファイルだけの更新も同様です。`--allow-partial` は終了コード0を許容しますが、partial と不完全性の情報は維持します。意図した symbols-only・symbol-kind 方針の成功動作は維持します。MCP のインデックスも `isError=true` で同じ partial 結果を返し、成功したデータは保持します。
-
-index、status、workspace health の `size_omissions` は対象件数、最大20件の無害化済みパス（各512文字まで）、切り詰め・省略件数、判明している `actual_bytes` / `limit_bytes` を示します。サイズは省略時点の観測値で、現在のファイルを再測定した値ではありません。旧診断には正確なバイト数がない場合があります。内容を確認して `--max-file-bytes <bytes>`（MCP は `maxFileBytes`）を明示するか、`.cdidxignore` で意図的に除外してから通常のインデックスを実行してください。除外の反映にはワークスペース全件走査が必要で、除外した内容は検索対象から外れます。再構築は不要です。復旧コマンドのプレースホルダーには確認済みの上限を指定します。省略ファイルのサイズを理由に保存済み上限を自動的に引き上げることはありません。鮮度と世代の完全性は別々に扱います。
-
-## import と diff の比較上限
-
-`import --check` / `--dry-run` と `diff` は、固定の安全上限（テーブルごと・片側ごとに100万行、比較する1行あたり4 MiB）を超えると終了コード `3` を返します。JSONエラーの `comparison_budget` は、`side`（`left`/`right`）、`role`（importでは `destination`/`archive`、diffでは `left`/`right`）、`table`、`kind`（`rows_per_table_per_side`/`row_bytes`）、`limit`、`observed`、`observed_is_lower_bound=true` を持ちます。観測値は失敗時点の行数または行内の累積バイト数であり、テーブルや行全体の大きさではありません。`table` は比較の主テーブルを示し、行数は参照候補の結合やメタデータ分類の選択を含む比較クエリの行数で、保存された生の行数とは異なります。診断には固定の識別子と数値だけを含め、行の内容やDBパスは含めません。importは `error_code=import_destination_comparison_budget_exceeded` と `root_cause=comparison_budget_exceeded`、diffは既存のDBエラーコードを維持します。
-
-宛先側の上限超過では、現在の宛先との比較は既存上限内で完了できません。入力アーカイブの縮小では解消しません。別途用意した小さな宛先スナップショットで範囲を縮小して比較できますが、現在の宛先の置換を検証したことにはなりません。アーカイブ側のファイルに紐づくテーブルなら、行数を減らした範囲で再エクスポートするか、巨大な行の原因ファイルを除外します。ただし別の制約に到達する可能性があります。ファイルの絞り込みでは `codeindex_meta` を縮小できません。`--limit`、`--offset`、`--max-json-bytes` は出力を制御するもので、比較の安全上限は変更しません。通常表示とJSONの両方で制約を説明し、宛先を変更しません。
-
-### Shell検索の由来分類
-
-Shell検索の由来分類は、二重引用符内で実行される `$()` やバッククォートによるコマンド置換と、その周囲のリテラルを区別します。通常・名前付き・recipe検索は同じ分類を共有し、`--origin code` は実行部分を保持し、`--exclude-strings` はリテラル部分を除外します。バッククォート内はエスケープ解除後に入れ子のコマンドを解釈し、`case` のパターン区切りを置換の終端と誤認しません。単一引用符内やエスケープされたリテラル例は文字列またはヘルプとして扱い、一致・ハイライト位置は変えません。これは完全なShellパーサーではなく、1行単位のヒューリスティックです。行頭から最大65,536文字を調べ、置換の入れ子は63段、同時に扱う `case` は64個、走査・前処理の反復は262,144回を上限とします。範囲外の一致や解析上限の超過時は `unknown` を返します。複数行のShell構文はこの保証の対象外です。
-
-### ローカル監査 baseline
-
-origin フィルター付きレシピでも、生の候補をすべて確認し、全一致の origin が判明していれば、0件の子クエリを含めて完全な baseline を作成できます。同一条件の互換実行は `unchanged`、確認済みの削除は `resolved` になります。`origin_classification_incomplete` の場合は、フィルターなしの search で不明な origin と `origin_unavailable` 診断を確認し、対象パスを手動レビューしてください。行上限の増加や変更のないソースの索引更新では字句分類の制限を解消できません。他の未検証フィルターや生の候補上限にも、具体的な理由と復旧案内を示します。`--limit`／`--total-limit` の単一指定は重複警告なしで内部既定値を置き換え、実際の重複指定は警告と最後の値の優先を維持します。
-
-索引の除外設定を変更しても、存在する除外ファイルを解決済みとは判定しません。以前のパスの対象範囲を確認し、物理的削除と sparse／除外パスを区別し、同じ DB 保存先が別プロジェクトの索引に置き換わった場合も検出します。空の比較不能結果も終了コード `11` を返します。
-
-`cdidx audit baseline-export .cdidx/audit-baseline.json --recipe risky-code` は既存の監査エンジンを実行し、ローカル baseline を保存します。`--recipe` を省略すると登録済みの全レシピが対象です。ソース変更後に索引を更新し、`cdidx audit baseline-compare .cdidx/audit-baseline.json --recipe risky-code --json` で比較します。比較時は同じフィルターと上限を指定してください。各コマンドはヘルプ記載の `--db`、`--lang`、`--path`、`--exclude-path`、`--exclude-tests`、`--audit-scope`、`--since`、`--limit`、`--total-limit` に対応します。既定値はクエリごとに1,000行、全体で10,000行です。
-
-比較は `new`、`unchanged`、`resolved`、`unknown` の識別グループ、総数、観測数、省略数を返します。どちらかの実行が古い、不完全、上限到達、失敗、取消済み、またはレシピ・フィルター・ワークスペース・識別契約が異なる場合、消えた検出結果は `unknown` のままです。重複した証拠やリネーム候補を推測で対応付けません。行番号は識別から除外し、文脈が変化した場合は再レビューが必要です。不完全な監査または不明な分類は終了コード `11` となります。export は不完全であることを明記した baseline を保存できますが、取消時は公開しません。
-
-安全確認済みの記録には baseline または比較結果の `id` を用い、`cdidx audit baseline-review .cdidx/audit-baseline.json <id> --actor <name> --reason <text> --overwrite` を実行します。完全な baseline 内の一意な検出結果だけが対象です。理由・担当者・時刻・証拠を保存し、互換性のある証拠が変わっていない場合だけ `review_applies` が真になります。compare は baseline を変更しません。export による置換には `--overwrite` が必要で、明示的な置換後は以前の注釈を含まない新しい baseline になります。
-
-ファイルには上限付きの一致・文脈のハッシュ、正規化した相対パス、実効フィルター、索引・レシピの由来を記録し、ソースの抜粋は保存しません。`.cdidx/` または索引対象外に保存してください。上限は8 MiB、JSON 深度16、10,000観測、比較出力200行で、省略数を明示します。保存はアトミックで、POSIX は `0600`、Windows は親ディレクトリの ACL を継承します。パスの大文字小文字を保持し、曖昧なバックスラッシュ・絶対パス・親ディレクトリ要素は拒否します。CLI 専用で、GitHub 認証や DB 移行は不要です。更新後はインストール済みのシェル補完を再生成してください。
-
-audit の出力を取得しながら実行状況を確認するには、`cdidx audit --all --summary-only --json --progress` を使います。進捗は stderr に出力し、stdout の JSON/NDJSON を維持します。`--quiet` と `--no-progress` は引数の順序に関係なく優先されます。[audit の進捗](USER_GUIDE.md#audit-の進捗)を参照してください。
-
-上限で不完全になった `audit --all` は、`--allow-partial` を明示しなければ終了コード11を返します。`continuation.next_command` で処理済みの recipe/query observation を引き継いで再開できます。実行完了と出力完了は別々に確認してください。[audit の再開](USER_GUIDE.md#audit-の再開)を参照してください。
-
-### ファイルサイズ上限と鮮度チェック
-
-索引作成時に空白以外の不正な`CDIDX_MAX_FILE_BYTES`が指定されている場合、有効な上限の明示指定がなければ、警告の案内どおり既定の4 MiBに戻ります。
-
-`index --max-file-bytes 8388608`（MCP: `maxFileBytes`）は、実際に使った上限を索引に保存します。後続の索引作成とdry runは、明示指定、`CDIDX_MAX_FILE_BYTES`、保存済み上限、既定の4 MiBの順に設定を選びます。通常の`status --check`と`workspace status --check`は保存済みの読み取り上限を再利用するため、大きなファイルを索引化した後も環境変数の指定は不要です。部分更新は、未更新ファイルに必要な従来の大きい上限を維持します。旧索引は、既存の2,147,483,647バイトの制限内で記録済みファイルサイズ以上の上限を使い、rebuildは不要です。読み取りに失敗した索引済みファイルは、削除ではなく走査エラーと確認不能として報告します。保存済み上限を超えてファイルが増大した場合は十分に大きい上限を明示して再索引し、アクセス失敗の場合は権限などの原因を解消してから再実行してください。
-
 > **[English version](#cdidx)**
 
-[![Build and Test](https://github.com/Widthdom/CodeIndex/actions/workflows/dotnet.yml/badge.svg)](https://github.com/Widthdom/CodeIndex/actions/workflows/dotnet.yml)
-[![CodeQL](https://github.com/Widthdom/CodeIndex/actions/workflows/codeql.yml/badge.svg)](https://github.com/Widthdom/CodeIndex/actions/workflows/codeql.yml)
-[![Release](https://github.com/Widthdom/CodeIndex/actions/workflows/release.yml/badge.svg)](https://github.com/Widthdom/CodeIndex/actions/workflows/release.yml)
+**ローカルリポジトリ向けのコード索引・検索ツール。CLI、MCP、LSPから利用できます。**
 
-![.NET 8.x / 9.x tests](https://img.shields.io/badge/.NET-8.x%20%2F%209.x%20tests-512BD4?logo=dotnet&logoColor=white)
-![C#](https://img.shields.io/badge/C%23-12-239120?logo=csharp&logoColor=white)
-![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
-![License](https://img.shields.io/badge/License-FSL--1.1--ALv2-orange)
-![SQLite](https://img.shields.io/badge/SQLite-FTS5-003B57?logo=sqlite&logoColor=white)
-
-**ローカルリポジトリ向けの CLI コード索引、MCP 検索、LSP editor lookup。**
-
-`cdidx` はリポジトリをローカル SQLite DB に索引化し、人、script、AI agent、
-MCP client、LSP 対応 editor が同じ tree を繰り返し走査せずに全文・symbol・
-dependency・inspection query を実行できるようにします。
-
-## なぜ cdidx なのか
-
-> **一度索引し、何度も問い合わせる。** `cdidx` は繰り返すコード調査のための
-> ローカル retrieval runtime です。
-
-| ワークフロー | 最適な選択 | 理由 |
-|---|---|---|
-| 単発の文字列検索 | `rg` | setup 不要で file を直接走査します。 |
-| 繰り返すリポジトリ調査 | `cdidx` | SQLite FTS5、構造化結果、incremental refresh を利用できます。 |
-| VS Code 内だけの chat context | VS Code workspace index | Copilot / VS Code UX 内で editor が context を管理します。 |
-| terminal、CI、script、MCP client | `cdidx` | IDE 外から明示的な CLI / MCP interface を利用できます。 |
-
-詳しくは [なぜ cdidx なのか](USER_GUIDE.md#なぜ-cdidx-なのか)、
-[rg との違い](USER_GUIDE.md#rg-との違い)、
-[VS Code workspace index との違い](USER_GUIDE.md#vs-code-workspace-index-との違い)を参照してください。
-
-## 設計上の境界
-
-| 境界 | 意味 |
-|---|---|
-| local-first retrieval | CodeIndex はローカルリポジトリを索引・検索し、hosted code-search service は提供しません。 |
-| lightweight extraction | symbol と reference は retrieval hint であり、compiler-grade semantic analysis ではありません。 |
-| 変更は外部 agent が所有 | conversation、編集、commit、PR、自律的な判断は `cdidx` を呼び出す tool が担当します。 |
-| AI ranking に非依存 | embedding、vector search、LLM ranking を CodeIndex core の前提にしません。 |
-
-## コントリビューション方針
-
-Issue report、feature request、改善提案を歓迎します。
-
-このリポジトリでは現在、外部からの pull request を受け付けていません。
-PR の作成は collaborator に限定し、実装変更は maintainer または信頼済み collaborator が担当します。
+`cdidx` はローカルの SQLite 索引を使い、全文・シンボル・依存関係の検索や
+コードの調査を高速に行います。一度索引を作れば、ターミナル、スクリプト、
+AIツール、エディターから繰り返し利用できます。Windows・macOS・Linuxに対応しています。
 
 ## すぐに試す
 
@@ -550,214 +99,53 @@ dotnet tool install -g cdidx
 curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash
 ```
 
-一度索引してから、対象を絞った query を実行します。
+リポジトリを索引化して検索します。
 
 ```bash
 cdidx .
 cdidx status --check --json
 cdidx search "handleRequest"
 cdidx definition UserService
-cdidx references UserService --limit 20
-cdidx inspect QueryCommandRunner --outline-only
-cdidx map --compact --max-json-bytes 65536
-cdidx audit risky-code --format sarif --limit 20
-cdidx audit --all --format compact --total-limit 200
-cdidx doctor --json
-cdidx doctor --integrations --json
-cdidx validate
 ```
 
-AI tool や editor から使う場合:
+AIツールやエディターから利用する場合は `cdidx mcp` または
+`cdidx lsp --db .cdidx/codeindex.db` を起動します。設定は[AIとの連携](USER_GUIDE.md#aiとの連携)、
+その他の導入方法は[インストール](USER_GUIDE.md#インストール)を参照してください。
 
-```bash
-cdidx mcp
-cdidx lsp --db .cdidx/codeindex.db
-```
+## 主な機能
 
-| 次に行うこと | ドキュメント |
-|---|---|
-| query workflow を学ぶ | [最初の検索を試す](USER_GUIDE.md#最初の検索を試す) |
-| 全 command を確認する | [コマンドリファレンス](USER_GUIDE.md#コマンドリファレンス) |
-| index を最新に保つ | [インデックスを最新に保つ](USER_GUIDE.md#インデックスを最新に保つ) と [インクリメンタル更新の信頼性](USER_GUIDE.md#インクリメンタル更新の信頼性) |
-| JSON size と pagination を制御する | [出力形式](USER_GUIDE.md#出力形式) |
-| 複数の query を自動実行する | `batch --json-summary` は子 JSON の安全なエラーコードとサイズ上限・再試行情報を保持します。[出力形式](USER_GUIDE.md#出力形式)を参照してください。 |
-| MCP、Codex、editor を設定する | [AI との連携](USER_GUIDE.md#aiとの連携) |
-| 大規模リポジトリを調整する | [大規模リポジトリの performance tuning](USER_GUIDE.md#大規模リポジトリの-performance-tuning) |
+- 全文・シンボル検索、定義の確認、参照・依存関係の追跡。
+- 監査レシピの実行、リポジトリ構造や変更が集中する箇所の調査。
+- 索引の差分更新と、CLI・JSON・MCP・LSP経由での結果取得。
 
-text / symbol だけを先に検索する場合、`cdidx . --symbols-only` で初回処理を
-短縮できます。graph command は通常の `cdidx .` を実行するまで degraded のままです。
-
-## 特長
-
-| 分野 | 使うもの |
-|---|---|
-| 検索とナビゲーション | `search`、`find`、`excerpt`、`symbols`、`definition`、`references`、`callers`、`callees`、`inspect`、`map`、`deps`、`impact`、`unused`、`hotspots`。詳細は [コマンドリファレンス](USER_GUIDE.md#コマンドリファレンス)。 |
-| AI 連携 | `cdidx mcp` が MCP client に indexed tool を提供します。詳細は [AI との連携](USER_GUIDE.md#aiとの連携)。 |
-| editor lookup | `cdidx lsp --db .cdidx/codeindex.db` で read-only LSP shim を起動します。setup と動作は [AI との連携](USER_GUIDE.md#aiとの連携) を参照してください。 |
-| 鮮度管理 | `status --check`、`--files`、`--commits`、`--changed-between`、`--watch` で DB と workspace を揃えます。 |
-| validation | `cdidx validate` が encoding / line-ending 問題を報告します。詳細は [Indexed files を validate する](USER_GUIDE.md#indexed-files-を-validate-する)。 |
-| 対応言語 | `cdidx languages --json` が live capability probe です。詳細は [対応言語](USER_GUIDE.md#対応言語)。 |
-| custom extraction | 拡張子 alias と regex-backed pattern は [カスタム言語抽出](DEVELOPER_GUIDE.md#カスタム言語抽出) を参照してください。 |
-| 運用 | install、upgrade、release 検証、troubleshooting、output control は [ユーザーガイド](USER_GUIDE.md#cdidx日本語) にあります。 |
-
-Git 差分 refresh は最後に workspace 全体を検証した基準から差分を補完するため、指定した
-old ref が indexed 基準より新しい場合や分岐している場合でも branch switch 後に収束します。
-`status` と `map` は、この検証済み HEAD を `workspace_verified_head_sha` として、最新
-scoped-update HEAD とは別に返します。scoped write の対象 path は次回の検証済み Git
-refresh まで保持されるため、後続 commit range の file 差分が相殺された場合も再照合されます。
+抽出結果はコード調査の手がかりであり、コンパイラー相当の解析ではありません。
+対話やコード変更は `cdidx` を利用する外部ツールが担当します。
+[なぜ cdidx なのか](USER_GUIDE.md#なぜ-cdidx-なのか)、[rgとの違い](USER_GUIDE.md#rg-との違い)、
+[対応言語](USER_GUIDE.md#対応言語)も参照してください。
 
 ## ドキュメント
 
-| ドキュメント | 内容 |
+| 目的 | 参照先 |
 |---|---|
-| [ユーザーガイド](USER_GUIDE.md#cdidx日本語) | install、command 例、option、出力形式、対応言語、MCP setup、troubleshooting。 |
-| [配布チャネル](DISTRIBUTION.md) | install channel、update path、platform support、package policy。 |
-| [クラウドブートストラップ](CLOUD_BOOTSTRAP_PROMPT.md#日本語) | 制限された cloud agent session での install guidance。 |
-| [プラットフォームサポート](docs/platform-support.md#プラットフォームサポート) | 公式 release RID、未対応 platform、source-build の代替手段。 |
-| [開発者ガイド](DEVELOPER_GUIDE.md#開発者ガイド) | architecture、database schema、status contract、custom extraction、release workflow。 |
-| [テストガイド](TESTING_GUIDE.md#テストガイド) | test layout、helper、cross-platform rule、validation command。 |
-| [エージェントガイド](AGENT_GUIDE.md) | agent workflow index、リポジトリ検索 policy、contract maintenance rule。 |
-| [統合ポリシー](INTEGRATION_POLICY.md) | CLI、JSON、MCP、integration の利用境界。 |
-| [セキュリティポリシー](SECURITY.md) | 非公開の脆弱性報告と協調的開示。 |
+| コマンドと使用例 | [ユーザーガイド](USER_GUIDE.md#コマンドリファレンス) |
+| 索引と鮮度の管理 | [プロジェクトをインデックス](USER_GUIDE.md#プロジェクトをインデックス)、[状態確認](USER_GUIDE.md#状態確認) |
+| 検索・監査 | [コード検索](USER_GUIDE.md#コード検索)、[正規表現 find の制御](docs/find-scan-controls.md#日本語) |
+| JSONフィールドと上限 | [出力形式](USER_GUIDE.md#json-出力形式)、[Status JSON 契約](DEVELOPER_GUIDE.md#status-json-契約) |
+| MCP・LSPと互換性 | [AIとの連携](USER_GUIDE.md#aiとの連携)、[統合ポリシー](INTEGRATION_POLICY.md) |
+| 導入とリリース | [配布チャネル](DISTRIBUTION.md)、[対応環境](docs/platform-support.md)、[成果物の検証](USER_GUIDE.md#リリースアセットの検証)、[クラウドでの導入](CLOUD_BOOTSTRAP_PROMPT.md#日本語) |
+| 開発 | [開発者ガイド](DEVELOPER_GUIDE.md#開発者ガイド)、[テストガイド](TESTING_GUIDE.md#テストガイド)、[エージェントガイド](AGENT_GUIDE.md) |
+| 変更履歴とセキュリティ | [変更履歴](CHANGELOG.md)、[セキュリティポリシー](SECURITY.md) |
 
-## サポート対象の利用面
+## コントリビューション方針
 
-| 利用面 | entry point | 契約 |
-|---|---|---|
-| CLI | `cdidx <command>` | versioned command-line interface。 |
-| JSON | `cdidx <command> --json` | automation 向けの structured output。 |
-| MCP | `cdidx mcp` | MCP client 向け JSON-RPC tool。 |
-| LSP | `cdidx lsp --db .cdidx/codeindex.db` | read-only editor lookup shim。 |
-| library / SDK | -- | public library / SDK API はありません。 |
-
-互換性の境界は [統合ポリシー](INTEGRATION_POLICY.md#api-surface-and-library-use)、
-MCP / LSP setup は [AI との連携](USER_GUIDE.md#aiとの連携)を参照してください。
-
-## CLI JSON エラー契約
-
-回復可能な command failure は、JSON mode では versioned / sanitized envelope、
-human mode では対応する `Error`、`Hint`、`Usage` 行を返します。field 定義と
-安定した code/category 対応は
-[開発者ガイド](DEVELOPER_GUIDE.md#cli-の回復可能エラー形式)を参照してください。
-
-## 拡張子なしの zsh 補完関数
-
-拡張子なし、または未知拡張子のファイルでは、上限付き先頭行 probe が token 境界を持つ
-`#compdef` directive を zsh の `shell` source として認識します。既知拡張子、exact / prefix
-filename match、明示的な language-map override、extractor plugin、曖昧拡張子は既存の
-precedence を維持します。`#compdef` は他言語の source に対する一般的な解決策ではありません。
-
-## index dry-run の mutation 推定
-
-`cdidx index <project> --dry-run --json` は source tree や index を変更せず、
-file action と上限付き table mutation estimate を preview します。使い方は
-[プロジェクトをインデックス](USER_GUIDE.md#プロジェクトをインデックス)、実装上の制限は
-[開発者ガイド](DEVELOPER_GUIDE.md#ビルドテスト)を参照してください。
-
-`table_row_estimates` は対象 table ごとに `rows_deleted`、
-`rows_inserted_or_upserted`、合計 `row_operations`、`projected_final_rows`、
-`projected_row_delta` を分離します。各 dimension は独自の nullable な `value`、
-`source`、`confidence`、`unknown_reasons` を持つため、parse-only の insert 推定が
-利用不能でも既知の delete 件数は利用できます。宣言マージの augmentation reference を
-再構築し得る TypeScript の変更では、未変更 file が所有する row も置換される可能性があるため、
-影響する `symbol_references` の全 dimension を
-`typescript_augmentation_rebuild_required` 理由の unknown とします。従来の
-`estimated_table_mutations` / `estimated_table_mutation_details` は互換性のため
-非推奨の総 row-operation alias として維持され、semantics / replacement field が
-`table_row_estimates.<table>.row_operations` への移行先を示します。削除は将来の
-major release だけで行います。
-
-`--files`、`--commits`、`--changed-between` の scoped preview では、static
-interface contract と修飾 member-read refresh のために実行時に必要となるものと同じ
-read-only C# workspace 展開を反映します。JSON は `projection_authoritative`、
-`projection_unavailable_reasons`、`csharp_workspace_expansion_status` /
-`csharp_workspace_expansion_reason` を返します。展開された path も candidate / sample
-上限に含まれます。cap、scan error、利用不能な preflight によって正確な予測を作れない場合は
-`totals_lower_bound` が true となり、安定した reason が非 authoritative である理由を示します。
-
-## Status JSON 契約
-
-`cdidx status --json` は script、MCP client、release check 向けに trust、
-freshness、compatibility、remediation data を返します。compatibility index として
-field group を表に残します。
-
-| field group | field |
-|---|---|
-| readiness / graph trust | `fold_ready`、`fold_ready_reason`、`graph_table_available`、`graph_data_current`、`reference_extraction_limits`、`reference_graph_complete`、`reference_graph_incomplete_reasons`、`reference_extraction_cap_hits`、`index_complete`、`index_incomplete_reasons`、`symbol_kind_filter_provenance_available`、`symbol_kind_filter`、`symbols_dropped_by_kind_filter`、`issues_table_available`、`file_issues_data_current`、`migration_in_progress`、`sql_graph_contract_ready`、`sql_graph_contract_degraded_reason`。 |
-| language readiness | `hotspot_family_ready`、`hotspot_family_degraded_reason`、`language_readiness`、`csharp_symbol_name_ready`、`csharp_metadata_target_ready`、`csharp_metadata_target_degraded_reason`。 |
-| workspace / HEAD freshness | `indexed_head_commit`、`worktree_head_changed`、`indexed_head_sha`、`indexed_head_branch`、`indexed_head_timestamp`、`commits_ahead_of_indexed_head`、`head_freshness`。 |
-| workspace-check の path sample | `workspace_check.changed_files`、`workspace_check.missing_files`、`workspace_check.outside_sparse_cone_files`、`workspace_check.unindexed_files`、`workspace_check.unverifiable_files`、`workspace_check.scan_errors`。各一覧には authoritative な `*_count`、`*_truncated`、`*_path_limit`、`*_omitted_count` が対応します。 |
-| version compatibility | `index_writer_version`、`index_newer_than_reader`、`index_newer_than_reader_reason`。 |
-| extension / extractor diagnostics | `unknown_extension_file_count`、`unknown_extension_files`、`unknown_extension_files_truncated`、`unknown_extension_file_path_limit`、`unknown_extension_extension_counts`、`unknown_extension_category_counts`、`unknown_extension_groups`、`unknown_extension_group_count`、`unknown_extension_groups_truncated`、`unknown_extension_group_limit`、`unknown_extension_group_omitted_count`、`unknown_extension_guidance`、`extractors`、`hooks`、`hook_diagnostics`。 |
-| runtime trust / permissions | `trust_overrides`、`git_executable`、`github_cli_executable`、`path_case_sensitive`、`data_dir_mode`、`db_file_mode`、`database_permission_policy`、`database_permission_diagnostics`、`mac_profile`、`mac_profile_diagnostics`。 |
-| check context / run diagnostics | `stale_after_seconds`、`index_age_seconds`、`query_context.check_mode`、`query_context.stale_after_seconds`、`process`、`last_index_run`、`last_workspace_freshened_at`、`last_failed_or_partial_index_run`、`status_metadata_diagnostics`。 |
-| last-run detail | `last_index_run.bytes_read_skipped_file_count`、`last_index_run.bytes_read_incomplete`、`last_index_run.diagnostics`、`last_index_run.diagnostic_count`、`last_index_run.diagnostics_truncated`、`last_index_run.reference_extraction_cap_hits`、`last_index_run.rebuild_reclaim`、`last_failed_or_partial_index_run.progress_persisted`、`last_failed_or_partial_index_run.recovery_hint`、`last_failed_or_partial_index_run.file_errors`。 |
-| SQLite / maintenance | `sqlite_connection_policy`、`db_size_bytes`、`wal_size_bytes`、`db_pragma_settings`、`prepared_command_cache`、`maintenance_guidance`、`maintenance_guidance.fts_optimization`、`threshold_writes`、`observed_writes`。 |
-| WAL checkpoint diagnostics | `read_only_fallback`、`wal_checkpoint_attempted`、`wal_checkpoint_succeeded`、`wal_checkpoint_skipped_reason`、`wal_checkpoint_failure_reason`、`wal_checkpoint_busy`、`wal_checkpoint_log_page_count`、`wal_checkpoint_checkpointed_page_count`、`wal_checkpoint_remaining_page_count`、`read_only_immutable_fallback`、`wal_stale_snapshot_risk`、`wal_stale_snapshot_reason`。 |
-| database size attribution | `database_size_attribution`。 |
-| remediation | `degraded_root_cause`、`degraded_reason`、`recommended_action`、`alternative_action`、`readiness_degradations`、`repair_commands`。 |
-| MCP-only session diagnostics | `mcp_session`、`mcp_session.metrics`、`queue_capacity`、`queue_depth`、`queued_event_count`、`written_event_count`、`dropped_event_count`、`queue_full_drop_count`、`serialization_failure_count`、`write_failure_count`、`rotation_failure_count`、`batch_flush_count`、`consecutive_failure_count`、`recovery_count`、`next_retry_at`、`last_recovery_at`、`last_failure`、`mcp_session.audit_log`、`queued_record_count`、`written_record_count`、`mcp.rate_limit.bucket_limit`、`mcp.rate_limit.bucket_limit_rejection_count`。 |
-
-通常の status summary は、checksum 再利用による no-op update 後の鮮度証拠として
-`last_workspace_freshened_at` を使います。ただし runtime HEAD、
-`workspace_verified_head_sha`、`indexed_head_sha` が一致し、worktree が clean な場合に
-限ります。worktree 変更を隠せる Git index flag（`skip-worktree` または
-`assume-unchanged`）がある場合、この通常 status の証拠は `unknown` です。また Git の
-dirtiness probe は `status.showUntrackedFiles=no` の設定時も未追跡 file を必ず含めます。
-provenance が欠けている場合、timestamp が未来の場合、通常 status で worktree が dirty な
-場合は `unknown`、実際の workspace 差分は引き続き `stale` です。`status --check` は
-authoritative な workspace 比較を行うため、通常 status が保守的に unknown でも、index 済み
-未追跡 path を fresh と証明できます。status-level の HEAD / branch 遷移は file check が
-一致しても checked status と member health を失敗させます。CLI、workspace、MCP の status
-surface はこれらの outcome を共有します。
-
-`last_index_run.reference_extraction_cap_hits`、`last_index_run.rebuild_reclaim`、
-`last_failed_or_partial_index_run.file_errors` の永続化 JSON subdocument には、
-UTF-8 で 512 KiB の入力上限と最大 depth 16 を適用します。file error と cap-hit
-file の一覧は最大 50 件、入れ子の reason 一覧は最大 16 件です。path は 32,768
-文字、category / phase / reason code は 128 文字、detail / rebuild reason は
-4,096 文字、subdocument 内の decoded string 合計は 262,144 文字まで受け付けます。
-利用不能な subdocument があっても `status` の残りは失敗せず、
-`status_metadata_diagnostics` が対象 field、安定した reason
-（`raw_size_exceeded`、`invalid_json`、`semantic_validation_failed`）、設定済みの
-`max_utf8_bytes`、取得できる場合は実測 byte size を返します。human status 出力は
-永続化された control character を平坦化し、安定した bounded-value truncation marker
-を使いますが、契約内で受理した JSON 値は変更しません。
-
-全体 index の完了時、watch の初回 scan、全体 scan の dry-run でも、言語未対応
-ファイル数、上位 10 個の拡張子 group、明示的な省略 metadata、対処 guidance を
-返します。`status --compact` には、直近に成功した全体 scan で永続化された同等の
-診断が含まれます。
-
-上限付きの field guidance は `cdidx status --explain <field>` で確認できます。
-repair action、readiness degradation、SQLite/WAL、MCP diagnostic の詳細は
-[開発者ガイド](DEVELOPER_GUIDE.md#ai連携)、日常的な使い方は
-[クイックスタート](USER_GUIDE.md#クイックスタート)を参照してください。
-通常の JSON は完全な説明を維持します。`--compact`、`--format compact`、および
-明示的な `--fields` を伴わない byte 上限付き説明は、`api_version`、`field`、
-`meaning`、`interpretation`、`remediation` の最小 compact schema を使います。
-envelope metadata は schema と省略した任意 field の名前・件数を返し、envelope と
-compact row 1件を収められない上限では、必要最小 size と retry guidance を含む
-明示的な response-budget error を返します。
-これらの一覧を `--fields` で選択した場合も count と truncation signal は残ります。
-compact 出力は path を省いて signal を維持し、JSON byte budget で path sample が
-さらに短縮された場合は omitted count が増加します。
-
-## リリース成果物の検証
-
-GitHub release には checksum、detached checksum signature、SBOM asset、
-platform archive が含まれます。手動検証は
-[リリースアセットの検証](USER_GUIDE.md#リリースアセットの検証)と
-[プラットフォームサポート](docs/platform-support.md#プラットフォームサポート)を参照してください。
+Issue報告、機能要望、改善提案を歓迎します。
+現在、外部からのpull requestは受け付けていません。
+実装とPR作成はメンテナーまたは信頼された共同開発者が担当します。
 
 ## ライセンスと Fair Source の扱い
 
-CodeIndex と公式 `cdidx` binary は、別途明記されない限り
-[FSL-1.1-ALv2](LICENSE) の source-available / Fair Source-style software です。
-明記された integration material には
-[Apache-2.0](LICENSES/Apache-2.0.txt) を適用できます。
-
-商用利用、統合、名称の扱いについては
-[COMMERCIAL_LICENSE.md](COMMERCIAL_LICENSE.md)、
-[INTEGRATION_POLICY.md](INTEGRATION_POLICY.md)、
-[TRADEMARKS.md](TRADEMARKS.md)を参照してください。
+CodeIndexと公式 `cdidx` バイナリは、別途明記されない限り
+[FSL-1.1-ALv2](LICENSE) に基づく source-available / Fair Source-style software です。
+明記された連携用の素材には [Apache-2.0](LICENSES/Apache-2.0.txt) を適用できます。
+利用条件と名称の扱いは[商用ライセンス](COMMERCIAL_LICENSE.md)、
+[統合ポリシー](INTEGRATION_POLICY.md)、[商標](TRADEMARKS.md)を参照してください。

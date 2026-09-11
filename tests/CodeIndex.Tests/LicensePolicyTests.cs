@@ -84,7 +84,7 @@ public class LicensePolicyTests
     {
         var readme = RepositoryTestPaths.ReadText("README.md");
 
-        Assert.Equal(2, CountOccurrences(readme, "License-FSL--1.1--ALv2-orange"));
+        Assert.Equal(1, CountOccurrences(readme, "License-FSL--1.1--ALv2-orange"));
         Assert.Contains("License and Fair Source Use", readme);
         Assert.Contains("ライセンスと Fair Source の扱い", readme);
         Assert.Equal(2, CountOccurrences(readme, "Fair Source-style software"));
