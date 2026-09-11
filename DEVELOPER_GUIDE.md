@@ -1,5 +1,17 @@
 # Developer Guide
 
+## XML audit settings evidence
+
+`DbReader.XmlSettingsAudit.cs` implements the bounded C# XML configuration subset
+documented in `USER_GUIDE.md`. Require current complete graph/range metadata and
+checksum-matching source before trusting a unique factory or inline initializer.
+Evaluate DTD, resolver and both character limits together; retain unknowns and
+mutations. Query-local budgets and provenance must survive JSON/compact/draft/MCP
+serialization. CLI `--exclude-safe-xml` is an explicit post-classification selector,
+before row limits, with raw source totals and intentional omission counts. Preserve
+default raw observations, recipe replay binding, and separate textual-match versus
+vulnerability confidence. No parser-policy or persisted-schema changes are involved.
+
 ## Early query usage errors
 
 Search/find determine early JSON error intent from original tokens before validation. Skip owned option values and stop at the literal marker; never parse rendered stderr. Route failures through `CommandErrorWriter` with bounded, control-safe messages and hints, public command identity and existing error codes. Preserve human diagnostics and batch child-error extraction; this does not add find origin support or change successful query formats.
@@ -4497,6 +4509,17 @@ API version 1 の互換性を維持し、新しい guard scope は contract vers
 # 開発者ガイド
 
 正規表現 find の意味フィルター (#5324) は `IndexedFindPipeline` で両 collector の前に適用します。カーソル再開用の元の一致 ordinal を維持し、リテラルで再検索せず `SearchMatchClassifier` と上限付き C# 索引プレフィックスを共有します。ゼロ幅座標と除外前の unknown 証拠を保持します。[v1 契約](docs/find-scan-controls.md#正規表現の-origin-フィルター-5324)を参照してください。
+
+## XML 監査の設定根拠
+
+`DbReader.XmlSettingsAudit.cs` は `USER_GUIDE.md` に記載した上限付きの C# XML 設定分類を実装します。
+一意なファクトリーや直接の初期化を信頼する前に、完全で最新のグラフ／範囲メタデータと
+チェックサムが一致するソースを要求します。DTD、resolver、両文字数上限を一緒に評価し、
+不明な設定や変更された設定は保持します。クエリ内の解析上限と出典情報を JSON / compact /
+draft / MCP で維持してください。CLI の `--exclude-safe-xml` は分類後・行数制限前の
+明示的な selector で、元の観測総数と意図的な除外件数を保持します。既定の元の観測、
+レシピ再実行の結び付け、一致の確かさと脆弱性の確かさの区別を維持してください。
+パーサーの方針や永続化スキーマは変更しません。
 
 ## クエリの早期 usage エラー
 

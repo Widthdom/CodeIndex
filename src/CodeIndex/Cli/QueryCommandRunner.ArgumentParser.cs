@@ -114,6 +114,7 @@ public static partial class QueryCommandRunner
         private List<string>? outlineFields;
         private bool outlineFieldsExplicit;
         private bool firstPerFile;
+        private bool excludeSafeXml;
         private bool resultsOnly;
         private bool nextSteps;
         private int groupedPerFileLimit = DefaultSearchGroupedPerFileLimit;
@@ -549,6 +550,7 @@ public static partial class QueryCommandRunner
                 OutlineFields = outlineFields,
                 OutlineFieldsExplicit = outlineFieldsExplicit,
                 FirstPerFile = firstPerFile,
+                ExcludeSafeXml = excludeSafeXml,
                 ResultsOnly = resultsOnly,
                 NextSteps = nextSteps,
                 GroupedPerFileLimit = groupedPerFileLimit,

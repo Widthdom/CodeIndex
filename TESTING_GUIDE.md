@@ -1,5 +1,15 @@
 # Testing Guide
 
+XML audit coverage (#5327) uses real indexed source shared across safe inline/local
+settings and factories, unsafe positive controls, aliases/reassignment/mutations,
+dynamic or missing targets, traversal budgets and metadata/source drift. Preserve
+JSON/compact/issue-draft/MCP classification and CLI filter-count assertions, including
+raw replay, unsupported output rejection and the distinction between match and
+vulnerability confidence. Run the focused tests on net8/net9 with recipe, baseline,
+help and completion regressions. Include legacy setter overrides, numeric-looking
+identifiers, unrelated-type constants, escaped mutations and value-member shadows,
+including inherited members and generic parameter declarations.
+
 Named selection (#5325) shares a small overlapping-chunk fixture across single,
 multiple/shared-file and empty queries, selectors, total/per-query limits,
 rich/compact/projected JSON, text, deterministic replay, UTF-8 budget boundaries,
@@ -1338,6 +1348,15 @@ Issue #5300 のテストは隣接・入れ子の C# callable、対象行の除�
 # テストガイド
 
 `QueryCommandRunnerFindIssue5324Tests` は code/comment/string/fixture/unknown の混在、元の座標とゼロ幅一致、ページ分割前の件数、除外・kind フィルター、上限付き JSON とカーソル、走査上限からの再開、キャンセルとタイムアウトを検証します。フィルター付き行ページの再開後は全体件数を非確定に保ちます。意味フィルターの usage エラーでも #5323 の早期 JSON エラー契約を維持します。同一行の unknown origin のカーソル再開では再開位置より前の一致を再計上せず、次の一致の先読みは観測件数に残します。既存の find、CLI スキーマ・ヘルプ、検索分類の回帰テストとともに net8/net9 で実行してください。
+
+XML 監査のテスト（#5327）は実際にインデックスしたソースを共有し、安全な直接／ローカル設定と
+ファクトリー、危険な対照例、別名・再代入・変更、動的または不明な参照先、追跡上限、
+メタデータ不足とソース変更を検証します。JSON / compact / issue-draft / MCP の分類と
+CLI フィルタの件数、元の証拠の再取得、未対応出力の拒否、一致の確かさと脆弱性の確かさの
+区別を維持してください。net8 / net9 でレシピ、baseline、ヘルプ、補完の回帰テストと併せて実行します。
+旧設定プロパティの上書き、数値に似た識別子、別の型の定数、エスケープされた識別子による変更、
+同名の値メンバーによる参照先の隠蔽も含めてください。
+継承されたメンバーとジェネリック型の引数宣言も検証してください。
 
 Issue #5326 では51ノードの SCC と21ファイルの partial 型を使い、ノードカタログと各ノードの宣言ページを欠落・重複なく取得できることを検証します。ファイルフォールバックと generic・入れ子の識別、世代・対象ノード・破損トークンの拒否、メタデータ不足、UTF-8 バイト境界と切り詰め後の継続を含めてください。CLI/MCP の応答を比較し、生ファイル循環とヘルプ・補完の回帰検証を net8/net9 で維持します。
 

@@ -487,7 +487,7 @@ public class ConsoleUiTests
         Assert.Contains("cdidx inspect --fields list", output);
         Assert.Contains("backfill-fold", output);
         Assert.Contains("optimize                   Optimize FTS5 segments in an existing index DB", output);
-        Assert.Contains("find <query>               Find literal substring matches inside known indexed files", output);
+        Assert.Contains("find <query>               Find literal or regex matches in indexed files; --regex accepts origin filters", output);
         Assert.Contains("impact <query>             Show transitive callers; type queries may return heuristic file-level dependency hints", output);
         Assert.Contains("hotspots                   Find high-impact symbols; duplicate-name families may fall back conservatively", output);
         Assert.Contains("cdidx find guard --path src/Auth.cs --after 2", output);

@@ -100,6 +100,7 @@ public static partial class QueryCommandRunner
             request.Options,
             request.RecipeQuery,
             rows);
+        ApplyXmlSettingsAuditClassifications(request.Reader, request.RecipeQuery, rows);
         MarkSearchRecipeQueryExecuted(request.Scope, request.RecipeQuery.Name);
         return new SearchRecipeQueryMaterializationResult(rows, sourceTotalAuthoritative, candidateWindowExhausted, coverageRestriction);
     }
@@ -387,6 +388,8 @@ public static partial class QueryCommandRunner
     {
         if (recipeQuery is { SemanticFilter: not SearchRecipeSemanticFilter.None })
             return int.MaxValue;
+        if (options.ExcludeSafeXml)
+            return SearchOriginFilterMaxCandidates;
 
         var selectionTarget = resultLimit > 0 && options.SampleSize.HasValue
             ? Math.Max(resultLimit, options.SampleSize.Value)

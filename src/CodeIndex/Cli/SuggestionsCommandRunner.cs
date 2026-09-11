@@ -1869,7 +1869,15 @@ internal sealed record IssueDraftTriageMetadataJsonResult(
     [property: JsonPropertyName("severity")] string Severity,
     [property: JsonPropertyName("confidence")] string Confidence,
     [property: JsonPropertyName("evidence_count")] int EvidenceCount,
-    [property: JsonPropertyName("duplicate_guidance")] string DuplicateGuidance);
+    [property: JsonPropertyName("duplicate_guidance")] string DuplicateGuidance)
+{
+    [JsonPropertyName("confidence_scope")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ConfidenceScope { get; init; }
+    [JsonPropertyName("vulnerability_confidence")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? VulnerabilityConfidence { get; init; }
+}
 
 internal sealed record SuggestionIssueDraftJsonResult(
     [property: JsonPropertyName("suggestion_id")] string SuggestionId,

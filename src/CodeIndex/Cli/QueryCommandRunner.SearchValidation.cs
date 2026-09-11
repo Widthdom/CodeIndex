@@ -49,6 +49,13 @@ public static partial class QueryCommandRunner
 
     private static bool TryValidateSearchRecipeControlOptions(QueryCommandOptions options)
     {
+        if (options.ExcludeSafeXml && (options.RecipeName?.Split('/')[0] != "xml-parser-security"
+            || options.CountOnly || HasSearchAggregation(options) || options.ResultsOnly || options.SummaryOnly
+            || options.JsonOutputFormatExplicit && options.JsonOutputFormat is JsonOutputFormatArray or JsonOutputFormatNdjson
+            || options.OutputFormat is not (null or "text" or "json" or "compact" or "issue-drafts")))
+            return RejectSearchUsage(options,
+                "--exclude-safe-xml requires the XML recipe with text, JSON, compact or issue-drafts row output.",
+                "Use `cdidx audit xml-parser-security --exclude-safe-xml --json`; omit the flag to retain raw observations.");
         if ((options.IncludeRecipeQueries.Count > 0 || options.ExcludeRecipeQueries.Count > 0) && options.RecipeName == null)
         {
             return RejectSearchUsage(

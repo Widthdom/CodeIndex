@@ -1206,6 +1206,8 @@ public static partial class QueryCommandRunner
             args.Add("--include-generated");
         if (options.ShowExcluded)
             args.Add("--show-excluded");
+        if (options.ExcludeSafeXml)
+            args.Add("--exclude-safe-xml");
         if (options.Since.HasValue)
             AddValue("--since", options.Since.Value.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture));
         if (options.NoDedup)
