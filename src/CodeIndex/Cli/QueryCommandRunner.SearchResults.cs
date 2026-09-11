@@ -1031,6 +1031,11 @@ public static partial class QueryCommandRunner
             {
                 Console.WriteLine($"[{queryResult.Name}] {queryResult.Query}");
                 Console.WriteLine($"results: {queryResult.Count}");
+                if (queryResult.SelectionAccounting is { } accounting)
+                {
+                    var authority = accounting.SourceTotalAuthoritative ? "authoritative" : "lower bound; candidate population only";
+                    Console.WriteLine($"selection (per_query): source={accounting.SourceTotal} ({authority}), selected={accounting.SelectedTotal}, returned={accounting.Returned}, selector_omitted={accounting.SelectorOmittedCount}, limit_omitted={accounting.LimitOmittedCount}, byte_limit_omitted={accounting.ByteLimitOmittedCount}");
+                }
                 foreach (var result in queryResult.Results)
                 {
                     Console.WriteLine($"{result.Path}:{result.ChunkStartLine}-{result.ChunkEndLine}");
@@ -1083,7 +1088,7 @@ public static partial class QueryCommandRunner
                 result.Path,
                 result.MatchLines.Count > 0 ? result.MatchLines[0] : result.ChunkStartLine));
             var compactLocations = BuildCompactLocationsPayload(locations, options, jsonOptions);
-            queries.Add(new JsonObject
+            var queryPayload = new JsonObject
             {
                 ["name"] = queryResult.Name,
                 ["query"] = queryResult.Query,
@@ -1092,10 +1097,16 @@ public static partial class QueryCommandRunner
                 ["truncation"] = new JsonObject
                 {
                     ["limit"] = options.Limit,
-                    ["limit_reached"] = queryResult.Truncated,
+                    ["limit_reached"] = queryResult.SelectionAccounting is { } accounting
+                        ? accounting.LimitOmittedCount > 0 : queryResult.Truncated,
                 },
                 ["results"] = compactLocations["results"]?.DeepClone() ?? new JsonArray(),
-            });
+            };
+            if (queryResult.SelectionAccounting != null)
+                queryPayload["selection_accounting"] = JsonSerializer.SerializeToNode(
+                    queryResult.SelectionAccounting,
+                    CliJsonSerializerContextFactory.Create(jsonOptions).SearchNamedSelectionAccountingJsonResult);
+            queries.Add(queryPayload);
         }
 
         return new JsonObject

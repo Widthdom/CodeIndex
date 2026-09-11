@@ -1,5 +1,11 @@
 # Testing Guide
 
+Named selection (#5325) shares a small overlapping-chunk fixture across single,
+multiple/shared-file and empty queries, selectors, total/per-query limits,
+rich/compact/projected JSON, text, deterministic replay, UTF-8 budget boundaries,
+lower-bound coverage and unsupported formats. Run the named-query and row-selector
+regressions on net8/net9; retain #5276 projection coverage.
+
 ## Early search/find validation coverage
 
 `QueryCommandRunnerEarlyUsageIssue5323Tests.cs` shares an isolated database across blank/missing query, unsupported/missing-value option, find scope, output ordering/alias, bounded diagnostic and human controls. Keep JSON-looking query/inline values separate from actual selectors and test `--` boundaries. Sequential/parallel batch summaries must retain structured failures and continue a successful child without raw streams. Run on net8/net9 alongside #5297/#5305; invalid numeric search values now produce JSON when requested.
@@ -1298,6 +1304,11 @@ Check the following:
 ---
 
 <a id="テストガイド"></a>
+
+名前付き検索の行選択（#5325）は、重複チャンクを含む小さな共通 fixture で単一・複数・
+共有ファイル・空クエリ、selector、全体／クエリ上限、rich / compact / 投影 JSON、text、
+決定的な再実行、UTF-8 上限の境界、下限表記、非対応形式を検証します。
+名前付き検索と行選択の回帰テストを net8 / net9 で実行し、#5276 の投影検証も維持してください。
 
 `ProgramCliTests.Run_Unhandled*`（#5311）は、テスト専用の未作成 `--db` とログディレクトリを指定し、既存設定の探索とライフサイクルログを無効化します。環境変数は `EnvironmentVariableScope` で復元します。各例外／SQLite 終了コードについて、診断保存の成功と `last-failure.json` を同名ディレクトリで塞いだ失敗を検証し、report の案内または今回の診断を保存できなかった旨、および安全な stderr を確認します。console-sensitive collection と既存の net8 専用 production-runtime 属性を維持し、関連する `GlobalToolLogTests`・`ReportCommandRunnerTests` は net8/net9 の両方で実行してください。この確実な書き込み阻害は、過去に発生した既存保存先での障害原因を特定するものではありません。
 
