@@ -190,9 +190,26 @@ public static class DbPathResolver
         var pathCaseSensitive = TryReadWorkspacePathCaseSensitive(dbPath);
         if (!pathCaseSensitive.HasValue && !string.Equals(dbPath, fullDbPath, StringComparison.Ordinal))
             pathCaseSensitive = TryReadWorkspacePathCaseSensitive(fullDbPath);
+        return ResolveProjectRootForQuery(fullDbPath, dbPath, dbPathExplicit, indexedProjectRoot, pathCaseSensitive);
+    }
+
+    internal static string? ResolveProjectRootForQuery(
+        string dbPath, bool dbPathExplicit, CodeIndex.Database.DbReader reader)
+        => ResolveProjectRootForQuery(
+            Path.GetFullPath(NormalizeDbPath(dbPath)),
+            dbPath,
+            dbPathExplicit,
+            reader.GetIndexedProjectRoot(),
+            reader.GetIndexedWorkspacePathCaseSensitive(),
+            reader);
+
+    private static string? ResolveProjectRootForQuery(
+        string fullDbPath, string dbPath, bool dbPathExplicit,
+        string? indexedProjectRoot, bool? pathCaseSensitive, CodeIndex.Database.DbReader? reader = null)
+    {
         SeedPathCasingFromWorkspaceStamp(indexedProjectRoot, fullDbPath, pathCaseSensitive);
 
-        var projectLocalRoot = TryResolveProjectLocalRoot(fullDbPath, dbPath, dbPathExplicit, indexedProjectRoot);
+        var projectLocalRoot = TryResolveProjectLocalRoot(fullDbPath, dbPath, dbPathExplicit, indexedProjectRoot, reader);
         if (projectLocalRoot != null)
             return projectLocalRoot;
 
@@ -422,7 +439,7 @@ public static class DbPathResolver
         }
     }
 
-    private static string? TryResolveProjectLocalRoot(string fullDbPath, string dbPath, bool dbPathExplicit, string? indexedProjectRoot)
+    private static string? TryResolveProjectLocalRoot(string fullDbPath, string dbPath, bool dbPathExplicit, string? indexedProjectRoot, CodeIndex.Database.DbReader? reader = null)
     {
         var dbDir = Path.GetDirectoryName(fullDbPath);
         if (dbDir == null)
@@ -449,13 +466,13 @@ public static class DbPathResolver
         // 明示指定の `--db .../.cdidx/codeindex.db` は曖昧なので、保存済み metadata があり、
         // かつ DB内容がその sibling と stored root より強く整合するときだけ sibling を採用する。
         // 保存済み metadata のない legacy explicit DB は推測してはいけない。
-        if (SiblingRootMatchesIndexedContents(dbPath, fullDbPath, siblingRoot, indexedProjectRoot))
+        if (SiblingRootMatchesIndexedContents(dbPath, fullDbPath, siblingRoot, indexedProjectRoot, reader))
             return siblingRoot;
 
         return null;
     }
 
-    private static bool SiblingRootMatchesIndexedContents(string dbPath, string fullDbPath, string siblingRoot, string? indexedProjectRoot)
+    private static bool SiblingRootMatchesIndexedContents(string dbPath, string fullDbPath, string siblingRoot, string? indexedProjectRoot, CodeIndex.Database.DbReader? reader)
     {
         if (!string.IsNullOrWhiteSpace(indexedProjectRoot))
         {
@@ -464,7 +481,7 @@ public static class DbPathResolver
                 return true;
         }
 
-        var samples = TryReadIndexedFileSamples(dbPath);
+        var samples = reader != null ? reader.GetProjectRootFileSamples() : TryReadIndexedFileSamples(dbPath);
         if (samples.Count == 0)
             return false;
 
@@ -514,33 +531,13 @@ public static class DbPathResolver
     private static bool IsUnderDirectory(string parentDirectory, string candidatePath)
         => PathCasing.IsPathEqualOrParent(parentDirectory, candidatePath);
 
-    private static List<IndexedFileSample> TryReadIndexedFileSamples(string dbPath)
+    private static List<CodeIndex.Database.IndexedFileSnapshot> TryReadIndexedFileSamples(string dbPath)
     {
         try
         {
             using var connection = OpenMetadataConnection(dbPath);
             connection.Open();
-            using var cmd = connection.CreateCommand();
-            cmd.CommandText = """
-                SELECT path, checksum
-                FROM files
-                WHERE path IS NOT NULL
-                  AND checksum IS NOT NULL
-                  AND checksum != ''
-                ORDER BY id
-                LIMIT 5
-                """;
-
-            using var reader = cmd.ExecuteReader();
-            var samples = new List<IndexedFileSample>();
-            while (reader.Read())
-            {
-                samples.Add(new IndexedFileSample(
-                    reader.GetString(0),
-                    reader.GetString(1)));
-            }
-
-            return samples;
+            return CodeIndex.Database.DbReader.GetProjectRootFileSamples(connection);
         }
         catch (Exception ex) when (IsMetadataProbeException(ex))
         {
@@ -557,7 +554,7 @@ public static class DbPathResolver
             or NotSupportedException
             or PathTooLongException;
 
-    private static SampleMatchResult CountMatchingSamples(string candidateRoot, IReadOnlyList<IndexedFileSample> samples)
+    private static SampleMatchResult CountMatchingSamples(string candidateRoot, IReadOnlyList<CodeIndex.Database.IndexedFileSnapshot> samples)
     {
         var checksumMatches = 0;
         var pathExistsMatches = 0;
@@ -565,7 +562,7 @@ public static class DbPathResolver
         {
             try
             {
-                if (!TryResolveIndexedFileSampleIoPath(candidateRoot, sample.RelativePath, out var ioPath))
+                if (!TryResolveIndexedFileSampleIoPath(candidateRoot, sample.Path, out var ioPath))
                     continue;
 
                 if (!File.Exists(ioPath))
@@ -624,7 +621,6 @@ public static class DbPathResolver
             : sampleRelativePath;
 
     private readonly record struct SampleMatchResult(int ChecksumMatches, int PathExistsMatches);
-    private sealed record IndexedFileSample(string RelativePath, string Checksum);
 }
 
 public sealed record DbPathResolution(string DbPath, string? DataDir, string? DataDirSource);

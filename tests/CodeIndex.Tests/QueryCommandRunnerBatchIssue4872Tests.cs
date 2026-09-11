@@ -1,12 +1,87 @@
 using System.Collections.Concurrent;
 using CodeIndex.Cli;
 using CodeIndex.Database;
+using CodeIndex.Indexer;
 using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Tests;
 
 public partial class QueryCommandRunnerTests
 {
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void ProjectRootResolutionUsesCapturedMetadataAndSamples_Issue5339(bool hasMetadata)
+    {
+        using var container = TestProjectHelper.CreateTempProjectScope("cdidx_batch_root_5339");
+        using var indexedProject = TestProjectHelper.CreateTempProjectScope("cdidx_batch_indexed_5339");
+        var dbPath = TestProjectHelper.CreateProjectDb(container.Root);
+        var originalFile = Path.Combine(indexedProject.Root, "Example.cs");
+        var changedFile = Path.Combine(container.Root, "Example.cs");
+        File.WriteAllText(originalFile, "class Original {}\n");
+        File.WriteAllText(changedFile, "class Changed {}\n");
+        Assert.True(FileIndexer.TryComputeChecksum(originalFile, FileIndexer.DefaultMaxFileSizeBytes, out var originalChecksum));
+        Assert.True(FileIndexer.TryComputeChecksum(changedFile, FileIndexer.DefaultMaxFileSizeBytes, out var changedChecksum));
+        using var writer = new SqliteConnection($"Data Source={dbPath};Mode=ReadWrite;Pooling=False");
+        writer.Open();
+        using (var command = writer.CreateCommand())
+        {
+            command.CommandText = """
+                PRAGMA journal_mode=WAL;
+                PRAGMA wal_autocheckpoint=0;
+                INSERT INTO files(path, lang, size, lines, checksum, modified)
+                VALUES ('Example.cs', 'csharp', 1, 1, @checksum, CURRENT_TIMESTAMP);
+                DELETE FROM codeindex_meta WHERE key = @rootKey;
+                """;
+            command.Parameters.AddWithValue("@checksum", originalChecksum);
+            command.Parameters.AddWithValue("@rootKey", DbContext.IndexedProjectRootMetaKey);
+            command.ExecuteNonQuery();
+        }
+        var metadataWriter = new DbWriter(writer);
+        if (hasMetadata)
+            metadataWriter.SetMeta(DbContext.IndexedProjectRootMetaKey, indexedProject.Root);
+        metadataWriter.SetMeta(DbContext.WorkspacePathCaseSensitiveMetaKey, "false");
+        using var capturedDb = new DbContext(DbOpenIntent.QueryOnly, dbPath);
+        using var capturedReader = new DbReader(capturedDb);
+
+        metadataWriter.SetMeta(DbContext.IndexedProjectRootMetaKey, container.Root);
+        metadataWriter.SetMeta(DbContext.WorkspacePathCaseSensitiveMetaKey, "true");
+        using (var command = writer.CreateCommand())
+        {
+            command.CommandText = "UPDATE files SET checksum = @checksum";
+            command.Parameters.AddWithValue("@checksum", changedChecksum);
+            command.ExecuteNonQuery();
+        }
+        var sourceBytes = new[] { dbPath, dbPath + "-wal", dbPath + "-shm" }
+            .ToDictionary(path => path, File.ReadAllBytes);
+        var originalDirectoryHook = DbConnectionFactory.QueryOnlySnapshotDirectoryCreatedForTesting;
+        DbConnectionFactory.QueryOnlySnapshotDirectoryCreatedForTesting =
+            _ => Assert.Fail("Project-root metadata must reuse the captured query snapshot.");
+        try
+        {
+            foreach (var path in new[] { dbPath, Path.GetRelativePath(Environment.CurrentDirectory, dbPath), new Uri(dbPath).AbsoluteUri + "?mode=ro" })
+            {
+                Assert.Equal(hasMetadata ? indexedProject.Root : null,
+                    DbPathResolver.ResolveProjectRootForQuery(path, true, capturedReader));
+                Assert.Equal(container.Root,
+                    DbPathResolver.ResolveProjectRootForQuery(path, false, capturedReader));
+            }
+            Assert.True(PathCasing.IsIgnoreCase(dbPath));
+            if (hasMetadata)
+                Assert.True(PathCasing.IsIgnoreCase(indexedProject.Root));
+            Assert.All(sourceBytes, pair => Assert.Equal(pair.Value, File.ReadAllBytes(pair.Key)));
+        }
+        finally
+        {
+            DbConnectionFactory.QueryOnlySnapshotDirectoryCreatedForTesting = originalDirectoryHook;
+        }
+
+        using var refreshedDb = new DbContext(DbOpenIntent.QueryOnly, dbPath);
+        using var refreshedReader = new DbReader(refreshedDb);
+        Assert.Equal(container.Root, DbPathResolver.ResolveProjectRootForQuery(dbPath, true, refreshedReader));
+        Assert.False(PathCasing.IsIgnoreCase(dbPath));
+    }
+
     [Fact]
     public void RunBatch_ParallelReusesBoundedSessionsAndMatchesSerialRecords_Issue4872()
     {
@@ -456,8 +531,10 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
-    public void RunBatch_ParallelSessionReuseKeepsSnapshotWorkConstant_Issue5332()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void RunBatch_ParallelSessionReuseKeepsSnapshotWorkConstant_Issue5332_Issue5339(bool filesCount)
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_batch_work_5332");
         var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
@@ -480,14 +557,14 @@ public partial class QueryCommandRunnerTests
 
         // The writer stays open without further writes, so every item sees the same
         // hot WAL generation. Count real setup/copy work instead of scheduler time.
-        // Rejected commands isolate session setup from command-specific DB work;
-        // the neighboring reuse test checks successful commands against serial output.
+        // Rejected commands isolate session setup; successful file counts also
+        // detect per-item metadata probes that would reopen/copy the same source.
         foreach (var commandCount in new[] { 3, 12 })
-            AssertIssue5332ParallelBatchWork(dbPath, commandCount, dbBytes, walBytes);
+            AssertIssue5332ParallelBatchWork(dbPath, commandCount, dbBytes, walBytes, filesCount);
     }
 
     private void AssertIssue5332ParallelBatchWork(
-        string dbPath, int commandCount, long dbBytes, long walBytes)
+        string dbPath, int commandCount, long dbBytes, long walBytes, bool filesCount)
     {
         using var firstWaveStarted = new CountdownEvent(3);
         var openedSessions = 0;
@@ -524,20 +601,24 @@ public partial class QueryCommandRunnerTests
         try
         {
             var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
-                BuildIssue4872RejectedBatchInput(commandCount),
+                filesCount
+                    ? string.Join('\n', Enumerable.Repeat("""{"command":"files","args":["--format","count","--json"]}""", commandCount)) + "\n"
+                    : BuildIssue4872RejectedBatchInput(commandCount),
                 () => QueryCommandRunner.RunBatch(
                     ["--db", dbPath, "--json-summary", "--parallel", "3"],
                     _jsonOptions));
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            var expectedExitCode = filesCount ? CommandExitCodes.Success : CommandExitCodes.UsageError;
+            const int expectedSnapshots = 3;
+            Assert.Equal(expectedExitCode, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(Enumerable.Range(1, commandCount), startedLines.Order());
             Assert.Equal(3, Volatile.Read(ref openedSessions));
             Assert.Equal(3, Volatile.Read(ref constructedReaders));
-            Assert.Equal(3, snapshotDirectories.Count);
+            Assert.Equal(expectedSnapshots, snapshotDirectories.Count);
             Assert.All(snapshotDirectories, path => Assert.False(Directory.Exists(path), path));
-            Assert.Equal(6, copiedFiles.Count);
-            Assert.Equal(3, copiedFiles.Count(file => file.Name == "snapshot.db" && file.Bytes == dbBytes));
-            Assert.Equal(3, copiedFiles.Count(file => file.Name == "snapshot.db-wal" && file.Bytes == walBytes));
+            Assert.Equal(expectedSnapshots * 2, copiedFiles.Count);
+            Assert.Equal(expectedSnapshots, copiedFiles.Count(file => file.Name == "snapshot.db" && file.Bytes == dbBytes));
+            Assert.Equal(expectedSnapshots, copiedFiles.Count(file => file.Name == "snapshot.db-wal" && file.Bytes == walBytes));
 
             var lines = ParseJsonLines(stdout);
             try
@@ -547,14 +628,23 @@ public partial class QueryCommandRunnerTests
                 {
                     var record = lines[index].RootElement;
                     Assert.Equal(index + 1, record.GetProperty("line").GetInt32());
-                    Assert.Equal("unknown", record.GetProperty("command").GetString());
-                    Assert.Equal(CommandExitCodes.UsageError, record.GetProperty("exit_code").GetInt32());
+                    Assert.Equal(filesCount ? "files" : "unknown", record.GetProperty("command").GetString());
+                    Assert.Equal(expectedExitCode, record.GetProperty("exit_code").GetInt32());
+                    if (filesCount)
+                    {
+                        var result = record.GetProperty("result");
+                        Assert.Equal(1, result.GetProperty("count").GetInt32());
+                        Assert.Equal(1, result.GetProperty("file_count").GetInt32());
+                        Assert.Equal(1, result.GetProperty("indexed_file_count").GetInt32());
+                        Assert.True(result.GetProperty("freshness_available").GetBoolean());
+                        Assert.True(result.GetProperty("authoritative_count").GetBoolean());
+                    }
                 }
                 var summary = lines[^1].RootElement;
                 Assert.Equal("batch_summary", summary.GetProperty("record").GetString());
                 Assert.Equal(3, summary.GetProperty("parallelism").GetInt32());
                 Assert.Equal(commandCount, summary.GetProperty("commands_processed").GetInt32());
-                Assert.Equal(commandCount, summary.GetProperty("command_failures").GetInt32());
+                Assert.Equal(filesCount ? 0 : commandCount, summary.GetProperty("command_failures").GetInt32());
             }
             finally
             {

@@ -133,7 +133,12 @@ public static partial class QueryCommandRunner
         var effectiveDbPathExplicit = inheritedBatchContext != null
             ? inheritedBatchContext.DbPathExplicit
             : dbPathExplicit;
-        var projectRoot = DbPathResolver.ResolveProjectRootForQuery(effectiveDbPath, effectiveDbPathExplicit);
+        // Resolve metadata from the same snapshot as this child's query. Reopening
+        // the source here copies a hot WAL twice per item and can mix generations.
+        var projectRoot = inheritedBatchContext != null
+            ? DbPathResolver.ResolveProjectRootForQuery(
+                effectiveDbPath, effectiveDbPathExplicit, inheritedBatchContext.Reader)
+            : DbPathResolver.ResolveProjectRootForQuery(effectiveDbPath, effectiveDbPathExplicit);
         if (!string.IsNullOrWhiteSpace(projectRoot))
             return new ProjectFilterRootResolution(Path.GetFullPath(projectRoot), null);
 
