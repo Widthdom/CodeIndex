@@ -130,6 +130,34 @@ Recent releases (v1.41.0 onward) remain below. Older releases retain both langua
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.49.0] - 2026-09-12
+
+#### Added
+
+- **Regex find supports bounded origin filters (#5324)** — Filter exact regex occurrences by origin, projected kind or fixture exclusion before counting and pagination. Shared C# and shell classification preserves zero-width coordinates and reports unsupported or unavailable context as non-authoritative unknowns. Semantic filters bind cursors; existing timeout, cancellation, scan caps and unfiltered find behavior remain intact.
+- Named-query search batches now support per-query `--first-per-file` and deterministic `--sample` before per-query and aggregate output limits. Text, grouped JSON, compact and field-projected output retain source, selected, returned and omission accounting, including lower bounds for incomplete candidate coverage. Unsupported count/stream/cursor combinations fail explicitly; whole-document byte budgets retain their existing error contract.
+- **Grouped dependency-cycle nodes now support bounded declaration navigation (#5326)** — CLI and MCP can page the indexed node catalogue and each node's declaration paths independently, resolve emitted IDs with generation validation, reject stale/corrupt continuations, and resume after byte-budget trimming. Existing 40-node/20-path mapping caps and graph-analysis completeness remain unchanged; grouped expansion hints now distinguish node IDs from declaration paths.
+- XML audit results now distinguish source-backed safe settings, settings needing review, and explicit unsafe configurations. Bounded factory tracing preserves source provenance and separates textual-match confidence from vulnerability confidence in JSON, compact, issue drafts and MCP. CLI `--exclude-safe-xml` optionally omits only proven safe observations while retaining omission accounting; production XML parsing policy is unchanged (#5327).
+
+#### Changed
+
+- **Bound declaration probes during full indexing** — C#, Razor, Blazor and CSHTML avoid rechecking static-lambda arrows and prefixes across unrelated declarations, and reject impossible method prefixes before regex matching. Static constructors, generic methods and lambda filtering retain their results, with fewer regex attempts and substantially fewer temporary allocations.
+- **Bound confirmed method lookahead during indexing** — C#, Razor, Blazor and CSHTML stop merging method bodies once an accessor is ruled out, reducing temporary allocations in large files while preserving ranges and recovering affected constructors. Extractor contract 19 refreshes existing rows on the next ordinary full scan.
+- **Reduce repeated source-reference sorting during initial full indexing** — temporary name indexes now select the best containing declaration before comparing at most three candidates. All languages retain the same source identities, alias and legacy-name behavior, and transactional recovery.
+
+#### Fixed
+
+- **Bound installer output draining after parent exit (#5320)** — Suppressed stdout/stderr share a one-second drain grace after exit or timeout cleanup, and caller cancellation stops draining immediately. Known exit codes and bounded diagnostic tails, including partially decoded buffers at interruption, are preserved; upgrade JSON reports `installer_output_incomplete` separately from tail-size truncation. Cancelled reads are joined before process handles are disposed, including synchronous Windows pipes.
+- **Resume C# search origins after bounded interpolated strings (#5321)** — Ordinary, verbatim and raw interpolation now preserve executable matches inside supported expressions and after proven string boundaries. Comments and literal text retain their labels; unsupported or incomplete context stays unknown with bounded reason/extent metadata. CLI rows, counts, recipes and MCP share the unchanged prefix budgets.
+- Origin-filtered audit baselines now compare fully evaluated compatible evidence, while unknown origins and candidate limits keep coverage incomplete with specific recovery guidance. Baseline limit overrides no longer produce false duplicate-option warnings; genuine duplicates retain warnings and rightmost precedence.
+- **Early search/find validation respects JSON output (#5323)** — Blank/missing queries, invalid options and missing/conflicting find scopes now return versioned, bounded errors with command identity and recovery hints when JSON is requested. Output aliases and ordering preserve option-value and literal boundaries; human diagnostics remain unchanged, and batch summaries retain structured failures while continuing subsequent requests.
+- Batch children reuse their query reader for project-root metadata and relocation samples, avoiding per-item detached DB/WAL copies in parallel file-count queries while preserving source-generation refresh, output metadata and read-only isolation.
+
+#### Internal
+
+- Removed the unused private helpers `AppendDependencyGeneratedFilter`, `TryCountTopLevelParameters`, and `IsLexicalPathEqualOrParent` after rechecking their consumers. Live dependency filtering, C# parameter analysis, and filesystem containment behavior are unchanged. Retained `BoundedFile.DefaultReadBufferSize`: `OpenReadForIndexContent`, `OpenReadForHash`, `OpenReadTrustedArchiveSource`, and the default `OpenRead` parameter still use its 81,920-byte value (#5328).
+- **Made parallel batch session-reuse regression coverage deterministic (#5332)** — replaced the scheduler-sensitive 12-item/3-item timing ratio with exact reader, session, snapshot and DB/WAL copy budgets using rejected commands to isolate setup cost. The smaller shared fixture checks every result and snapshot cleanup without artificial sleeps; production behavior is unchanged.
+
 ### [1.48.0] - 2026-09-10
 
 #### Added
@@ -774,6 +802,34 @@ v1.41.0 以降はこのファイルに、それ以前の日英の履歴は次の
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.49.0] - 2026-09-12
+
+#### 追加
+
+- **正規表現 find が上限付き origin フィルターに対応 (#5324)** — 正規表現の各一致を origin・投影 kind・fixture 除外で絞り込み、件数計算とページ分割の前に適用します。共通の C#・shell 分類器を利用してゼロ幅座標を維持し、未対応または取得不能な文脈は確定性のない unknown として報告します。意味フィルターをカーソルに紐づけ、既存のタイムアウト・キャンセル・走査上限・フィルターなしの find 動作を維持します。
+- 名前付き検索バッチで、クエリ上限・全体上限より前にクエリごとの `--first-per-file` と決定的な `--sample` を適用できるようになりました。text、グループ化 JSON、compact、フィールド投影で元の件数・選択数・返却数・省略数を保持し、候補の網羅性が不完全な場合は下限を明示します。非対応の count・stream・cursor の組み合わせは明示的に拒否し、文書全体のバイト上限は既存のエラー契約を維持します。
+- **グループ化した依存循環ノードの宣言を上限付きで参照できるようになりました (#5326)** — CLI と MCP で索引内のノードカタログと各ノードの宣言パスを独立してページ取得し、返された ID を世代検証付きで解決できます。古い・破損した継続情報を拒否し、バイト上限で縮小したページからも再開できます。既存の40ノード・20パスの上限とグラフ解析の完全性は維持し、展開案内ではノード ID と宣言パスを区別します。
+- XML 監査結果で、ソース上の根拠が揃った安全な設定、要レビューの設定、明示的に危険な設定を区別するようになりました。上限付きのファクトリー追跡で出典を保持し、JSON、compact、issue draft、MCP で一致の確かさと脆弱性の確かさを区別します。CLI の `--exclude-safe-xml` は省略件数を保持しつつ、安全の根拠が揃った観測だけを任意で除外できます。本番の XML 解析方針は変更しません（#5327）。
+
+#### 変更
+
+- **フルインデックス時の宣言候補の検査範囲を制限** — C#・Razor・Blazor・CSHTML で別の宣言に跨る静的 lambda の arrow・prefix の再検査を避け、成立しないメソッド prefix も regex 照合の前に除外します。static constructor・generic method・lambda 除外の結果を保ちながら、regex 試行回数と一時割り当てを減らします。
+- **インデックス作成時の確認済みメソッドの先読みを制限** — C#・Razor・Blazor・CSHTML で accessor でないと判明した時点で body の連結を止め、大きいファイルの一時割り当てを減らします。範囲を維持し、影響を受けていた constructor も回復します。次の通常フルスキャンでは抽出契約19により既存行も更新します。
+- **初回フルインデックスでの参照元候補の反復ソートを削減** — 一時的な名前 index で最適な包含宣言を先に選び、最後の比較を最大3候補に制限します。全言語で参照元の同一性、別名・旧形式の名前照合、トランザクションの復旧動作を維持します。
+
+#### 修正
+
+- **親の終了後のインストーラー出力読み取りに上限を追加 (#5320)** — 抑制した stdout/stderr に、終了またはタイムアウト後の停止処理から共有する1秒の猶予を設け、呼び出し元のキャンセルでは読み取りを即座に中断します。判明した終了コードと、中断時の復号済みバッファを含む上限付きの末尾診断出力を維持し、upgrade JSON の `installer_output_incomplete` で収集未完了をサイズ超過の切り詰めとは別に報告します。Windows の同期パイプを含め、中断した読み取りを回収してからプロセスハンドルを破棄します。
+- **上限付き補間文字列の後で C# の検索 origin 判定を再開 (#5321)** — 通常・verbatim・raw 補間で、対応する式内と確認済み文字列境界後の実行コードの一致を保持します。コメントとリテラル部分はラベルを維持し、未対応または不完全な文脈は上限付きの理由・範囲メタデータを持つ不明状態になります。CLI の行・件数・recipe と MCP は従来の先頭部分の処理上限を共有します。
+- origin フィルター付き監査 baseline で、全件を評価済みの互換な証拠を比較できるようにしました。不明な origin や候補上限では不完全な状態と具体的な復旧案内を維持します。baseline の上限指定で誤った重複警告を出さず、実際の重複指定に対する警告と最後の値の優先を維持します。
+- **search/find の早期検証が JSON 出力指定を尊重するようになりました (#5323)** — 空・欠落クエリ、不正なオプション、find のスコープ欠落・競合は、JSON 指定時にコマンド名と復旧ヒントを持つ上限付き・バージョン付きエラーを返します。出力形式の別名や指定順序にかかわらず、オプション値とリテラルの境界を維持します。人間向け診断は変わらず、batch summary は構造化エラーを保持して後続要求を実行します。
+- batch の子コマンドがプロジェクトルートのメタデータと移動先照合サンプルの取得にクエリ reader を再利用し、並列のファイル件数クエリで項目ごとに発生していた DB/WAL の分離コピーを削減しました。元 DB の世代更新、出力メタデータ、読み取り専用の分離性を維持します。
+
+#### 内部変更
+
+- 利用箇所を再確認し、未使用の private ヘルパー `AppendDependencyGeneratedFilter`、`TryCountTopLevelParameters`、`IsLexicalPathEqualOrParent` を削除しました。使用中の依存関係フィルター、C# のパラメーター解析、ファイルシステムの包含判定の動作は変わりません。`BoundedFile.DefaultReadBufferSize` は、`OpenReadForIndexContent`、`OpenReadForHash`、`OpenReadTrustedArchiveSource` と `OpenRead` の既定引数が引き続き 81,920 バイトの値を使用しているため保持しました (#5328)。
+- **並列 batch のセッション再利用を処理回数で回帰検証するようにしました (#5332)** — 実行環境の影響を受ける12件対3件の時間比率を、拒否コマンドで準備コストを分離した reader・セッション・スナップショット生成回数と DB/WAL コピー量の検証に置き換えました。小さな共有 fixture で全結果とスナップショット削除を確認し、人工的な待機を廃止しました。本番の挙動は変更していません。
+
 ### [1.48.0] - 2026-09-10
 
 #### 追加
@@ -1293,7 +1349,8 @@ v1.41.0 以降はこのファイルに、それ以前の日英の履歴は次の
 - **読取不能な marker fixture が target framework 間の並列テストへ干渉しないようになりました (#5019)** — MCP の marker-fingerprint fixture を repository の build output 外にある独立した一時 workspace へ移し、別 target framework の source-policy scan が意図的に unreadable にした directory へ再帰進入しないようにしました。
 - **parallel detached-snapshot fixture が thread-pool timing や広範な status diagnostics に依存しなくなりました (#5033)** — interactive batch loop を専用 test thread で実行し、非同期 completion signal と軽量な file-count query で generation refresh を確認するため、suite 負荷下でも net8 test が安定して完了します。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.48.0...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.49.0...HEAD
+[1.49.0]: https://github.com/Widthdom/CodeIndex/compare/v1.48.0...v1.49.0
 [1.48.0]: https://github.com/Widthdom/CodeIndex/compare/v1.47.0...v1.48.0
 [1.47.0]: https://github.com/Widthdom/CodeIndex/compare/v1.46.1...v1.47.0
 [1.46.1]: https://github.com/Widthdom/CodeIndex/compare/v1.46.0...v1.46.1
