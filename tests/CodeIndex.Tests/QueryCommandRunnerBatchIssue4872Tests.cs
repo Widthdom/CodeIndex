@@ -52,8 +52,10 @@ public partial class QueryCommandRunnerTests
             command.Parameters.AddWithValue("@checksum", changedChecksum);
             command.ExecuteNonQuery();
         }
-        var sourceBytes = new[] { dbPath, dbPath + "-wal", dbPath + "-shm" }
-            .ToDictionary(path => path, File.ReadAllBytes);
+        // The writer remains open: ReadAllBytes uses FileShare.Read and conflicts
+        // with SQLite's write handle on Windows. Reuse the shared artifact reader.
+        var sourceArtifacts = CaptureDatabaseArtifacts(dbPath);
+        Assert.Equal(3, sourceArtifacts.Count);
         var originalDirectoryHook = DbConnectionFactory.QueryOnlySnapshotDirectoryCreatedForTesting;
         DbConnectionFactory.QueryOnlySnapshotDirectoryCreatedForTesting =
             _ => Assert.Fail("Project-root metadata must reuse the captured query snapshot.");
@@ -69,7 +71,7 @@ public partial class QueryCommandRunnerTests
             Assert.True(PathCasing.IsIgnoreCase(dbPath));
             if (hasMetadata)
                 Assert.True(PathCasing.IsIgnoreCase(indexedProject.Root));
-            Assert.All(sourceBytes, pair => Assert.Equal(pair.Value, File.ReadAllBytes(pair.Key)));
+            Assert.Equal(sourceArtifacts, CaptureDatabaseArtifacts(dbPath));
         }
         finally
         {
