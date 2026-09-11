@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using System.Diagnostics;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using Microsoft.Data.Sqlite;
@@ -458,9 +457,9 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunBatch_ParallelSessionReuseKeepsTwelveItemCostWithinThreeItemRatio_Issue4872()
+    public void RunBatch_ParallelSessionReuseKeepsSnapshotWorkConstant_Issue5332()
     {
-        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_batch_ratio_4872");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_batch_work_5332");
         var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
         using var writer = new SqliteConnection(
             $"Data Source={dbPath};Mode=ReadWrite;Pooling=False");
@@ -470,66 +469,106 @@ public partial class QueryCommandRunnerTests
             command.CommandText = """
                 PRAGMA journal_mode=WAL;
                 PRAGMA wal_autocheckpoint=0;
-                CREATE TABLE batch_ratio_filler(payload BLOB NOT NULL);
-                INSERT INTO batch_ratio_filler(payload) VALUES (zeroblob(16777216));
+                INSERT INTO files(path, lang, size, lines, checksum, modified)
+                VALUES ('src/Initial.cs', 'csharp', 1, 1, 'initial', CURRENT_TIMESTAMP);
                 """;
             command.ExecuteNonQuery();
         }
-        Assert.True(new FileInfo(dbPath + "-wal").Length >= 16_777_216);
+        var dbBytes = new FileInfo(dbPath).Length;
+        var walBytes = new FileInfo(dbPath + "-wal").Length;
+        Assert.True(walBytes > 0);
 
-        _ = MeasureIssue4872ParallelBatch(dbPath, commandCount: 3);
-        var shortRuns = new TimeSpan[3];
-        var longRuns = new TimeSpan[3];
-        for (var iteration = 0; iteration < shortRuns.Length; iteration++)
-        {
-            shortRuns[iteration] = MeasureIssue4872ParallelBatch(dbPath, commandCount: 3);
-            longRuns[iteration] = MeasureIssue4872ParallelBatch(dbPath, commandCount: 12);
-        }
-
-        var shortBaseline = shortRuns.Min();
-        var longBaseline = longRuns.Min();
-        var ratio = longBaseline.TotalMilliseconds / shortBaseline.TotalMilliseconds;
-        Assert.True(
-            ratio <= 3.0,
-            $"Parallel batch session reuse regressed: 12-item/3-item ratio was {ratio:F2} "
-            + $"({longBaseline.TotalMilliseconds:F1} ms / {shortBaseline.TotalMilliseconds:F1} ms).");
+        // The writer stays open without further writes, so every item sees the same
+        // hot WAL generation. Count real setup/copy work instead of scheduler time.
+        // Rejected commands isolate session setup from command-specific DB work;
+        // the neighboring reuse test checks successful commands against serial output.
+        foreach (var commandCount in new[] { 3, 12 })
+            AssertIssue5332ParallelBatchWork(dbPath, commandCount, dbBytes, walBytes);
     }
 
-    private TimeSpan MeasureIssue4872ParallelBatch(string dbPath, int commandCount)
+    private void AssertIssue5332ParallelBatchWork(
+        string dbPath, int commandCount, long dbBytes, long walBytes)
     {
         using var firstWaveStarted = new CountdownEvent(3);
-        QueryCommandRunner.BatchParallelSessionOpenedForTesting = static () =>
+        var openedSessions = 0;
+        var constructedReaders = 0;
+        var copiedFiles = new ConcurrentBag<(string Name, long Bytes)>();
+        var snapshotDirectories = new ConcurrentBag<string>();
+        var startedLines = new ConcurrentBag<int>();
+        var originalSessionHook = QueryCommandRunner.BatchParallelSessionOpenedForTesting;
+        var originalReaderFactory = QueryCommandRunner.BatchParallelReaderFactoryForTesting;
+        var originalCommandHook = QueryCommandRunner.BatchParallelCommandStartedForTesting;
+        var originalCopyHook = DbConnectionFactory.QueryOnlySnapshotFileCopyingForTesting;
+        var originalDirectoryHook = DbConnectionFactory.QueryOnlySnapshotDirectoryCreatedForTesting;
+        QueryCommandRunner.BatchParallelSessionOpenedForTesting =
+            () => Interlocked.Increment(ref openedSessions);
+        QueryCommandRunner.BatchParallelReaderFactoryForTesting = db =>
         {
-            // Model an expensive large-index open/schema phase. This is workload cost,
-            // not a synchronization delay; the countdown below owns worker coordination.
-            Thread.Sleep(TimeSpan.FromMilliseconds(100));
+            Interlocked.Increment(ref constructedReaders);
+            return new DbReader(db);
         };
+        DbConnectionFactory.QueryOnlySnapshotFileCopyingForTesting = (source, destination) =>
+            copiedFiles.Add((Path.GetFileName(destination), new FileInfo(source).Length));
+        DbConnectionFactory.QueryOnlySnapshotDirectoryCreatedForTesting = snapshotDirectories.Add;
         QueryCommandRunner.BatchParallelCommandStartedForTesting = lineNumber =>
         {
+            startedLines.Add(lineNumber);
             if (lineNumber > 3)
                 return;
             firstWaveStarted.Signal();
-            if (!firstWaveStarted.Wait(TimeSpan.FromSeconds(5)))
-                throw new TimeoutException("The parallel batch benchmark wave did not start.");
+            // Synchronization watchdog only; elapsed time is not a performance assertion.
+            if (!firstWaveStarted.Wait(TimeSpan.FromSeconds(30)))
+                throw new TimeoutException("The parallel batch work-count wave did not start.");
         };
 
         try
         {
-            var stopwatch = Stopwatch.StartNew();
-            var (exitCode, _, stderr) = CaptureConsoleWithInput(
+            var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
                 BuildIssue4872RejectedBatchInput(commandCount),
                 () => QueryCommandRunner.RunBatch(
                     ["--db", dbPath, "--json-summary", "--parallel", "3"],
                     _jsonOptions));
-            stopwatch.Stop();
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
             Assert.Equal(string.Empty, stderr);
-            return stopwatch.Elapsed;
+            Assert.Equal(Enumerable.Range(1, commandCount), startedLines.Order());
+            Assert.Equal(3, Volatile.Read(ref openedSessions));
+            Assert.Equal(3, Volatile.Read(ref constructedReaders));
+            Assert.Equal(3, snapshotDirectories.Count);
+            Assert.All(snapshotDirectories, path => Assert.False(Directory.Exists(path), path));
+            Assert.Equal(6, copiedFiles.Count);
+            Assert.Equal(3, copiedFiles.Count(file => file.Name == "snapshot.db" && file.Bytes == dbBytes));
+            Assert.Equal(3, copiedFiles.Count(file => file.Name == "snapshot.db-wal" && file.Bytes == walBytes));
+
+            var lines = ParseJsonLines(stdout);
+            try
+            {
+                Assert.Equal(commandCount + 1, lines.Count);
+                for (var index = 0; index < commandCount; index++)
+                {
+                    var record = lines[index].RootElement;
+                    Assert.Equal(index + 1, record.GetProperty("line").GetInt32());
+                    Assert.Equal("unknown", record.GetProperty("command").GetString());
+                    Assert.Equal(CommandExitCodes.UsageError, record.GetProperty("exit_code").GetInt32());
+                }
+                var summary = lines[^1].RootElement;
+                Assert.Equal("batch_summary", summary.GetProperty("record").GetString());
+                Assert.Equal(3, summary.GetProperty("parallelism").GetInt32());
+                Assert.Equal(commandCount, summary.GetProperty("commands_processed").GetInt32());
+                Assert.Equal(commandCount, summary.GetProperty("command_failures").GetInt32());
+            }
+            finally
+            {
+                foreach (var document in lines)
+                    document.Dispose();
+            }
         }
         finally
         {
-            QueryCommandRunner.BatchParallelSessionOpenedForTesting = null;
-            QueryCommandRunner.BatchParallelCommandStartedForTesting = null;
+            QueryCommandRunner.BatchParallelSessionOpenedForTesting = originalSessionHook;
+            QueryCommandRunner.BatchParallelReaderFactoryForTesting = originalReaderFactory;
+            QueryCommandRunner.BatchParallelCommandStartedForTesting = originalCommandHook;
+            DbConnectionFactory.QueryOnlySnapshotFileCopyingForTesting = originalCopyHook;
+            DbConnectionFactory.QueryOnlySnapshotDirectoryCreatedForTesting = originalDirectoryHook;
         }
     }
 
