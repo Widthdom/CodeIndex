@@ -20,13 +20,6 @@ public partial class FileIndexer
             normalizedChild);
     }
 
-    private static bool IsLexicalPathEqualOrParent(string candidateParent, string candidateChild)
-    {
-        var normalizedParent = Path.TrimEndingDirectorySeparator(Path.GetFullPath(candidateParent));
-        var normalizedChild = Path.TrimEndingDirectorySeparator(Path.GetFullPath(candidateChild));
-        return CodeIndex.Cli.PathCasing.IsPathEqualOrParent(normalizedParent, normalizedChild);
-    }
-
     internal static string ResolveFileReadPath(string path)
         => ResolveFileReadPath(path, out _);
 

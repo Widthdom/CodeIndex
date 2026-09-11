@@ -253,9 +253,4 @@ public partial class DbReader
             evidenceFilter);
         return ExecuteDependencyQuery(BuildDependencyQueryPlan(request), cancellationToken);
     }
-
-
-
-    private void AppendDependencyGeneratedFilter(ref string sql, string fileAlias)
-        => sql += BuildDependencyGeneratedFilter(fileAlias);
 }
