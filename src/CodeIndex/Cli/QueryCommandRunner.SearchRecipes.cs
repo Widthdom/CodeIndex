@@ -270,7 +270,7 @@ public static partial class QueryCommandRunner
             jsonOptions,
             commandName);
 
-    private static JsonSerializerOptions EnsureJsonNodeSerializerOptions(JsonSerializerOptions jsonOptions)
+    internal static JsonSerializerOptions EnsureJsonNodeSerializerOptions(JsonSerializerOptions jsonOptions)
     {
         if (jsonOptions.TypeInfoResolver != null)
             return jsonOptions;
@@ -5018,9 +5018,12 @@ public static partial class QueryCommandRunner
         total = 0;
         foreach (var namedQuery in options.NamedSearchQueries)
         {
-            var results = reader.Search(
+            var selectRows = HasSearchRowSelectors(options);
+            // Use a fixed candidate population so output limits cannot change sampling.
+            var candidateWindowExhausted = false;
+            var results = reader.SearchWithCandidateEvidence(
                 namedQuery.Query,
-                FetchLimitForSearchEnvelope(options.Limit),
+                selectRows ? SearchOriginFilterMaxCandidates : FetchLimitForSearchEnvelope(options.Limit),
                 options.Lang,
                 options.RawFts,
                 options.PathPatterns,
@@ -5034,9 +5037,26 @@ public static partial class QueryCommandRunner
                 guardFilters: options.GuardFilters,
                 guardWindow: options.GuardWindow,
                 guardScope: options.GuardScope,
-                tokenBoundary: options.TokenBoundary);
-            var rows = BuildSearchDisplayRows(results, options, userExact, namedQuery.Query);
-            var truncated = TrimSearchRowsToRequestedLimit(rows, options.Limit);
+                tokenBoundary: options.TokenBoundary,
+                candidateWindowObserver: exhausted => candidateWindowExhausted = exhausted);
+            var originCoverageComplete = true;
+            var rows = BuildSearchDisplayRows(results, options, userExact, namedQuery.Query,
+                originCoverageObserver: complete => originCoverageComplete &= complete);
+            SearchOutputSelection? selection = null;
+            bool truncated;
+            if (selectRows)
+            {
+                var resultLimit = GetSearchRecipeEffectiveResultLimit(options, total);
+                selection = ApplySearchOutputSelection(rows, options, resultLimit,
+                    !candidateWindowExhausted && originCoverageComplete
+                    && options.GuardFilters.Count == 0 && options.ResultKinds.Count == 0);
+                rows = selection.Rows;
+                truncated = selection.LimitTruncated || !selection.SourceTotalAuthoritative;
+            }
+            else
+            {
+                truncated = TrimSearchRowsToRequestedLimit(rows, options.Limit);
+            }
             AttachExactSubstringHint(
                 rows.Select(row => row.Compact),
                 SearchQueryAdvisor.BuildExactSubstringHint(namedQuery.Query, options.RawFts, userExact, options.Prefix));
@@ -5049,7 +5069,14 @@ public static partial class QueryCommandRunner
                 BuildSearchRecipeTopFiles(rows),
                 truncated,
                 null,
-                rows.Select(row => row.Compact).ToList()));
+                rows.Select(row => row.Compact).ToList())
+            {
+                SelectionAccounting = selection == null ? null : new SearchNamedSelectionAccountingJsonResult(
+                    "per_query", selection.SourceTotal, selection.SourceTotalAuthoritative,
+                    selection.SourceTotalAuthoritative ? null : selection.SourceTotal,
+                    selection.SelectedTotal, selection.Returned, selection.SelectorOmittedCount,
+                    selection.LimitOmittedCount, 0, candidateWindowExhausted, selection.Selectors),
+            });
         }
 
         return queryResults;

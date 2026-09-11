@@ -221,6 +221,10 @@ public sealed class QueryCommandOptions
     public int DependencyCycleGraphBudget { get; init; } = QueryCommandRunner.DefaultDependencyCycleGraphBudget;
     public bool IncludeAllDependencyCycleNodes { get; init; }
     public bool GroupDependencyPartialTypes { get; init; }
+    public bool DependencyNodeMappings { get; init; }
+    public string? DependencyCycleNode { get; init; }
+    public string? DependencyNodeGeneration { get; init; }
+    public string? DependencyMappingCursor { get; init; }
     public DependencyEvidenceFilter DependencyEvidenceFilter { get; init; } = DependencyEvidenceFilter.Empty;
     public bool DependencySuppressNoise { get; init; }
     public List<string> DependencySymbols { get; init; } = [];

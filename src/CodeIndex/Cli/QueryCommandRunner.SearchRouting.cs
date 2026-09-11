@@ -188,12 +188,15 @@ public static partial class QueryCommandRunner
                 "--search-fields with --named-query requires grouped JSON row output; NDJSON, results-only, count, summary, aggregation, and non-JSON formats are not supported.",
                 "Use --named-query <name>=<query> --search-fields path,line --json (or --format compact); run each query as a plain search for projected NDJSON.");
         }
-        if (HasSearchRowSelectors(options))
+        if (HasSearchRowSelectors(options)
+            && (options.CountOnly || options.SummaryOnly || HasSearchAggregation(options)
+                || options.ResultsOnly || options.SearchCursor.HasValue
+                || options.JsonOutputFormatExplicit))
         {
             return RejectSearchUsage(
                 options,
-                "row-selection controls are not supported with --named-query because named batches do not expose selector accounting.",
-                "Remove --first-per-file / --sample, or run each query as a plain search or recipe row output.");
+                "named-query row-selection controls require grouped row output; count, summary, aggregation, results-only, explicit JSON stream/array formats, and cursors are not supported.",
+                "Use --first-per-file / --sample with plain text, --json, or --format compact; remove selectors to request counts.");
         }
         if (options.Query != null || options.RecipeName != null || options.ExtraNames.Count > 0)
         {

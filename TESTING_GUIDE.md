@@ -1,5 +1,11 @@
 # Testing Guide
 
+Named selection (#5325) shares a small overlapping-chunk fixture across single,
+multiple/shared-file and empty queries, selectors, total/per-query limits,
+rich/compact/projected JSON, text, deterministic replay, UTF-8 budget boundaries,
+lower-bound coverage and unsupported formats. Run the named-query and row-selector
+regressions on net8/net9; retain #5276 projection coverage.
+
 ## Early search/find validation coverage
 
 `QueryCommandRunnerEarlyUsageIssue5323Tests.cs` shares an isolated database across blank/missing query, unsupported/missing-value option, find scope, output ordering/alias, bounded diagnostic and human controls. Keep JSON-looking query/inline values separate from actual selectors and test `--` boundaries. Sequential/parallel batch summaries must retain structured failures and continue a successful child without raw streams. Run on net8/net9 alongside #5297/#5305; invalid numeric search values now produce JSON when requested.
@@ -38,6 +44,8 @@ Issue #5312 uses a real-index fixture shared across CLI and MCP to compare ordin
 Also cover source/definition case differences and positive/negative target-symbol filters for unqualified references. The 128-view-pairs fixture counts SQL normalization callbacks: each reference resolves once, and target normalization stays linear in indexed symbols instead of growing with reference/definition pairs. The query must stay within 256 progress callbacks at 1,000 SQLite VM instructions per callback. Run both frameworks; avoid wall-clock assertions.
 
 ## Typed dependency-cycle regression coverage
+
+Issue #5326 extends these fixtures with a 51-node SCC and a 21-file partial family. Verify complete node-catalogue and per-node declaration pagination without loss/duplication, mixed file fallbacks and generic/nested identities, generation/node/corrupt-token rejection, absent metadata, exact UTF-8 byte boundaries and continuation after trimming. Compare CLI/MCP payloads and preserve raw-file cycle and help/completion regressions on net8/net9.
 
 `QueryCommandRunnerIssue5301Tests` uses real indexing to verify partial-family collapse, same-file inter-type SCCs through local functions, namespace/generic/nested identity, bounded declaration mappings, Python and top-level file-scope retention, mixed SQL readiness, graph budgets, pagination and noise-suppressed stale-metadata fallback. Keep CLI/MCP parity and the raw-file regressions in #5197 on both net8 and net9.
 
@@ -1301,6 +1309,11 @@ Check the following:
 
 <a id="テストガイド"></a>
 
+名前付き検索の行選択（#5325）は、重複チャンクを含む小さな共通 fixture で単一・複数・
+共有ファイル・空クエリ、selector、全体／クエリ上限、rich / compact / 投影 JSON、text、
+決定的な再実行、UTF-8 上限の境界、下限表記、非対応形式を検証します。
+名前付き検索と行選択の回帰テストを net8 / net9 で実行し、#5276 の投影検証も維持してください。
+
 `ProgramCliTests.Run_Unhandled*`（#5311）は、テスト専用の未作成 `--db` とログディレクトリを指定し、既存設定の探索とライフサイクルログを無効化します。環境変数は `EnvironmentVariableScope` で復元します。各例外／SQLite 終了コードについて、診断保存の成功と `last-failure.json` を同名ディレクトリで塞いだ失敗を検証し、report の案内または今回の診断を保存できなかった旨、および安全な stderr を確認します。console-sensitive collection と既存の net8 専用 production-runtime 属性を維持し、関連する `GlobalToolLogTests`・`ReportCommandRunnerTests` は net8/net9 の両方で実行してください。この確実な書き込み阻害は、過去に発生した既存保存先での障害原因を特定するものではありません。
 
 ## SQL 依存循環の回帰テスト
@@ -1325,6 +1338,8 @@ Issue #5300 のテストは隣接・入れ子の C# callable、対象行の除�
 # テストガイド
 
 `QueryCommandRunnerFindIssue5324Tests` は code/comment/string/fixture/unknown の混在、元の座標とゼロ幅一致、ページ分割前の件数、除外・kind フィルター、上限付き JSON とカーソル、走査上限からの再開、キャンセルとタイムアウトを検証します。フィルター付き行ページの再開後は全体件数を非確定に保ちます。意味フィルターの usage エラーでも #5323 の早期 JSON エラー契約を維持します。同一行の unknown origin のカーソル再開では再開位置より前の一致を再計上せず、次の一致の先読みは観測件数に残します。既存の find、CLI スキーマ・ヘルプ、検索分類の回帰テストとともに net8/net9 で実行してください。
+
+Issue #5326 では51ノードの SCC と21ファイルの partial 型を使い、ノードカタログと各ノードの宣言ページを欠落・重複なく取得できることを検証します。ファイルフォールバックと generic・入れ子の識別、世代・対象ノード・破損トークンの拒否、メタデータ不足、UTF-8 バイト境界と切り詰め後の継続を含めてください。CLI/MCP の応答を比較し、生ファイル循環とヘルプ・補完の回帰検証を net8/net9 で維持します。
 
 #5322 の回帰検証には `QueryCommandRunnerAuditSarifIssue4903Tests` も含めてください。SARIF の UTF-8 バイト上限で結果を丸ごと省略しても、origin フィルターの全候補を評価済みなら元の件数は確定したままです。上限ちょうど、省略数、部分結果の終了コード、明示的な許容、カーソル再実行、最小出力の検証を net8/net9 の両方で維持してください。
 

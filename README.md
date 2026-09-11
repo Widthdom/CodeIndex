@@ -18,6 +18,15 @@ Classification reads an indexed prefix bounded by 4,096 lines, 8,388,608 UTF-16 
 
 ## Dependency cycles by C# type
 
+Declaration navigation: run `cdidx deps --cycles --group-partial-types --node-mappings --json --db <db>`. This separate catalogue contains **all indexed C# types and explicit file-fallback nodes**, including declarations outside the cycle/edge filters; catalogue membership does not establish a dependency or cycle. Graph filters, SCC cursors and alternate formats are rejected in navigation mode. No graph analysis is rerun.
+
+Follow `next_mapping_cursor` with `--mapping-cursor <token>` for the next node page. To resolve an emitted ID, add `--cycle-node <id> --node-generation <token>`, taking the token from `cycle_grouping.node_generation` (or a mapping page's `node_generation`) in the **same response as that ID**. Follow that mapping's `next_file_cursor` with the same node and generation to retrieve remaining declaration files. MCP `deps` uses `nodeMappings=true, cycles=true, groupPartialTypes=true`, `cycleNode`, `nodeGeneration` and `mappingCursor`. Use the same database throughout.
+
+Navigation defaults to 40 nodes per page and 20 paths per node; resolving one node defaults to 20 paths. A positive `--limit` / MCP `limit` can reduce the active dimension's page size. Nodes and paths are ordered by binary identity/path. Pages expose total, returned, offset and remaining counts; each mapping independently exposes file counts and continuation. Successful CLI output is capped at 65,536 UTF-8 bytes including its final newline; `--max-json-bytes` can reduce it. MCP `maxBytes` applies the same bound to `structuredContent` plus the CLI newline, excluding the transport envelope. Byte fitting retains whole mappings/paths and advances cursors only over emitted items. If even one item and continuation cannot fit, `E028_RESPONSE_BUDGET_TOO_SMALL` reports a measured minimum and consumes no page.
+
+Node IDs must travel with their generation token. Tokens bind the indexed workspace/generation, grouping contract and metadata readiness; file continuations also bind the exact node. They detect corruption and stale reuse, not authorization. After indexing or metadata changes, discard tokens and rerun the grouped query. Missing metadata rejects navigation with refresh guidance while normal grouped cycle analysis retains its raw-file fallback. Graph budgets, SCC sampling, and `analysis_complete` are unchanged.
+
+
 Opt in with `cdidx deps --cycles --group-partial-types --json` (MCP: `cycles=true, groupPartialTypes=true`). The default remains the original file graph. Current C# partial-family and reference-identity metadata assigns each confirmed reference endpoint to its owning type before SCC analysis. Partial declarations share a node; ordinary types remain declaration-specific. Namespaces, generic arities, nested types and multiple types in one file remain distinct. Same-file inter-type dependencies are included. Non-type, ambiguous-ownership and non-authoritative target evidence retains an explicit `file:` node; this is not a compiler-complete type graph.
 
 `cycle_grouping` reports intra-type edges/references separately from inter-node edges/references, including representative internal symbols. Intra-type edges do not produce SCCs. Counts describe the bounded typed candidate graph, and a reference reaching multiple declarations of the same family counts once per typed edge. `raw_candidate_edge_count` describes the selected raw file pairs; `--graph-budget` bounds both raw pairs and resulting typed edges independently, so grouping never turns a budget-limited scan into complete analysis. `analysis_complete`, grouping state and output sampling remain separate. Filters, noise suppression and graph evidence retain their existing meanings.
@@ -392,6 +401,15 @@ A deadline returns exit `11`; cancellation returns `130`. JSON reports `analysis
 `deps --cycles`（MCP: `deps` の `cycles=true`）は通常の依存関係検索と同じ SQL 修飾名の照合を使います。候補選択と参照証拠の取得の両方で、参照位置と所属コンテナから名前を解決し、スキーマの識別と検索範囲に基づく末尾名へのフォールバックを維持します。`dbo.LeftView` と `dbo.RightView` のような修飾付きビューの循環を検出し、別スキーマの無関係な同名オブジェクトを混ぜません。パス・逆方向・シンボル・証拠のフィルター、グラフ解析上限、カーソルの完全性判定の意味は変わりません。このクエリ修正のための再索引は不要です。
 
 ## C# 型単位の依存循環
+
+宣言の参照には `cdidx deps --cycles --group-partial-types --node-mappings --json --db <db>` を使います。この独立したカタログは、循環・辺のフィルター外の宣言も含む**索引内の全 C# 型と明示的なファイルフォールバックノード**を列挙します。カタログへの所属は依存関係や循環への所属を意味しません。参照モードではグラフフィルター、SCC カーソル、別の出力形式を拒否し、グラフ解析を再実行しません。
+
+次のノードページは `next_mapping_cursor` を `--mapping-cursor <token>` に渡して取得します。返された ID を解決する場合は `--cycle-node <id> --node-generation <token>` を追加し、**その ID と同じ応答**の `cycle_grouping.node_generation`（またはマッピングページの `node_generation`）を使います。宣言ファイルの残りは、そのマッピングの `next_file_cursor` を同じノード・世代とともに渡して取得します。MCP の `deps` では `nodeMappings=true, cycles=true, groupPartialTypes=true` と `cycleNode`、`nodeGeneration`、`mappingCursor` を使います。一連の操作では同じ DB を指定してください。
+
+参照ページの既定は40ノード・各20パスで、単一ノードの解決は20パスです。正の `--limit` / MCP `limit` で対象の次元のページサイズを縮小できます。ノードは ID、パスはパス文字列のバイナリ順です。ページには総数・返却数・オフセット・残数、各マッピングには独立したファイル件数と継続情報を返します。CLI の成功出力は末尾改行を含む UTF-8 の65,536バイトが上限で、`--max-json-bytes` で縮小できます。MCP の `maxBytes` は転送用エンベロープを除く `structuredContent` と CLI 相当の改行に同じ上限を適用します。バイト調整ではマッピング・パスを途中で切らず、実際に返した項目の分だけカーソルを進めます。1項目と継続情報すら収まらない場合は `E028_RESPONSE_BUDGET_TOO_SMALL` と計測した最小サイズを返し、ページを消費しません。
+
+ノード ID は世代トークンと一緒に保持してください。トークンは索引対象のワークスペース・世代・グループ化契約・メタデータの準備状態に、ファイル継続はさらに対象ノードに紐づきます。破損や古いトークンの再利用を検出するもので、認可情報ではありません。索引・メタデータ更新後はトークンを破棄し、グループ化クエリを再実行してください。メタデータ不足時の参照は更新案内付きで拒否し、通常のグループ化循環解析は既存の生ファイルへのフォールバックを維持します。グラフ上限、SCC サンプル、`analysis_complete` の意味は変わりません。
+
 
 `cdidx deps --cycles --group-partial-types --json`（MCP: `cycles=true, groupPartialTypes=true`）で明示的に有効化します。既定は従来のファイルグラフです。最新の C# partial 型と参照 ID のメタデータを使い、確実に解決された参照の両端を所属型へ割り当ててから SCC を解析します。partial 宣言は同じノードへ統合し、通常の型は宣言ごとに区別します。namespace、generic arity、入れ子の型、同一ファイル内の複数型を区別し、同一ファイル内の型間依存も含めます。型外の参照、所属が曖昧な参照、確実な参照先 ID を持たない証拠は明示的な `file:` ノードに残します。コンパイラと同等の完全な型グラフではありません。
 

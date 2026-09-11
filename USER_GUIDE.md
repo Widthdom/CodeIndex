@@ -383,9 +383,8 @@ return a usage error instead of being silently replaced. When `--format` is
 repeated, its existing rightmost-value-wins rule still applies.
 `search --named-query <name>=<query>` can be repeated to run an ad hoc grouped
 batch with the same filters and snippet bounds. Named batches emit one grouped
-JSON document, and `--format compact` keeps the per-result
-`CompactSearchResult` snippet/highlight context instead of reducing rows to
-file/line pairs.
+JSON document; `--format compact` uses file/line locations by default, while
+`--search-fields` selects explicit row fields.
 `search --format grouped` reports query-wide `total_matches`, `total_groups`,
 and `total_files` separately from `grouped_match_count` and
 `emitted_match_count`. When `--limit` or `--per-file-limit` omits rows,
@@ -1821,6 +1820,26 @@ output stays unchanged. `--max-json-bytes` measures the complete projected UTF-8
 document, including nested query metadata and the final newline; if it cannot fit,
 the command returns `E028_RESPONSE_BUDGET_TOO_SMALL` rather than oversized results.
 
+Named queries support `--first-per-file` and `--sample <n>` in text, grouped
+`--json`, and compact output, including field projection. Selection is independent
+per query: normal matching/filtering and overlap deduplication, first row per file
+in search order, fixed-seed sampling, then `--limit` and the remaining
+`--total-limit` in query declaration order. Shared files remain in each query.
+Sampling uses a fixed 10,000-candidate window, independent of output limits, and
+is repeatable for the same index and options. A sample of one keeps the first row.
+Each `queries[].selection_accounting` reports `scope=per_query`, `source_total`,
+`selected_total`, `returned`, `selector_omitted_count`, `limit_omitted_count`, and
+ordered `selectors` with stage counts and sampling parameters. Source totals
+count filtered/deduplicated rows before selectors. `source_total_authoritative=false`
+and `source_total_lower_bound` retain uncertainty for exhausted candidate windows
+or unverified filters; selected totals describe only those observed candidates,
+not a repository-wide sample. `candidate_window_exhausted` reports the raw cap.
+Selection alone does not set `truncated`; output limits or incomplete coverage do.
+Byte budgets retain the whole-document error policy above, so successful output
+has `byte_limit_omitted_count=0`. Count/summary/aggregation, results-only, explicit
+NDJSON/array formats and cursors reject named-query selectors. No cross-query
+deduplication or selector cursor state is provided.
+
 Recipe and named-query JSON include per-query counts, `top_files`, and
 `truncated` metadata. Recipe JSON rows may include `audit_classifications`
 when a recipe classifier can classify an individual result, and query payloads
@@ -1944,7 +1963,7 @@ rerun instead. For the same reason, recipe row selectors reject an incoming
 `--cursor`. Generated compact and issue-draft replay commands retain the active
 selector. Count, aggregation,
 and summary-only compact recipe output reject row-selection controls because
-they cannot represent selected rows. Plain count/aggregation, named-query and
+they cannot represent selected rows. Plain count/aggregation and
 recipe-list modes, `--results-only`, metadata-free `--json=array`, and formatted
 row outputs without selector accounting also reject them instead of silently
 ignoring them. Add `--json-envelope` to an array request to retain selector
@@ -4378,8 +4397,8 @@ count mode も同じ contract に従います。bare `--count` は script が利
 `--format` を繰り返した場合は、既存どおり右端の値を優先します。
 `search --named-query <name>=<query>` は繰り返し指定でき、同じ filter と snippet 上限で
 ad hoc な grouped batch を実行します。名前付き batch は 1 つの grouped JSON document を
-出力し、`--format compact` でも各 result の `CompactSearchResult` snippet / highlight
-context を維持し、file/line だけの行には縮約しません。
+出力します。`--format compact` の既定行は file/line で、`--search-fields` により
+出力フィールドを明示的に選べます。
 `search --format grouped` は query 全体の `total_matches`、`total_groups`、
 `total_files` と、表示対象の `grouped_match_count`、実際に出力した
 `emitted_match_count` を分けて報告します。`--limit` または `--per-file-limit` で
@@ -5762,7 +5781,27 @@ query ごとに grouped された 1 つの aggregate JSON payload を出力し�
 形式との併用は拒否します。フィールド選択なしの既存出力は維持します。
 `--max-json-bytes` は入れ子のクエリ情報と末尾改行を含む選択後の UTF-8 document
 全体を測定し、収まらない場合は超過した結果ではなく `E028_RESPONSE_BUDGET_TOO_SMALL`
-を返します。recipe classifier が個別 result を分類できる場合、
+を返します。
+
+名前付きクエリでは text、グループ化された `--json`、compact（フィールド選択を含む）で
+`--first-per-file` と `--sample <n>` を使えます。選択はクエリごとに独立し、通常の検索・
+フィルター・重複チャンクの排除、検索順で各ファイルの先頭行、固定 seed のサンプリング、
+`--limit`、宣言順に残りの `--total-limit` を適用します。同じファイルも各クエリに残ります。
+候補は出力上限に依存しない固定 10,000 件の範囲で、同じインデックスとオプションなら
+選択は再現可能です。sample が 1 の場合は先頭行を保持します。
+`queries[].selection_accounting` は `scope=per_query`、`source_total`、`selected_total`、
+`returned`、`selector_omitted_count`、`limit_omitted_count` と、各段階の件数・sample 設定を
+持つ順序付き `selectors` を返します。source はフィルター・重複排除後、選択前の行数です。
+候補上限到達や未検証フィルターでは `source_total_authoritative=false` と
+`source_total_lower_bound` を返し、selected は観測できた候補の選択数だけを表します。
+リポジトリ全体を標本抽出したとはみなしません。`candidate_window_exhausted` は生の候補上限
+到達を示します。選択のみでは `truncated` を設定せず、出力上限や不完全な網羅性で設定します。
+バイト上限は上記の文書全体のエラー方式を維持するため、成功時の
+`byte_limit_omitted_count` は 0 です。count / summary / 集計、results-only、明示的な
+NDJSON / array、cursor は名前付きクエリの行選択と併用できません。
+クエリ間の重複排除や選択状態を保持する cursor は提供しません。
+
+recipe classifier が個別 result を分類できる場合、
 recipe JSON row は `audit_classifications` を含むことがあり、分類済み row がある query payload は
 `classifier_counts` を含みます。例えば `phrase-risk-patterns/task-result-property-review` は
 DTO / result-wrapper の `.Result` property と Task / ValueTask の blocking wait を分離します。
@@ -5856,7 +5895,7 @@ selection だけによる省略は matched / omitted count に含まれますが
 recipe の row selector は受け取った `--cursor` も拒否します。compact / issue-draft が生成する
 replay command は有効な selector を保持します。count、aggregation、summary-only compact の
 recipe output は選択済み row を表現できないため row-selection control を拒否します。
-plain count / aggregation、named-query、recipe-list、`--results-only`、metadata を持たない
+plain count / aggregation、recipe-list、`--results-only`、metadata を持たない
 `--json=array`、selector accounting を持たない formatted row output も、黙って無視せず
 row-selection control を拒否します。array request で accounting を保持するには
 `--json-envelope` を追加します。recipe execution は grouped search output を生成しないため
