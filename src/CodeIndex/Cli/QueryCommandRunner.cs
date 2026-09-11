@@ -184,6 +184,7 @@ public sealed class QueryCommandOptions
     public List<string>? OutlineFields { get; init; }
     public bool OutlineFieldsExplicit { get; init; }
     public bool FirstPerFile { get; init; }
+    public bool ExcludeSafeXml { get; init; }
     public bool ResultsOnly { get; init; }
     public bool NextSteps { get; init; }
     public int GroupedPerFileLimit { get; init; } = 3;

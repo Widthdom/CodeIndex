@@ -1061,7 +1061,12 @@ public sealed record SearchAuditClassificationJsonResult(
     [property: JsonPropertyName("category")] string Category,
     [property: JsonPropertyName("description")] string Description,
     [property: JsonPropertyName("review_guidance")] string ReviewGuidance,
-    [property: JsonPropertyName("evidence")] List<string> Evidence);
+    [property: JsonPropertyName("evidence")] List<string> Evidence)
+{
+    [JsonPropertyName("xml_settings")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public XmlSettingsAuditEvidence? XmlSettings { get; init; }
+}
 
 public sealed class SearchNextMatchHint
 {

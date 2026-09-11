@@ -1730,6 +1730,39 @@ Resume with `continuation.next_command`, or pass `continuation.next_token` as `-
 
 Continuation replays a fixed window of at most 10,000 candidates per child before slicing the selected observations. Tokens are bounded to 16 KiB and 512 child queries. If coverage beyond a child window cannot be established, `continuation.fallbacks` reports `child_coverage_not_authoritative` with a bounded executable child command and narrowing guidance. Fallbacks restart that child and can repeat observations; they do not establish complete traversal. Up to three are returned with exact omitted counts. A null token alone does not imply completeness: check the summary and fallback fields. Reusing a token intentionally replays the same page.
 
+#### XML settings evidence
+
+`xml-parser-security` adds `audit_classifications[].xml_settings` to CLI JSON,
+compact results, issue-draft evidence and MCP recipe results. States are
+`safe_under_observed_guards`, `needs_review`, and `confirmed_unsafe_configuration`.
+Safety requires explicit `Ignore`/`Prohibit`, a null resolver, and positive document
+and entity character limits together. Explicit `Parse` with `XmlUrlResolver` proves
+an unsafe configuration, but does not establish input exposure or a vulnerability.
+Draft `triage.confidence_scope=textual_match` separates match confidence from
+`vulnerability_confidence=not_established`. Manual baseline reviews never establish safety.
+
+Use `cdidx audit xml-parser-security --exclude-safe-xml --json` (or
+`--format compact`, `text`, or `issue-drafts`) to omit only proven safe observations.
+The default retains raw matches and snippets. `source_total`, `selected_total`,
+`selector_omitted_count`, `limit_omitted_count`, and the `exclude_safe_xml` selector
+keep intentional omissions separate from output limits; existing authority signals
+still apply. Remove the flag to retrieve the original evidence. Filtering is a CLI
+row-output option, not supported for count/aggregation, streaming, summaries, or
+`audit --all`; MCP retains the unfiltered classifications.
+
+The C# classifier follows unique indexed factory targets and literal arguments,
+with at most 3 factory hops, 128 analysis nodes, 16 source files, 256 KiB per file,
+1 MiB of source per child query, 4,096 lines per file and 513 lines per callable.
+It supports direct initializers, one-use local settings, single-return factories,
+and same-type single-line integer constants/products. Missing/stale metadata, changed source,
+aliases, later mutations/reassignment, ambiguous calls, unsupported syntax and
+exhausted budgets remain `needs_review`. Provenance includes bounded source paths,
+line numbers and checksums. These observations do not change production XML policy.
+Legacy guard setters such as `ProhibitDtd`, escaped identifiers and framework-name
+value shadows are unsupported and remain reviewable. Types with base lists and
+repeated constant identifiers within a callable also remain reviewable.
+Type-binding checks admit at most 512 indexed declarations and a 512-character scope name.
+
 #### Audit progress
 
 Progress pauses and clears any terminal redraw before result output, then emits the final status after output finishes. Database-open failures have no live redraw to corrupt the error output.
@@ -5690,6 +5723,39 @@ child-query cursor、recipe 固有 aggregation が必要な場合は個別の `c
 `continuation.next_command` を実行するか、同じ `audit --all` に `continuation.next_token` を `--continuation <token>` として渡すと再開できます。token は byte budget による削減後の出力行数を子 query ごとに保持し、完了した子 query は飛ばします。失敗・中断した子 query は未処理のまま残します。index generation、recipe 定義、有効な filter、selector、順序、`--limit` は維持してください。変更された条件や破損 token は子 query の実行前に拒否します。全体の row / JSON byte budget は変更できます。通常の search と名前指定 recipe の cursor は既存の挙動を維持し、baseline file は finding 比較用のままです。
 
 再開では子 query ごとに最大10,000候補の固定集合を再取得し、選択済み observation をページ分割します。token は16 KiB、子 query は512件までです。候補集合より先の全件性を確認できない場合は、`continuation.fallbacks` が `child_coverage_not_authoritative` と上限付きの実行可能な個別コマンド、範囲を絞る案内を返します。fallback は子 query を最初から実行するため重複する observation を含む場合があり、完全走査を保証しません。最大3件を返し、省略件数も明示します。token が null でも完了とは限らないため summary と fallback を確認してください。同じ token の再利用は同じページの再取得になります。
+
+#### XML 設定の根拠
+
+`xml-parser-security` は CLI の JSON、compact 結果、issue-draft の証拠、
+MCP のレシピ結果に `audit_classifications[].xml_settings` を追加します。
+状態は `safe_under_observed_guards`、`needs_review`、
+`confirmed_unsafe_configuration` です。安全判定には明示的な `Ignore` / `Prohibit`、
+null resolver、正の文書文字数上限と entity 文字数上限がすべて必要です。
+`Parse` と `XmlUrlResolver` の明示的な組合せは危険な設定ですが、入力の公開範囲や
+脆弱性の成立を証明するものではありません。ドラフトの
+`triage.confidence_scope=textual_match` と `vulnerability_confidence=not_established`
+で一致の確かさと脆弱性の確かさを区別します。手動の baseline レビューは安全の根拠にしません。
+
+`cdidx audit xml-parser-security --exclude-safe-xml --json`（または
+`--format compact`、`text`、`issue-drafts`）で、安全の根拠が揃った観測だけを除外できます。
+既定では元の一致とスニペットを保持します。`source_total`、`selected_total`、
+`selector_omitted_count`、`limit_omitted_count` と `exclude_safe_xml` selector により、
+意図的な除外と出力上限による省略を区別します。既存の件数の確定性情報も維持します。
+元の証拠はフラグを外して再取得してください。フィルタは CLI の行出力用で、
+count / 集計、ストリーミング、要約、`audit --all` では使用できません。
+MCP はフィルタ前の分類を保持します。
+
+C# の分類は、一意なインデックス済みファクトリーの参照先とリテラル引数を追跡します。
+上限はファクトリー3段、解析ノード128件、ソース16ファイル、1ファイル256 KiB、
+子クエリあたり合計1 MiB、1ファイル4,096行、呼出し可能なシンボル513行です。
+直接の初期化、1回だけ使用するローカル設定、単一 return のファクトリー、同じ型の
+単一行の整数定数と積に対応します。古い／不足したメタデータ、ソース変更、別名、後続の変更・
+再代入、曖昧な呼出し、未対応構文、上限到達は `needs_review` に残します。
+出典には上限付きのパス、行番号、チェックサムを含めます。本番 XML 設定は変更しません。
+`ProhibitDtd` などの旧設定プロパティ、エスケープされた識別子、フレームワーク名を隠す
+同名の値は未対応として、レビュー対象に残します。
+基底型リストを持つ型や、呼出し可能なシンボル内で定数名が複数回現れる場合もレビュー対象に残します。
+型の参照先確認では、インデックス済み宣言512件、スコープ名512文字を上限とします。
 
 #### Audit の進捗
 
