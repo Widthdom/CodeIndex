@@ -931,18 +931,6 @@ internal static class CSharpTypeReferenceArity
         return false;
     }
 
-    private static bool TryCountTopLevelParameters(string text, int openParenthesis, out int count)
-        => TryAnalyzeTopLevelParameters(
-            text,
-            openParenthesis,
-            rejectAmbiguousArgumentExpressions: false,
-            out count,
-            out _,
-            out _,
-            out _,
-            out _,
-            out _);
-
     private static bool TryAnalyzeTopLevelParameters(
         string text,
         int openParenthesis,
