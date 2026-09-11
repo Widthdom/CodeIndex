@@ -1,5 +1,22 @@
 # Developer Guide
 
+## Batch project-root snapshot reuse (#5339)
+
+Children inheriting a batch reader resolve the project root, persisted path-case
+policy, and at most five relocation samples from that reader. Keep explicit DB,
+implicit project-local layout, relative path and file-URI resolution semantics;
+missing metadata must not trigger a new source connection. The session still
+checks source generation between items and replaces stale snapshots. Standalone
+queries and children selecting their own database retain their own resolution.
+
+On macOS arm64, .NET 8.0.29 and 9.0.6, the isolated #5332 hot-WAL fixture
+(4,096-byte main DB + 383,192-byte WAL) produced 9 snapshots / 3,485,592 copied
+bytes for three `files --format count --json` items and 27 / 10,456,776 for twelve,
+at parallelism three. Stack traces identified two project-root metadata opens per
+item. After reuse, both batches require three snapshots / 1,161,864 copied bytes,
+matching the rejected-command control. These are fixture copy-work measurements,
+not latency guarantees or an explanation of #5332's historical timing instability.
+
 ## XML audit settings evidence
 
 `DbReader.XmlSettingsAudit.cs` implements the bounded C# XML configuration subset
@@ -4507,6 +4524,22 @@ CLI、レシピの再実行・フィンガープリント、MCP スキーマ、`
 API version 1 の互換性を維持し、新しい guard scope は contract version 1 を公開します。
 
 # 開発者ガイド
+
+## batch のプロジェクトルート解決におけるスナップショット再利用（#5339）
+
+batch reader を継承する子コマンドは、プロジェクトルート、保存済みの大小文字区別設定、
+移動先照合用の最大5件のファイルサンプルを同じ reader から取得します。DB の明示指定、
+暗黙のプロジェクト内配置、相対パス、file URI の解決規則を維持し、メタデータ欠落時にも
+元 DB を再オープンしません。セッションは項目間で元 DB の世代を確認し、古いスナップショットを
+置き換えます。単独クエリと独自の DB を指定する子コマンドは従来の独立した解決経路を使います。
+
+macOS arm64 の .NET 8.0.29 / 9.0.6 で、#5332 の分離した hot WAL fixture
+（DB 本体4,096 bytes、WAL 383,192 bytes）を並列度3で測定しました。
+`files --format count --json` を3件実行するとスナップショット9個・コピー量3,485,592 bytes、
+12件では27個・10,456,776 bytes でした。スタック記録で、項目ごとのルート解決に伴う
+メタデータ再オープン2回を確認しました。再利用後は両方とも3個・1,161,864 bytes となり、
+拒否コマンドの対照例と一致します。これは fixture のコピー処理量の測定であり、応答時間の保証や
+#5332 の過去の計測時間の不安定さを説明するものではありません。
 
 正規表現 find の意味フィルター (#5324) は `IndexedFindPipeline` で両 collector の前に適用します。カーソル再開用の元の一致 ordinal を維持し、リテラルで再検索せず `SearchMatchClassifier` と上限付き C# 索引プレフィックスを共有します。ゼロ幅座標と除外前の unknown 証拠を保持します。[v1 契約](docs/find-scan-controls.md#正規表現の-origin-フィルター-5324)を参照してください。
 

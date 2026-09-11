@@ -1,5 +1,17 @@
 # Testing Guide
 
+#5339 extends the #5332 fixture to successful `files --format count --json`
+batches with the same three-snapshot/copy-byte budget for 3/12 items, checking
+counts, freshness and authority fields. Keep metadata-present/absent controls
+that mutate the source root, path-case stamp and relocation sample checksum after
+capturing a reader: absolute/relative/URI and explicit/implicit resolution must
+use that snapshot without extra copies or source DB/WAL/SHM changes; a new reader
+must observe the new generation. Run `--filter 'FullyQualifiedName~RunBatch|FullyQualifiedName~Issue5339|FullyQualifiedName~DbPathResolver'`
+on both frameworks. Measurements and scope are in `DEVELOPER_GUIDE.md`.
+Capture all three source artifacts with `CaptureDatabaseArtifacts`, which opens
+with `FileShare.ReadWrite | FileShare.Delete`; `File.ReadAllBytes` conflicts with
+the live SQLite writer on Windows. Compare lengths, SHA-256 hashes and write times.
+
 Parallel batch session-reuse coverage (#5332, replacing the #4872 timing ratio)
 shares a small, unchanged hot-WAL fixture across 3/12 rejected items, isolating
 session setup from command-specific DB work; retain the successful serial/parallel
@@ -1360,6 +1372,18 @@ Issue #5300 のテストは隣接・入れ子の C# callable、対象行の除�
 パーサー（#5297）の回帰テストとともに net8.0 / net9.0 で実行します。
 
 # テストガイド
+
+#5339 は #5332 の fixture に正常な `files --format count --json` の batch を追加し、
+3件・12件ともスナップショット3個分のコピー量を上限として、件数・鮮度・確定性の出力を検証します。
+メタデータがある場合と欠落する場合の両方で、reader 取得後に元 DB のルート、大小文字区別設定、
+移動先照合サンプルのチェックサムを変更してください。絶対／相対パス・URI と明示／暗黙の
+DB 解決が取得済みスナップショットを使い、追加コピーや元 DB/WAL/SHM の変更がないこと、
+新しい reader が更新後の世代を認識することを確認します。
+`--filter 'FullyQualifiedName~RunBatch|FullyQualifiedName~Issue5339|FullyQualifiedName~DbPathResolver'`
+を両フレームワークで実行してください。計測結果と範囲は `DEVELOPER_GUIDE.md` に記載しています。
+元の3ファイルは `FileShare.ReadWrite | FileShare.Delete` を指定する
+`CaptureDatabaseArtifacts` で取得し、サイズ・SHA-256・更新時刻を比較します。
+`File.ReadAllBytes` は Windows で実行中の SQLite writer と共有モードが競合するため使いません。
 
 並列 batch のセッション再利用検証（#5332、#4872 の時間比率テストを置換）は、
 小さな未変更の hot WAL を持つ DB を使い、拒否コマンドを3件と12件実行して、

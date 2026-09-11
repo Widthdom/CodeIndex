@@ -2059,6 +2059,34 @@ public partial class DbReader : IDisposable
     internal string? GetIndexedProjectRoot()
         => TryGetMetaString(_conn, DbContext.IndexedProjectRootMetaKey);
 
+    internal bool? GetIndexedWorkspacePathCaseSensitive()
+        => ParseMetaBool(TryGetMetaString(_conn, DbContext.WorkspacePathCaseSensitiveMetaKey));
+
+    internal List<IndexedFileSnapshot> GetProjectRootFileSamples()
+        => GetProjectRootFileSamples(_conn);
+
+    internal static List<IndexedFileSnapshot> GetProjectRootFileSamples(SqliteConnection connection)
+    {
+        try
+        {
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                SELECT path, checksum FROM files
+                WHERE path IS NOT NULL AND checksum IS NOT NULL AND checksum != ''
+                ORDER BY id LIMIT 5
+                """;
+            using var reader = command.ExecuteReader();
+            var samples = new List<IndexedFileSnapshot>();
+            while (reader.Read())
+                samples.Add(new(reader.GetString(0), reader.GetString(1), null));
+            return samples;
+        }
+        catch (SqliteException)
+        {
+            return [];
+        }
+    }
+
     internal bool SupportsReferenceLanguage(string? lang)
         => ReferenceExtractor.SupportsLanguage(lang, GetWorkspaceSupportedReferenceLanguages());
 
