@@ -536,6 +536,8 @@ cdidx inspect Compute --json --fields definitions.name,definitions.path,referenc
 cdidx inspect --fields list
 ```
 
+For `import` / `diff` comparison budgets and recovery, see [comparison limits](DEVELOPER_GUIDE.md#import-and-diff-comparison-limits).
+
 ## Editor and index portability
 
 Use `cdidx export ctags` when an editor wants the traditional ctags file format
@@ -891,6 +893,12 @@ routed into lower-confidence buckets. C#
 `nameof(...)`, `typeof(...)`, and direct reflection member-name literals such as
 `GetMethod("Foo")` are indexed, but dynamically constructed names still require
 manual review.
+
+#### Unused analysis budgets
+
+`unused` bounds analysis after the database opens to 30,000 ms by default. Set `--analysis-timeout-ms <1..600000>` to change that budget. This includes candidate selection, protective partial-type checks, and requested summaries; `--limit` and `--max-json-bytes` only limit output. Interactive stderr shows one progress line per second; `--progress` also enables it for captured output. `--quiet` and `--no-progress` suppress progress.
+
+A deadline returns exit `11`; cancellation returns `130`. JSON reports `analysis_complete: false`, `analysis_state` (`time_budget_exceeded` or `cancelled`), `analysis_timeout_ms`, and `total_count_authoritative: false`, with no unverified candidates or continuation cursor. A bounded JSON envelope retains these fields under `metadata`. Restart with narrower filters or a larger analysis budget. Completed paged envelopes report lower-bound totals and keep continuation cursors; use explicit `unused --count --json` for full totals, subject to the same analysis budget.
 
 ### Rank hotspots
 
@@ -1333,6 +1341,20 @@ small repositories, and minutes or longer on very large monorepos with around
 
 By default, `cdidx index` stores the database in `<projectPath>/.cdidx/codeindex.db`, even if you run the command from another directory.
 
+#### Size-limited indexing
+
+A persisted `file_too_large` omission makes full and scoped CLI indexing return `status=partial`, `E022_INDEX_PARTIAL`, and exit 11, including unchanged retries and unrelated scoped writes. `--allow-partial` accepts exit 0 while preserving the partial status and incomplete facts. Intentional symbols-only and symbol-kind policies keep their existing success behavior. MCP indexing reports the same partial outcome with `isError=true` and retains successful data.
+
+`size_omissions` in index, status, and workspace health provides an affected-file count, up to 20 sanitized paths (512 characters each), truncation/omitted counts, and observed `actual_bytes` / `limit_bytes` when known. These are observations at omission time, not live file measurements; older diagnostic rows may lack exact byte evidence. Review an explicit `--max-file-bytes <bytes>` (MCP `maxFileBytes`) or deliberately exclude paths in `.cdidxignore`, then run normal indexing. Exclusion requires a full workspace scan and removes those files from searchable coverage. Rebuild is unnecessary. Repair command placeholders require a reviewed limit; no limit is raised automatically. Omitted file sizes do not raise the saved admission policy. Freshness and generation completeness remain separate facts.
+
+#### File-size limits and freshness
+
+For indexing, a nonblank invalid `CDIDX_MAX_FILE_BYTES` value falls back to the 4 MiB default, as the warning indicates, unless an explicit valid limit is supplied.
+
+`index --max-file-bytes 8388608` (MCP: `maxFileBytes`) saves the effective limit with the index. Later indexing and dry runs use an explicit limit first, then `CDIDX_MAX_FILE_BYTES`, then the saved limit, then the 4 MiB default. Ordinary `status --check` and `workspace status --check` reuse the saved budget; an environment override is not required after indexing larger files. Scoped updates preserve the larger prior budget for untouched files. Legacy indexes use at least the largest recorded file size, bounded by the existing 2,147,483,647-byte ceiling, without a rebuild. Failed reads are reported as scan errors and unverifiable indexed files, not deletions. If a file grows beyond the saved budget, retry indexing with a sufficiently larger explicit limit; fix access failures before retrying.
+
+Dry-run row estimates and their confidence limits are documented in [Build & Test](DEVELOPER_GUIDE.md#build--test).
+
 #### Watch mode
 
 `--watch` starts the platform watcher before the required baseline scan, then
@@ -1718,6 +1740,30 @@ Use an individual `cdidx audit <recipe>` for SARIF, issue drafts, child-query
 cursoring, or recipe-specific aggregation. `cdidx recipes` and `cdidx batch`
 remain the lower-level discovery and explicit orchestration tools.
 
+#### Local audit baselines
+
+Origin-filtered recipes can produce complete baselines when the raw candidates are fully examined and every match origin is known, including zero-hit child queries. Identical compatible runs then report `unchanged`; verified removals can become `resolved`. `origin_classification_incomplete` requires inspecting unknown origins and `origin_unavailable` diagnostics with an unfiltered search and reviewing the affected paths manually; increasing row limits or refreshing unchanged source cannot repair lexical classification limits. Other unverified filtering and raw candidate caps retain explicit coverage reasons and recovery guidance. A single user `--limit` or `--total-limit` replaces its internal default without a duplicate warning; genuine repeated options still warn and use the rightmost value.
+
+Changing index exclusions cannot turn an existing excluded file into a resolution. Comparison verifies prior path coverage, distinguishes physical deletion from sparse/ignored paths, and detects when the same database location now indexes another project. Empty incomparable comparisons also return exit `11`.
+
+`cdidx audit baseline-export .cdidx/audit-baseline.json --recipe risky-code` runs the existing audit engine and saves a local baseline. Omit `--recipe` to select all registered recipes. Refresh the index after source changes, then run `cdidx audit baseline-compare .cdidx/audit-baseline.json --recipe risky-code --json`. Use the same filters and limits for comparable runs. Each command accepts `--db`, `--lang`, `--path`, `--exclude-path`, `--exclude-tests`, `--audit-scope`, `--since`, `--limit`, and `--total-limit` as shown in command help; defaults are 1,000 rows per query and 10,000 total rows.
+
+Comparison reports bounded `new`, `unchanged`, `resolved`, and `unknown` identity groups, totals, observation counts, and omissions. Missing findings stay `unknown` when either run is stale, partial, capped, failed, cancelled, or has different recipes, filters, workspace, or identity contracts. Duplicate evidence and possible renames are never guessed. Line numbers are excluded from identity; changed context requires review. Exit `11` identifies incomplete coverage or unknown classifications; export may save an incomplete baseline, explicitly marked as such. Cancellation never publishes an export.
+
+To record a safe finding, copy its `id` from the baseline or comparison and run `cdidx audit baseline-review .cdidx/audit-baseline.json <id> --actor <name> --reason <text> --overwrite`. This requires a complete baseline and an unambiguous entry. The reason, actor, time, and evidence remain traceable; `review_applies` is true only for unchanged compatible evidence. Compare never edits the baseline. Export refuses replacement without `--overwrite`; explicit replacement starts a new baseline without previous annotations.
+
+Files contain hashes of bounded match/context evidence, normalized relative paths, effective filters, and index/recipe provenance, with no source snippets. Store them under `.cdidx/` or outside the indexed source scope. Limits are 8 MiB, JSON depth 16, 10,000 observations, and 200 comparison rows with omission counts. Writes are atomic and use POSIX mode `0600` (Windows inherits directory ACLs). Paths retain case; ambiguous backslashes, absolute paths, and parent segments are rejected. This CLI-only workflow needs neither GitHub credentials nor a database migration. Regenerate installed shell completions after upgrading.
+
+#### Audit recipe token boundaries
+
+`audit <recipe>` and `search --recipe <recipe>` accept `--token-boundary`, including batch execution. It overrides every selected child's match mode with case-sensitive full-query token boundaries. Explicit `--exact-substring` (or `--exact`) instead overrides a child's boundary default with substring matching; these flags remain mutually exclusive. Without an override, each child's `tokenBoundary` / `token_boundary` setting defaults to false and its existing substring/FTS policy remains active. MCP `search` uses the same defaults and supports explicit `tokenBoundary: false` to disable boundaries; explicit `exactSubstring`/`exact` without `tokenBoundary` selects the exact/FTS policy and disables the boundary default.
+
+`dogfood-risk-patterns/process-argument-list` defaults to complete `ArgumentList` tokens in code, retaining `.ArgumentList` and C# `.@ArgumentList` while excluding `TypeArgumentListPattern`. This is lexical evidence, not receiver-type resolution: confirm that the receiver is `ProcessStartInfo`. Unicode letters participate in boundaries; C# `@` is normalized, but Unicode escape sequences are not decoded. Comments/strings follow the recipe's origin filters; genuine substring audits retain their defaults.
+
+Recipe definition fingerprints now include boundary policy. Restart old or mismatched recipe cursors and `audit --all` continuations; export a new baseline after a recipe-policy change rather than treating old observations as resolved. Recipe row cursors bind the index generation, child definition, effective scope and replay options. No database rebuild is required.
+
+For multiline C# comments, strings, and classification limits, see [C# search origins](#c-multiline-search-origins). Boundary filtering does not add compiler-level lexical or type analysis.
+
 #### Audit continuation
 
 When a candidate window is exhausted, `source_total_authoritative` and aggregate `count_authoritative` remain false; `source_total_lower_bound` reports the observed count even if deduplication returned fewer rows than the cap.
@@ -1729,6 +1775,14 @@ Candidate exhaustion is tracked before overlapping-chunk deduplication and inclu
 Resume with `continuation.next_command`, or pass `continuation.next_token` as `--continuation <token>` to the same `audit --all` command. Tokens retain each child's accounted row offset, including byte-budget trimming, and skip completed children. Failed or interrupted children remain pending. Keep the index generation, recipe definitions, effective filters, selectors, ordering, and `--limit` unchanged; changing them or supplying a corrupt token fails before child queries execute. Total-row and JSON-byte budgets may change. Ordinary search and named-recipe cursors keep their existing behavior, and baseline files remain finding-comparison artifacts.
 
 Continuation replays a fixed window of at most 10,000 candidates per child before slicing the selected observations. Tokens are bounded to 16 KiB and 512 child queries. If coverage beyond a child window cannot be established, `continuation.fallbacks` reports `child_coverage_not_authoritative` with a bounded executable child command and narrowing guidance. Fallbacks restart that child and can repeat observations; they do not establish complete traversal. Up to three are returned with exact omitted counts. A null token alone does not imply completeness: check the summary and fallback fields. Reusing a token intentionally replays the same page.
+
+#### Compact audit recovery
+
+Use `cdidx audit --all --db .cdidx/codeindex.db --audit-scope all --summary-level top` for completion, freshness, observation lower bounds and recovery without repeated child descriptions. `--summary-level detailed` preserves the default detail. Successful top summaries and plan pages fit 64 KiB including the final newline; `--max-json-bytes` may impose a smaller budget. JSON/NDJSON/count and `--allow-partial` retain their existing semantics. Counts sum recipe/query observations, including overlapping recipes; they are not unique findings.
+
+When continuation cannot resume a capped child, run the emitted `recovery.partition_plan.argv`, or `cdidx audit --all --db .cdidx/codeindex.db --audit-scope all --partition-plan`. Each unit contains copyable `argv` and a shell-quoted command that executes one exact indexed path with the original filters. Follow `next.argv` to enumerate further plan pages. Tokens reject changed index generations, scope or recipe definitions; regenerate the plan after such changes. Different recipe defaults remain bound to the plan when no single explicit scope applies.
+
+A new plan has every partition pending. Collect each execution's `partition` receipt by binding/id; a page cursor is not proof of execution, and retries may repeat observations. A single file that still exhausts the candidate window remains pending/non-authoritative and requires manual source inspection. Plans cover eligible indexed paths, not unindexed files or human finding review. The limits are 10,000 paths, 100,000 visited inventory rows, 512 queries, 10 seconds and 10 units per page. Overflow returns an unavailable plan with narrowing guidance. Output budgets do not enlarge those work limits, and baseline review annotations remain separate.
 
 #### XML settings evidence
 
@@ -2062,6 +2116,14 @@ invoked `search` or `audit` command in its retry guidance. Without
 `--summary-only`, the full issue-draft contract remains unchanged. These drafts
 are triage aids; review duplicate guidance and current open issues before filing.
 
+#### Search guard errors
+
+Early `search` / `find` validation failures also return a versioned JSON error with command identity, usage category, exit 1, and a recovery hint when JSON (including array/NDJSON and `--format json` / `compact`) is requested. This covers blank/missing queries, invalid options and missing/conflicting find scopes. JSON selectors work on either side of invalid input; inline option values and literals protected by `--` are not selectors. `find --origin` requires `--regex`; see [regex find controls](docs/find-scan-controls.md#regex-origin-filters-5324). Human diagnostics are unchanged, and `batch --json-summary` retains these child failures while continuing later requests.
+
+Missing numeric option values also preserve following inline output selectors: `cdidx search Return --limit --json=array` returns an `E010_USAGE_ERROR` JSON object with exit 1, just like placing the output selector first. This applies to search/audit numeric options and aliases, including counts, snippet limits, and byte budgets. A following `--` still protects a literal query; explicit inline values and existing numeric ranges are unchanged. Without machine output, the error, hint, and usage remain on stderr.
+
+Search and audit guard option errors return a versioned `E010_USAGE_ERROR` JSON object (exit 1) when JSON output is selected, including `--json=ndjson`, `--json=array`, `--format json`, and compact output. Output selection works before or after the invalid option; `--` still introduces a literal query. Missing values and invalid scopes/windows remain rejected (`--guard-scope` accepts `window`, `same-line`, or `same-symbol`). Human output retains its error, hint, and usage. `batch --json-summary` preserves the structured child error and continues subsequent commands without `--include-raw-streams`.
+
 ### Debugging queries
 
 Add `--verbose` to any query command (`search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `excerpt`, `map`, `inspect`, `outline`, `status`, `validate`, `deps`, `impact`, `unused`, or `hotspots`) to print query diagnostics to stderr without changing normal stdout:
@@ -2255,6 +2317,18 @@ When `definition --body` is combined with `--json`, `body_content` is capped to 
 `search --json`, `search --format compact`, named search batches, and MCP `search` return compact match-centered snippets instead of whole chunks. Each result includes `chunk_start_line`, `chunk_end_line`, `snippet_start_line`, `snippet_end_line`, `snippet`, `match_lines`, `highlights`, `context_before`, `context_after`, `truncated_line_count`, `dropped_match_line_count`, and `truncation_context`, plus optional `enclosing_symbol_name`, `enclosing_symbol_kind`, `enclosing_symbol_start_line`, `enclosing_symbol_end_line`, and `enclosing_container_name` when the match line is inside an indexed symbol. Use `--snippet-lines <n>` to shrink or widen the excerpt window (default: 8, max: 20), and `--max-line-width <n>` to clamp each line around the strongest match when a minified / transpiled file would otherwise return a single huge line (default: 512, max: 4096; `0` disables clamping). `--snippet-focus <leftmost|quality|proximity>` controls that long-line focus; `quality` is the default, `leftmost` keeps the legacy earliest-match behavior, and `proximity` favors dense multi-token clusters. Clamped lines are marked with `...(+N)...` in the snippet and expose `highlights[].truncated` / `highlights[].original_line_length` in JSON / MCP output.
 Search JSON also exposes `match_origins`, `match_facets`, and `result_kinds` so tools can distinguish matches in code, comments, string literals, regex literals, CLI help text, MCP schema descriptions (`schema_description`), declarations, identifiers, and likely call sites. Source-scoped exact and origin-filtered searches exclude schema-description examples by default so audit recipes prioritize executable evidence. Each highlight includes its own `match_origins`; `--exclude-comments`, `--exclude-strings`, `--origin` / `--match-origin`, `--exclude-origin`, and `--result-kind` use those facets to hide or keep specific match classes. The `query_context` object includes active `match_origins`, `exclude_origins`, and `result_kinds` filters when present. Broad audit output can be reduced with `--unique path|symbol|origin`, `--count-by path|symbol|origin`, `--format grouped`, `--first-per-file`, `--sample <n>`, `--search-fields <fields>`, `--results-only`, and `--max-json-bytes <n>`.
 The same facets expose `test_file`, `test_symbol`, and `test_fixture` booleans at result, highlight, and match-facet levels. `test_fixture` marks string-like matches inside likely test files or indexed test methods, and `--exclude-fixtures` hides fixture-only matches while keeping real code matches.
+
+#### C# multiline search origins
+
+Search origin filters and facets carry C# block-comment, verbatim-string and raw-string state across indexed lines. Ordinary search, token-boundary recipes, counts and MCP use the same classification and original coordinates. Schema, regex and help-string labels follow the string's opening line. Bounded lexical handling classifies supported interpolation expressions as code and resumes after terminated ordinary, verbatim and raw interpolated strings. Escaped braces, literal text, nested strings and comments keep their respective labels.
+
+Interpolation nesting and expression delimiters each have a depth limit of 64. Unbalanced or unsupported interpolation (including quoted/braced format components) remains `unknown` from the outer string onward. Unknown C# match facets expose `origin_unavailable` (MCP: `originUnavailable`) with a fixed `reason`, one-based `start_line` / `start_column` (MCP: `startLine` / `startColumn`) and `extent=remaining_file` (`line` for mismatched indexed text). Inspect these facets without an origin filter, or with `--origin unknown`; a code-only zero count cannot establish absence when classification is unavailable.
+
+Classification reads an indexed prefix bounded by 4,096 lines, 8,388,608 UTF-16 characters and 128 chunks per file (overlapping chunk characters count toward the read budget). Missing prefix lines or exhausted bounds produce `unknown`, which does not satisfy `--origin code`. It does not read live source or require a rebuild. Inspect unknown matches without an origin filter when reviewing incomplete or large files.
+
+#### Shell search origins
+
+Shell search origins distinguish executable `$()` and backtick command substitutions inside double quotes from the surrounding literal text. Ordinary, named, and recipe searches share these facets: `--origin code` retains the executable spans, and `--exclude-strings` removes the literal spans. Backtick unescaping is applied before interpreting its nested commands, and `case` pattern delimiters do not close substitutions. Single-quoted and escaped literal examples remain strings or help text; match/highlight coordinates are unchanged. This is a line-local heuristic, not a full Shell parser: it examines a prefix of at most 65,536 characters with limits of 63 nested substitutions, 64 active `case` constructs, and 262,144 scan/preprocessing iterations. Matches beyond the prefix or exhausted parsing budgets report `unknown`. Multiline Shell syntax is outside this guarantee.
 
 ### Resolve a definition
 
@@ -2540,6 +2614,31 @@ Use these fields as concrete remediation hints:
 
 Without `--check`, the `status` summary freshness indicator is based on stored `indexed_at` and `latest_modified` timestamps, not elapsed wall-clock time. A clean workspace with `indexed_at >= latest_modified` should read as fresh even if the index itself is older than a few minutes.
 
+For the complete field reference, metadata limits, and explanation output, see the [Status JSON contract](DEVELOPER_GUIDE.md#status-json-contract).
+
+### Dependency cycles
+
+#### SQL dependency cycles
+
+`deps --cycles` (MCP: `deps` with `cycles=true`) uses the same SQL qualified-name matching as ordinary dependencies. Candidate selection and reference evidence both resolve the source occurrence and its container, preserve schema identity, and apply the same scoped leaf fallback. Qualified views such as `dbo.LeftView` and `dbo.RightView` therefore form a file cycle without merging unrelated same-leaf objects in other schemas. Path/reverse, symbol and evidence filters, graph budgets, and cursor completeness retain their existing meanings; no reindex is required for this query fix.
+
+#### Dependency cycles by C# type
+
+Declaration navigation: run `cdidx deps --cycles --group-partial-types --node-mappings --json --db <db>`. This separate catalogue contains **all indexed C# types and explicit file-fallback nodes**, including declarations outside the cycle/edge filters; catalogue membership does not establish a dependency or cycle. Graph filters, SCC cursors and alternate formats are rejected in navigation mode. No graph analysis is rerun.
+
+Follow `next_mapping_cursor` with `--mapping-cursor <token>` for the next node page. To resolve an emitted ID, add `--cycle-node <id> --node-generation <token>`, taking the token from `cycle_grouping.node_generation` (or a mapping page's `node_generation`) in the **same response as that ID**. Follow that mapping's `next_file_cursor` with the same node and generation to retrieve remaining declaration files. MCP `deps` uses `nodeMappings=true, cycles=true, groupPartialTypes=true`, `cycleNode`, `nodeGeneration` and `mappingCursor`. Use the same database throughout.
+
+Navigation defaults to 40 nodes per page and 20 paths per node; resolving one node defaults to 20 paths. A positive `--limit` / MCP `limit` can reduce the active dimension's page size. Nodes and paths are ordered by binary identity/path. Pages expose total, returned, offset and remaining counts; each mapping independently exposes file counts and continuation. Successful CLI output is capped at 65,536 UTF-8 bytes including its final newline; `--max-json-bytes` can reduce it. MCP `maxBytes` applies the same bound to `structuredContent` plus the CLI newline, excluding the transport envelope. Byte fitting retains whole mappings/paths and advances cursors only over emitted items. If even one item and continuation cannot fit, `E028_RESPONSE_BUDGET_TOO_SMALL` reports a measured minimum and consumes no page.
+
+Node IDs must travel with their generation token. Tokens bind the indexed workspace/generation, grouping contract and metadata readiness; file continuations also bind the exact node. They detect corruption and stale reuse, not authorization. After indexing or metadata changes, discard tokens and rerun the grouped query. Missing metadata rejects navigation with refresh guidance while normal grouped cycle analysis retains its raw-file fallback. Graph budgets, SCC sampling, and `analysis_complete` are unchanged.
+
+
+Opt in with `cdidx deps --cycles --group-partial-types --json` (MCP: `cycles=true, groupPartialTypes=true`). The default remains the original file graph. Current C# partial-family and reference-identity metadata assigns each confirmed reference endpoint to its owning type before SCC analysis. Partial declarations share a node; ordinary types remain declaration-specific. Namespaces, generic arities, nested types and multiple types in one file remain distinct. Same-file inter-type dependencies are included. Non-type, ambiguous-ownership and non-authoritative target evidence retains an explicit `file:` node; this is not a compiler-complete type graph.
+
+`cycle_grouping` reports intra-type edges/references separately from inter-node edges/references, including representative internal symbols. Intra-type edges do not produce SCCs. Counts describe the bounded typed candidate graph, and a reference reaching multiple declarations of the same family counts once per typed edge. `raw_candidate_edge_count` describes the selected raw file pairs; `--graph-budget` bounds both raw pairs and resulting typed edges independently, so grouping never turns a budget-limited scan into complete analysis. `analysis_complete`, grouping state and output sampling remain separate. Filters, noise suppression and graph evidence retain their existing meanings.
+
+`node_mappings` contains at most 40 nodes from returned/largest SCCs and internal-edge evidence, with at most 20 indexed declaration paths per node and exact count/omission metadata. The mapping can include declarations outside the selected edge scope. `--all-cycle-nodes` expands SCC node IDs, not these mapping limits. Opaque type IDs are generation-specific. Cursors bind grouping mode, metadata readiness and index generation; restart after indexing or changing modes. Missing/stale C# family or reference-identity metadata produces an explicit `raw_file_fallback_metadata_unavailable` result with the original file graph. Refresh the index to enable grouping; no rebuild is required. CLI grouping currently requires a single database.
+
 ### Map the repo before searching
 
 ```bash
@@ -2604,7 +2703,7 @@ Default `cdidx search` is literal-safe unless you explicitly opt into raw FTS5:
 
 For punctuation-heavy code phrases such as `catch { }`, normal search may emit a rerun hint. Use `--exact-substring` when braces, operators, punctuation, and case need byte-for-byte matching. Use `--token-boundary` when the full phrase should match exactly but must stop at identifier/token boundaries, such as finding `new HttpClient` without `new HttpClientHandler`.
 
-Recipe execution also accepts `--token-boundary`. It overrides each selected child; `--exact-substring` overrides a child's boundary default with substring matching. Without either flag, the child's `tokenBoundary` / `token_boundary` default applies (false when omitted). The process argument-list child enables it by default. See [recipe matching and cursor compatibility](README.md#audit-recipe-token-boundaries).
+Recipe execution also accepts `--token-boundary`. It overrides each selected child; `--exact-substring` overrides a child's boundary default with substring matching. Without either flag, the child's `tokenBoundary` / `token_boundary` default applies (false when omitted). The process argument-list child enables it by default. See [recipe matching and cursor compatibility](#audit-recipe-token-boundaries).
 
 For whitespace-containing literal queries passed as one argument, such as `cdidx search "not supported"`, normal search still uses FTS token matching but ranks chunks containing the exact phrase ahead of token-only matches. Multi-token code-like phrases such as `throw new Exception` can emit an `--exact-substring` hint when tokenized search is likely to be misleading.
 
@@ -2735,7 +2834,7 @@ same source location.
 | `--reverse` | `deps` | Reverse lookup: show files that depend ON the matched path |
 | `--symbol <name>` / `--symbol-family <prefix>` / `--suppress-noise` | `deps` | Restrict dependency edges by an exact symbol, a symbol-name prefix, or the built-in noise profile. Exact/prefix filters and generic-symbol suppression run in SQLite before candidate ranking and `--limit`, including cycle and cross-workspace queries. In cycle mode, `--suppress-noise` additionally removes only classified evidence: legacy Markdown heading-name matches, unresolved or ambiguous qualified C# calls, and resolved-call name matches in files that do not contain the confirmed `target_symbol_id`; this C# classification requires a current reference-identity contract and fails closed by retaining calls when the contract is stale or absent. The confirmed target file remains visible even with same-name overloads, as do explicit Markdown links. Cycle JSON evidence exposes `source_language`, `origin`, `resolution_state`, `reference_kind`, `target_kind`, `suppression_reason`, and `reference_count`; SCC `retained_evidence` summaries aggregate all six classification dimensions in matching `by_*` arrays, and `symbol_filter` reports reference before/after totals and per-reason affected/removed counts. |
 | `--resolution-state <state[,state]>` / `--reference-kind <kind[,kind]>` | `deps` | Select dependency observations before edge aggregation, ranking, cycle analysis, and graph-budget consumption. Each repeatable option accepts up to 64 comma-separated values; values within one dimension are ORed and the two dimensions are ANDed. Resolution states are `resolved`, `resolved_group`, `ambiguous`, `unresolved`, and `unavailable`; `unavailable` covers missing, stale, NULL, or unknown identity metadata and is never silently treated as `unresolved`. Reference kinds use the canonical reference-kind catalog: `subscribe` includes its raw event variants, while an explicitly named raw kind matches only itself. CLI and MCP `query_context.dependency_evidence_filter` report normalized selectors and provenance. Defaults preserve all observations, and a resolved-only subset does not imply whole-program completeness. MCP uses `resolutionStates` and `referenceKinds` arrays. |
-| `--cycles` / `--graph-budget <n>` / `--cursor <value>` / `--all-cycle-nodes` | `deps` | Compute deterministic, stably ranked dependency SCCs. `--graph-budget` independently bounds analyzed edges (default `10000`), while `--limit` pages the ranked SCCs and an opaque `next_cursor` continues the same filtered graph. Each returned SCC materializes at most 50 path-ordered nodes by default in human, JSON, DOT, GraphML, and JSON graph output; graph edges are projected to those displayed nodes, and DOT/GraphML report authoritative omission counts plus expansion guidance on stderr. `node_count`, `nodes_returned`, `nodes_omitted_count`, `display_truncated`, `largest_component`, evidence breakdowns, and file-level grouping metadata remain available independently of `analysis_complete`; `returned_node_count`, `returned_nodes_materialized`, and `returned_nodes_omitted_count` aggregate the current SCC page separately from the global largest component. Use `--summary-only` for compact `cycle_summaries`; summary mode is incompatible with JSON graph output in both CLI and MCP. Use `--all-cycle-nodes` (MCP: `includeAllCycleNodes: true`) for explicit raw node and graph expansion; the MCP output schema permits a component's node array through the maximum graph budget. When the graph budget is exhausted, the SCC set and total are explicitly non-authoritative; increase `--graph-budget` or narrow the graph with `--suppress-noise`, `--symbol`, `--symbol-family`, or `--path`. |
+| `--cycles` / `--graph-budget <n>` / `--cursor <value>` / `--all-cycle-nodes` | `deps` | Compute deterministic, stably ranked dependency SCCs. `--graph-budget` independently bounds analyzed edges (default `10000`), while `--limit` pages the ranked SCCs and an opaque `next_cursor` continues the same filtered graph. Each returned SCC materializes at most 50 path-ordered nodes by default in human, JSON, DOT, GraphML, and JSON graph output; graph edges are projected to those displayed nodes, and DOT/GraphML report authoritative omission counts plus expansion guidance on stderr. `node_count`, `nodes_returned`, `nodes_omitted_count`, `display_truncated`, `largest_component`, evidence breakdowns, and file-level grouping metadata remain available independently of `analysis_complete`; `returned_node_count`, `returned_nodes_materialized`, and `returned_nodes_omitted_count` aggregate the current SCC page separately from the global largest component. Use `--summary-only` for compact `cycle_summaries`; summary mode is incompatible with JSON graph output in both CLI and MCP. Use `--all-cycle-nodes` (MCP: `includeAllCycleNodes: true`) for explicit raw node and graph expansion; the MCP output schema permits a component's node array through the maximum graph budget. When the graph budget is exhausted, the SCC set and total are explicitly non-authoritative; increase `--graph-budget` or narrow the graph with `--suppress-noise`, `--symbol`, `--symbol-family`, or `--path`. See [dependency cycle details](#dependency-cycles). |
 | `--strict-not-found` | Query commands | Return exit code `2` when a valid query produces zero rows. Without this flag, zero-result queries normally exit `0` and keep their normal empty/zero-result output; the default-format `definition --json` miss is an intentional exception that always emits `E018_QUERY_NOT_FOUND` and exits `2`. |
 | `--top <n>` | Query commands | Alias for `--limit` |
 | `--max-results <n>` | `search` | Alias for `--limit` |
@@ -3188,6 +3287,15 @@ persisted diagnostics by default.
 Legacy databases omit these persisted fields until a successful full scan writes
 the current diagnostics-version stamp, preventing older count semantics from
 being presented as current coverage.
+
+#### Extensionless zsh Completion Functions
+
+For extensionless files and files with an unknown extension, the bounded
+first-line probe treats a token-delimited `#compdef` directive as zsh `shell`
+source. Known extensions, exact or prefix filename matches, explicit
+language-map overrides, extractor plugins, and ambiguous extensions retain
+their existing precedence. `#compdef` is not a generic remedy for source in
+other languages.
 
 ## Supported languages
 
@@ -4571,6 +4679,8 @@ cdidx inspect Compute --json --fields definitions.name,definitions.path,referenc
 cdidx inspect --fields list
 ```
 
+`import` / `diff` の比較上限と復旧は[比較上限](DEVELOPER_GUIDE.md#import-と-diff-の比較上限)を参照してください。
+
 ## Editor / index portability
 
 Editor が `cdidx` を直接 query するのではなく従来の ctags file を読む場合は、
@@ -4893,6 +5003,12 @@ language marker、reflection、config 経由の使用は false positive にな�
 C# の `nameof(...)`、`typeof(...)`、`GetMethod("Foo")` のような
 直接的な reflection member-name literal は indexed されますが、動的に組み立てられる
 名前は手動確認が必要です。
+
+#### unused 解析の時間上限
+
+`unused` は DB を開いた後の解析を既定で 30,000 ms に制限します。`--analysis-timeout-ms <1..600000>` で変更できます。候補選択、partial 型の保護チェック、要求した集計を含む上限であり、`--limit` と `--max-json-bytes` は出力量だけを制限します。対話的 stderr には毎秒進行状況を表示し、`--progress` を付けると出力取得時にも表示します。`--quiet` と `--no-progress` は進行表示を抑制します。
+
+時間上限到達は終了コード `11`、キャンセルは `130` です。JSON は `analysis_complete: false`、`analysis_state`（`time_budget_exceeded` または `cancelled`）、`analysis_timeout_ms`、`total_count_authoritative: false` を返し、未検証候補や継続 cursor を含めません。バイト上限付き JSON envelope ではこれらを `metadata` に保持します。フィルターを絞るか解析時間を増やして再実行してください。完了したページの envelope は総数を下限として示し、継続 cursor を維持します。全件の集計には明示的な `unused --count --json` を使用します。この集計にも同じ解析時間上限が適用されます。
 
 ### Hotspots を ranking する
 
@@ -5352,6 +5468,20 @@ interactive terminal では spinner と progress bar が動き続けます。待
 
 `cdidx index` は、別ディレクトリから実行しても、デフォルトでは `<projectPath>/.cdidx/codeindex.db` にDBを保存します。
 
+#### サイズ上限によるインデックスの省略
+
+保存済みの `file_too_large` が残る場合、CLI の全件・差分インデックスは `status=partial`、`E022_INDEX_PARTIAL`、終了コード11を返します。変更のない再試行や別ファイルだけの更新も同様です。`--allow-partial` は終了コード0を許容しますが、partial と不完全性の情報は維持します。意図した symbols-only・symbol-kind 方針の成功動作は維持します。MCP のインデックスも `isError=true` で同じ partial 結果を返し、成功したデータは保持します。
+
+index、status、workspace health の `size_omissions` は対象件数、最大20件の無害化済みパス（各512文字まで）、切り詰め・省略件数、判明している `actual_bytes` / `limit_bytes` を示します。サイズは省略時点の観測値で、現在のファイルを再測定した値ではありません。旧診断には正確なバイト数がない場合があります。内容を確認して `--max-file-bytes <bytes>`（MCP は `maxFileBytes`）を明示するか、`.cdidxignore` で意図的に除外してから通常のインデックスを実行してください。除外の反映にはワークスペース全件走査が必要で、除外した内容は検索対象から外れます。再構築は不要です。復旧コマンドのプレースホルダーには確認済みの上限を指定します。省略ファイルのサイズを理由に保存済み上限を自動的に引き上げることはありません。鮮度と世代の完全性は別々に扱います。
+
+#### ファイルサイズ上限と鮮度チェック
+
+索引作成時に空白以外の不正な`CDIDX_MAX_FILE_BYTES`が指定されている場合、有効な上限の明示指定がなければ、警告の案内どおり既定の4 MiBに戻ります。
+
+`index --max-file-bytes 8388608`（MCP: `maxFileBytes`）は、実際に使った上限を索引に保存します。後続の索引作成とdry runは、明示指定、`CDIDX_MAX_FILE_BYTES`、保存済み上限、既定の4 MiBの順に設定を選びます。通常の`status --check`と`workspace status --check`は保存済みの読み取り上限を再利用するため、大きなファイルを索引化した後も環境変数の指定は不要です。部分更新は、未更新ファイルに必要な従来の大きい上限を維持します。旧索引は、既存の2,147,483,647バイトの制限内で記録済みファイルサイズ以上の上限を使い、rebuildは不要です。読み取りに失敗した索引済みファイルは、削除ではなく走査エラーと確認不能として報告します。保存済み上限を超えてファイルが増大した場合は十分に大きい上限を明示して再索引し、アクセス失敗の場合は権限などの原因を解消してから再実行してください。
+
+dry-run の行数推定と信頼度の制限は[ビルド・テスト](DEVELOPER_GUIDE.md#ビルドテスト)を参照してください。
+
 #### Watch モード
 
 `--watch` は必要な baseline scan より先に platform watcher を開始し、その後も
@@ -5712,6 +5842,30 @@ cancellation は completed / omitted accounting を保持し、exit code 8 を�
 child-query cursor、recipe 固有 aggregation が必要な場合は個別の `cdidx audit <recipe>` を使ってください。
 `cdidx recipes` と `cdidx batch` は lower-level の discovery / 明示的 orchestration tool として維持されます。
 
+#### ローカル監査 baseline
+
+origin フィルター付きレシピでも、生の候補をすべて確認し、全一致の origin が判明していれば、0件の子クエリを含めて完全な baseline を作成できます。同一条件の互換実行は `unchanged`、確認済みの削除は `resolved` になります。`origin_classification_incomplete` の場合は、フィルターなしの search で不明な origin と `origin_unavailable` 診断を確認し、対象パスを手動レビューしてください。行上限の増加や変更のないソースの索引更新では字句分類の制限を解消できません。他の未検証フィルターや生の候補上限にも、具体的な理由と復旧案内を示します。`--limit`／`--total-limit` の単一指定は重複警告なしで内部既定値を置き換え、実際の重複指定は警告と最後の値の優先を維持します。
+
+索引の除外設定を変更しても、存在する除外ファイルを解決済みとは判定しません。以前のパスの対象範囲を確認し、物理的削除と sparse／除外パスを区別し、同じ DB 保存先が別プロジェクトの索引に置き換わった場合も検出します。空の比較不能結果も終了コード `11` を返します。
+
+`cdidx audit baseline-export .cdidx/audit-baseline.json --recipe risky-code` は既存の監査エンジンを実行し、ローカル baseline を保存します。`--recipe` を省略すると登録済みの全レシピが対象です。ソース変更後に索引を更新し、`cdidx audit baseline-compare .cdidx/audit-baseline.json --recipe risky-code --json` で比較します。比較時は同じフィルターと上限を指定してください。各コマンドはヘルプ記載の `--db`、`--lang`、`--path`、`--exclude-path`、`--exclude-tests`、`--audit-scope`、`--since`、`--limit`、`--total-limit` に対応します。既定値はクエリごとに1,000行、全体で10,000行です。
+
+比較は `new`、`unchanged`、`resolved`、`unknown` の識別グループ、総数、観測数、省略数を返します。どちらかの実行が古い、不完全、上限到達、失敗、取消済み、またはレシピ・フィルター・ワークスペース・識別契約が異なる場合、消えた検出結果は `unknown` のままです。重複した証拠やリネーム候補を推測で対応付けません。行番号は識別から除外し、文脈が変化した場合は再レビューが必要です。不完全な監査または不明な分類は終了コード `11` となります。export は不完全であることを明記した baseline を保存できますが、取消時は公開しません。
+
+安全確認済みの記録には baseline または比較結果の `id` を用い、`cdidx audit baseline-review .cdidx/audit-baseline.json <id> --actor <name> --reason <text> --overwrite` を実行します。完全な baseline 内の一意な検出結果だけが対象です。理由・担当者・時刻・証拠を保存し、互換性のある証拠が変わっていない場合だけ `review_applies` が真になります。compare は baseline を変更しません。export による置換には `--overwrite` が必要で、明示的な置換後は以前の注釈を含まない新しい baseline になります。
+
+ファイルには上限付きの一致・文脈のハッシュ、正規化した相対パス、実効フィルター、索引・レシピの由来を記録し、ソースの抜粋は保存しません。`.cdidx/` または索引対象外に保存してください。上限は8 MiB、JSON 深度16、10,000観測、比較出力200行で、省略数を明示します。保存はアトミックで、POSIX は `0600`、Windows は親ディレクトリの ACL を継承します。パスの大文字小文字を保持し、曖昧なバックスラッシュ・絶対パス・親ディレクトリ要素は拒否します。CLI 専用で、GitHub 認証や DB 移行は不要です。更新後はインストール済みのシェル補完を再生成してください。
+
+#### 監査レシピのトークン境界
+
+`audit <recipe>` と `search --recipe <recipe>` は、batch 実行を含めて `--token-boundary` を受理します。選択した各子クエリを、大文字小文字を区別するクエリ全体のトークン境界一致に上書きします。明示的な `--exact-substring`（または `--exact`）は子の境界既定値を部分一致に上書きし、これらのフラグは引き続き併用できません。指定がなければ子の `tokenBoundary` / `token_boundary` は既定で false となり、従来の部分一致／FTS 方針を維持します。MCP `search` も同じ既定値を使い、明示的な `tokenBoundary: false` で境界を無効化できます。`tokenBoundary` なしで `exactSubstring` / `exact` を明示すると、exact／FTS 方針を選択し、境界既定値を無効化します。
+
+`dogfood-risk-patterns/process-argument-list` はコード内の完全な `ArgumentList` トークンを既定で検索し、`.ArgumentList` や C# の `.@ArgumentList` を保持して `TypeArgumentListPattern` を除外します。字句上の証拠であり型解決ではないため、受信側が `ProcessStartInfo` かは確認してください。Unicode の文字は境界判定に含まれ、C# の `@` は正規化されますが、Unicode エスケープ列は復号しません。コメント／文字列にはレシピの出現元フィルターを適用し、部分一致を意図した監査の既定値は維持します。
+
+レシピ定義の fingerprint に境界方針を含めます。旧形式や条件不一致のレシピ cursor と `audit --all` continuation は最初から再実行してください。方針変更後は旧観測を解決済み扱いせず、新しい baseline を export します。レシピの行 cursor は index 世代、子定義、実効 scope、再実行オプションに結び付きます。DB の再構築は不要です。
+
+C# の複数行コメント／文字列の分類と上限は、[C# の検索 origin](#c-の複数行検索-origin)を参照してください。境界フィルターはコンパイラー相当の字句解析や型解析を追加するものではありません。
+
 #### Audit の再開
 
 候補枠の上限に達した場合、重複除去後の返却行数が上限より少なくても `source_total_authoritative` と集計の `count_authoritative` は false のままとし、`source_total_lower_bound` に観測済み件数の下限を示します。
@@ -5723,6 +5877,14 @@ child-query cursor、recipe 固有 aggregation が必要な場合は個別の `c
 `continuation.next_command` を実行するか、同じ `audit --all` に `continuation.next_token` を `--continuation <token>` として渡すと再開できます。token は byte budget による削減後の出力行数を子 query ごとに保持し、完了した子 query は飛ばします。失敗・中断した子 query は未処理のまま残します。index generation、recipe 定義、有効な filter、selector、順序、`--limit` は維持してください。変更された条件や破損 token は子 query の実行前に拒否します。全体の row / JSON byte budget は変更できます。通常の search と名前指定 recipe の cursor は既存の挙動を維持し、baseline file は finding 比較用のままです。
 
 再開では子 query ごとに最大10,000候補の固定集合を再取得し、選択済み observation をページ分割します。token は16 KiB、子 query は512件までです。候補集合より先の全件性を確認できない場合は、`continuation.fallbacks` が `child_coverage_not_authoritative` と上限付きの実行可能な個別コマンド、範囲を絞る案内を返します。fallback は子 query を最初から実行するため重複する observation を含む場合があり、完全走査を保証しません。最大3件を返し、省略件数も明示します。token が null でも完了とは限らないため summary と fallback を確認してください。同じ token の再利用は同じページの再取得になります。
+
+#### audit の小さな要約と復旧
+
+`cdidx audit --all --db .cdidx/codeindex.db --audit-scope all --summary-level top` は子クエリの説明を繰り返さず、完了・鮮度・観測数の下限・復旧情報を返します。`--summary-level detailed` は既定の詳細出力を維持します。成功した最上位要約と計画ページは末尾改行込みで最大 64 KiB となり、`--max-json-bytes` でさらに小さく制限できます。JSON/NDJSON/count と `--allow-partial` の既存の意味は維持されます。件数は重複する recipe も含む recipe/query ごとの観測数の合計であり、一意な指摘数ではありません。
+
+候補上限に達した子クエリを継続できない場合は、出力された `recovery.partition_plan.argv`、または `cdidx audit --all --db .cdidx/codeindex.db --audit-scope all --partition-plan` を実行します。各単位には元の条件を維持して索引内の厳密な 1 パスを実行する `argv` と、シェル用に引用されたコマンドがあります。`next.argv` で次の計画ページを取得します。索引世代・scope・recipe 定義が変わるとトークンは拒否されるため、計画を再作成してください。単一の明示 scope を適用できない異なる recipe 既定値も計画に照合されます。
+
+新規計画は全単位を pending とします。実行ごとの `partition` 記録を binding/id ごとに収集してください。ページカーソルは実行済みの証拠ではなく、再実行では観測が重複し得ます。単一ファイルでも候補上限に達すれば pending・非 authoritative のままで、ソースの手動確認が必要です。計画は対象となる索引内パスを扱い、未索引ファイルや人手レビューの完了を保証しません。上限は 10,000 パス、延べ 100,000 索引行、512 クエリ、10 秒、1 ページ 10 単位です。超過時は利用不可の計画と絞り込み案内を返します。出力予算で作業上限は増えず、baseline レビューの注釈とも独立しています。
 
 #### XML 設定の根拠
 
@@ -6018,6 +6180,14 @@ command からは run 全体のその limit を除外します。root は total 
 command を維持します。`--summary-only` を付けない完全版 issue-draft contract は変更しません。これらの
 draft は triage aid なので、起票前に duplicate guidance と現在の open issue を確認してください。
 
+#### 検索guardのエラー
+
+`search` / `find` の早期検証失敗も、JSON（array／NDJSON、`--format json`／`compact` を含む）指定時は、コマンド名、usage カテゴリー、終了コード1、復旧ヒントを持つバージョン付き JSON エラーを返します。空・欠落クエリ、不正なオプション、find のスコープ欠落・競合が対象です。出力指定は不正入力の前後どちらでも有効ですが、オプションのインライン値や `--` で保護したリテラルを出力指定とは扱いません。`find --origin` には `--regex` が必要です（[正規表現 find の制御](docs/find-scan-controls.md#正規表現の-origin-フィルター-5324)）。人間向け診断は変わらず、`batch --json-summary` は構造化した子エラーを保持して後続要求を実行します。
+
+数値オプションの値欠如時も、後続のインライン出力指定を保持します。`cdidx search Return --limit --json=array` は、出力指定を先に置いた場合と同じく `E010_USAGE_ERROR` JSON オブジェクトと終了コード1を返します。search／audit の件数、スニペット上限、バイト予算などの数値オプションと別名が対象です。後続の `--` は引き続きリテラル検索文字列を保護し、明示的なインライン値と既存の数値範囲は変わりません。機械向け出力を指定しない場合、エラー、ヒント、使用法は stderr に出力されます。
+
+search と audit の guard オプションエラーは、JSON 出力の指定時にバージョン付き `E010_USAGE_ERROR` JSON オブジェクト（終了コード1）を返します。`--json=ndjson`、`--json=array`、`--format json`、compact 出力にも対応します。出力形式は不正オプションの前後どちらでも指定でき、`--` は引き続きリテラル検索文字列を導入します。欠落値や不正な scope/window は拒否します（`--guard-scope` は `window`、`same-line`、`same-symbol` を受理）。人間向け出力はエラー、ヒント、使用法を維持します。`batch --json-summary` は `--include-raw-streams` なしで子コマンドの構造化エラーを保持し、後続コマンドを継続します。
+
 ### クエリのデバッグ
 
 任意の query command（`search`、`definition`、`references`、`callers`、`callees`、`symbols`、`files`、`find`、`excerpt`、`map`、`inspect`、`outline`、`status`、`validate`、`deps`、`impact`、`unused`、`hotspots`）に `--verbose` を付けると、通常の stdout を変えずに query 診断を stderr へ出力します:
@@ -6203,6 +6373,18 @@ function   CreateUser                               src/Services/UserService.cs:
 `search --json`、`search --format compact`、名前付き search batch、MCP の `search` は、チャンク全文ではなく一致中心の軽量スニペットを返します。各結果には `chunk_start_line`、`chunk_end_line`、`snippet_start_line`、`snippet_end_line`、`snippet`、`match_lines`、`highlights`、`context_before`、`context_after`、`truncated_line_count`、`dropped_match_line_count`、`truncation_context` が含まれ、マッチ行がインデックス済みシンボル範囲内にある場合は `enclosing_symbol_name`、`enclosing_symbol_kind`、`enclosing_symbol_start_line`、`enclosing_symbol_end_line`、`enclosing_container_name` も含まれます。抜粋の長さは `--snippet-lines <n>` で調整でき（デフォルト: 8、最大: 20）、minified / transpiled で 1 行が極端に長いファイルでは `--max-line-width <n>` を使って各行を最も強い一致周辺へクランプできます（`0` でクランプ解除、デフォルト: 512、最大: 4096）。長い行の焦点は `--snippet-focus <leftmost|quality|proximity>` で制御でき、`quality` がデフォルト、`leftmost` は従来の最左一致、`proximity` は近接した複数トークンを優先します。クランプされた行はスニペット内に `...(+N)...` マーカーが入り、JSON / MCP 出力では `highlights[].truncated` / `highlights[].original_line_length` でも検出できます。
 検索 JSON には `match_origins`、`match_facets`、`result_kinds` も含まれ、コード、コメント、文字列リテラル、正規表現リテラル、CLI ヘルプ文言、MCP schema description（`schema_description`）、宣言、識別子、呼び出し候補のどこで一致したかをツール側で区別できます。source scope の exact 検索と origin filter 付き検索では schema description 内の例を既定で除外し、audit recipe が実行可能な根拠を優先します。各 highlight にも個別の `match_origins` が付き、`--exclude-comments`、`--exclude-strings`、`--origin` / `--match-origin`、`--exclude-origin`、`--result-kind` はこの facet を使って特定の一致種別を隠す、または保持します。`query_context` object には、有効な `match_origins`、`exclude_origins`、`result_kinds` filter がある場合に含まれます。広い audit 出力は `--unique path|symbol|origin`、`--count-by path|symbol|origin`、`--format grouped`、`--first-per-file`、`--sample <n>`、`--search-fields <fields>`、`--results-only`、`--max-json-bytes <n>` で小さくできます。
 同じ facet は result、highlight、match-facet の各レベルで `test_file`、`test_symbol`、`test_fixture` boolean も返します。`test_fixture` はテストらしいファイルまたはインデックス済み test method 内の文字列系一致を示し、`--exclude-fixtures` は実コードの一致を残したまま fixture だけの一致を隠します。
+
+#### C# の複数行検索 origin
+
+検索の origin フィルターと facet は、C# のブロックコメント、verbatim 文字列、raw 文字列の状態をインデックス済みの行をまたいで引き継ぎます。通常検索、token-boundary recipe、件数、MCP は同じ分類と元の座標を使用します。schema、regex、help 文字列のラベルは文字列の開始行に従います。上限付きの字句処理によって対応する補間式をコードとして分類し、通常・verbatim・raw 補間文字列の終端後に走査を再開します。エスケープした波括弧、リテラル部分、入れ子の文字列、コメントはそれぞれのラベルを維持します。
+
+補間の入れ子と式の区切りの深さには、それぞれ 64 の上限があります。不均衡または未対応の補間（引用符や波括弧を含む書式部分など）は、外側の文字列以降を `unknown` とします。不明な C# の一致 facet には `origin_unavailable`（MCP: `originUnavailable`）を付け、固定の `reason`、1 始まりの `start_line` / `start_column`（MCP: `startLine` / `startColumn`）、`extent=remaining_file`（インデックス済みテキストの不一致では `line`）を示します。origin フィルターを外すか `--origin unknown` で確認してください。分類できない場合、コードのみの件数がゼロでも不存在を証明できません。
+
+分類は各ファイルのインデックス済み先頭部分を、4,096 行、UTF-16 で 8,388,608 文字、128 チャンクを上限として読み取ります（重複チャンクの文字も読み取り上限に含みます）。先頭からの行が欠けている場合や上限を超える場合は `unknown` となり、`--origin code` には一致しません。実ファイルの読み取りや rebuild は不要です。不完全なファイルや大きなファイルのレビューでは、origin フィルターを外して不明な一致も確認してください。
+
+#### Shell検索の由来分類
+
+Shell検索の由来分類は、二重引用符内で実行される `$()` やバッククォートによるコマンド置換と、その周囲のリテラルを区別します。通常・名前付き・recipe検索は同じ分類を共有し、`--origin code` は実行部分を保持し、`--exclude-strings` はリテラル部分を除外します。バッククォート内はエスケープ解除後に入れ子のコマンドを解釈し、`case` のパターン区切りを置換の終端と誤認しません。単一引用符内やエスケープされたリテラル例は文字列またはヘルプとして扱い、一致・ハイライト位置は変えません。これは完全なShellパーサーではなく、1行単位のヒューリスティックです。行頭から最大65,536文字を調べ、置換の入れ子は63段、同時に扱う `case` は64個、走査・前処理の反復は262,144回を上限とします。範囲外の一致や解析上限の超過時は `unknown` を返します。複数行のShell構文はこの保証の対象外です。
 
 ### 定義を引く
 
@@ -6482,6 +6664,31 @@ edge が存在しない証拠として扱わないでください。
 
 `--check` なしの `status` summary の鮮度判定は、ビルドからの経過時間ではなく、保存された `indexed_at` と `latest_modified` の比較で決まります。`indexed_at >= latest_modified` かつ workspace が clean なら、index 自体が数分以上前でも fresh と表示されます。
 
+フィールド一覧、メタデータの上限、説明出力の詳細は[Status JSON 契約](DEVELOPER_GUIDE.md#status-json-契約)を参照してください。
+
+### 依存関係の循環
+
+#### SQL の依存循環
+
+`deps --cycles`（MCP: `deps` の `cycles=true`）は通常の依存関係検索と同じ SQL 修飾名の照合を使います。候補選択と参照証拠の取得の両方で、参照位置と所属コンテナから名前を解決し、スキーマの識別と検索範囲に基づく末尾名へのフォールバックを維持します。`dbo.LeftView` と `dbo.RightView` のような修飾付きビューの循環を検出し、別スキーマの無関係な同名オブジェクトを混ぜません。パス・逆方向・シンボル・証拠のフィルター、グラフ解析上限、カーソルの完全性判定の意味は変わりません。このクエリ修正のための再索引は不要です。
+
+#### C# 型単位の依存循環
+
+宣言の参照には `cdidx deps --cycles --group-partial-types --node-mappings --json --db <db>` を使います。この独立したカタログは、循環・辺のフィルター外の宣言も含む**索引内の全 C# 型と明示的なファイルフォールバックノード**を列挙します。カタログへの所属は依存関係や循環への所属を意味しません。参照モードではグラフフィルター、SCC カーソル、別の出力形式を拒否し、グラフ解析を再実行しません。
+
+次のノードページは `next_mapping_cursor` を `--mapping-cursor <token>` に渡して取得します。返された ID を解決する場合は `--cycle-node <id> --node-generation <token>` を追加し、**その ID と同じ応答**の `cycle_grouping.node_generation`（またはマッピングページの `node_generation`）を使います。宣言ファイルの残りは、そのマッピングの `next_file_cursor` を同じノード・世代とともに渡して取得します。MCP の `deps` では `nodeMappings=true, cycles=true, groupPartialTypes=true` と `cycleNode`、`nodeGeneration`、`mappingCursor` を使います。一連の操作では同じ DB を指定してください。
+
+参照ページの既定は40ノード・各20パスで、単一ノードの解決は20パスです。正の `--limit` / MCP `limit` で対象の次元のページサイズを縮小できます。ノードは ID、パスはパス文字列のバイナリ順です。ページには総数・返却数・オフセット・残数、各マッピングには独立したファイル件数と継続情報を返します。CLI の成功出力は末尾改行を含む UTF-8 の65,536バイトが上限で、`--max-json-bytes` で縮小できます。MCP の `maxBytes` は転送用エンベロープを除く `structuredContent` と CLI 相当の改行に同じ上限を適用します。バイト調整ではマッピング・パスを途中で切らず、実際に返した項目の分だけカーソルを進めます。1項目と継続情報すら収まらない場合は `E028_RESPONSE_BUDGET_TOO_SMALL` と計測した最小サイズを返し、ページを消費しません。
+
+ノード ID は世代トークンと一緒に保持してください。トークンは索引対象のワークスペース・世代・グループ化契約・メタデータの準備状態に、ファイル継続はさらに対象ノードに紐づきます。破損や古いトークンの再利用を検出するもので、認可情報ではありません。索引・メタデータ更新後はトークンを破棄し、グループ化クエリを再実行してください。メタデータ不足時の参照は更新案内付きで拒否し、通常のグループ化循環解析は既存の生ファイルへのフォールバックを維持します。グラフ上限、SCC サンプル、`analysis_complete` の意味は変わりません。
+
+
+`cdidx deps --cycles --group-partial-types --json`（MCP: `cycles=true, groupPartialTypes=true`）で明示的に有効化します。既定は従来のファイルグラフです。最新の C# partial 型と参照 ID のメタデータを使い、確実に解決された参照の両端を所属型へ割り当ててから SCC を解析します。partial 宣言は同じノードへ統合し、通常の型は宣言ごとに区別します。namespace、generic arity、入れ子の型、同一ファイル内の複数型を区別し、同一ファイル内の型間依存も含めます。型外の参照、所属が曖昧な参照、確実な参照先 ID を持たない証拠は明示的な `file:` ノードに残します。コンパイラと同等の完全な型グラフではありません。
+
+`cycle_grouping` は型内の辺数・参照数とノード間の辺数・参照数を分け、型内参照の代表的なシンボルも示します。型内の辺は SCC を生成しません。件数は上限付きの型ノード候補グラフに対するもので、同一 family の複数宣言へ到達する参照は型ノード間の辺ごとに1回数えます。`raw_candidate_edge_count` は選択された元のファイル対数です。`--graph-budget` は元のファイル対と変換後の型ノード間の辺の双方を個別に制限するため、グループ化によって上限到達時の解析を完全と判定することはありません。`analysis_complete`、グループ化状態、表示サンプルは独立しています。フィルター、ノイズ抑制、参照証拠の既存の意味は維持します。
+
+`node_mappings` は返却 SCC・最大 SCC・型内参照の証拠から最大40ノードを含み、各ノードにつき最大20個の索引済み宣言パスと正確な総数・省略数を返します。選択した辺の範囲外の宣言を含む場合もあります。`--all-cycle-nodes` は SCC のノード ID を展開しますが、対応表の上限は変えません。不透明な型 ID は索引世代に紐づきます。カーソルはグループ化モード、メタデータの準備状態、索引世代を検証するため、索引更新やモード変更後は再実行してください。C# family または参照 ID のメタデータが欠落・古い場合は `raw_file_fallback_metadata_unavailable` を明示し、従来のファイルグラフを返します。通常の索引更新でグループ化を有効化でき、rebuild は不要です。CLI のグループ化は現在、単一 DB が対象です。
+
 ### 検索前にリポジトリ全体を俯瞰する
 
 ```bash
@@ -6537,7 +6744,7 @@ JSON mode の `output_path` は生成した artifact の basename を返すた�
 
 `catch { }` のように記号の多いコード片では、通常検索が再実行ヒントを出す場合があります。brace、operator、punctuation、大文字小文字まで byte-for-byte に一致させたい場合は `--exact-substring` を使います。`new HttpClient` を `new HttpClientHandler` に一致させたくない場合のように、query 全体の前後で identifier/token 境界も必要なら `--token-boundary` を使います。
 
-レシピ実行も `--token-boundary` を受理し、選択した各子クエリを上書きします。`--exact-substring` は子の境界既定値を部分一致に上書きします。どちらもなければ子の `tokenBoundary` / `token_boundary` の既定値（省略時 false）を使います。プロセス引数リストの子では既定で有効です。[レシピ検索と cursor の互換性](README.md#監査レシピのトークン境界)も参照してください。
+レシピ実行も `--token-boundary` を受理し、選択した各子クエリを上書きします。`--exact-substring` は子の境界既定値を部分一致に上書きします。どちらもなければ子の `tokenBoundary` / `token_boundary` の既定値（省略時 false）を使います。プロセス引数リストの子では既定で有効です。[レシピ検索と cursor の互換性](#監査レシピのトークン境界)も参照してください。
 
 `cdidx search "not supported"` のように空白を含む literal query を 1 引数で渡した場合、通常検索は引き続き FTS token matching を使いますが、exact phrase を含む chunk を token-only match より前に並べます。`throw new Exception` のような複数 token のコードらしい phrase では、tokenized search が誤解を招きそうな場合に `--exact-substring` hint を出すことがあります。
 
@@ -6663,7 +6870,7 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--reverse` | `deps` | 逆引き: 指定パスに依存しているファイルを表示 |
 | `--symbol <name>` / `--symbol-family <prefix>` / `--suppress-noise` | `deps` | 完全一致のシンボル、シンボル名の接頭辞、または組み込み noise profile で依存 edge を絞り込む。完全一致 / 接頭辞 filter と汎用 symbol 抑制は、cycle と cross-workspace query を含め、候補の ranking と `--limit` より前に SQLite 内で適用される。cycle mode では、`--suppress-noise` が追加で除外するのは、旧 index 由来の Markdown 見出し名一致、未解決または曖昧な C# 修飾 call、および確認済み `target_symbol_id` を含まない file に解決済み C# 修飾 call が作る同名一致だけである。この C# 分類には current な reference-identity contract が必要で、contract が stale または absent の場合は call を保持して fail closed する。同名 overload があっても確認済み target の file と明示的な Markdown link は残る。cycle JSON evidence は `source_language`、`origin`、`resolution_state`、`reference_kind`、`target_kind`、`suppression_reason`、`reference_count` を公開し、SCC の `retained_evidence` summary は 6 種類すべての分類 dimension を対応する `by_*` array に集計する。`symbol_filter` は reference の before/after 合計と理由別の affected / removed 件数を返す。 |
 | `--resolution-state <state[,state]>` / `--reference-kind <kind[,kind]>` | `deps` | edge 集約、ranking、cycle 解析、graph budget 消費より前に依存 observation を選択する。各 option は繰り返し指定でき、カンマ区切りで最大 64 値を受け付ける。同じ dimension 内は OR、2つの dimension 間は AND で結合する。解決状態は `resolved`、`resolved_group`、`ambiguous`、`unresolved`、`unavailable`。`unavailable` は identity metadata の欠落・stale・NULL・未知値を表し、暗黙に `unresolved` として扱わない。reference kind は canonical catalog を使い、`subscribe` は raw event variant を含むが、明示した raw kind はそれ自身だけに一致する。CLI と MCP の `query_context.dependency_evidence_filter` は正規化済み selector と provenance を返す。既定値は全 observation を維持し、resolved-only の部分集合も whole-program completeness を意味しない。MCP では `resolutionStates` / `referenceKinds` array を使う。 |
-| `--cycles` / `--graph-budget <n>` / `--cursor <value>` / `--all-cycle-nodes` | `deps` | 決定的かつ安定順位付きの依存 SCC を計算する。`--graph-budget` は解析する edge 数を独立して制限し（既定値 `10000`）、`--limit` は順位付け済み SCC をページ分割し、不透明な `next_cursor` で同じ filter 済み graph の続きを取得する。各 SCC の path 順 node は human、JSON、DOT、GraphML、JSON graph の各出力で既定で最大 50 件だけ materialize し、graph edge はその表示 node へ投影する。DOT / GraphML は authoritative な省略件数と展開 guidance を stderr に報告する。`node_count`、`nodes_returned`、`nodes_omitted_count`、`display_truncated`、`largest_component`、evidence breakdown、file 単位の grouping metadata は `analysis_complete` と独立して返し、`returned_node_count`、`returned_nodes_materialized`、`returned_nodes_omitted_count` は current な SCC page を global な最大 component とは別に集計する。簡潔な `cycle_summaries` には `--summary-only` を使うが、summary mode は CLI / MCP とも JSON graph 出力とは併用できない。明示的な raw node / graph 展開には `--all-cycle-nodes`（MCP: `includeAllCycleNodes: true`）を使い、MCP output schema は最大 graph budget までの component node array を許可する。graph budget 枯渇時は SCC 集合と総件数が non-authoritative であることを明示するため、`--graph-budget` を増やすか、`--suppress-noise`、`--symbol`、`--symbol-family`、`--path` で graph を絞り込む。 |
+| `--cycles` / `--graph-budget <n>` / `--cursor <value>` / `--all-cycle-nodes` | `deps` | 決定的かつ安定順位付きの依存 SCC を計算する。`--graph-budget` は解析する edge 数を独立して制限し（既定値 `10000`）、`--limit` は順位付け済み SCC をページ分割し、不透明な `next_cursor` で同じ filter 済み graph の続きを取得する。各 SCC の path 順 node は human、JSON、DOT、GraphML、JSON graph の各出力で既定で最大 50 件だけ materialize し、graph edge はその表示 node へ投影する。DOT / GraphML は authoritative な省略件数と展開 guidance を stderr に報告する。`node_count`、`nodes_returned`、`nodes_omitted_count`、`display_truncated`、`largest_component`、evidence breakdown、file 単位の grouping metadata は `analysis_complete` と独立して返し、`returned_node_count`、`returned_nodes_materialized`、`returned_nodes_omitted_count` は current な SCC page を global な最大 component とは別に集計する。簡潔な `cycle_summaries` には `--summary-only` を使うが、summary mode は CLI / MCP とも JSON graph 出力とは併用できない。明示的な raw node / graph 展開には `--all-cycle-nodes`（MCP: `includeAllCycleNodes: true`）を使い、MCP output schema は最大 graph budget までの component node array を許可する。graph budget 枯渇時は SCC 集合と総件数が non-authoritative であることを明示するため、`--graph-budget` を増やすか、`--suppress-noise`、`--symbol`、`--symbol-family`、`--path` で graph を絞り込む。 [依存循環の詳細](#依存関係の循環)を参照してください。 |
 | `--workspace-db <path>` | `deps` | file dependency query に別の CodeIndex DB を追加する。最大 7 個の distinct な追加 DB（`--db` を含め合計 8 個）まで繰り返し指定でき、JSON edge には同じ相対パスを区別できるよう `source_db` / `target_db` が含まれる。 |
 | `--strict-not-found` | クエリ系 | 有効な query の結果が 0 件なら終了コード `2` を返す。この flag がない場合、0 件の query は通常、既存の empty / zero-result output を維持して終了コード `0` を返す。ただし既定 format の `definition --json` 未検出は意図的な例外で、常に `E018_QUERY_NOT_FOUND` と終了コード `2` を返す。 |
 | `--top <n>` | クエリ系 | `--limit` のエイリアス |
@@ -7105,6 +7312,13 @@ update（`--files`、`--commits`、`--changed-between`）は新しい workspace 
 
 legacy DB では、成功した全体 scan が現行 diagnostics-version stamp を書き込むまで
 これらの永続化 field を省略し、旧来の件数 semantics を現行 coverage として表示しません。
+
+#### 拡張子なしの zsh 補完関数
+
+拡張子なし、または未知拡張子のファイルでは、上限付き先頭行 probe が token 境界を持つ
+`#compdef` directive を zsh の `shell` source として認識します。既知拡張子、exact / prefix
+filename match、明示的な language-map override、extractor plugin、曖昧拡張子は既存の
+precedence を維持します。`#compdef` は他言語の source に対する一般的な解決策ではありません。
 
 ## 対応言語
 
