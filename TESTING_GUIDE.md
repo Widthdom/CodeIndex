@@ -1,5 +1,37 @@
 # Testing Guide
 
+`Extract_CSharpStaticLambdaGate_BoundsRepeatedSameLineDeclarations` checks 64
+same-line static methods with a warmed 2 MiB allocation ceiling on both runtimes,
+including C#, Razor, Blazor and CSHTML. Preserve all identities, raw start columns,
+return types and expression-body ranges. Static constructors and generic methods
+must survive; typed, tuple-return, function-pointer-return and inferred static
+lambdas must not create phantom declarations. Run the existing #4830 query corpus
+and the full symbol/reference extractor regressions alongside this fixture.
+`Extract_CSharpMethodConfirmation_RequiresOpeningParenthesis` compares every
+symbol property with optimizations disabled and requires fewer method-confirmation
+regex attempts for parameter fragments without `(`, while real multiline headers
+still reach the regex. Keep the attempt/skip counters internal to extraction tests.
+
+Confirmed C# method lookahead coverage in `SymbolExtractorCSharpRegexProbeTests`
+shares multiline methods, empty and nonempty constructor bodies, delayed body
+tokens, trailing fields and attributed accessors across C#, Razor, Blazor and
+CSHTML. Keep the warmed 512 KiB allocation ceiling, all declaration identities,
+signatures and body ranges on net8/net9. `DatabaseTests` verifies that both
+timestamp and stat reuse reject old C# contract 18 / alias contract 1 and resume
+after stamping contract 19. The full-scan upgrade regressions remain required.
+
+Initial fresh-source lookup coverage in `AuthoritativeFreshRawBulkInsertTests`
+shares canonical/display/legacy names, nested and tied ranges, out-of-range
+candidates and multi-file controls across C#, Python, JavaScript, TypeScript,
+Java, Go, Rust, C++, Kotlin and VB. Preserve the single final three-candidate
+sort and the 32-callback budget (1,000 SQLite VM instructions each) for 64
+lookups over 128 overlapping declarations, alongside savepoint and cancellation
+regressions. Run the suite on net8/net9; timing thresholds are not used here.
+Include `FreshReferenceResolutionTests` in that run: it covers direct and
+materialized source lookup, the shared 14-parameter row shape and separate SQL
+caches. The materialized outer comparison orders by the projected `start_line`;
+each probe applies the nullable-line fallback before selecting its candidate.
+
 #5339 extends the #5332 fixture to successful `files --format count --json`
 batches with the same three-snapshot/copy-byte budget for 3/12 items, checking
 counts, freshness and authority fields. Keep metadata-present/absent controls

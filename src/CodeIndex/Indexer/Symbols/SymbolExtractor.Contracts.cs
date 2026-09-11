@@ -22,7 +22,11 @@ public static partial class SymbolExtractor
     // and their reference-container boundaries are persisted for existing indexes.
     // バージョン 18 (#5228) は既存 index の C# symbol を再抽出し、セミコロン形式 record の
     // body range と参照 container 境界を永続化する。
-    public const int CSharpContractVersion = 18;
+    // Version 19 bounds confirmed method lookahead and recovers constructor headers
+    // previously swallowed with subsequent method bodies before a trailing field.
+    // バージョン 19 は確認済み method の先読みを止め、後続 body と一緒に
+    // 末尾 field まで飲み込まれていた constructor header を再抽出する。
+    public const int CSharpContractVersion = 19;
     public const int DockerfileContractVersion = 2;
     public const int MakefileContractVersion = 2;
     public const int StyleAndXamlContractVersion = 2;
@@ -80,7 +84,7 @@ public static partial class SymbolExtractor
         {
             null or "" => DefaultContractVersion,
             "python" => PythonContractVersion,
-            "csharp" => CSharpContractVersion,
+            "csharp" or "razor" or "blazor" or "cshtml" => CSharpContractVersion,
             "dockerfile" => DockerfileContractVersion,
             "makefile" => MakefileContractVersion,
             "sass" or "stylus" => StyleAndXamlContractVersion,

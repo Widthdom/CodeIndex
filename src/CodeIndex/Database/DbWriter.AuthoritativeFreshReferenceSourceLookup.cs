@@ -21,15 +21,24 @@ public partial class DbWriter
         ) WITHOUT ROWID;
 
         CREATE INDEX IF NOT EXISTS temp.idx_authoritative_fresh_source_name_folded
-        ON {AuthoritativeFreshReferenceSourceSymbolsTableName}(file_id, name_folded)
+        ON {AuthoritativeFreshReferenceSourceSymbolsTableName}(
+            file_id, name_folded,
+            COALESCE(end_line, line) - COALESCE(start_line, line),
+            COALESCE(start_line, line) DESC, symbol_id, COALESCE(end_line, line))
         WHERE name_folded IS NOT NULL;
 
         CREATE INDEX IF NOT EXISTS temp.idx_authoritative_fresh_source_display_name_folded
-        ON {AuthoritativeFreshReferenceSourceSymbolsTableName}(file_id, display_name_folded)
+        ON {AuthoritativeFreshReferenceSourceSymbolsTableName}(
+            file_id, display_name_folded,
+            COALESCE(end_line, line) - COALESCE(start_line, line),
+            COALESCE(start_line, line) DESC, symbol_id, COALESCE(end_line, line))
         WHERE display_name_folded IS NOT NULL;
 
         CREATE INDEX IF NOT EXISTS temp.idx_authoritative_fresh_source_name_nocase
-        ON {AuthoritativeFreshReferenceSourceSymbolsTableName}(file_id, name COLLATE NOCASE)
+        ON {AuthoritativeFreshReferenceSourceSymbolsTableName}(
+            file_id, name COLLATE NOCASE,
+            COALESCE(end_line, line) - COALESCE(start_line, line),
+            COALESCE(start_line, line) DESC, symbol_id, COALESCE(end_line, line))
         WHERE name_folded IS NULL;
 
         DELETE FROM temp.{AuthoritativeFreshReferenceSourceSymbolsTableName};
@@ -66,55 +75,53 @@ public partial class DbWriter
 
     private static string BuildMaterializedFreshReferenceSourceSymbolValueSql(
         string referenceAlias)
-        // Only the first ranked symbol ID is observed. A symbol matching multiple
-        // name indexes has the same range and ID in every arm, so duplicates cannot
-        // change that winner. UNION ALL avoids a distinct temporary B-tree per reference.
-        // 同一symbolの重複は順位もIDも同じ。先頭1件の選択に不要な参照ごとの重複除去を省く。
+        // Each name index supplies its best containing symbol in rank order. The
+        // final sort compares at most three rows, even for a large overload family.
+        // Duplicate matches retain the same rank and ID and cannot change the winner.
+        // 各名前indexから包含順位の先頭だけを取り、最後のsortを最大3行に制限する。
         => $"""
         (
             SELECT candidate.symbol_id
             FROM (
-                SELECT source.symbol_id,
-                       source.line,
-                       source.start_line,
-                       source.end_line
-                FROM temp.{AuthoritativeFreshReferenceSourceSymbolsTableName} AS source
-                WHERE {referenceAlias}.container_name IS NOT NULL
-                  AND {referenceAlias}.container_name <> ''
-                  AND source.file_id = {referenceAlias}.file_id
-                  AND source.name_folded = {referenceAlias}.container_name_folded
+                {BuildRankedFreshReferenceSourceProbeSql(referenceAlias,
+                    $"source.name_folded = {referenceAlias}.container_name_folded")}
 
                 UNION ALL
 
-                SELECT source.symbol_id,
-                       source.line,
-                       source.start_line,
-                       source.end_line
-                FROM temp.{AuthoritativeFreshReferenceSourceSymbolsTableName} AS source
-                WHERE {referenceAlias}.container_name IS NOT NULL
-                  AND {referenceAlias}.container_name <> ''
-                  AND source.file_id = {referenceAlias}.file_id
-                  AND source.display_name_folded = {referenceAlias}.container_name_folded
+                {BuildRankedFreshReferenceSourceProbeSql(referenceAlias,
+                    $"source.display_name_folded = {referenceAlias}.container_name_folded")}
 
                 UNION ALL
 
-                SELECT source.symbol_id,
-                       source.line,
-                       source.start_line,
-                       source.end_line
-                FROM temp.{AuthoritativeFreshReferenceSourceSymbolsTableName} AS source
-                WHERE {referenceAlias}.container_name IS NOT NULL
-                  AND {referenceAlias}.container_name <> ''
-                  AND source.file_id = {referenceAlias}.file_id
-                  AND source.name_folded IS NULL
-                  AND source.name = {referenceAlias}.container_name COLLATE NOCASE
+                {BuildRankedFreshReferenceSourceProbeSql(referenceAlias,
+                    $"source.name_folded IS NULL AND source.name = {referenceAlias}.container_name COLLATE NOCASE")}
             ) AS candidate
-            WHERE {referenceAlias}.line BETWEEN COALESCE(candidate.start_line, candidate.line)
-                                             AND COALESCE(candidate.end_line, candidate.line)
-            ORDER BY (COALESCE(candidate.end_line, candidate.line) -
-                      COALESCE(candidate.start_line, candidate.line)),
-                     COALESCE(candidate.start_line, candidate.line) DESC,
+            ORDER BY candidate.range_width,
+                     candidate.start_line DESC,
                      candidate.symbol_id
+            LIMIT 1
+        )
+        """;
+
+    private static string BuildRankedFreshReferenceSourceProbeSql(
+        string referenceAlias,
+        string namePredicate)
+        => $"""
+        SELECT * FROM (
+            SELECT source.symbol_id,
+                   COALESCE(source.end_line, source.line) -
+                       COALESCE(source.start_line, source.line) AS range_width,
+                   COALESCE(source.start_line, source.line) AS start_line
+            FROM temp.{AuthoritativeFreshReferenceSourceSymbolsTableName} AS source
+            WHERE {referenceAlias}.container_name IS NOT NULL
+              AND {referenceAlias}.container_name <> ''
+              AND source.file_id = {referenceAlias}.file_id
+              AND {namePredicate}
+              AND {referenceAlias}.line BETWEEN COALESCE(source.start_line, source.line)
+                                           AND COALESCE(source.end_line, source.line)
+            ORDER BY COALESCE(source.end_line, source.line) - COALESCE(source.start_line, source.line),
+                     COALESCE(source.start_line, source.line) DESC,
+                     source.symbol_id
             LIMIT 1
         )
         """;

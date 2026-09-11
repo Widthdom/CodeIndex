@@ -355,6 +355,8 @@ public static partial class SymbolExtractor
         public int PropertyStructuralShapeSkipCount { get; set; }
         public int PropertyHeaderRegexAttemptCount { get; set; }
         public int MethodHeaderRegexAttemptCount { get; set; }
+        public int MethodConfirmationRegexAttemptCount { get; set; }
+        public int MethodConfirmationLiteralSkipCount { get; set; }
         public int PlainFieldTerminatorSkipCount { get; set; }
         public int PlainFieldRegexAttemptCount { get; set; }
         public int RecoverablePlainFieldTerminatorSkipCount { get; set; }
@@ -374,6 +376,8 @@ public static partial class SymbolExtractor
         int PropertyStructuralShapeSkipCount,
         int PropertyHeaderRegexAttemptCount,
         int MethodHeaderRegexAttemptCount,
+        int MethodConfirmationRegexAttemptCount,
+        int MethodConfirmationLiteralSkipCount,
         int PlainFieldTerminatorSkipCount,
         int PlainFieldRegexAttemptCount,
         int RecoverablePlainFieldTerminatorSkipCount,
@@ -456,6 +460,8 @@ public static partial class SymbolExtractor
             counts.PropertyStructuralShapeSkipCount,
             counts.PropertyHeaderRegexAttemptCount,
             counts.MethodHeaderRegexAttemptCount,
+            counts.MethodConfirmationRegexAttemptCount,
+            counts.MethodConfirmationLiteralSkipCount,
             counts.PlainFieldTerminatorSkipCount,
             counts.PlainFieldRegexAttemptCount,
             counts.RecoverablePlainFieldTerminatorSkipCount,

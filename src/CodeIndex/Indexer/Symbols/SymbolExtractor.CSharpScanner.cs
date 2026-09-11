@@ -1670,7 +1670,8 @@ public static partial class SymbolExtractor
             : (int?)null;
 
         if (HasCSharpTopLevelFieldInitializer(matchLine)
-            || openBraceLineIndex >= 0 && IsCSharpConfirmedMemberOrMethodPrefix(matchLine))
+            || openBraceLineIndex >= 0 && IsCSharpConfirmedMemberOrMethodPrefix(
+                matchLine, applyCSharpRegexProbeOptimizations, csharpRegexProbeCounts))
         {
             return ContinueConfirmedCSharpPropertyMatch(
                 lines,
@@ -1745,7 +1746,8 @@ public static partial class SymbolExtractor
             }
 
             if (HasCSharpTopLevelFieldInitializer(normalizedCombined)
-                || openBraceLineIndex >= 0 && IsCSharpConfirmedMemberOrMethodPrefix(normalizedCombined))
+                || openBraceLineIndex >= 0 && IsCSharpConfirmedMemberOrMethodPrefix(
+                    normalizedCombined, applyCSharpRegexProbeOptimizations, csharpRegexProbeCounts))
             {
                 return ContinueConfirmedCSharpPropertyMatch(
                     lines,
@@ -1814,6 +1816,7 @@ public static partial class SymbolExtractor
 
         StringBuilder? accessorProbeBuilder = null;
         var accessorProbeStatus = CSharpAccessorProbeStatus.Rejected;
+        CSharpPropertyMatchCandidate? confirmedMethodHeader = null;
         if (openBraceLineIndex >= 0 && openBraceExclusiveEndColumn.HasValue)
         {
             accessorProbeBuilder = BuildCSharpAccessorProbeBuilder(
@@ -1831,10 +1834,12 @@ public static partial class SymbolExtractor
                     openBraceExclusiveEndColumn);
             }
 
-            if (accessorProbeStatus == CSharpAccessorProbeStatus.Rejected
-                && CSharpConfirmedMethodPrefixRegex.IsMatch(normalizedCombined))
+            if (CSharpConfirmedMethodPrefixRegex.IsMatch(normalizedCombined))
             {
-                return new CSharpPropertyMatchCandidate(normalizedCombined, currentLineIndex, currentLineIndex);
+                confirmedMethodHeader = new CSharpPropertyMatchCandidate(
+                    normalizedCombined, currentLineIndex, currentLineIndex);
+                if (accessorProbeStatus == CSharpAccessorProbeStatus.Rejected)
+                    return confirmedMethodHeader.Value;
             }
         }
 
@@ -1857,13 +1862,12 @@ public static partial class SymbolExtractor
                     openBraceExclusiveEndColumn.Value,
                     i);
                 accessorProbeStatus = ClassifyCSharpAccessorProbe(accessorProbeBuilder.ToString());
-                if (accessorProbeStatus == CSharpAccessorProbeStatus.Rejected
-                    && CSharpConfirmedMethodPrefixRegex.IsMatch(CollapseCSharpGenericTypeWhitespace(builder.ToString())))
+                var header = CollapseCSharpGenericTypeWhitespace(builder.ToString());
+                if (CSharpConfirmedMethodPrefixRegex.IsMatch(header))
                 {
-                    return new CSharpPropertyMatchCandidate(
-                        CollapseCSharpGenericTypeWhitespace(builder.ToString()),
-                        i,
-                        i);
+                    confirmedMethodHeader = new CSharpPropertyMatchCandidate(header, i, i);
+                    if (accessorProbeStatus == CSharpAccessorProbeStatus.Rejected)
+                        return confirmedMethodHeader.Value;
                 }
             }
             else if (accessorProbeBuilder != null
@@ -1871,6 +1875,17 @@ public static partial class SymbolExtractor
             {
                 AppendCSharpAccessorProbeLine(accessorProbeBuilder, csharpMatchLines[i], null);
                 accessorProbeStatus = ClassifyCSharpAccessorProbe(accessorProbeBuilder.ToString());
+            }
+
+            // A brace on its own line leaves the accessor probe pending. Once a
+            // later body token rejects it, use the already confirmed method header
+            // instead of merging the method and every following body up to a field.
+            // 単独の開きbraceではaccessor判定が保留になる。後続tokenで棄却されたら
+            // 確認済みmethod headerを返し、後続bodyまで連結し続けない。
+            if (accessorProbeStatus == CSharpAccessorProbeStatus.Rejected
+                && confirmedMethodHeader.HasValue)
+            {
+                return confirmedMethodHeader.Value;
             }
 
             if (accessorProbeStatus == CSharpAccessorProbeStatus.Found)
@@ -1894,7 +1909,10 @@ public static partial class SymbolExtractor
         return new CSharpPropertyMatchCandidate(normalizedCombined, currentLineIndex, currentLineIndex);
     }
 
-    private static bool IsCSharpConfirmedMemberOrMethodPrefix(string line)
+    private static bool IsCSharpConfirmedMemberOrMethodPrefix(
+        string line,
+        bool applyCSharpRegexProbeOptimizations,
+        CSharpRegexProbeCounts? csharpRegexProbeCounts)
     {
         var openBraceIndex = line.IndexOf('{');
         if (openBraceIndex < 0)
@@ -1904,9 +1922,25 @@ public static partial class SymbolExtractor
         while (prefixEnd >= 0 && char.IsWhiteSpace(line[prefixEnd]))
             prefixEnd--;
 
-        return prefixEnd >= 0 && line[prefixEnd] == ')'
-            ? CSharpConfirmedMethodPrefixRegex.IsMatch(line)
-            : CSharpConfirmedMemberPrefixRegex.IsMatch(line);
+        if (prefixEnd >= 0 && line[prefixEnd] == ')')
+        {
+            // Parameter continuation fragments can end with `) {` without ever
+            // opening a parameter list. The method regex requires a literal `(`.
+            // 引数の継続断片は `(` を含まず `) {` で終わり得るが、method regex は
+            // 必ず `(` を消費するため、成立しない高コストの照合を省略できる。
+            if (applyCSharpRegexProbeOptimizations && line.IndexOf('(') < 0)
+            {
+                if (csharpRegexProbeCounts != null)
+                    csharpRegexProbeCounts.MethodConfirmationLiteralSkipCount++;
+                return false;
+            }
+
+            if (csharpRegexProbeCounts != null)
+                csharpRegexProbeCounts.MethodConfirmationRegexAttemptCount++;
+            return CSharpConfirmedMethodPrefixRegex.IsMatch(line);
+        }
+
+        return CSharpConfirmedMemberPrefixRegex.IsMatch(line);
     }
 
     // Prefer the raw line's `{` column (to preserve original positioning for body slicing),
@@ -2439,7 +2473,11 @@ public static partial class SymbolExtractor
         string? enclosingTypeName)
     {
         var boundedNameIndex = Math.Min(Math.Max(0, nameIndex), matchLine.Length);
-        var searchIndex = 0;
+        // A header ends just after its arrow, so an earlier arrow cannot contain
+        // this name. Keep the second arrow character for the boundary case.
+        // header は arrow 直後で終わるため、名前より前で終わる arrow は対象外。
+        // 境界条件のため arrow の2文字目だけは検索範囲に残す。
+        var searchIndex = Math.Max(0, boundedNameIndex - 1);
         while (searchIndex < matchLine.Length)
         {
             var arrowIndex = matchLine.IndexOf("=>", searchIndex, StringComparison.Ordinal);
@@ -2449,6 +2487,7 @@ public static partial class SymbolExtractor
             if (TryGetCSharpStaticLambdaHeaderRange(
                     matchLine,
                     arrowIndex,
+                    boundedNameIndex,
                     enclosingTypeName,
                     out var headerStart,
                     out var headerEnd)
@@ -2467,6 +2506,7 @@ public static partial class SymbolExtractor
     private static bool TryGetCSharpStaticLambdaHeaderRange(
         string matchLine,
         int arrowIndex,
+        int nameIndex,
         string? enclosingTypeName,
         out int headerStart,
         out int headerEnd)
@@ -2527,10 +2567,21 @@ public static partial class SymbolExtractor
             return true;
         }
 
-        if (!hasParenthesizedParameters
+        if (!hasParenthesizedParameters)
+            return false;
+
+        // Outside tuple groups, return types and declaration headers cannot cross
+        // semicolons or braces.
+        // Bound explicit-return probes before allocating or matching prefixes from
+        // earlier declarations, and skip later headers that cannot contain the name.
+        // tuple group外のセミコロン・braceは戻り値型・宣言headerを分断する。prefix生成と
+        // regex照合を避け、対象名を含めない後続headerも除外する。
+        var declarationBoundary = FindCSharpStaticLambdaDeclarationBoundary(matchLine, parameterStart);
+        if (nameIndex <= declarationBoundary
             || !TryFindCSharpExplicitReturnStaticLambdaModifier(
                 matchLine,
                 parameterStart,
+                declarationBoundary + 1,
                 enclosingTypeName,
                 out modifierStart))
         {
@@ -2540,6 +2591,23 @@ public static partial class SymbolExtractor
         headerStart = modifierStart;
         headerEnd = arrowIndex + 2;
         return true;
+    }
+
+    private static int FindCSharpStaticLambdaDeclarationBoundary(string text, int parameterStart)
+    {
+        var parentheses = 0;
+        for (var index = parameterStart - 1; index >= 0; index--)
+        {
+            var ch = text[index];
+            if (ch == ')')
+                parentheses++;
+            else if (ch == '(' && parentheses > 0)
+                parentheses--;
+            else if (parentheses == 0 && ch is ';' or '{' or '}')
+                return index;
+        }
+
+        return -1;
     }
 
     private static bool TryReadCSharpStaticLambdaModifiersBackward(
@@ -2578,6 +2646,7 @@ public static partial class SymbolExtractor
     private static bool TryFindCSharpExplicitReturnStaticLambdaModifier(
         string text,
         int parameterStart,
+        int minimumModifierStart,
         string? enclosingTypeName,
         out int modifierStart)
     {
@@ -2589,7 +2658,7 @@ public static partial class SymbolExtractor
                 "static",
                 searchBefore - 1,
                 StringComparison.Ordinal);
-            if (staticIndex < 0)
+            if (staticIndex < minimumModifierStart)
                 return false;
 
             searchBefore = staticIndex;
