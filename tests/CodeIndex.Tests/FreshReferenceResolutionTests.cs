@@ -191,7 +191,7 @@ public sealed class FreshReferenceResolutionTests : IDisposable
         Assert.Equal(2, CountOccurrences(materializedFreshSql, "UNION"));
         Assert.Equal(2, CountOccurrences(materializedFreshSql, "UNION ALL"));
         Assert.Contains(
-            "COALESCE(candidate.start_line, candidate.line) DESC",
+            "candidate.start_line DESC",
             materializedFreshSql,
             StringComparison.Ordinal);
         Assert.Equal(28, CountOccurrences(materializedFreshSql, "?"));

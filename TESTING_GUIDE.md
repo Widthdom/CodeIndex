@@ -27,6 +27,10 @@ Java, Go, Rust, C++, Kotlin and VB. Preserve the single final three-candidate
 sort and the 32-callback budget (1,000 SQLite VM instructions each) for 64
 lookups over 128 overlapping declarations, alongside savepoint and cancellation
 regressions. Run the suite on net8/net9; timing thresholds are not used here.
+Include `FreshReferenceResolutionTests` in that run: it covers direct and
+materialized source lookup, the shared 14-parameter row shape and separate SQL
+caches. The materialized outer comparison orders by the projected `start_line`;
+each probe applies the nullable-line fallback before selecting its candidate.
 
 #5339 extends the #5332 fixture to successful `files --format count --json`
 batches with the same three-snapshot/copy-byte budget for 3/12 items, checking
