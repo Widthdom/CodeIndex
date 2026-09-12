@@ -1054,7 +1054,8 @@ Exit 11 records can additionally contain `partial_result: true` and typed
 `results` (NDJSON) or `result` (count/document/envelope). This requires a validated
 partial/interrupted terminal last in the stream or in matching envelope
 `metadata.stream_terminal`, or a supported partial find count document. Reconcile
-terminal counts with recognized rows and count/control records; bounded envelopes
+terminal counts with recognized rows and count/control records; retain `_debug`
+and `profile` diagnostic objects without counting them as result rows. Bounded envelopes
 validate rendered `result_count` while retaining inner scan counts only when their
 explicit truncation metadata explains a difference. Scoped regex find with origin
 filters also uses NDJSON and preserves unknown-origin partial results. Preserve
@@ -5542,7 +5543,8 @@ compact 出力、明示または自動の envelope は `result` を使う。未�
 終了コード11のレコードには、追加で `partial_result: true` と型付きの `results`
 （NDJSON）または `result`（count・単一文書・envelope）を含められる。ストリームの末尾または
 識別情報が一致する envelope の `metadata.stream_terminal` にある部分・中断の終端情報、
-もしくは対応するfindの部分count文書の検証に成功した場合に限る。終端件数を認識可能な結果行と
+もしくは対応するfindの部分count文書の検証に成功した場合に限る。`_debug` と `profile` の
+診断オブジェクトは結果行の件数に数えず保持する。終端件数を認識可能な結果行と
 count・制御レコードに照合する。上限付きenvelopeは描画後の `result_count` を検証し、
 明示的な切り詰め情報で差を説明できる場合だけ内側の走査件数を維持する。
 スコープ付き正規表現findもoriginフィルター指定時はNDJSONとなり、判別不能なoriginによる部分結果を保持する。

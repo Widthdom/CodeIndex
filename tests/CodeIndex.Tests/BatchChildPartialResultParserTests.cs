@@ -15,8 +15,17 @@ public class BatchChildPartialResultParserTests
         var parsed = Assert.IsType<JsonArray>(BatchChildPartialResultParser.Parse(stream, "find", ndjson: true));
         Assert.Equal(2, parsed.Count);
         Assert.Equal("opaque-cursor", parsed[^1]!["next_cursor"]!.GetValue<string>());
+        const string debug = """{"_debug":{"sql_statement_count":1,"elapsed_ms":0.1,"rows_scanned":1,"phases":[{"name":"sql_1","elapsed_ms":0.1,"rows_scanned":1}]}}""";
+        const string profile = """{"profile":{"phases":[{"name":"sql_1","elapsed_ms":0.1,"rows_scanned":1}],"query_plan":[],"queries":[],"sql_text_limit_chars":200}}""";
+        var diagnostics = debug + "\n" + profile + "\n";
+        var diagnosticStream = row + "\n" + diagnostics + Terminal;
+        var diagnosticRows = Assert.IsType<JsonArray>(BatchChildPartialResultParser.Parse(diagnosticStream, "find", ndjson: true));
+        Assert.Equal(4, diagnosticRows.Count);
+        Assert.True(JsonNode.DeepEquals(JsonNode.Parse(debug), diagnosticRows[1]));
+        Assert.True(JsonNode.DeepEquals(JsonNode.Parse(profile), diagnosticRows[2]));
         var zeroTerminal = Terminal.Replace("\"returned_count\":1", "\"returned_count\":0", StringComparison.Ordinal);
         Assert.NotNull(BatchChildPartialResultParser.Parse(zeroTerminal, "find", ndjson: true));
+        Assert.NotNull(BatchChildPartialResultParser.Parse(diagnostics + zeroTerminal, "find", ndjson: true));
         Assert.NotNull(BatchChildPartialResultParser.Parse("{\"count\":0,\"results\":[]}\n" + zeroTerminal, "search", ndjson: true));
         var count = Terminal.Replace("\"returned_count\":1", "\"count\":1,\"returned_count\":1", StringComparison.Ordinal);
         Assert.NotNull(BatchChildPartialResultParser.Parse(count, "find", ndjson: false));
@@ -33,6 +42,12 @@ public class BatchChildPartialResultParserTests
         {
             "", "plain text", "null", "[]", "{}", row, Terminal, Terminal[..^1],
             stream.Replace("\"returned_count\":1", "\"returned_count\":2", StringComparison.Ordinal),
+            diagnostics + Terminal,
+            diagnosticStream.Replace("\"returned_count\":1", "\"returned_count\":2", StringComparison.Ordinal),
+            row + "\n{\"_debug\":true}\n" + Terminal,
+            row + "\n{\"profile\":[]}\n" + Terminal,
+            row + "\n{\"profile\":null}\n" + Terminal,
+            row + "\n{\"_debug\":{},\"unrelated\":true}\n" + Terminal,
             "{\"unrelated\":true}\n" + Terminal,
             "{\"count\":0,\"results\":[]}\n" + stream,
             row + "\n{", stream + row, Terminal + "\n" + Terminal,

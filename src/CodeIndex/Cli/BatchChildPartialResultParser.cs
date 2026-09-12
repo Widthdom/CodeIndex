@@ -38,6 +38,8 @@ internal static class BatchChildPartialResultParser
                 var emptyControls = 0;
                 foreach (var row in rows.Take(rows.Count - 1).Cast<JsonObject>())
                 {
+                    if (IsDiagnosticControl(row))
+                        continue;
                     if (IsEmptyControl(row))
                     {
                         emptyControls++;
@@ -126,6 +128,9 @@ internal static class BatchChildPartialResultParser
     private static bool IsEmptyControl(JsonObject record)
         => !IsPath(record["path"]) && !IsPath(record["file"])
             && ReadCount(record["count"]) == 0 && record["results"] is JsonArray { Count: 0 };
+
+    private static bool IsDiagnosticControl(JsonObject record)
+        => record.Count == 1 && (record["_debug"] is JsonObject || record["profile"] is JsonObject);
 
     private static bool IsResultRow(JsonObject record, string command)
         => (IsPath(record["path"]) || IsPath(record["file"]))

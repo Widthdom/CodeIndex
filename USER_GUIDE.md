@@ -2170,6 +2170,7 @@ Definition's default JSON is NDJSON: one or multiple definitions, including body
 output, appear in `results`. Single-document formats and JSON envelopes use `result`.
 Validated partial query output adds `partial_result: true` and `results` or `result`
 to an exit-11 error record, retaining rows, terminal metadata and continuation cursors.
+NDJSON also retains `--verbose` / `--profile` diagnostic records without counting them as result rows.
 The record keeps `status: "error"`, its typed `error`, exit 11 and failure accounting;
 partial output does not prove absence. For `find --all`, read the final `results`
 item (or `result.metadata.stream_terminal` for envelopes, or `result` for counts),
@@ -6246,7 +6247,8 @@ raw `stdout` のまま保持します。失敗時は `error_code`、`category`�
 definitionの既定JSONはNDJSONで、本文出力を含め、1件・複数件とも `results` に入ります。
 単一文書形式とJSON envelopeは `result` を使います。検証済みの部分結果は、終了コード11の
 エラーレコードに `partial_result: true` と `results` または `result` を追加し、
-結果行・終端情報・再開cursorを保持します。`status: "error"`、型付き `error`、終了コード11、
+結果行・終端情報・再開cursorを保持します。NDJSONでは `--verbose` / `--profile` の
+診断レコードも結果行の件数に数えず保持します。`status: "error"`、型付き `error`、終了コード11、
 失敗件数への加算は維持され、部分結果は不存在を確定する証拠にはなりません。
 `find --all` では `results` の最後の要素（envelopeなら `result.metadata.stream_terminal`、
 countなら `result`）の走査状態と確定性を確認し、同じクエリとDBに `next_cursor` を渡して再開します。

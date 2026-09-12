@@ -91,6 +91,50 @@ public class QueryCommandRunnerBatchIssue5344Tests
                 Assert.Equal(new[] { 1, 2, 3 }, matches);
             }
 
+            foreach (var query in new[] { "alpha", "beta" })
+            foreach (var diagnosticFlags in new string[][] { ["--verbose"], ["--profile"], ["--verbose", "--profile"] })
+            {
+                string[] diagnosticChild = ["find", query, .. child.Skip(2), .. diagnosticFlags];
+                var diagnosticDirect = RunDirect(diagnosticChild, dbPath);
+                Assert.Equal(CommandExitCodes.PartialResult, diagnosticDirect.Exit);
+                var expectedDiagnostics = ParseNdjson(diagnosticDirect.Stdout);
+                foreach (var flag in diagnosticFlags)
+                    Assert.Single(expectedDiagnostics.Where(row => row?[flag == "--verbose" ? "_debug" : "profile"] is JsonObject));
+                var (exit, stdout, _) = CaptureConsoleWithInput(JsonSerializer.Serialize(diagnosticChild) + "\n",
+                    () => QueryCommandRunner.RunBatch(
+                        ["--db", dbPath, "--json-summary", "--parallel", parallelism], JsonOptions));
+                Assert.Equal(CommandExitCodes.PartialResult, exit);
+                var records = ParseNdjson(stdout);
+                var record = records[0]!;
+                Assert.Equal("error", record["status"]!.GetValue<string>());
+                Assert.True(record["partial_result"]!.GetValue<bool>());
+                var actualDiagnostics = Assert.IsType<JsonArray>(record["results"]);
+                // Batch context reuse changes SQL counts and timings, but not result rows or terminals.
+                foreach (var flag in diagnosticFlags)
+                {
+                    var key = flag == "--verbose" ? "_debug" : "profile";
+                    var control = Assert.Single(actualDiagnostics.Where(row => row?[key] is JsonObject))!;
+                    Assert.Single(control.AsObject());
+                    var diagnostic = control[key]!;
+                    var phases = Assert.IsType<JsonArray>(diagnostic["phases"]);
+                    if (flag == "--verbose")
+                        Assert.Equal(phases.Count, diagnostic["sql_statement_count"]!.GetValue<int>());
+                    else
+                    {
+                        Assert.IsType<JsonArray>(diagnostic["query_plan"]);
+                        Assert.IsType<JsonArray>(diagnostic["queries"]);
+                    }
+                }
+                static JsonArray WithoutDiagnostics(JsonArray items) => new(items
+                    .Where(item => item?["_debug"] is null && item?["profile"] is null)
+                    .Select(item => item!.DeepClone()).ToArray());
+                Assert.True(JsonNode.DeepEquals(WithoutDiagnostics(expectedDiagnostics), WithoutDiagnostics(actualDiagnostics)),
+                    $"{string.Join(' ', diagnosticChild)}: {actualDiagnostics}");
+                Assert.Null(record["raw_streams"]);
+                Assert.Null(record["stdout"]);
+                Assert.Equal(1, records[^1]!["command_failures"]!.GetValue<int>());
+            }
+
             var (limitedExit, limitedOutput, _) = CaptureConsoleWithInput(JsonSerializer.Serialize(child) + "\n",
                 () => QueryCommandRunner.RunBatch(
                     ["--db", dbPath, "--json-summary", "--parallel", parallelism,
