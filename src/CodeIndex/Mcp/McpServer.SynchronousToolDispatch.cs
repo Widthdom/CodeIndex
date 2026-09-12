@@ -14,6 +14,7 @@ public partial class McpServer
             "callees" => ExecuteCallees(id, args),
             "symbols" => ExecuteSymbols(id, args),
             "files" => ExecuteFiles(id, args),
+            "find" => ExecuteFindInFile(id, args, allowAll: true),
             "find_in_file" => ExecuteFindInFile(id, args),
             "excerpt" => ExecuteExcerpt(id, args),
             "read_resource" => ExecuteReadResource(id, args),

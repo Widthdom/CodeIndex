@@ -2,6 +2,48 @@
 
 ## English
 
+### MCP search and continuation (#5349)
+
+MCP `search` (including recipes), `find`, and `find_in_file` accept `origin`,
+`excludeOrigin`, and `resultKind` as comma-separated strings or string arrays,
+plus `excludeComments`, `excludeStrings`, and `excludeFixtures` booleans.
+They share CLI validation and classification, applying filters before counts
+and pagination. Find semantic filters require `regex:true` and support origin
+names and `identifier` result kinds. Search also supports its declaration and
+call-site classifications. Classifier coverage is unchanged.
+
+```json
+{"name":"search","arguments":{"query":"File.Delete","origin":"code"}}
+{"name":"find","arguments":{"query":"TODO|FIXME|HACK","regex":true,"all":true,"limit":30,"lineScanLimit":20000,"maxBytes":65536,"excludeTests":true}}
+```
+
+`find` requires either `all:true` or `path`; `find_in_file` continues to require
+`path`. Both accept the existing context, language and exclusion options, plus
+`cursor`, `countOnly`, and `maxBytes`. Only `find` with `all:true` accepts
+`lineScanLimit`: default 250,000, maximum 10,000,000 lines per page, with a
+4,096-file cap. Both tools retain the MCP 200-result maximum. Their default
+`maxBytes` is 65,536 UTF-8 bytes in `structuredContent`; the enclosing response
+must also fit the server budget. Byte fitting keeps whole rows and returns a
+cursor before any omitted matches. An unfit minimum page returns
+`E028_RESPONSE_BUDGET_TOO_SMALL` without consuming the input cursor.
+
+Pass `next_cursor` back as `cursor` until `has_more:false`. Keep the query,
+scope, classification filters and `countOnly` mode unchanged; `limit`,
+`maxBytes`, and `lineScanLimit` may change. Cursors bind indexed source identity
+and generation, including raw same-line and zero-width match positions. Discard
+them after indexing. Malformed, mismatched and stale cursors return structured
+errors. Timeout or cancellation does not issue a new cursor.
+
+MCP find results preserve scan budgets, `scan_complete`, `partial_result`,
+`authoritative_rows`/`authoritative_count`, `origin_classification_complete`,
+`unknown_origin_matches`, and recovery guidance. Unknowns rejected by filters
+still degrade authority. Resumed pages describe only their segment and remain
+non-authoritative; sum unchanged-source count pages to obtain the full count.
+Semantic search also exposes `candidate_scan_complete` and classification
+completeness; bounded or unknown coverage cannot prove absence. Its cursor
+binds filters and generation and supports changing the row limit. STDIO, HTTP,
+and `batch_query` share these handlers and structured results.
+
 ### Regex origin filters (#5324)
 
 Use `cdidx find 'XmlReader\.Create' --regex --path src/ --origin code --json`.
@@ -20,7 +62,7 @@ Rows expose `match_facets` with original UTF-16 line/column/length, including
 zero length. `result_kinds` supports origin names and search's `identifier`
 projection for code; `declaration` and `call_site` are not supported here.
 Fixture classification uses recognized test-file paths and string-like origins;
-`test_symbol` is not inferred from regex text. There is no new MCP find surface.
+`test_symbol` is not inferred from regex text.
 
 Filtered row output supports text and JSON/NDJSON, including bounded `--fields`,
 `--cursor` and `--max-json-bytes`; formats without terminal authority metadata
@@ -81,6 +123,44 @@ text or JSON output when context from `--before`, `--after`, or
 
 ## 日本語
 
+### MCP の検索と継続取得 (#5349)
+
+MCP の `search`（recipe を含む）、`find`、`find_in_file` は、カンマ区切り文字列または
+文字列配列の `origin`、`excludeOrigin`、`resultKind` と、真偽値の `excludeComments`、
+`excludeStrings`、`excludeFixtures` に対応します。CLI と同じ検証・分類処理を使い、
+件数とページ分割の前にフィルターを適用します。find の意味フィルターには `regex:true` が
+必要で、結果種別は origin 名と `identifier` に対応します。search は宣言・呼び出し位置の
+分類にも対応します。分類器の対応範囲は従来どおりです。
+
+```json
+{"name":"search","arguments":{"query":"File.Delete","origin":"code"}}
+{"name":"find","arguments":{"query":"TODO|FIXME|HACK","regex":true,"all":true,"limit":30,"lineScanLimit":20000,"maxBytes":65536,"excludeTests":true}}
+```
+
+`find` は `all:true` または `path` の一方が必要です。`find_in_file` は引き続き `path` を
+必須とします。両方で従来の文脈・言語・除外指定に加え、`cursor`、`countOnly`、`maxBytes` を
+使用できます。`lineScanLimit` は `find` の `all:true` 時のみ対応し、ページあたり既定
+250,000 行、最大 10,000,000 行、ファイル数上限は 4,096 件です。MCP の結果上限は両方とも
+200 件を維持します。`maxBytes` の既定値は `structuredContent` の UTF-8 サイズで
+65,536 バイトです。外側の応答もサーバーの上限内に収めます。サイズ調整では行を分断せず、
+省略した一致の直前を指すカーソルを返します。最小ページも入らない場合は入力カーソルを
+進めず `E028_RESPONSE_BUDGET_TOO_SMALL` を返します。
+
+`has_more:false` になるまで `next_cursor` を `cursor` として渡します。検索語・範囲・
+分類フィルター・`countOnly` は同じ値を維持し、`limit`、`maxBytes`、`lineScanLimit` は
+変更できます。カーソルは索引の識別情報と世代、同じ行やゼロ幅の一致位置も保持します。
+再索引後は破棄してください。形式不正・条件不一致・古い世代は構造化エラーになり、
+タイムアウトやキャンセルでは新しいカーソルを発行しません。
+
+MCP の find は走査上限、`scan_complete`、`partial_result`、`authoritative_rows` /
+`authoritative_count`、`origin_classification_complete`、`unknown_origin_matches` と
+復旧案内を保持します。フィルターで除外した unknown も確定性を低下させます。再開ページは
+その区間だけを表すため、最終ページでも確定扱いにはしません。同じ索引の件数ページを
+合算すると全件数が得られます。意味フィルター付き search も `candidate_scan_complete` と
+分類完了状態を示し、上限到達や unknown が残る場合に不在を証明しません。カーソルは条件と
+世代に紐づき、行数上限は変更できます。STDIO・HTTP・`batch_query` は共通ハンドラーと
+構造化結果を使います。
+
 ### 正規表現の origin フィルター (#5324)
 
 `cdidx find 'XmlReader\.Create' --regex --path src/ --origin code --json` を使います。
@@ -96,7 +176,7 @@ v1 は search と共通の C# 索引済みプレフィックス分類器（4,096
 `unknown` のままです。行の `match_facets` は元の UTF-16 行・列・長さを保持し、長さ 0 にも対応します。
 `result_kinds` は origin 名と、code に対する search と同じ `identifier` 投影に対応します。
 `declaration` と `call_site` には対応しません。fixture は認識済みテストファイルのパスと文字列系 origin から
-判定し、正規表現の文字列から `test_symbol` を推測しません。MCP の find 機能は追加しません。
+判定し、正規表現の文字列から `test_symbol` を推測しません。
 
 フィルター付きの行出力は text と JSON/NDJSON に対応し、`--fields`、`--cursor`、
 `--max-json-bytes` も使用できます。終端の確定性情報を保持できない形式は拒否します。件数出力も利用できます。

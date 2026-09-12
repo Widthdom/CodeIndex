@@ -18,7 +18,11 @@ public partial class McpServer
 
     private JsonNode ExecuteSearch(JsonNode? id, JsonNode? args)
     {
+        if (ReadSemanticSearchFilters(id, args, out var semanticFilters) is { } semanticError)
+            return semanticError;
         var listRecipes = args?["listRecipes"]?.GetValue<bool>() ?? false;
+        if (listRecipes && semanticFilters is not null)
+            return CreateToolErrorResponse(id, "Semantic filters apply to recipe execution, not listRecipes.");
         if (listRecipes)
             return ExecuteSearchRecipeList(id);
 
@@ -28,7 +32,7 @@ public partial class McpServer
             var recipeName = recipeNode.GetValue<string>();
             if (string.IsNullOrWhiteSpace(recipeName))
                 return CreateToolErrorResponse(id, "'recipe' must be a non-empty search recipe name.");
-            return ExecuteSearchRecipe(id, args, recipeName.Trim());
+            return ExecuteSearchRecipe(id, args, recipeName.Trim(), semanticFilters);
         }
 
         if (args?["auditScope"] is not null)
@@ -51,7 +55,7 @@ public partial class McpServer
         var rawQuery = args?["rawQuery"]?.GetValue<bool>() ?? false;
         SearchCursor? cursor = null;
         var cursorValue = args?["cursor"]?.GetValue<string>();
-        if (!string.IsNullOrWhiteSpace(cursorValue))
+        if (semanticFilters is null && !string.IsNullOrWhiteSpace(cursorValue))
         {
             if (!TryParseSearchCursor(cursorValue, out var parsedCursor))
                 return CreateToolErrorResponse(id, "'cursor' must be a search pagination cursor returned as `next_cursor` by a previous search response.");
@@ -87,6 +91,19 @@ public partial class McpServer
 
         return WithDbReader(id, args, reader =>
         {
+            if (semanticFilters is not null)
+                return ExecuteSemanticSearchPage(id, args, reader, new QueryCommandOptions
+                {
+                    Query = query, Limit = limit, Lang = lang, RawFts = rawQuery,
+                    PathPatterns = pathPatterns ?? [], ExcludePaths = excludePaths, ExcludeTests = excludeTests,
+                    NoDedup = !deduplicate, Since = since, Exact = exactSearch, TokenBoundary = tokenBoundary,
+                    Prefix = prefix, GuardFilters = guardFilters, GuardWindow = guardWindow, GuardScope = guardScope,
+                    SnippetLines = snippetLines, SnippetFocus = snippetFocus, MaxLineWidth = maxLineWidth,
+                    CountOnly = countOnly, MatchOrigins = [.. semanticFilters.Origins],
+                    ExcludeOrigins = [.. semanticFilters.ExcludedOrigins], ResultKinds = [.. semanticFilters.ResultKinds],
+                    ExcludeComments = semanticFilters.ExcludeComments, ExcludeStrings = semanticFilters.ExcludeStrings,
+                    ExcludeFixtures = semanticFilters.ExcludeFixtures,
+                }, format, cursorValue, adjustments);
             if (countOnly)
             {
                 List<SearchResult> countResults;
@@ -237,7 +254,7 @@ public partial class McpServer
         return CreateToolResult(id, $"Found {registry.Recipes.Count} search recipe(s).", payload);
     }
 
-    private JsonNode ExecuteSearchRecipe(JsonNode? id, JsonNode? args, string recipeName)
+    private JsonNode ExecuteSearchRecipe(JsonNode? id, JsonNode? args, string recipeName, FindSemanticFilters? semanticFilters)
     {
         var registry = SearchAuditRecipes.Load();
         var recipe = registry.Recipes.FirstOrDefault(r => string.Equals(r.Name, recipeName, StringComparison.OrdinalIgnoreCase));
@@ -309,6 +326,43 @@ public partial class McpServer
                     out var queryPathPatterns,
                     out var queryExcludePaths);
                 var requiredPathPatterns = GetMcpSearchRecipeRequiredPathPatterns(requestedPathPatterns, recipeQuery);
+                if (semanticFilters is not null)
+                {
+                    var semanticPage = QueryCommandRunner.ReadSemanticSearchRows(reader, new QueryCommandOptions
+                    {
+                        Query = recipeQuery.Query, Limit = limit, Lang = lang,
+                        PathPatterns = queryPathPatterns ?? [], ExcludePaths = queryExcludePaths, ExcludeTests = excludeTests,
+                        NoDedup = !deduplicate, Since = since, Exact = exact, TokenBoundary = tokenBoundary,
+                        GuardFilters = guardFilters, GuardWindow = guardWindow, GuardScope = guardScope,
+                        SnippetLines = snippetLines, MaxLineWidth = maxLineWidth,
+                        MatchOrigins = [.. semanticFilters.Origins], ExcludeOrigins = [.. semanticFilters.ExcludedOrigins],
+                        ResultKinds = [.. semanticFilters.ResultKinds], ExcludeComments = semanticFilters.ExcludeComments,
+                        ExcludeStrings = semanticFilters.ExcludeStrings, ExcludeFixtures = semanticFilters.ExcludeFixtures,
+                    }, limit + 1, recipeQuery, requiredPathPatterns);
+                    var semanticRows = semanticPage.Rows.Take(limit).ToList();
+                    QueryCommandRunner.ApplyXmlSettingsAuditClassifications(reader, recipeQuery, semanticRows);
+                    QueryCommandRunner.MarkSearchRecipeQueryExecuted(scope, recipeQuery.Name);
+                    total += semanticRows.Count;
+                    queryResults.Add(new JsonObject
+                    {
+                        ["name"] = recipeQuery.Name, ["query"] = recipeQuery.Query,
+                        ["description"] = recipeQuery.Description,
+                        ["recommended_labels"] = ToJsonArray(recipeQuery.RecommendedLabels),
+                        ["false_positive_guidance"] = recipeQuery.FalsePositiveGuidance,
+                        ["exact_substring"] = exact, ["token_boundary"] = tokenBoundary,
+                        ["match_origins"] = ToJsonArray(recipeQuery.MatchOrigins),
+                        ["exclude_origins"] = ToJsonArray(recipeQuery.ExcludeOrigins),
+                        ["result_kinds"] = ToJsonArray(recipeQuery.ResultKinds),
+                        ["count"] = semanticRows.Count,
+                        ["top_files"] = BuildTopFileHistogram(semanticRows, row => row.Path),
+                        ["truncated"] = !semanticPage.ScanComplete || semanticPage.Rows.Count > limit,
+                        ["origin_classification_complete"] = semanticPage.ClassificationComplete,
+                        ["candidate_scan_complete"] = semanticPage.ScanComplete,
+                        ["total_count_authoritative"] = semanticPage.ScanComplete && semanticPage.ClassificationComplete,
+                        ["results"] = ToJsonArray(semanticRows),
+                    });
+                    continue;
+                }
                 List<SearchResult> results;
                 try
                 {

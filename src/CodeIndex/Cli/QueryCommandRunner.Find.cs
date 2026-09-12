@@ -825,7 +825,7 @@ public static partial class QueryCommandRunner
         return payload.ToJsonString(GetCompactJsonOptions(jsonOptions));
     }
 
-    private static void AddFindTerminalScanFields(
+    internal static void AddFindTerminalScanFields(
         JsonObject payload,
         FindScanSummary scan,
         int returnedCount,
@@ -925,7 +925,7 @@ public static partial class QueryCommandRunner
             CommandErrorWriter.WriteStderr($"Recovery: {recoveryGuidance}");
     }
 
-    private static (string? Cursor, string? ResultStableAt) BuildFindResumeCursor(
+    internal static (string? Cursor, string? ResultStableAt) BuildFindResumeCursor(
         string[] commandArgs,
         DbReader reader,
         FindScanSummary scan)

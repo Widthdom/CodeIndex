@@ -441,7 +441,7 @@ public static partial class QueryCommandRunner
         return all ? null : fields;
     }
 
-    private static void AddSearchMatchOrigins(string optionName, string rawValue, List<string> origins, Action<string> addParseError)
+    internal static void AddSearchMatchOrigins(string optionName, string rawValue, List<string> origins, Action<string> addParseError)
     {
         if (!ValidateCsvBounds(optionName, rawValue, MaxSearchProjectionFieldsCsvLength, MaxSearchProjectionFieldsCsvEntries, addParseError))
             return;
@@ -466,7 +466,7 @@ public static partial class QueryCommandRunner
             excludeOrigins.Add(origin);
     }
 
-    private static void AddSearchResultKinds(string rawValue, List<string> resultKinds, Action<string> addParseError)
+    internal static void AddSearchResultKinds(string rawValue, List<string> resultKinds, Action<string> addParseError)
     {
         if (!ValidateCsvBounds("--result-kind", rawValue, MaxSearchProjectionFieldsCsvLength, MaxSearchProjectionFieldsCsvEntries, addParseError))
             return;

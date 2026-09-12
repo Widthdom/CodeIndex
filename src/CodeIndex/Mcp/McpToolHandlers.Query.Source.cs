@@ -440,7 +440,7 @@ public partial class McpServer
 
     private readonly record struct ExcerptPayloadSpan(int SourceLine, int SourceStartColumn, int SourceEndColumn);
 
-    private JsonNode ExecuteFindInFile(JsonNode? id, JsonNode? args)
+    private JsonNode ExecuteFindInFile(JsonNode? id, JsonNode? args, bool allowAll = false)
     {
         if (!TryReadRequiredStringParameter(args, "query", out var query, out var requiredError))
             return CreateToolErrorResponse(id, requiredError!);
@@ -448,14 +448,17 @@ public partial class McpServer
             return CreateToolErrorResponse(id, QueryLimits.FormatQueryTooLongError());
 
         var pathPatterns = ReadScopedPathList(args);
-        if (pathPatterns == null || pathPatterns.Count == 0)
+        var all = allowAll && (args?["all"]?.GetValue<bool>() ?? false);
+        if (all && (pathPatterns is { Count: > 0 } || HasBlankPathFilter(args)))
+            return CreateToolErrorResponse(id, "find accepts either path or all=true, not both.");
+        if (!all && (pathPatterns == null || pathPatterns.Count == 0))
             return CreateToolErrorResponse(id, HasBlankPathFilter(args)
                 ? "Parameter \"path\" cannot be empty or whitespace-only"
-                : "Missing required parameter: path");
+                : allowAll ? "find requires path or all=true." : "Missing required parameter: path");
 
         var adjustments = new ArgumentAdjustmentCollector();
         var limit = ReadLimit(args, QueryCommandRunner.DefaultQueryLimit, adjustments);
-        var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
+        var lang = QueryCommandRunner.NormalizeLangFilterValue(args?["lang"]?.GetValue<string>());
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
         var beforeValue = ReadOptionalIntArgument(args, "before");
@@ -489,64 +492,31 @@ public partial class McpServer
             return maxLineWidthError;
         var exact = args?["exact"]?.GetValue<bool>() ?? false;
         var regex = args?["regex"]?.GetValue<bool>() ?? false;
-
-        return WithDbReader(id, args, reader =>
+        if (ReadSemanticSearchFilters(id, args, out var semanticFilters) is { } semanticError)
+            return semanticError;
+        if (semanticFilters is not null && (!regex || semanticFilters.ResultKinds.Any(kind => kind is "declaration" or "call_site")))
+            return CreateToolErrorResponse(id, "find semantic filters require regex=true; resultKind supports origins and identifier only.");
+        var lineScanLimit = ReadOptionalIntArgument(args, "lineScanLimit");
+        if (lineScanLimit.HasValue && !all)
+            return CreateToolErrorResponse(id, "lineScanLimit requires all=true.");
+        if (lineScanLimit is <= 0 or > QueryCommandRunner.MaxFindLineScanLimit)
+            return CreateToolErrorResponse(id, $"lineScanLimit must be between 1 and {QueryCommandRunner.MaxFindLineScanLimit}.");
+        var maxBytes = ReadOptionalIntArgument(args, "maxBytes") ?? DefaultFindMaxBytes;
+        if (maxBytes <= 0 || maxBytes > MaxConfiguredResponseBytes)
+            return CreateToolErrorResponse(id, $"maxBytes must be between 1 and {MaxConfiguredResponseBytes}.");
+        var cursor = args?["cursor"]?.GetValue<string>();
+        if (cursor?.Length > MaxMcpQueryCursorCharacters)
+            return CreateMcpCursorError(id, allowAll ? "find" : "find_in_file", "cursor_malformed", "Find cursor is too long.", stale: false);
+        var options = new QueryCommandOptions
         {
-            List<FileFindResult> results;
-            try
-            {
-                results = reader.FindInFiles(query, limit, lang, pathPatterns, excludePaths, excludeTests, before, after, exact, maxLineWidth, focusLine, focusColumn, regex).Results;
-            }
-            catch (RegexMatchTimeoutException ex) when (regex)
-            {
-                return CreateToolErrorResponse(
-                    id,
-                    RegexTimeoutPolicy.FormatFindTimeout(ex),
-                    category: RegexTimeoutPolicy.RegexTimeoutCategory,
-                    suggestion: RegexTimeoutPolicy.McpFindTimeoutSuggestion,
-                    retrySafe: true,
-                    extraData: new JsonObject
-                    {
-                        ["error_code"] = CommandErrorCodes.RegexMatchTimeout,
-                        ["timeout_ms"] = ex.MatchTimeout.TotalMilliseconds,
-                    });
-            }
-            catch (ArgumentException) when (regex)
-            {
-                return CreateToolErrorResponse(id, "invalid regular expression. Check regex syntax and retry.");
-            }
-            var structured = new JsonObject
-            {
-                ["query"] = query,
-                ["path"] = PathEcho(pathPatterns),
-                ["excludeTests"] = excludeTests,
-                ["before"] = before,
-                ["after"] = after,
-                ["contextTruncated"] = contextTruncated,
-                ["maxLineWidth"] = maxLineWidth,
-                ["exact"] = exact,
-                ["regex"] = regex,
-                ["count"] = results.Count,
-                ["fileCount"] = results.Select(r => r.Path).Distinct().Count(),
-                ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions),
-            };
-            if (snippetLinesValue.HasValue)
-                structured["snippetLines"] = snippetLinesValue.Value;
-            if (focusLine.HasValue)
-                structured["focusLine"] = focusLine.Value;
-            if (focusColumn.HasValue)
-                structured["focusColumn"] = focusColumn.Value;
-            if (results.Count == 0)
-            {
-                AddFreshnessHint(structured, reader);
-                adjustments.ApplyTo(structured);
-                return CreateToolResult(id, "No matches found.", structured);
-            }
-
-            var fileCount = structured["fileCount"]!.GetValue<int>();
-            adjustments.ApplyTo(structured);
-            return CreateToolResult(id, $"Found {ConsoleUi.Counted(results.Count, "in-file match", "in-file matches")} across {ConsoleUi.Counted(fileCount, "file")}.", structured);
-        });
+            Query = query, Limit = limit, Lang = lang, All = all, PathPatterns = pathPatterns ?? [],
+            ExcludePaths = excludePaths, ExcludeTests = excludeTests, IncludeGenerated = args?["includeGenerated"]?.GetValue<bool>() ?? false,
+            ContextBefore = before, ContextAfter = after, Exact = exact, Regex = regex,
+            MaxLineWidth = maxLineWidth, FocusLine = focusLine, FocusColumn = focusColumn,
+            CountOnly = ReadCountOnly(args),
+        };
+        return WithDbReader(id, args, reader => ExecuteFindPage(id, reader, options, semanticFilters,
+            cursor, lineScanLimit, maxBytes, contextTruncated, snippetLinesValue, adjustments));
     }
 
     private static int ClampContextLines(int value)

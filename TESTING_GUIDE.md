@@ -1,5 +1,12 @@
 # Testing Guide
 
+MCP search parity coverage (#5349) lives in `McpServerIssue5349Tests` and
+`HttpMcpTransportTests`. Run `--filter FullyQualifiedName~Issue5349` on net8/net9
+with existing MCP schema/dispatch and CLI find/search-classification tests.
+Keep CLI row/count comparisons, recipe/batch execution, path-required controls,
+unknown origins, scan/byte caps, same-line/zero-width continuation, changed
+filters/generation, timeout and request cancellation in shared small fixtures.
+
 Dependency summary regressions in `QueryCommandRunnerGraphTests` (#5346) separate
 page counts, SQL/C# candidate boundaries, extraction completeness, and response
 budgets. Keep the three-edge limits 1/2/3/4, empty/filter/missing-graph controls,
@@ -1433,6 +1440,13 @@ Issue #5300 のテストは隣接・入れ子の C# callable、対象行の除�
 パーサー（#5297）の回帰テストとともに net8.0 / net9.0 で実行します。
 
 # テストガイド
+
+MCP 検索の同等性 (#5349) は `McpServerIssue5349Tests` と `HttpMcpTransportTests` で
+検証します。`--filter FullyQualifiedName~Issue5349` を net8/net9 で実行し、既存の
+MCP スキーマ・dispatch と CLI find・検索分類のテストも併せて確認してください。
+小さな共通フィクスチャで CLI の行・件数比較、recipe・batch 実行、path 必須の契約、
+unknown、走査・サイズ上限、同一行・ゼロ幅一致の継続、条件・世代の変更、タイムアウトと
+リクエストのキャンセルを維持します。
 
 `QueryCommandRunnerGraphTests` の依存関係 summary 回帰テスト（#5346）は、ページ件数、
 SQL／C# の候補上限、抽出の完全性、応答サイズ上限を区別します。3 edge に対する
