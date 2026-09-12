@@ -92,48 +92,48 @@ public class QueryCommandRunnerBatchIssue5344Tests
             }
 
             foreach (var query in new[] { "alpha", "beta" })
-            foreach (var diagnosticFlags in new string[][] { ["--verbose"], ["--profile"], ["--verbose", "--profile"] })
-            {
-                string[] diagnosticChild = ["find", query, .. child.Skip(2), .. diagnosticFlags];
-                var diagnosticDirect = RunDirect(diagnosticChild, dbPath);
-                Assert.Equal(CommandExitCodes.PartialResult, diagnosticDirect.Exit);
-                var expectedDiagnostics = ParseNdjson(diagnosticDirect.Stdout);
-                foreach (var flag in diagnosticFlags)
-                    Assert.Single(expectedDiagnostics.Where(row => row?[flag == "--verbose" ? "_debug" : "profile"] is JsonObject));
-                var (exit, stdout, _) = CaptureConsoleWithInput(JsonSerializer.Serialize(diagnosticChild) + "\n",
-                    () => QueryCommandRunner.RunBatch(
-                        ["--db", dbPath, "--json-summary", "--parallel", parallelism], JsonOptions));
-                Assert.Equal(CommandExitCodes.PartialResult, exit);
-                var records = ParseNdjson(stdout);
-                var record = records[0]!;
-                Assert.Equal("error", record["status"]!.GetValue<string>());
-                Assert.True(record["partial_result"]!.GetValue<bool>());
-                var actualDiagnostics = Assert.IsType<JsonArray>(record["results"]);
-                // Batch context reuse changes SQL counts and timings, but not result rows or terminals.
-                foreach (var flag in diagnosticFlags)
+                foreach (var diagnosticFlags in new string[][] { ["--verbose"], ["--profile"], ["--verbose", "--profile"] })
                 {
-                    var key = flag == "--verbose" ? "_debug" : "profile";
-                    var control = Assert.Single(actualDiagnostics.Where(row => row?[key] is JsonObject))!;
-                    Assert.Single(control.AsObject());
-                    var diagnostic = control[key]!;
-                    var phases = Assert.IsType<JsonArray>(diagnostic["phases"]);
-                    if (flag == "--verbose")
-                        Assert.Equal(phases.Count, diagnostic["sql_statement_count"]!.GetValue<int>());
-                    else
+                    string[] diagnosticChild = ["find", query, .. child.Skip(2), .. diagnosticFlags];
+                    var diagnosticDirect = RunDirect(diagnosticChild, dbPath);
+                    Assert.Equal(CommandExitCodes.PartialResult, diagnosticDirect.Exit);
+                    var expectedDiagnostics = ParseNdjson(diagnosticDirect.Stdout);
+                    foreach (var flag in diagnosticFlags)
+                        Assert.Single(expectedDiagnostics.Where(row => row?[flag == "--verbose" ? "_debug" : "profile"] is JsonObject));
+                    var (exit, stdout, _) = CaptureConsoleWithInput(JsonSerializer.Serialize(diagnosticChild) + "\n",
+                        () => QueryCommandRunner.RunBatch(
+                            ["--db", dbPath, "--json-summary", "--parallel", parallelism], JsonOptions));
+                    Assert.Equal(CommandExitCodes.PartialResult, exit);
+                    var records = ParseNdjson(stdout);
+                    var record = records[0]!;
+                    Assert.Equal("error", record["status"]!.GetValue<string>());
+                    Assert.True(record["partial_result"]!.GetValue<bool>());
+                    var actualDiagnostics = Assert.IsType<JsonArray>(record["results"]);
+                    // Batch context reuse changes SQL counts and timings, but not result rows or terminals.
+                    foreach (var flag in diagnosticFlags)
                     {
-                        Assert.IsType<JsonArray>(diagnostic["query_plan"]);
-                        Assert.IsType<JsonArray>(diagnostic["queries"]);
+                        var key = flag == "--verbose" ? "_debug" : "profile";
+                        var control = Assert.Single(actualDiagnostics.Where(row => row?[key] is JsonObject))!;
+                        Assert.Single(control.AsObject());
+                        var diagnostic = control[key]!;
+                        var phases = Assert.IsType<JsonArray>(diagnostic["phases"]);
+                        if (flag == "--verbose")
+                            Assert.Equal(phases.Count, diagnostic["sql_statement_count"]!.GetValue<int>());
+                        else
+                        {
+                            Assert.IsType<JsonArray>(diagnostic["query_plan"]);
+                            Assert.IsType<JsonArray>(diagnostic["queries"]);
+                        }
                     }
+                    static JsonArray WithoutDiagnostics(JsonArray items) => new(items
+                        .Where(item => item?["_debug"] is null && item?["profile"] is null)
+                        .Select(item => item!.DeepClone()).ToArray());
+                    Assert.True(JsonNode.DeepEquals(WithoutDiagnostics(expectedDiagnostics), WithoutDiagnostics(actualDiagnostics)),
+                        $"{string.Join(' ', diagnosticChild)}: {actualDiagnostics}");
+                    Assert.Null(record["raw_streams"]);
+                    Assert.Null(record["stdout"]);
+                    Assert.Equal(1, records[^1]!["command_failures"]!.GetValue<int>());
                 }
-                static JsonArray WithoutDiagnostics(JsonArray items) => new(items
-                    .Where(item => item?["_debug"] is null && item?["profile"] is null)
-                    .Select(item => item!.DeepClone()).ToArray());
-                Assert.True(JsonNode.DeepEquals(WithoutDiagnostics(expectedDiagnostics), WithoutDiagnostics(actualDiagnostics)),
-                    $"{string.Join(' ', diagnosticChild)}: {actualDiagnostics}");
-                Assert.Null(record["raw_streams"]);
-                Assert.Null(record["stdout"]);
-                Assert.Equal(1, records[^1]!["command_failures"]!.GetValue<int>());
-            }
 
             var (limitedExit, limitedOutput, _) = CaptureConsoleWithInput(JsonSerializer.Serialize(child) + "\n",
                 () => QueryCommandRunner.RunBatch(
@@ -163,32 +163,32 @@ public class QueryCommandRunnerBatchIssue5344Tests
             ["--path", "src/matches.txt", "--origin", "unknown"],
             ["--path", "src/matches.txt", "--exclude-origin=unknown"],
         })
-        foreach (var query in new[] { "alpha", "beta" })
-        foreach (var flags in new string[][]
-        {
+            foreach (var query in new[] { "alpha", "beta" })
+                foreach (var flags in new string[][]
+                {
             ["--json"], ["--json", "--count"], ["--json-envelope"], ["--json-envelope", "--count"],
             ["--json", "--fields", "path", "--max-json-bytes", "6000"],
-        })
-        {
-            string[] child = ["find", query, "--regex", .. scope, .. flags];
-            var direct = RunDirect(child, dbPath);
-            Assert.Equal(CommandExitCodes.PartialResult, direct.Exit);
-            var ndjson = flags.SequenceEqual(new[] { "--json" });
-            var expected = ndjson ? ParseNdjson(direct.Stdout) : JsonNode.Parse(direct.Stdout)!;
-            RemoveTiming(expected);
-            foreach (var parallelism in new[] { "1", "3" })
-            {
-                var (exit, stdout, _) = CaptureConsoleWithInput(JsonSerializer.Serialize(child) + "\n",
-                    () => QueryCommandRunner.RunBatch(
-                        ["--db", dbPath, "--json-summary", "--parallel", parallelism], JsonOptions));
-                Assert.Equal(direct.Exit, exit);
-                var record = ParseNdjson(stdout)[0]!;
-                Assert.True(record["partial_result"]!.GetValue<bool>());
-                var actual = record[ndjson ? "results" : "result"]!;
-                RemoveTiming(actual);
-                Assert.True(JsonNode.DeepEquals(expected, actual));
-            }
-        }
+                })
+                {
+                    string[] child = ["find", query, "--regex", .. scope, .. flags];
+                    var direct = RunDirect(child, dbPath);
+                    Assert.Equal(CommandExitCodes.PartialResult, direct.Exit);
+                    var ndjson = flags.SequenceEqual(new[] { "--json" });
+                    var expected = ndjson ? ParseNdjson(direct.Stdout) : JsonNode.Parse(direct.Stdout)!;
+                    RemoveTiming(expected);
+                    foreach (var parallelism in new[] { "1", "3" })
+                    {
+                        var (exit, stdout, _) = CaptureConsoleWithInput(JsonSerializer.Serialize(child) + "\n",
+                            () => QueryCommandRunner.RunBatch(
+                                ["--db", dbPath, "--json-summary", "--parallel", parallelism], JsonOptions));
+                        Assert.Equal(direct.Exit, exit);
+                        var record = ParseNdjson(stdout)[0]!;
+                        Assert.True(record["partial_result"]!.GetValue<bool>());
+                        var actual = record[ndjson ? "results" : "result"]!;
+                        RemoveTiming(actual);
+                        Assert.True(JsonNode.DeepEquals(expected, actual));
+                    }
+                }
     }
 
     [Fact]
@@ -200,26 +200,26 @@ public class QueryCommandRunnerBatchIssue5344Tests
         TestProjectHelper.InsertIndexedFile(dbPath, "src/second.cs", "csharp", "namespace Other { class Widget { } }\n");
         var children = new List<(string[] Args, int Exit, JsonNode? Expected, bool Ndjson)>();
         foreach (var query in new[] { "Widget", "Solo", "NoDefinition5344" })
-        foreach (var flags in new string[][]
-        {
+            foreach (var flags in new string[][]
+            {
             ["--json"], ["--json=ndjson", "--body"], ["--format", "json"],
             ["--json=array", "--body"], ["--compact", "--body"], ["--format", "compact"],
             ["--json-envelope", "--body"], ["--json", "--fields", "name,path"],
             ["--json", "--count"], ["--format", "lsp"], ["--format", "sarif"],
-        })
-        {
-            string[] child = ["definition", query, "--limit", "10", .. flags];
-            var direct = RunDirect(child, dbPath);
-            var ndjson = flags[0] is "--json=ndjson" || flags.SequenceEqual(new[] { "--json" })
-                || flags.SequenceEqual(new[] { "--format", "json" });
-            var expected = string.IsNullOrWhiteSpace(direct.Stdout) ? null
-                : ndjson ? ParseNdjson(direct.Stdout) : JsonNode.Parse(direct.Stdout)!;
-            if (direct.Exit == 0 && ndjson)
-                Assert.Equal(query == "Widget" ? 2 : 1, expected!.AsArray().Count);
-            if (expected is not null)
-                RemoveTiming(expected);
-            children.Add((child, direct.Exit, expected, ndjson));
-        }
+            })
+            {
+                string[] child = ["definition", query, "--limit", "10", .. flags];
+                var direct = RunDirect(child, dbPath);
+                var ndjson = flags[0] is "--json=ndjson" || flags.SequenceEqual(new[] { "--json" })
+                    || flags.SequenceEqual(new[] { "--format", "json" });
+                var expected = string.IsNullOrWhiteSpace(direct.Stdout) ? null
+                    : ndjson ? ParseNdjson(direct.Stdout) : JsonNode.Parse(direct.Stdout)!;
+                if (direct.Exit == 0 && ndjson)
+                    Assert.Equal(query == "Widget" ? 2 : 1, expected!.AsArray().Count);
+                if (expected is not null)
+                    RemoveTiming(expected);
+                children.Add((child, direct.Exit, expected, ndjson));
+            }
         var input = string.Join('\n', children.Select(child => JsonSerializer.Serialize(child.Args))) + "\n";
         foreach (var parallelism in new[] { "1", "3" })
         {
