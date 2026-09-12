@@ -701,6 +701,8 @@ public static partial class IndexCommandRunner
 
 public sealed class IndexCommandOptions
 {
+    internal CSharpWorkspaceExpansion? CSharpWorkspaceExpansion { get; set; }
+
     internal IndexCommandOptions WithResolvedFileSizeLimit(long limit)
     {
         var copy = (IndexCommandOptions)MemberwiseClone();

@@ -1,5 +1,14 @@
 # Developer Guide
 
+## C# scoped-update expansion (#5347)
+
+See [C# update scope diagnostics](docs/csharp-update-expansion.md#english) for the
+immediate/persisted `csharp_workspace_expansion` contract, phase-cost semantics,
+and conservative source-input proof. Narrow only after the expanded pre-write
+barrier; keep all source/configuration snapshots for final validation. The optional
+proof must be invalidated before mutation and on other successful indexing paths.
+
+
 ## Batch project-root snapshot reuse (#5339)
 
 Children inheriting a batch reader resolve the project root, persisted path-case
@@ -4569,6 +4578,15 @@ CLI、レシピの再実行・フィンガープリント、MCP スキーマ、`
 API version 1 の互換性を維持し、新しい guard scope は contract version 1 を公開します。
 
 # 開発者ガイド
+
+## C# 部分更新の展開（#5347）
+
+直後の出力と保存済み `csharp_workspace_expansion` の契約、工程別コストの意味、
+保守的なソース入力証拠は [C# 更新範囲の診断](docs/csharp-update-expansion.md#日本語)
+を参照してください。展開後の書き込み前検証を通過してから対象を絞り、全ソース・設定の
+スナップショットを最終検証まで維持します。最適化用の証拠は変更前と、別の索引経路の
+成功時に無効化してください。
+
 
 ## batch のプロジェクトルート解決におけるスナップショット再利用（#5339）
 

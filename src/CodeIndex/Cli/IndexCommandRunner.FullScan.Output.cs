@@ -63,6 +63,8 @@ public static partial class IndexCommandRunner
         output.Stopwatch.Stop();
         var memoryTimeline = BuildMemoryTimeline(output.MemorySamples);
         WarnIfMemoryThresholdExceeded(memoryTimeline);
+        if (!output.Options.Json)
+            WriteCSharpWorkspaceExpansionSummary(output.Options.CSharpWorkspaceExpansion);
         // Detect cwd drift between option-parsing and finalize. See RunUpdateMode for the
         // rationale; the warning is informational because we already absolutized paths.
         // Issue #1577.
@@ -148,6 +150,7 @@ public static partial class IndexCommandRunner
         {
             CommandOutputWriter.WriteLine(JsonSerializer.Serialize(new IndexFullScanJsonResult
             {
+                CSharpWorkspaceExpansion = output.Options.CSharpWorkspaceExpansion,
                 Status = partial ? "partial" : "success",
                 Mode = output.Options.Rebuild ? "rebuild" : "incremental",
                 UnknownExtensionFileCount = output.ScanResult.UnknownExtensionFiles.Count,

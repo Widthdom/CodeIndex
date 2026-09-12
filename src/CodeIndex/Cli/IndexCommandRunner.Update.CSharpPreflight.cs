@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
 
@@ -18,6 +19,7 @@ public static partial class IndexCommandRunner
         internal required bool ScopedCleanupHadCSharp { get; init; }
         internal required bool ScopedCleanupHadContract { get; init; }
         internal required bool HadIndexedCSharpFilesBeforeUpdate { get; init; }
+        internal required Func<bool> ContractNarrowingAllowed { get; init; }
         internal required int Updated { get; init; }
         internal required int Removed { get; init; }
         internal required CancellationToken CancellationToken { get; init; }
@@ -76,6 +78,9 @@ public static partial class IndexCommandRunner
         }
 
         internal bool CSharpTargetAffected { get; set; }
+        internal string? ContractBaselineFingerprint { get; set; }
+        internal bool CanNarrowTargets { get; set; }
+        internal bool CapturedContractFingerprint { get; set; }
     }
 
     private sealed record UpdateCSharpPreflightResult(
@@ -88,12 +93,16 @@ public static partial class IndexCommandRunner
         bool DeferCSharpMutationsForIncompleteWorkspace,
         bool? CSharpSourceEvidenceForStamp,
         bool CSharpSourceEvidenceCompleteForStamp,
-        bool CSharpTargetAffected);
+        bool CSharpTargetAffected,
+        string? ContractBaselineFingerprint,
+        bool CanNarrowTargets);
 
     private static UpdateCSharpPreflightResult PrepareUpdateCSharpWorkspace(
         UpdateCSharpPreflightContext context)
     {
         context.ThrowIfUpdateCancelled();
+        var telemetry = context.Options.CSharpWorkspaceExpansion!;
+        var initialTimer = Stopwatch.StartNew();
         WriteIndexJsonLiveness(
             context.Options,
             "checking C# workspace contracts...");
@@ -128,11 +137,42 @@ public static partial class IndexCommandRunner
         finally
         {
             StopIndexJsonPhaseHeartbeat(heartbeat);
+            telemetry.InitialPrepassMs = initialTimer.ElapsedMilliseconds;
         }
 
+        telemetry.Trigger = !state.CSharpWorkspace.SourceContractEvidenceComplete
+            ? "incomplete_contract_evidence"
+            : state.PreserveConservativePersistedContractEvidence
+                ? "persisted_static_interface_contracts"
+                : state.CSharpWorkspace.RequiresMemberReadReferenceRefresh
+                    ? "member_reference_targets"
+                    : state.CSharpWorkspace.HasStaticInterfaceContracts
+                        ? "source_static_interface_contracts"
+                        : state.CSharpTargetAffected ? "csharp_targets" : "no_csharp_targets";
         if (state.CSharpWorkspace.HasStaticInterfaceContracts
             || state.CSharpWorkspace.RequiresMemberReadReferenceRefresh)
+        {
+            telemetry.Decision = "expanded";
+            telemetry.Reason = "safety_checks_required";
             ExpandUpdateCSharpWorkspace(context, state);
+            if (state.DeferCSharpMutationsForIncompleteWorkspace)
+            {
+                telemetry.Decision = "deferred";
+                telemetry.Reason = "incomplete_workspace";
+            }
+            else
+            {
+                EvaluateUpdateCSharpContractNarrowing(context, state);
+            }
+        }
+        else
+        {
+            telemetry.Reason = state.CSharpTargetAffected ? "no_workspace_contracts" : "no_csharp_targets";
+        }
+        telemetry.FinalTargetCount = context.TargetPaths.Count;
+        if (telemetry.Decision == "expanded"
+            && telemetry.ExpandedTargetCount == telemetry.OriginalTargetCount)
+            telemetry.Decision = "not_expanded";
 
         return new UpdateCSharpPreflightResult(
             state.ScannedUpdateLanguages,
@@ -143,7 +183,9 @@ public static partial class IndexCommandRunner
             state.DeferCSharpMutationsForIncompleteWorkspace,
             state.CSharpSourceEvidenceForStamp,
             state.CSharpSourceEvidenceCompleteForStamp,
-            state.CSharpTargetAffected);
+            state.CSharpTargetAffected,
+            state.ContractBaselineFingerprint,
+            state.CanNarrowTargets);
     }
 
     private static void BuildInitialUpdateCSharpWorkspace(
@@ -314,9 +356,11 @@ public static partial class IndexCommandRunner
         try
         {
             UpdateCSharpExpansionScanStartingForTesting?.Invoke();
+            var scanTimer = Stopwatch.StartNew();
             var scanWithDirectorySnapshots =
                 context.Indexer.ScanFilesDetailedWithDirectoryListingSnapshots(
                     cancellationToken: context.CancellationToken);
+            context.Options.CSharpWorkspaceExpansion!.WorkspaceScanMs = scanTimer.ElapsedMilliseconds;
             var scanResult = scanWithDirectorySnapshots.ScanResult;
             state.CSharpWorkspaceInputSnapshot =
                 scanWithDirectorySnapshots.InputSnapshot;
@@ -331,7 +375,10 @@ public static partial class IndexCommandRunner
             }
 
             AddExpandedUpdateCSharpTargets(context, state, scanResult);
+            context.Options.CSharpWorkspaceExpansion.ExpandedTargetCount = context.TargetPaths.Count;
+            var prepassTimer = Stopwatch.StartNew();
             BuildExpandedUpdateCSharpWorkspace(context, state);
+            context.Options.CSharpWorkspaceExpansion.WorkspacePrepassMs = prepassTimer.ElapsedMilliseconds;
         }
         catch (OperationCanceledException) when (
             context.CancellationToken.IsCancellationRequested)
@@ -397,6 +444,9 @@ public static partial class IndexCommandRunner
                 out var beforeSnapshots,
                 out var snapshotFailurePath,
                 cancellationToken);
+        var telemetry = context.Options.CSharpWorkspaceExpansion!;
+        telemetry.WorkspacePrepassFileCount = state.CSharpPrepassTargets.Count;
+        telemetry.WorkspacePrepassInputBytes = beforeSnapshots.Values.Sum(snapshot => snapshot.Size);
         if (state.CSharpPrepassTargets.Count == 0)
         {
             state.CSharpWorkspace =
@@ -413,6 +463,8 @@ public static partial class IndexCommandRunner
         else
         {
             UpdateCSharpPrepassForTesting?.Invoke();
+            cancellationToken.ThrowIfCancellationRequested();
+            state.CapturedContractFingerprint = context.ContractNarrowingAllowed();
             state.CSharpWorkspace =
                 CSharpStaticInterfacePrepass.BuildWorkspaceSymbols(
                     context.Writer,
@@ -426,7 +478,8 @@ public static partial class IndexCommandRunner
                     excludedExistingFileIds:
                         context.ScopedCleanupPlan.FileIds,
                     patternConfigsAlreadyLoaded: true,
-                    cancellationToken: cancellationToken);
+                    cancellationToken: cancellationToken,
+                    captureContractFingerprint: state.CapturedContractFingerprint);
         }
 
         string? afterSnapshotFailurePath = null;

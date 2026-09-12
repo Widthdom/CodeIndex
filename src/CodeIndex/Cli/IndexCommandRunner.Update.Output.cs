@@ -88,6 +88,7 @@ public static partial class IndexCommandRunner
         {
             CommandOutputWriter.WriteLine(JsonSerializer.Serialize(new IndexUpdateJsonResult
             {
+                CSharpWorkspaceExpansion = output.Options.CSharpWorkspaceExpansion,
                 Status = partial ? "partial" : "success",
                 Mode = "update",
                 Summary = new IndexUpdateSummaryJsonResult
@@ -163,6 +164,7 @@ public static partial class IndexCommandRunner
             CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Symbols", ConsoleUi.FormatNumber(totalSymbols), indent: "  "));
             CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Refs", ConsoleUi.FormatNumber(totalReferences), indent: "  "));
             CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Updated", ConsoleUi.FormatNumber(output.Updated), indent: "  "));
+            WriteCSharpWorkspaceExpansionSummary(output.Options.CSharpWorkspaceExpansion);
             if (output.Removed > 0) CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Removed", ConsoleUi.FormatNumber(output.Removed), indent: "  "));
             if (output.Skipped > 0) CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Skipped", ConsoleUi.FormatNumber(output.Skipped), indent: "  "));
             if (output.Warnings > 0) CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Warnings", ConsoleUi.FormatNumber(output.Warnings), indent: "  "));

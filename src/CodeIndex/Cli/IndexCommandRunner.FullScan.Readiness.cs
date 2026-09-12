@@ -302,7 +302,8 @@ public static partial class IndexCommandRunner
                 memoryTimelineForStamp,
                 context.IndexRunDiagnostics,
                 writer.GetReferenceExtractionCapHits(issuesTableAvailableAfter),
-                writer.GetPersistedIndexOmissionReasons());
+                writer.GetPersistedIndexOmissionReasons(),
+                options.CSharpWorkspaceExpansion);
         }
 
         return new FullScanReadinessResult(

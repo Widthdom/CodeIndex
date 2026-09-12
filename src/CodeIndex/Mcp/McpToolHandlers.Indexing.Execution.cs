@@ -1290,7 +1290,9 @@ public partial class McpServer
                 (DbContext.LastIndexRunReferenceExtractionCapHitsMetaKey, JsonSerializer.Serialize(
                     referenceExtractionCapHits,
                     StatusMetadataJsonContext.Default.ReferenceExtractionCapHitSummary)),
-                (DbContext.LastIndexRunRebuildReclaimMetaKey, null));
+                (DbContext.LastIndexRunRebuildReclaimMetaKey, null),
+                (DbContext.LastIndexRunCSharpWorkspaceExpansionMetaKey, null),
+                (DbContext.CSharpWorkspaceContractBaselineMetaKey, null));
             writer.MarkIndexCompleteness(writer.GetPersistedIndexOmissionReasons());
             writer.ClearLastFailedIndexRunMetadata();
             // Persist the current HEAD only after the run is fully successful (errors == 0).

@@ -1131,6 +1131,9 @@ public sealed class IndexSymbolKindFilterJsonResult
 
 internal sealed class IndexUpdateJsonResult : IVersionedJsonResult
 {
+    [JsonPropertyName("csharp_workspace_expansion")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public CSharpWorkspaceExpansion? CSharpWorkspaceExpansion { get; init; }
     public string ApiVersion { get; init; } = JsonOutputContract.ApiVersion;
     public string Status { get; init; } = string.Empty;
     public string Mode { get; init; } = string.Empty;
@@ -1177,6 +1180,9 @@ internal sealed class IndexUpdateJsonResult : IVersionedJsonResult
 
 internal sealed class IndexFullScanJsonResult : IVersionedJsonResult
 {
+    [JsonPropertyName("csharp_workspace_expansion")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public CSharpWorkspaceExpansion? CSharpWorkspaceExpansion { get; init; }
     public string ApiVersion { get; init; } = JsonOutputContract.ApiVersion;
     public string Status { get; init; } = string.Empty;
     public string Mode { get; init; } = string.Empty;
