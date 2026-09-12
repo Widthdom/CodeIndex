@@ -66,13 +66,20 @@ public partial class McpServer
                 var next = QueryCommandRunner.BuildFindResumeCursor(cursorArgs, reader, scan);
                 var payload = new JsonObject
                 {
-                    ["query"] = options.Query, ["path"] = PathEcho(options.PathPatterns),
-                    ["excludeTests"] = options.ExcludeTests, ["before"] = options.ContextBefore,
-                    ["after"] = options.ContextAfter, ["contextTruncated"] = contextTruncated,
-                    ["maxLineWidth"] = options.MaxLineWidth, ["exact"] = options.Exact, ["regex"] = options.Regex,
-                    ["count"] = count, ["fileCount"] = fileCount,
+                    ["query"] = options.Query,
+                    ["path"] = PathEcho(options.PathPatterns),
+                    ["excludeTests"] = options.ExcludeTests,
+                    ["before"] = options.ContextBefore,
+                    ["after"] = options.ContextAfter,
+                    ["contextTruncated"] = contextTruncated,
+                    ["maxLineWidth"] = options.MaxLineWidth,
+                    ["exact"] = options.Exact,
+                    ["regex"] = options.Regex,
+                    ["count"] = count,
+                    ["fileCount"] = fileCount,
                     ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions),
-                    ["max_bytes"] = maxBytes, ["byte_limit_reached"] = byteLimited,
+                    ["max_bytes"] = maxBytes,
+                    ["byte_limit_reached"] = byteLimited,
                 };
                 if (snippetLines.HasValue)
                     payload["snippetLines"] = snippetLines.Value;

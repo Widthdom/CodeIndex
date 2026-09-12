@@ -509,10 +509,21 @@ public partial class McpServer
             return CreateMcpCursorError(id, allowAll ? "find" : "find_in_file", "cursor_malformed", "Find cursor is too long.", stale: false);
         var options = new QueryCommandOptions
         {
-            Query = query, Limit = limit, Lang = lang, All = all, PathPatterns = pathPatterns ?? [],
-            ExcludePaths = excludePaths, ExcludeTests = excludeTests, IncludeGenerated = args?["includeGenerated"]?.GetValue<bool>() ?? false,
-            ContextBefore = before, ContextAfter = after, Exact = exact, Regex = regex,
-            MaxLineWidth = maxLineWidth, FocusLine = focusLine, FocusColumn = focusColumn,
+            Query = query,
+            Limit = limit,
+            Lang = lang,
+            All = all,
+            PathPatterns = pathPatterns ?? [],
+            ExcludePaths = excludePaths,
+            ExcludeTests = excludeTests,
+            IncludeGenerated = args?["includeGenerated"]?.GetValue<bool>() ?? false,
+            ContextBefore = before,
+            ContextAfter = after,
+            Exact = exact,
+            Regex = regex,
+            MaxLineWidth = maxLineWidth,
+            FocusLine = focusLine,
+            FocusColumn = focusColumn,
             CountOnly = ReadCountOnly(args),
         };
         return WithDbReader(id, args, reader => ExecuteFindPage(id, reader, options, semanticFilters,

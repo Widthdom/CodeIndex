@@ -897,7 +897,9 @@ public partial class McpServerTests
         {
             result = _server.HandleMessage(new JsonObject
             {
-                ["jsonrpc"] = "2.0", ["id"] = 100, ["method"] = "tools/list",
+                ["jsonrpc"] = "2.0",
+                ["id"] = 100,
+                ["method"] = "tools/list",
                 ["params"] = new JsonObject { ["cursor"] = cursor },
             })!["result"]!;
             foreach (var tool in result["tools"]!.AsArray())

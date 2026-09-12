@@ -27,13 +27,16 @@ public partial class McpServer
         var scopedProperties = scopedFind["inputSchema"]!["properties"]!.AsObject();
         scopedProperties["cursor"] = new JsonObject
         {
-            ["type"] = "string", ["maxLength"] = MaxMcpQueryCursorCharacters,
+            ["type"] = "string",
+            ["maxLength"] = MaxMcpQueryCursorCharacters,
             ["description"] = "Resume next_cursor with the same query, filters, and count mode. Limit and maxBytes may change. Restart after indexing.",
         };
         scopedProperties["countOnly"] = new JsonObject { ["type"] = "boolean", ["default"] = false };
         scopedProperties["maxBytes"] = new JsonObject
         {
-            ["type"] = "integer", ["minimum"] = 1, ["maximum"] = MaxConfiguredResponseBytes,
+            ["type"] = "integer",
+            ["minimum"] = 1,
+            ["maximum"] = MaxConfiguredResponseBytes,
             ["default"] = DefaultFindMaxBytes,
             ["description"] = "Maximum UTF-8 bytes in structuredContent (default 65536). Whole rows are paged without advancing past omitted matches. Server response limits also apply.",
         };
@@ -41,13 +44,16 @@ public partial class McpServer
         schema["required"] = new JsonArray { "query" };
         schema["properties"]!["all"] = new JsonObject
         {
-            ["type"] = "boolean", ["default"] = false,
+            ["type"] = "boolean",
+            ["default"] = false,
             ["description"] = "Explicitly scan all indexed files with file/line safety caps. Specify either all=true or path, never both.",
         };
         schema["properties"]!["path"]!["description"] = "Explicit file/path scope instead of all=true; accepts a string or array.";
         schema["properties"]!["lineScanLimit"] = new JsonObject
         {
-            ["type"] = "integer", ["minimum"] = 1, ["maximum"] = QueryCommandRunner.MaxFindLineScanLimit,
+            ["type"] = "integer",
+            ["minimum"] = 1,
+            ["maximum"] = QueryCommandRunner.MaxFindLineScanLimit,
             ["default"] = QueryCommandRunner.FindAllLineScanLimit,
             ["description"] = "Maximum indexed lines per all=true scan page; may change when resuming a cursor. Requires all=true.",
         };

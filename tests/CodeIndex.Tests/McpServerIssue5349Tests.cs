@@ -57,7 +57,7 @@ public partial class McpServerTests
             }
         }
         var unknown = Payload5349(Call5349("find", new JsonObject
-            { ["query"] = "Needle5349", ["all"] = true, ["regex"] = true, ["origin"] = "code" }));
+        { ["query"] = "Needle5349", ["all"] = true, ["regex"] = true, ["origin"] = "code" }));
         Assert.Equal(3, unknown["count"]!.GetValue<int>());
         Assert.Equal(2, unknown["unknown_origin_matches"]!.GetValue<int>());
         Assert.False(unknown["authoritative_rows"]!.GetValue<bool>());
@@ -71,9 +71,16 @@ public partial class McpServerTests
         InsertIndexedFile("audit5349/guard-b.cs", "csharp", "Guard5349();\nNeedle5349();\n");
         foreach (var tokenBoundary in new[] { false, true })
         {
-            var args = new JsonObject { ["query"] = "Needle5349", ["path"] = "audit5349/",
-                ["origin"] = "code", [tokenBoundary ? "tokenBoundary" : "exact"] = true, ["requireBefore"] = "Guard5349",
-                ["guardWindow"] = 8, ["countOnly"] = true };
+            var args = new JsonObject
+            {
+                ["query"] = "Needle5349",
+                ["path"] = "audit5349/",
+                ["origin"] = "code",
+                [tokenBoundary ? "tokenBoundary" : "exact"] = true,
+                ["requireBefore"] = "Guard5349",
+                ["guardWindow"] = 8,
+                ["countOnly"] = true
+            };
             var counted = Payload5349(Call5349("search", args));
             string[] cliArgs = ["search", "Needle5349", "--path", "audit5349/", "--origin", "code",
                 tokenBoundary ? "--token-boundary" : "--exact", "--require-before", "Guard5349", "--guard-window", "8",
@@ -87,8 +94,11 @@ public partial class McpServerTests
 
         foreach (var countOnly in new[] { false, true })
         {
-            var args = new JsonObject { ["query"] = string.Join(' ', Enumerable.Repeat("a", 129)),
-                ["countOnly"] = countOnly };
+            var args = new JsonObject
+            {
+                ["query"] = string.Join(' ', Enumerable.Repeat("a", 129)),
+                ["countOnly"] = countOnly
+            };
             var expected = Call5349("search", args)["result"]!;
             args["origin"] = "code";
             var actual = Call5349("search", args)["result"]!;
@@ -104,14 +114,24 @@ public partial class McpServerTests
         const string cappedPath = "audit5349/capped-auth.cs";
         const string content = "// Authorization\n";
         var writer = new DbWriter(_db.Connection);
-        var fileId = writer.UpsertFile(new FileRecord { Path = cappedPath, Lang = "csharp",
-            Size = content.Length, Lines = 1, Modified = ManualTimeProvider.FixtureUtcNow.UtcDateTime });
+        var fileId = writer.UpsertFile(new FileRecord
+        {
+            Path = cappedPath,
+            Lang = "csharp",
+            Size = content.Length,
+            Lines = 1,
+            Modified = ManualTimeProvider.FixtureUtcNow.UtcDateTime
+        });
         writer.InsertChunks(Enumerable.Range(0, DbReader.MaxContextRankingCandidates + 1).Select(index => new ChunkRecord
         {
-            FileId = fileId, ChunkIndex = index, StartLine = 1, EndLine = 1, Content = content,
+            FileId = fileId,
+            ChunkIndex = index,
+            StartLine = 1,
+            EndLine = 1,
+            Content = content,
         }).ToList());
         var capped = Payload5349(Call5349("search", new JsonObject
-            { ["recipe"] = "auth-token-audit", ["path"] = cappedPath, ["origin"] = "code", ["limit"] = 20 }));
+        { ["recipe"] = "auth-token-audit", ["path"] = cappedPath, ["origin"] = "code", ["limit"] = 20 }));
         var authorization = capped["queries"]!.AsArray().Single(child => child!["name"]!.GetValue<string>() == "authorization-header")!;
         Assert.Equal(0, authorization["count"]!.GetValue<int>());
         Assert.False(authorization["candidate_scan_complete"]!.GetValue<bool>());
@@ -120,8 +140,12 @@ public partial class McpServerTests
 
         foreach (var recipeMode in new[] { false, true })
         {
-            var guardedArgs = new JsonObject { ["path"] = cappedPath, ["limit"] = 1,
-                ["requireBefore"] = "AbsentGuard5349" };
+            var guardedArgs = new JsonObject
+            {
+                ["path"] = cappedPath,
+                ["limit"] = 1,
+                ["requireBefore"] = "AbsentGuard5349"
+            };
             guardedArgs[recipeMode ? "recipe" : "query"] = recipeMode ? "auth-token-audit" : "Authorization";
             var expectedError = Call5349("search", guardedArgs)["result"]!;
             guardedArgs["origin"] = "code";
@@ -135,8 +159,13 @@ public partial class McpServerTests
         }
 
         InsertIndexedFile("audit5349/unknown-recipe.cs", "csharp", new string('\n', 4096) + "info.ArgumentList.Add(value);\n");
-        var args = new JsonObject { ["recipe"] = "dogfood-risk-patterns", ["path"] = "audit5349/unknown-recipe.cs",
-            ["origin"] = "code", ["limit"] = 20 };
+        var args = new JsonObject
+        {
+            ["recipe"] = "dogfood-risk-patterns",
+            ["path"] = "audit5349/unknown-recipe.cs",
+            ["origin"] = "code",
+            ["limit"] = 20
+        };
         var unknown = Payload5349(Call5349("search", args));
         var child = unknown["queries"]!.AsArray().Single(query => query!["name"]!.GetValue<string>() == "process-argument-list")!;
         Assert.Equal(0, child["count"]!.GetValue<int>());
@@ -145,8 +174,11 @@ public partial class McpServerTests
         Assert.False(child["truncated"]!.GetValue<bool>());
         AssertPartial5349(child);
         AssertPartial5349(unknown);
-        var batch = Payload5349(Call5349("batch_query", new JsonObject { ["queries"] = new JsonArray
-            { new JsonObject { ["tool"] = "search", ["arguments"] = args.DeepClone() } } }));
+        var batch = Payload5349(Call5349("batch_query", new JsonObject
+        {
+            ["queries"] = new JsonArray
+            { new JsonObject { ["tool"] = "search", ["arguments"] = args.DeepClone() } }
+        }));
         var batchRecipe = batch["results"]![0]!["result"]!;
         AssertPartial5349(batchRecipe);
         AssertPartial5349(batchRecipe["queries"]!.AsArray().Single(query => query!["name"]!.GetValue<string>() == "process-argument-list")!);
@@ -166,17 +198,32 @@ public partial class McpServerTests
         const string path = "audit5349/complete-pages.cs";
         const int count = 240;
         var writer = new DbWriter(_db.Connection);
-        var fileId = writer.UpsertFile(new FileRecord { Path = path, Lang = "csharp",
-            Size = count * 24, Lines = count, Modified = ManualTimeProvider.FixtureUtcNow.UtcDateTime });
+        var fileId = writer.UpsertFile(new FileRecord
+        {
+            Path = path,
+            Lang = "csharp",
+            Size = count * 24,
+            Lines = count,
+            Modified = ManualTimeProvider.FixtureUtcNow.UtcDateTime
+        });
         writer.InsertChunks(Enumerable.Range(0, count / 10).Select(index => new ChunkRecord
         {
-            FileId = fileId, ChunkIndex = index, StartLine = index * 10 + 1, EndLine = (index + 1) * 10,
+            FileId = fileId,
+            ChunkIndex = index,
+            StartLine = index * 10 + 1,
+            EndLine = (index + 1) * 10,
             Content = string.Join('\n', Enumerable.Repeat("using System;", 10)),
         }).ToList());
         foreach (var limit in new[] { 1, 100 })
         {
-            var args = new JsonObject { ["query"] = "using System", ["path"] = path,
-                ["tokenBoundary"] = true, ["origin"] = "comment", ["limit"] = limit };
+            var args = new JsonObject
+            {
+                ["query"] = "using System",
+                ["path"] = path,
+                ["tokenBoundary"] = true,
+                ["origin"] = "comment",
+                ["limit"] = limit
+            };
             var complete = Payload5349(Call5349("search", args));
             Assert.Equal(0, complete["count"]!.GetValue<int>());
             Assert.True(complete["candidate_scan_complete"]!.GetValue<bool>());
@@ -200,8 +247,15 @@ public partial class McpServerTests
         InsertIndexedFile("audit5349/b.cs", "csharp", "var s = \"Needle5349\"; Needle5349();\nNeedle5349();\n");
         foreach (var query in new[] { "Needle5349", "(?=Needle5349)" })
         {
-            var args = new JsonObject { ["query"] = query, ["all"] = true, ["regex"] = true,
-                ["origin"] = "code", ["limit"] = 1, ["lineScanLimit"] = 1 };
+            var args = new JsonObject
+            {
+                ["query"] = query,
+                ["all"] = true,
+                ["regex"] = true,
+                ["origin"] = "code",
+                ["limit"] = 1,
+                ["lineScanLimit"] = 1
+            };
             var seen = new List<string>();
             string? cursor = null;
             for (var page = 0; page < 100; page++)
@@ -227,8 +281,15 @@ public partial class McpServerTests
         }
 
         InsertIndexedFile("audit5349/wide.cs", "csharp", string.Join('\n', Enumerable.Repeat("Needle5349(); " + new string('x', 400), 8)));
-        var wideArgs = new JsonObject { ["query"] = "Needle5349", ["path"] = "audit5349/wide.cs", ["regex"] = true,
-            ["origin"] = "code", ["limit"] = 8, ["maxBytes"] = 3000 };
+        var wideArgs = new JsonObject
+        {
+            ["query"] = "Needle5349",
+            ["path"] = "audit5349/wide.cs",
+            ["regex"] = true,
+            ["origin"] = "code",
+            ["limit"] = 8,
+            ["maxBytes"] = 3000
+        };
         var wideRows = new List<int>();
         string? next = null;
         for (var page = 0; page < 10; page++)
@@ -286,8 +347,15 @@ public partial class McpServerTests
     {
         InsertIndexedFile("audit5349/a.cs", "csharp", "info.ArgumentList.Add(value);\ninfo.ArgumentList.Add(value);\n");
         InsertIndexedFile("audit5349/b.cs", "csharp", "// ArgumentList\n");
-        var args = new JsonObject { ["query"] = "ArgumentList", ["all"] = true, ["regex"] = true,
-            ["origin"] = "code", ["countOnly"] = true, ["lineScanLimit"] = 1 };
+        var args = new JsonObject
+        {
+            ["query"] = "ArgumentList",
+            ["all"] = true,
+            ["regex"] = true,
+            ["origin"] = "code",
+            ["countOnly"] = true,
+            ["lineScanLimit"] = 1
+        };
         var count = 0;
         string? cursor = null;
         for (var page = 0; page < 100; page++)
@@ -302,17 +370,20 @@ public partial class McpServerTests
         Assert.Null(cursor);
         Assert.Equal(2, count);
         var recipe = Payload5349(Call5349("search", new JsonObject
-            { ["recipe"] = "dogfood-risk-patterns", ["path"] = "audit5349/", ["origin"] = "code", ["limit"] = 10 }));
+        { ["recipe"] = "dogfood-risk-patterns", ["path"] = "audit5349/", ["origin"] = "code", ["limit"] = 10 }));
         var child = recipe["queries"]!.AsArray().Single(q => q!["name"]!.GetValue<string>() == "process-argument-list")!;
         Assert.Equal(2, child["count"]!.GetValue<int>());
         Assert.True(child["origin_classification_complete"]!.GetValue<bool>());
-        var batch = Call5349("batch_query", new JsonObject { ["queries"] = new JsonArray
+        var batch = Call5349("batch_query", new JsonObject
+        {
+            ["queries"] = new JsonArray
         {
             new JsonObject { ["tool"] = "find", ["arguments"] = new JsonObject
                 { ["query"] = "ArgumentList", ["all"] = true, ["regex"] = true, ["origin"] = "code", ["lineScanLimit"] = 1 } },
             new JsonObject { ["tool"] = "search", ["arguments"] = new JsonObject
                 { ["query"] = "ArgumentList", ["origin"] = "code", ["path"] = "audit5349/" } },
-        } });
+        }
+        });
         Assert.Contains("next_cursor", batch.ToJsonString(), StringComparison.Ordinal);
         Assert.Contains("scan_complete", batch.ToJsonString(), StringComparison.Ordinal);
         Assert.DoesNotContain("unknown_argument", batch.ToJsonString(), StringComparison.Ordinal);
@@ -332,8 +403,14 @@ public partial class McpServerTests
         var scoped = tools.Single(tool => tool!["name"]!.GetValue<string>() == "find_in_file")!;
         Assert.Contains(scoped["inputSchema"]!["required"]!.AsArray(), value => value!.GetValue<string>() == "path");
         var defaults = Payload5349(Call5349("find_in_file", new JsonObject
-            { ["query"] = "Read", ["path"] = "src/", ["excludeComments"] = false,
-                ["excludeStrings"] = false, ["excludeFixtures"] = false, ["origin"] = new JsonArray() }));
+        {
+            ["query"] = "Read",
+            ["path"] = "src/",
+            ["excludeComments"] = false,
+            ["excludeStrings"] = false,
+            ["excludeFixtures"] = false,
+            ["origin"] = new JsonArray()
+        }));
         Assert.Null(defaults["origin_classification_complete"]);
         foreach (var (tool, json) in new[]
         {
@@ -366,7 +443,7 @@ public partial class McpServerTests
             foreach (var tool in new[] { "find", "find_in_file" })
             {
                 var response = Call5349(tool, new JsonObject
-                    { ["query"] = "(a+)+$", ["regex"] = true, ["path"] = "audit5349/slow.cs", ["origin"] = "code" });
+                { ["query"] = "(a+)+$", ["regex"] = true, ["path"] = "audit5349/slow.cs", ["origin"] = "code" });
                 Assert.Contains(CommandErrorCodes.RegexMatchTimeout, response.ToJsonString(), StringComparison.Ordinal);
                 Assert.DoesNotContain("next_cursor", response.ToJsonString(), StringComparison.Ordinal);
             }
@@ -388,13 +465,15 @@ public partial class McpServerTests
         }
         finally { DbReader.FindLineScannedForTesting = null; }
         var recovered = Payload5349(Call5349("find", new JsonObject
-            { ["query"] = "Needle5349", ["path"] = "audit5349/cancel.cs", ["regex"] = true, ["origin"] = "code" }));
+        { ["query"] = "Needle5349", ["path"] = "audit5349/cancel.cs", ["regex"] = true, ["origin"] = "code" }));
         Assert.Equal(2, recovered["count"]!.GetValue<int>());
     }
 
     private JsonNode Call5349(string tool, JsonObject args) => _server.HandleMessage(new JsonObject
     {
-        ["jsonrpc"] = "2.0", ["id"] = 5349, ["method"] = "tools/call",
+        ["jsonrpc"] = "2.0",
+        ["id"] = 5349,
+        ["method"] = "tools/call",
         ["params"] = new JsonObject { ["name"] = tool, ["arguments"] = args.DeepClone() },
     })!;
 
