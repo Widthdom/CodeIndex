@@ -1530,6 +1530,10 @@ public class ProgramCliTests
     public void Suggestions_AddJsonCreatesLocalDraftAndDeduplicates_Issue4310()
     {
         using var fixture = SuggestionFixture.Create();
+        const string evidence = "artifacts/full-dogfood-20260912/FINDINGS.md#d01";
+        const string secondEvidence = "docs/report-20260912/FINDINGS.md";
+        const string thirdEvidence = "docs/report-20260913/FINDINGS.md";
+        var context = $"See {evidence}; {{\"evidence\":[\"{secondEvidence}\",\"{thirdEvidence}\"]}}";
         string[] addArgs =
         [
             "suggestions", "add",
@@ -1539,7 +1543,7 @@ public class ProgramCliTests
             "--category", "output_format",
             "--language", "csharp",
             "--agent", "codex",
-            "--context", "Observed while triaging local audit output.",
+            "--context", context,
             "--title", "Local dogfood finding store",
             "--evidence-path", "src/CodeIndex/Cli/SuggestionsCommandRunner.cs",
         ];
@@ -1575,10 +1579,30 @@ public class ProgramCliTests
         Assert.Equal("output_format", suggestion.GetProperty("category").GetString());
         Assert.Equal("csharp", suggestion.GetProperty("language").GetString());
         Assert.Equal("codex", suggestion.GetProperty("agent").GetString());
-        Assert.Equal("Observed while triaging local audit output.", suggestion.GetProperty("context").GetString());
+        Assert.Equal(context, suggestion.GetProperty("context").GetString());
         Assert.Equal("Local dogfood finding store", suggestion.GetProperty("sampled_title").GetString());
         Assert.Equal("src/CodeIndex/Cli/SuggestionsCommandRunner.cs", suggestion.GetProperty("evidence_paths")[0].GetString());
         Assert.Equal(suggestion.GetProperty("id").GetString(), listDoc.RootElement.GetProperty("results")[0].GetProperty("id").GetString());
+
+        // Reopen the persisted store through every full-text display/export surface (#5345).
+        var id = suggestion.GetProperty("id").GetString()!;
+        foreach (var readArgs in new string[][]
+        {
+            ["suggestions", "show", id, "--db", fixture.DbPath],
+            ["suggestions", "show", id, "--db", fixture.DbPath, "--json"],
+            ["suggestions", "export", "--db", fixture.DbPath, "--format", "json"],
+            ["suggestions", "export", "--db", fixture.DbPath, "--format", "markdown"],
+            ["suggestions", "export", "--db", fixture.DbPath, "--format", "issue-drafts"],
+        })
+        {
+            var (readExitCode, readStdout, readStderr) = RunCliInSubprocess(readArgs);
+            Assert.Equal(CommandExitCodes.Success, readExitCode);
+            Assert.Equal(string.Empty, readStderr);
+            Assert.Contains(evidence, readStdout);
+            Assert.Contains(secondEvidence, readStdout);
+            Assert.Contains(thirdEvidence, readStdout);
+            Assert.DoesNotContain("[REDACTED:", readStdout);
+        }
     }
 
     [ProductionRuntimeFact]
@@ -1679,11 +1703,21 @@ public class ProgramCliTests
     public void Suggestions_UpdatePreservesStableIdAcrossShowExportAndDelete_Issue4588()
     {
         using var fixture = SuggestionFixture.Create();
-        var record = fixture.Add("bug", "csharp", "Malformed draft description", submitted: false, context: "bad context", sampledTitle: "Stale title");
+        const string historicalContext = "See [REDACTED:high_entropy_token]#d01";
+        const string originalContext = "See artifacts/full-dogfood-20260912/FINDINGS.md#d01";
+        var record = fixture.Add("bug", "csharp", "Malformed draft description", submitted: false, context: historicalContext, sampledTitle: "Stale title");
+
+        var (beforeExitCode, beforeStdout, beforeStderr) = RunCliInSubprocess([
+            "suggestions", "show", record.Hash[..12], "--db", fixture.DbPath, "--json"
+        ]);
+        Assert.Equal(CommandExitCodes.Success, beforeExitCode);
+        Assert.Equal(string.Empty, beforeStderr);
+        using var beforeDoc = JsonDocument.Parse(beforeStdout);
+        Assert.Equal(historicalContext, beforeDoc.RootElement.GetProperty("context").GetString());
 
         var (updateExitCode, updateStdout, updateStderr) = RunCliInSubprocess([
             "suggestions", "update", record.Hash[..12], "--db", fixture.DbPath, "--json",
-            "--description", "Corrected draft description", "--context", "correct context", "--title", "Corrected title",
+            "--description", "Corrected draft description", "--context", originalContext, "--title", "Corrected title",
             "--evidence-path", "src/CodeIndex/Cli/SuggestionsCommandRunner.cs"
         ]);
         var (showExitCode, showStdout, showStderr) = RunCliInSubprocess([
@@ -1712,7 +1746,7 @@ public class ProgramCliTests
         var revisionHash = suggestion.GetProperty("revision_hash").GetString();
         Assert.Equal("updated", updateDoc.RootElement.GetProperty("action").GetString());
         Assert.Equal("Corrected draft description", suggestion.GetProperty("description").GetString());
-        Assert.Equal("correct context", suggestion.GetProperty("context").GetString());
+        Assert.Equal(originalContext, suggestion.GetProperty("context").GetString());
         Assert.Equal("Corrected title", suggestion.GetProperty("sampled_title").GetString());
         Assert.Equal("src/CodeIndex/Cli/SuggestionsCommandRunner.cs", suggestion.GetProperty("evidence_paths")[0].GetString());
         Assert.Equal(record.Hash, suggestion.GetProperty("id").GetString());
@@ -1720,7 +1754,9 @@ public class ProgramCliTests
         Assert.Equal(record.CreatedAt, suggestion.GetProperty("created_at").GetDateTime());
         Assert.Equal(record.Hash, showDoc.RootElement.GetProperty("id").GetString());
         Assert.Equal(revisionHash, showDoc.RootElement.GetProperty("revision_hash").GetString());
+        Assert.Equal(originalContext, showDoc.RootElement.GetProperty("context").GetString());
         var exported = Assert.Single(exportDoc.RootElement.GetProperty("suggestions").EnumerateArray());
+        Assert.Equal(originalContext, exported.GetProperty("context").GetString());
         Assert.Equal(record.Hash, exported.GetProperty("id").GetString());
         Assert.Equal(revisionHash, exported.GetProperty("revision_hash").GetString());
         Assert.Equal(record.Hash, deleteDoc.RootElement.GetProperty("suggestion").GetProperty("id").GetString());
