@@ -44,6 +44,13 @@ completeness; bounded or unknown coverage cannot prove absence. Its cursor
 binds filters and generation and supports changing the row limit. STDIO, HTTP,
 and `batch_query` share these handlers and structured results.
 
+Guarded semantic `countOnly` requests use the CLI's indexed result units; with
+`tokenBoundary:true` they retain its row-count convention. Query-limit and
+unavailable same-symbol-scope errors preserve the existing argument-error
+recovery. Recipe children and their parent expose `partial_result`, `degraded`,
+and recovery guidance when classification or candidate coverage is incomplete.
+An empty page inside a capped ranking window does not establish complete absence.
+
 ### Regex origin filters (#5324)
 
 Use `cdidx find 'XmlReader\.Create' --regex --path src/ --origin code --json`.
@@ -160,6 +167,13 @@ MCP の find は走査上限、`scan_complete`、`partial_result`、`authoritati
 分類完了状態を示し、上限到達や unknown が残る場合に不在を証明しません。カーソルは条件と
 世代に紐づき、行数上限は変更できます。STDIO・HTTP・`batch_query` は共通ハンドラーと
 構造化結果を使います。
+
+guard 付きの意味フィルター検索で `countOnly` を指定すると、CLI と同じ索引結果単位で
+数えます。`tokenBoundary:true` 時は CLI の行数カウントを維持します。検索上限や
+same-symbol 範囲を利用できない場合のエラーは、従来の引数エラーと復旧案内を保ちます。
+分類や候補の走査が不完全な recipe は、子結果と全体の両方に `partial_result`、
+`degraded` と復旧案内を含めます。順位付けの候補上限内で空ページになっても、完全な不在を
+示すものではありません。
 
 ### 正規表現の origin フィルター (#5324)
 

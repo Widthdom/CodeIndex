@@ -4,6 +4,7 @@ using System.Text.Json.Nodes;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Mcp;
+using CodeIndex.Models;
 using static CodeIndex.Tests.QueryCommandTestSupport;
 
 namespace CodeIndex.Tests;
@@ -61,6 +62,102 @@ public partial class McpServerTests
         Assert.Equal(2, unknown["unknown_origin_matches"]!.GetValue<int>());
         Assert.False(unknown["authoritative_rows"]!.GetValue<bool>());
         Assert.True(unknown["partial_result"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public void ToolsCall_SemanticGuardCountsAndQueryErrorsMatchSharedContracts_Issue5349()
+    {
+        InsertIndexedFile("audit5349/guard-a.cs", "csharp", "Guard5349();\nNeedle5349();\nNeedle5349();\n");
+        InsertIndexedFile("audit5349/guard-b.cs", "csharp", "Guard5349();\nNeedle5349();\n");
+        foreach (var tokenBoundary in new[] { false, true })
+        {
+            var args = new JsonObject { ["query"] = "Needle5349", ["path"] = "audit5349/",
+                ["origin"] = "code", [tokenBoundary ? "tokenBoundary" : "exact"] = true, ["requireBefore"] = "Guard5349",
+                ["guardWindow"] = 8, ["countOnly"] = true };
+            var counted = Payload5349(Call5349("search", args));
+            string[] cliArgs = ["search", "Needle5349", "--path", "audit5349/", "--origin", "code",
+                tokenBoundary ? "--token-boundary" : "--exact", "--require-before", "Guard5349", "--guard-window", "8",
+                "--count", "--json", "--db", _dbPath];
+            var (_, output, _) = CaptureConsole(() => ProgramRunner.Run(cliArgs, JsonOptions, "test"));
+            var expected = JsonNode.Parse(output)!["count"]!.GetValue<int>();
+            Assert.Equal(expected, counted["count"]!.GetValue<int>());
+            Assert.Equal(expected, counted["top_files"]!.AsArray().Sum(file => file!["count"]!.GetValue<int>()));
+            if (!tokenBoundary) Assert.Equal(2, expected);
+        }
+
+        foreach (var countOnly in new[] { false, true })
+        {
+            var args = new JsonObject { ["query"] = string.Join(' ', Enumerable.Repeat("a", 129)),
+                ["countOnly"] = countOnly };
+            var expected = Call5349("search", args)["result"]!;
+            args["origin"] = "code";
+            var actual = Call5349("search", args)["result"]!;
+            Assert.True(actual["isError"]!.GetValue<bool>());
+            Assert.Equal("invalid_argument", actual["structuredContent"]!["category"]!.GetValue<string>());
+            Assert.Equal(expected["content"]!.ToJsonString(), actual["content"]!.ToJsonString());
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_SemanticRecipeCapsAndUnknownsStayPartialThroughBatch_Issue5349()
+    {
+        const string cappedPath = "audit5349/capped-auth.cs";
+        const string content = "// Authorization\n";
+        var writer = new DbWriter(_db.Connection);
+        var fileId = writer.UpsertFile(new FileRecord { Path = cappedPath, Lang = "csharp",
+            Size = content.Length, Lines = 1, Modified = ManualTimeProvider.FixtureUtcNow.UtcDateTime });
+        writer.InsertChunks(Enumerable.Range(0, DbReader.MaxContextRankingCandidates + 1).Select(index => new ChunkRecord
+        {
+            FileId = fileId, ChunkIndex = index, StartLine = 1, EndLine = 1, Content = content,
+        }).ToList());
+        var capped = Payload5349(Call5349("search", new JsonObject
+            { ["recipe"] = "auth-token-audit", ["path"] = cappedPath, ["origin"] = "code", ["limit"] = 20 }));
+        var authorization = capped["queries"]!.AsArray().Single(child => child!["name"]!.GetValue<string>() == "authorization-header")!;
+        Assert.Equal(0, authorization["count"]!.GetValue<int>());
+        Assert.False(authorization["candidate_scan_complete"]!.GetValue<bool>());
+        AssertPartial5349(authorization);
+        AssertPartial5349(capped);
+
+        foreach (var recipeMode in new[] { false, true })
+        {
+            var guardedArgs = new JsonObject { ["path"] = cappedPath, ["limit"] = 1,
+                ["requireBefore"] = "AbsentGuard5349" };
+            guardedArgs[recipeMode ? "recipe" : "query"] = recipeMode ? "auth-token-audit" : "Authorization";
+            var expectedError = Call5349("search", guardedArgs)["result"]!;
+            guardedArgs["origin"] = "code";
+            var actualError = Call5349("search", guardedArgs)["result"]!;
+            Assert.True(actualError["isError"]!.GetValue<bool>());
+            Assert.Equal("invalid_argument", actualError["structuredContent"]!["category"]!.GetValue<string>());
+            Assert.Contains("candidate", expectedError["content"]!.ToJsonString(), StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("candidate", actualError["content"]!.ToJsonString(), StringComparison.OrdinalIgnoreCase);
+            if (recipeMode)
+                Assert.Contains("auth-token-audit", actualError["content"]!.ToJsonString(), StringComparison.Ordinal);
+        }
+
+        InsertIndexedFile("audit5349/unknown-recipe.cs", "csharp", new string('\n', 4096) + "info.ArgumentList.Add(value);\n");
+        var args = new JsonObject { ["recipe"] = "dogfood-risk-patterns", ["path"] = "audit5349/unknown-recipe.cs",
+            ["origin"] = "code", ["limit"] = 20 };
+        var unknown = Payload5349(Call5349("search", args));
+        var child = unknown["queries"]!.AsArray().Single(query => query!["name"]!.GetValue<string>() == "process-argument-list")!;
+        Assert.Equal(0, child["count"]!.GetValue<int>());
+        Assert.True(child["candidate_scan_complete"]!.GetValue<bool>());
+        Assert.False(child["origin_classification_complete"]!.GetValue<bool>());
+        Assert.False(child["truncated"]!.GetValue<bool>());
+        AssertPartial5349(child);
+        AssertPartial5349(unknown);
+        var batch = Payload5349(Call5349("batch_query", new JsonObject { ["queries"] = new JsonArray
+            { new JsonObject { ["tool"] = "search", ["arguments"] = args.DeepClone() } } }));
+        var batchRecipe = batch["results"]![0]!["result"]!;
+        AssertPartial5349(batchRecipe);
+        AssertPartial5349(batchRecipe["queries"]!.AsArray().Single(query => query!["name"]!.GetValue<string>() == "process-argument-list")!);
+    }
+
+    private static void AssertPartial5349(JsonNode payload)
+    {
+        Assert.True(payload["partial_result"]!.GetValue<bool>());
+        Assert.True(payload["degraded"]!.GetValue<bool>());
+        Assert.False(payload["total_count_authoritative"]!.GetValue<bool>());
+        Assert.NotNull(payload["recovery_guidance"]);
     }
 
     [Fact]

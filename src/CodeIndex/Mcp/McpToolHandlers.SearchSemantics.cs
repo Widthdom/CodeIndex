@@ -1,11 +1,45 @@
 using System.Text.Json.Nodes;
 using CodeIndex.Cli;
 using CodeIndex.Database;
+using CodeIndex.Diagnostics;
 
 namespace CodeIndex.Mcp;
 
 public partial class McpServer
 {
+    private JsonNode WithSearchQueryErrors(JsonNode? id, Func<JsonNode> action,
+        string? recipeName = null, string? recipeQueryName = null)
+    {
+        try { return action(); }
+        catch (CodeIndexException ex) when (ex.Code == "same_symbol_scope_unavailable")
+        {
+            return CreateToolErrorResponse(id, ex.Message + " " + ex.Hint);
+        }
+        catch (SearchQueryLimitException)
+        {
+            return CreateToolErrorResponse(id, FormatLiteralSearchQueryLimitError());
+        }
+        catch (SearchGuardCandidateLimitException ex)
+        {
+            return CreateToolErrorResponse(id, recipeName is null
+                ? FormatSearchGuardCandidateLimitError(ex)
+                : FormatSearchRecipeGuardCandidateLimitError(recipeName, recipeQueryName!, ex));
+        }
+    }
+
+    private static bool AddSemanticSearchCoverage(JsonObject payload, bool scanComplete, bool classificationComplete)
+    {
+        var authoritative = scanComplete && classificationComplete;
+        payload["candidate_scan_complete"] = scanComplete;
+        payload["origin_classification_complete"] = classificationComplete;
+        payload["partial_result"] = !authoritative;
+        payload["degraded"] = !authoritative;
+        payload["total_count_authoritative"] = authoritative;
+        if (!authoritative)
+            payload["recovery_guidance"] = "Inspect unknown matches without semantic exclusions; narrow the path/query when candidate or pagination bounds are reached. Filtered absence is not authoritative.";
+        return authoritative;
+    }
+
     private static bool HasSemanticSearchArguments(JsonNode? args)
         => new[] { "origin", "excludeOrigin", "resultKind", "excludeComments", "excludeStrings", "excludeFixtures" }
             .Any(name => args?[name] is not null);
@@ -64,10 +98,7 @@ public partial class McpServer
         payload["query"] = options.Query;
         payload["path"] = PathEcho(options.PathPatterns);
         payload["excludeTests"] = options.ExcludeTests;
-        payload["origin_classification_complete"] = page.ClassificationComplete;
-        payload["candidate_scan_complete"] = page.ScanComplete;
-        payload["partial_result"] = !page.ScanComplete || !page.ClassificationComplete;
-        var authoritative = page.ScanComplete && page.ClassificationComplete;
+        var authoritative = AddSemanticSearchCoverage(payload, page.ScanComplete, page.ClassificationComplete);
         if (options.CountOnly)
         {
             payload["authoritative_count"] = authoritative;
@@ -85,8 +116,6 @@ public partial class McpServer
                 ApplyCompactResults(payload, rows, row => row.Path,
                     row => row.MatchLines.Count > 0 ? row.MatchLines[0] : row.ChunkStartLine);
         }
-        if (!authoritative)
-            payload["recovery_guidance"] = "Inspect unknown matches without semantic exclusions; narrow the path/query when candidate or pagination bounds are reached. Filtered absence is not authoritative.";
         AddSameSymbolGuardContext(payload, options.GuardFilters, options.GuardScope, options.GuardWindow);
         AddFreshnessHint(payload, reader);
         adjustments.ApplyTo(payload);

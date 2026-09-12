@@ -12,9 +12,9 @@ public partial class McpServerTests
         const string source = "class Guarded\n{\n void M()\n {\n  Clear();\n  Return();\n }\n void N()\n {\n  Return();\n }\n}";
         TestProjectHelper.InsertFreshIndexedFile(_projectRoot, _dbPath, "src/guard.cs", "csharp", source);
         new DbWriter(_db.Connection).SetMeta(DbContext.SymbolKindFilterMetaKey, SymbolKindFilter.Empty.Signature);
-        JsonNode Call(string query, bool count = false)
+        JsonNode Call(string query, bool count = false, bool semantic = false)
         {
-            return _server.HandleMessage(new JsonObject
+            var request = new JsonObject
             {
                 ["jsonrpc"] = "2.0",
                 ["id"] = 5300,
@@ -32,7 +32,10 @@ public partial class McpServerTests
                         ["countOnly"] = count,
                     },
                 },
-            })!["result"]!;
+            };
+            if (semantic)
+                request["params"]!["arguments"]!["origin"] = "code";
+            return _server.HandleMessage(request)!["result"]!;
         }
         var rows = Call("Return");
         Assert.False(rows["isError"]?.GetValue<bool>() ?? false);
@@ -48,5 +51,8 @@ public partial class McpServerTests
         var failed = Call("Return");
         Assert.True(failed["isError"]!.GetValue<bool>());
         Assert.Contains("same_symbol_scope_unavailable", failed.ToJsonString());
+        var semanticFailed = Call("Return", semantic: true);
+        Assert.Equal(failed["content"]!.ToJsonString(), semanticFailed["content"]!.ToJsonString());
+        Assert.Equal("invalid_argument", semanticFailed["structuredContent"]!["category"]!.GetValue<string>());
     }
 }

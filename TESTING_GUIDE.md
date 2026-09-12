@@ -6,6 +6,8 @@ with existing MCP schema/dispatch and CLI find/search-classification tests.
 Keep CLI row/count comparisons, recipe/batch execution, path-required controls,
 unknown origins, scan/byte caps, same-line/zero-width continuation, changed
 filters/generation, timeout and request cancellation in shared small fixtures.
+Include guarded count-unit and query-error parity, plus deduplicated ranking-cap
+exhaustion and unknown recipe coverage at child, parent, and batch levels.
 
 Dependency summary regressions in `QueryCommandRunnerGraphTests` (#5346) separate
 page counts, SQL/C# candidate boundaries, extraction completeness, and response
@@ -1447,6 +1449,8 @@ MCP スキーマ・dispatch と CLI find・検索分類のテストも併せて�
 小さな共通フィクスチャで CLI の行・件数比較、recipe・batch 実行、path 必須の契約、
 unknown、走査・サイズ上限、同一行・ゼロ幅一致の継続、条件・世代の変更、タイムアウトと
 リクエストのキャンセルを維持します。
+guard 付き件数の単位と検索エラーの同等性、重複除去後の順位付け候補上限、recipe の
+unknown 状態を子結果・全体・batch で保持することも検証します。
 
 `QueryCommandRunnerGraphTests` の依存関係 summary 回帰テスト（#5346）は、ページ件数、
 SQL／C# の候補上限、抽出の完全性、応答サイズ上限を区別します。3 edge に対する
