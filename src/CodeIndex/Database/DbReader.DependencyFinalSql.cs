@@ -7,7 +7,7 @@ public partial class DbReader
         var sql = new DependencySqlFragmentBuilder();
         AppendDependencyEdgeTotals(sql, request.SuppressDependencyNoise);
         AppendDependencyEvidence(sql);
-        AppendDependencySymbolsAndSelect(sql, request.SuppressDependencyNoise);
+        AppendDependencySymbolsAndSelect(sql, request);
         return sql.Build();
     }
 
@@ -86,8 +86,9 @@ public partial class DbReader
 
     private static void AppendDependencySymbolsAndSelect(
         DependencySqlFragmentBuilder sql,
-        bool suppressDependencyNoise)
+        DependencyQueryRequest request)
     {
+        var suppressDependencyNoise = request.SuppressDependencyNoise;
         var retainedFilterSql = suppressDependencyNoise
             ? " WHERE edges.origin <> 'markdown_heading_name_match'"
             : string.Empty;
@@ -110,7 +111,10 @@ public partial class DbReader
                        symbol_name,
                        ROW_NUMBER() OVER (PARTITION BY source_path, target_path ORDER BY symbol_name) AS symbol_rank
                 FROM distinct_edge_symbols
-            )
+            )");
+        if (request.CaptureSummaryCoverage)
+            sql.Append(", dependency_result_rows AS (");
+        sql.Append(@"
             SELECT limited_edge_totals.source_path,
                    limited_edge_totals.target_path,
                    limited_edge_totals.reference_count,
@@ -128,5 +132,18 @@ public partial class DbReader
                      limited_edge_totals.reference_count,
                      edge_evidence_payloads.evidence_payload
             ORDER BY " + finalOrderSql);
+        if (request.CaptureSummaryCoverage)
+        {
+            // Both C# source paths are bounded before aggregation. Hitting a
+            // boundary is conservatively incomplete, including an exact hit.
+            var sourceCompleteSql = request.Lang == "csharp"
+                ? "(SELECT COUNT(*) FROM bounded_source_name_counts) < @sourceCandidateLimit"
+                  + " AND (SELECT COALESCE(SUM(ref_count), 0) FROM edges WHERE origin = 'resolved_identity') < @sourceCandidateLimit"
+                : "1";
+            sql.Append(@")
+            SELECT dependency_result_rows.*, coverage.source_scan_complete
+            FROM (SELECT " + sourceCompleteSql + @" AS source_scan_complete) coverage
+            LEFT JOIN dependency_result_rows ON 1 = 1");
+        }
     }
 }
