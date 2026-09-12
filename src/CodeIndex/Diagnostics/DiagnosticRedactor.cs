@@ -347,7 +347,8 @@ internal static class DiagnosticRedactor
             redacted = HighEntropyTokenPattern.Replace(redacted, match =>
             {
                 if (match.Value.StartsWith("[REDACTED:", StringComparison.Ordinal)
-                    || LooksLikeStructuredIdentifier(match.Value))
+                    || LooksLikeStructuredIdentifier(match.Value)
+                    || LooksLikeRepositoryEvidencePath(redacted, match))
                     return match.Value;
                 types.Add("high_entropy_token");
                 return SuggestionRedactedHighEntropyToken;
@@ -372,6 +373,133 @@ internal static class DiagnosticRedactor
 
         types.Add("credential");
         return $"{match.Groups[1].Value}{name}={SuggestionRedactedCredential}";
+    }
+
+    private static bool LooksLikeRepositoryEvidencePath(string text, Match match)
+    {
+        // This is a lexical exception for complete, bounded relative file references,
+        // not a filesystem check. Never approve a suffix of a URL, rooted path or token.
+        var value = match.ValueSpan;
+        if (value.Length > 260
+            || (match.Index > 0 && !IsEvidencePathBoundary(text[match.Index - 1], before: true))
+            || (match.Index + match.Length < text.Length
+                && !IsEvidencePathBoundary(text[match.Index + match.Length], before: false))
+            || HasSensitiveEvidencePathContext(text, match.Index))
+            return false;
+
+        var lastSlash = value.LastIndexOf('/');
+        var extensionStart = value.LastIndexOf('.');
+        if (lastSlash <= 0 || extensionStart <= lastSlash + 1)
+            return false;
+
+        var extension = value[(extensionStart + 1)..];
+        if (extension.Length is < 1 or > 8)
+            return false;
+        foreach (var ch in extension)
+        {
+            if (!char.IsAsciiLetter(ch))
+                return false;
+        }
+
+        var componentStart = 0;
+        var componentCount = 0;
+        for (var index = 0; index <= value.Length; index++)
+        {
+            if (index < value.Length && value[index] != '/')
+                continue;
+            if (++componentCount > 16
+                || !IsOrdinaryEvidencePathComponent(value[componentStart..index]))
+                return false;
+            componentStart = index + 1;
+        }
+        return true;
+    }
+
+    private static bool IsEvidencePathBoundary(char ch, bool before) =>
+        ch is ' ' or '\r' or '\n' or '"' or '\'' or '`'
+        || (before ? ch is '(' or '[' or '<' : ch is ')' or ']' or '>' or ',' or ';' or '.' or '#');
+
+    private static bool HasSensitiveEvidencePathContext(string text, int end)
+    {
+        // A token can use ordinary words and slashes too. Do not exempt values
+        // after e.g. "bearer", "password: " or a quoted credential assignment.
+        var lowerBound = Math.Max(0, end - 128);
+        while (end > lowerBound && (char.IsWhiteSpace(text[end - 1]) || text[end - 1] is '"' or '\'' or '`' or '(' or '<'))
+            end--;
+        if (end > lowerBound && text[end - 1] is ':' or '=')
+        {
+            end--;
+            while (end > lowerBound && char.IsWhiteSpace(text[end - 1]))
+                end--;
+        }
+        var start = end;
+        while (start > lowerBound && (char.IsAsciiLetterOrDigit(text[start - 1]) || text[start - 1] is '_' or '-' or '.'))
+            start--;
+        return (start == lowerBound && lowerBound > 0)
+            || (start < end && IsSensitiveName(text[start..end]));
+    }
+
+    private static bool IsOrdinaryEvidencePathComponent(ReadOnlySpan<char> component)
+    {
+        if (component.IsEmpty || component.Length > 100 || IsSensitiveName(component.ToString()))
+            return false;
+
+        var wordStart = 0;
+        for (var index = 0; index <= component.Length; index++)
+        {
+            if (index < component.Length && component[index] is not ('.' or '-' or '_'))
+                continue;
+            if (!IsOrdinaryEvidencePathWord(component[wordStart..index]))
+                return false;
+            wordStart = index + 1;
+        }
+        return true;
+    }
+
+    private static bool IsOrdinaryEvidencePathWord(ReadOnlySpan<char> word)
+    {
+        if (word.IsEmpty)
+            return false;
+
+        var letterEnd = word.Length;
+        while (letterEnd > 0 && char.IsAsciiDigit(word[letterEnd - 1]))
+            letterEnd--;
+        // Standalone dates and short version/issue suffixes are ordinary evidence names.
+        if (letterEnd == 0)
+            return word.Length <= 8;
+        if (word.Length - letterEnd > 4)
+            return false;
+
+        var letters = word[..letterEnd];
+        var allLower = true;
+        var allUpper = true;
+        foreach (var ch in letters)
+        {
+            if (!char.IsAsciiLetter(ch))
+                return false;
+            allLower &= char.IsAsciiLetterLower(ch);
+            allUpper &= char.IsAsciiLetterUpper(ch);
+        }
+        if (allLower || allUpper)
+            return letters.Length <= (allUpper ? 12 : 24);
+
+        // Check every camel/Pascal word independently: a harmless directory must
+        // not lend its natural-word signal to an opaque credential in another part.
+        var wordStart = 0;
+        for (var index = 1; index <= letters.Length; index++)
+        {
+            if (index < letters.Length
+                && !(char.IsAsciiLetterUpper(letters[index])
+                    && (char.IsAsciiLetterLower(letters[index - 1])
+                        || (index + 1 < letters.Length && char.IsAsciiLetterLower(letters[index + 1])))))
+                continue;
+            var part = letters[wordStart..index];
+            if (part.Length is < 3 or > 24)
+                return false;
+            wordStart = index;
+        }
+        return letters.Length < 16
+            || (TryAnalyzeIdentifierSegment(letters, out _, out var hasNaturalWord) && hasNaturalWord);
     }
 
     private static bool LooksLikeStructuredIdentifier(string value)

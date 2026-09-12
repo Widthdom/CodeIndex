@@ -74,6 +74,110 @@ public class DiagnosticRedactorTests
     }
 
     [Theory]
+    [InlineData("See artifacts/full-dogfood-20260912/FINDINGS.md#d01")]
+    [InlineData("[D01](artifacts/full-dogfood-20260912/FINDINGS.md#d01)")]
+    [InlineData("`artifacts/full-dogfood-20260912/FINDINGS.md#d01`.")]
+    [InlineData("Evidence:\nartifacts/full-dogfood-20260912/FINDINGS.md#d01\nEnd")]
+    [InlineData("See artifacts/run-20260912/results_5345.json.")]
+    [InlineData("docs/audit-20260912/README.en.md")]
+    [InlineData("src/CodeIndex/Diagnostics/DiagnosticRedactor.Issue5345.cs")]
+    [InlineData("tests/CodeIndex.Tests/DiagnosticRedactorTests.Issue5345.cs")]
+    public void RedactSuggestionText_PreservesOrdinaryEvidenceReferences_Issue5345(string text)
+    {
+        var redacted = DiagnosticRedactor.RedactSuggestionText(text, out var types);
+
+        Assert.Equal(text, redacted);
+        Assert.Empty(types);
+    }
+
+    [Theory]
+    [InlineData("aaBB11ccDD22eeFF33ggHH44iiJJ55kk")]
+    [InlineData("AbCdEfGhIjKlMnOpQrStUvWxYz123456")]
+    [InlineData("AbcDefGhiJklMnoPqrStuVwxYz123456")]
+    [InlineData("docs-aaBB11ccDD22eeFF33ggHH44iiJJ55kk")]
+    [InlineData("AbcDefGhiJklMnoPqrStuVwx1234")]
+    [InlineData("ghp_" + "abcdefghijklmnopqrstuvwxyz123456")]
+    [InlineData("github_" + "pat_11AA22bb33CC44dd55EE66ff77GG88hh")]
+    [InlineData("glpat" + "-AbcdefGhijklMnopqrstUvwx123456")]
+    [InlineData("sk_" + "live_AbcdefGhijklMnopqr123456")]
+    [InlineData("AKIA" + "1234567890ABCDEF")]
+    [InlineData("Bearer AbCdEfGhIjKlMnOpQrStUvWxYz123456")]
+    [InlineData("api_key=explicit-secret-value")]
+    [InlineData("password=explicit-secret-value")]
+    public void RedactSuggestionText_PathComponentsCannotHideCredentials_Issue5345(string secret)
+    {
+        const string evidence = "artifacts/full-dogfood-20260912/FINDINGS.md#d01";
+        var text = $"See {evidence}; credential artifacts/{secret}/FINDINGS.md#d02";
+
+        var redacted = DiagnosticRedactor.RedactSuggestionText(text, out var types);
+
+        Assert.Contains(evidence, redacted);
+        Assert.DoesNotContain(secret, redacted);
+        Assert.NotEmpty(types);
+        Assert.Contains("[REDACTED:", redacted);
+    }
+
+    [Theory]
+    [InlineData("../artifacts/full-dogfood-20260912/FINDINGS.md")]
+    [InlineData("./artifacts/full-dogfood-20260912/FINDINGS.md")]
+    [InlineData("artifacts/../full-dogfood-20260912/FINDINGS.md")]
+    [InlineData("artifacts//full-dogfood-20260912/FINDINGS.md")]
+    [InlineData("/artifacts/full-dogfood-20260912/FINDINGS.md")]
+    [InlineData("C:/artifacts/full-dogfood-20260912/FINDINGS.md")]
+    [InlineData("C:\\artifacts/full-dogfood-20260912/FINDINGS.md")]
+    [InlineData("//host/artifacts/full-dogfood-20260912/FINDINGS.md")]
+    [InlineData("~/artifacts/full-dogfood-20260912/FINDINGS.md")]
+    [InlineData("https://example.test/artifacts/full-dogfood-20260912/FINDINGS.md")]
+    [InlineData("artifacts/full-dogfood-20260912/FINDINGS.md?query=value")]
+    [InlineData("artifacts/full-dogfood-20260912/FINDINGS.md\u001b")]
+    [InlineData("artifacts/full-dogfood-20260912/FINDINGS.md\t")]
+    [InlineData("artifacts/invalid\u0001full-dogfood-20260912/FINDINGS.md")]
+    [InlineData("artifacts/token-20260912/FINDINGS.md")]
+    [InlineData("artifacts/password/FINDINGS-20260912.md")]
+    [InlineData("artifacts/abcdefghijklmnopqrstuvwx123456/FINDINGS.md")]
+    [InlineData("bearer artifacts/full-dogfood-20260912/FINDINGS.md")]
+    [InlineData("bEaReR artifacts/full-dogfood-20260912/FINDINGS.md")]
+    [InlineData("password: artifacts/full-dogfood-20260912/FINDINGS.md")]
+    [InlineData("api_key : \"artifacts/full-dogfood-20260912/FINDINGS.md\"")]
+    public void RedactSuggestionText_DoesNotExemptUnvalidatedPaths_Issue5345(string text)
+    {
+        var redacted = DiagnosticRedactor.RedactSuggestionText(text, out var types);
+
+        Assert.NotEqual(text, redacted);
+        Assert.Contains(DiagnosticRedactor.SuggestionRedactedHighEntropyToken, redacted);
+        Assert.Equal(["high_entropy_token"], types);
+    }
+
+    [Fact]
+    public void RedactSuggestionText_EvidenceRecognitionRetainsInputBounds_Issue5345()
+    {
+        var tooManyComponents = "artifacts/" + string.Concat(Enumerable.Repeat("audit/", 16)) + "FINDINGS-20260912.md";
+        var tooLongPath = "artifacts/" + string.Concat(Enumerable.Repeat(new string('a', 24) + "/", 10)) + "FINDINGS-20260912.md";
+        var tooLongComponent = "artifacts/" + string.Join("-", Enumerable.Repeat("audit", 21)) + "/FINDINGS-20260912.md";
+        foreach (var path in new[] { tooManyComponents, tooLongPath, tooLongComponent })
+        {
+            Assert.Equal(DiagnosticRedactor.SuggestionRedactedHighEntropyToken,
+                DiagnosticRedactor.RedactSuggestionText(path, out var pathTypes));
+            Assert.Equal(["high_entropy_token"], pathTypes);
+        }
+
+        const string evidence = "artifacts/full-dogfood-20260912/FINDINGS.md#d01";
+        var text = evidence + new string(' ', DiagnosticRedactor.SuggestionRedactionFieldLengthLimit) + "private-tail";
+        var redacted = DiagnosticRedactor.RedactSuggestionText(text, out var types);
+
+        Assert.StartsWith(evidence, redacted);
+        Assert.DoesNotContain("private-tail", redacted);
+        Assert.EndsWith(DiagnosticRedactor.SuggestionRedactionTruncationMarker, redacted);
+        Assert.Equal(["truncated"], types);
+        Assert.Equal(DiagnosticRedactor.SuggestionRedactionFieldLengthLimit
+            + DiagnosticRedactor.SuggestionRedactionTruncationMarker.Length, redacted.Length);
+
+        var distantCredential = "bearer" + new string(' ', 128) + evidence;
+        Assert.DoesNotContain(evidence, DiagnosticRedactor.RedactSuggestionText(distantCredential, out var contextTypes));
+        Assert.Equal(["high_entropy_token"], contextTypes);
+    }
+
+    [Theory]
     [InlineData("--github-token")]
     [InlineData("github_token")]
     [InlineData("bearer")]
