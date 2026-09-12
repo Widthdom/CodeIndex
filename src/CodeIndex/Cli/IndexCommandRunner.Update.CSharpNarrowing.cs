@@ -15,7 +15,7 @@ public static partial class IndexCommandRunner
         var telemetry = context.Options.CSharpWorkspaceExpansion!;
         if (!state.CapturedContractFingerprint
             || !context.ContractNarrowingAllowed()
-            || context.ProjectMarkerFingerprint is not { } projectMarkerFingerprint
+            || state.ProjectMarkerFingerprint is not { } projectMarkerFingerprint
             || state.CSharpWorkspace.ContractSourceFingerprint == null
             || state.CSharpWorkspaceInputSnapshot is not { IsComplete: true } inputs
             || state.CSharpWorkspaceSnapshots == null

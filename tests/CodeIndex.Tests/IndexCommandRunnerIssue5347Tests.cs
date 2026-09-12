@@ -226,31 +226,32 @@ public partial class IndexCommandRunnerTests
         Assert.True(status.ReferenceGraphComplete);
     }
 
-    private void AssertFullParity5347(string root)
+    private void AssertFullParity5347(string root, bool csharpOnly = false)
     {
-        var scoped = ReadSemanticRows5347(root);
+        var scoped = ReadSemanticRows5347(root, csharpOnly: csharpOnly);
         var (exitCode, full) = RunAndCaptureJson([root, "--rebuild", "--yes", "--json"]);
         Assert.Equal(CommandExitCodes.Success, exitCode);
         Assert.True(full.GetProperty("index_complete").GetBoolean());
         Assert.True(full.GetProperty("reference_graph_complete").GetBoolean());
-        Assert.Equal(scoped, ReadSemanticRows5347(root));
+        Assert.Equal(scoped, ReadSemanticRows5347(root, csharpOnly: csharpOnly));
     }
 
-    private static string[] ReadSemanticRows5347(string root, string databaseFileName = "codeindex.db")
+    private static string[] ReadSemanticRows5347(string root, string databaseFileName = "codeindex.db", bool csharpOnly = false)
     {
         using var db = new DbContext(DbOpenIntent.WriteIndex, Path.Combine(root, ".cdidx", databaseFileName));
         var rows = new List<string>();
+        var filter = csharpOnly ? " WHERE f.lang = 'csharp'" : "";
         foreach (var sql in new[]
         {
-            "SELECT path, lang, checksum FROM files",
-            "SELECT f.path, s.* FROM symbols s JOIN files f ON f.id = s.file_id",
+            "SELECT path, lang, checksum FROM files f" + filter,
+            "SELECT f.path, s.* FROM symbols s JOIN files f ON f.id = s.file_id" + filter,
             """
             SELECT f.path, r.*, sf.path AS source_file, ss.name AS source_name,
                    tf.path AS target_file, ts.name AS target_name
             FROM symbol_references r JOIN files f ON f.id = r.file_id
             LEFT JOIN symbols ss ON ss.id = r.source_symbol_id LEFT JOIN files sf ON sf.id = ss.file_id
             LEFT JOIN symbols ts ON ts.id = r.target_symbol_id LEFT JOIN files tf ON tf.id = ts.file_id
-            """,
+            """ + filter,
         })
         {
             using var command = db.Connection.CreateCommand();

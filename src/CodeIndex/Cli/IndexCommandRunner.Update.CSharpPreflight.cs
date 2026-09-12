@@ -19,7 +19,6 @@ public static partial class IndexCommandRunner
         internal required bool ScopedCleanupHadCSharp { get; init; }
         internal required bool ScopedCleanupHadContract { get; init; }
         internal required bool HadIndexedCSharpFilesBeforeUpdate { get; init; }
-        internal required string? ProjectMarkerFingerprint { get; init; }
         internal required Func<bool> ContractNarrowingAllowed { get; init; }
         internal required int Updated { get; init; }
         internal required int Removed { get; init; }
@@ -80,6 +79,7 @@ public static partial class IndexCommandRunner
 
         internal bool CSharpTargetAffected { get; set; }
         internal string? ContractBaselineFingerprint { get; set; }
+        internal string? ProjectMarkerFingerprint { get; set; }
         internal bool CanNarrowTargets { get; set; }
         internal bool CapturedContractFingerprint { get; set; }
     }
@@ -375,6 +375,10 @@ public static partial class IndexCommandRunner
                 return;
             }
 
+            // Bind the proof to the scan that establishes the family-scope cache
+            // and validated snapshots, rather than the earlier marker-only scan.
+            state.ProjectMarkerFingerprint = scanResult.ProjectMarkerFingerprints.TryGetValue("csharp", out var projectMarkers)
+                && projectMarkers.IsComplete ? projectMarkers.Fingerprint : null;
             AddExpandedUpdateCSharpTargets(context, state, scanResult);
             context.Options.CSharpWorkspaceExpansion.ExpandedTargetCount = Math.Max(
                 context.Options.CSharpWorkspaceExpansion.OriginalTargetCount,

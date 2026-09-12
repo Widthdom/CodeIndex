@@ -38,6 +38,10 @@ method body in an ordinary instance-only class can leave these contract inputs
 unchanged. Changing a source containing `static`, even just a comment in that
 source, remains conservative. This is not a general semantic comparison of C#.
 
+Project-marker evidence comes from the same expanded scan that establishes family
+scopes and the validated input snapshot. Marker changes or discovery-budget
+exhaustion between the initial and expanded scans retain full expansion.
+
 The proof is optional, limited to 50,000 C# paths, and bound to the last successful
 run. Legacy/missing evidence (`baseline_unavailable`), changed inputs or binary
 (`contract_inputs_changed`), incomplete or incompatible prior readiness, active
@@ -70,9 +74,9 @@ with an explicit, private `--db`; the control was not an already-current databas
 
 | Case | Updated-loop files | Loop bytes | Persisted duration (ms) | Process wall (ms) | C# scan / prepass (ms) |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Independent instance edit, narrowed | 1 | 1,777 | 1,498 | 1,624 | 8 / 221 |
-| Same edit, conservative control | 99 | 170,819 | 2,319 | 2,446 | 7 / 223 |
-| Shared constant target renamed | 99 | 170,821 | 2,249 | 2,375 | 7 / 220 |
+| Independent instance edit, narrowed | 1 | 1,777 | 1,850 | 1,987 | 9 / 222 |
+| Same edit, conservative control | 99 | 170,819 | 2,720 | 2,856 | 8 / 244 |
+| Shared constant target renamed | 99 | 170,821 | 3,478 | 3,612 | 8 / 235 |
 
 All cases retained fresh, complete source/graph status and verified HEADs. The
 independent result matched its conservative control; the shared-target result
@@ -132,6 +136,10 @@ status からも参照できます。これは診断情報であり、準備状�
 変えない場合があります。一方、`static` を含むソースの変更は、そのファイルのコメント
 編集だけでも保守的に処理します。C# 全般の意味的な同値性を判定する機能ではありません。
 
+プロジェクトマーカーの証拠は、family scope と検証対象の入力スナップショットを確立する
+同一の展開走査から取得します。初期走査と展開走査の間にマーカーが変わるか、探索上限に
+達した場合も、全体への展開を維持します。
+
 この証拠は最適化専用で、C# パス数の上限は 50,000、対象世代は直近の成功実行です。
 古い DB などで証拠がない場合（`baseline_unavailable`）、入力やバイナリが変わった場合
 （`contract_inputs_changed`）、以前の準備状態が不完全・非互換の場合、シンボルフィルター、
@@ -159,9 +167,9 @@ C# は99ファイル（32メソッドずつのインスタンス専用クラス9
 
 | ケース | 更新ループのファイル数 | ループの bytes | 保存済み時間 (ms) | プロセス実時間 (ms) | C# 走査／前処理 (ms) |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| 独立したインスタンス編集・絞り込みあり | 1 | 1,777 | 1,498 | 1,624 | 8 / 221 |
-| 同じ編集・保守的な対照実行 | 99 | 170,819 | 2,319 | 2,446 | 7 / 223 |
-| 共有定数の参照先名を変更 | 99 | 170,821 | 2,249 | 2,375 | 7 / 220 |
+| 独立したインスタンス編集・絞り込みあり | 1 | 1,777 | 1,850 | 1,987 | 9 / 222 |
+| 同じ編集・保守的な対照実行 | 99 | 170,819 | 2,720 | 2,856 | 8 / 244 |
+| 共有定数の参照先名を変更 | 99 | 170,821 | 3,478 | 3,612 | 8 / 235 |
 
 全ケースでソース・グラフの鮮度と完全性、検証済み HEAD を維持しました。独立した編集の
 結果は保守的な対照実行と一致し、共有参照先の変更結果は同じソースの全量再構築と一致しました。

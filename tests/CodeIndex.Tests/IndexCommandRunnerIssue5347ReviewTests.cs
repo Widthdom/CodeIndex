@@ -6,10 +6,13 @@ namespace CodeIndex.Tests;
 
 public partial class IndexCommandRunnerTests
 {
-    [Fact]
-    public void Run_Update_ProjectMarkerChangeMatchesConservativeScope_Issue5347Review()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Run_Update_ProjectMarkerChangeMatchesConservativeScope_Issue5347Review(bool duringExpansion)
     {
         var root = CreateExpansionProject5347();
+        var priorHook = IndexCommandRunner.UpdateCSharpExpansionScanStartingForTesting;
         try
         {
             Directory.CreateDirectory(Path.Combine(root, "src"));
@@ -28,36 +31,62 @@ public partial class IndexCommandRunnerTests
                 new DbWriter(control.Connection).SetMeta(DbContext.CSharpWorkspaceContractBaselineMetaKey, null);
             }
 
-            File.WriteAllText(Path.Combine(root, "App.csproj"), "<Project />\n");
+            var markerPath = Path.Combine(root, "App.csproj");
+            void AddMarker() => File.WriteAllText(markerPath, "<Project />\n");
+            if (duringExpansion)
+                IndexCommandRunner.UpdateCSharpExpansionScanStartingForTesting = AddMarker;
+            else
+                AddMarker();
             File.WriteAllText(part, "public partial class Api { public int Run() => 2; }\n");
+            string[] targets = duringExpansion ? ["src/Api.Part1.cs"] : ["src/Api.Part1.cs", "App.csproj"];
             var (exitCode, actual) = RunAndCaptureJson(
-                [root, "--files", "src/Api.Part1.cs", "App.csproj", "--allow-partial", "--json"]);
-            Assert.Equal(CommandExitCodes.Success, exitCode);
+                [root, "--files", .. targets, "--allow-partial", "--json"]);
+            Assert.True(exitCode == CommandExitCodes.Success, actual.ToString());
             Assert.Equal("expanded", actual.GetProperty("csharp_workspace_expansion").GetProperty("decision").GetString());
             Assert.Equal("contract_inputs_changed", actual.GetProperty("csharp_workspace_expansion").GetProperty("reason").GetString());
+            // Give the old-database control the same marker timing as the subject.
+            if (duringExpansion)
+                File.Delete(markerPath);
             var (controlCode, conservative) = RunAndCaptureJson(
-                [root, "--db", controlPath, "--files", "src/Api.Part1.cs", "App.csproj", "--allow-partial", "--json"]);
+                [root, "--db", controlPath, "--files", .. targets, "--allow-partial", "--json"]);
             Assert.Equal(CommandExitCodes.Success, controlCode);
             Assert.Equal(ReadSemanticRows5347(root, "control.db"), ReadSemanticRows5347(root));
             foreach (var flag in new[] { "index_complete", "reference_graph_complete", "hotspot_family_ready" })
                 Assert.Equal(conservative.GetProperty(flag).GetBoolean(), actual.GetProperty(flag).GetBoolean());
-            AssertFullParity5347(root);
+            IndexCommandRunner.UpdateCSharpExpansionScanStartingForTesting = priorHook;
+            // The racing marker is outside the requested paths; compare C# data
+            // after a full scan also admits that newly created MSBuild file.
+            AssertFullParity5347(root, csharpOnly: duringExpansion);
         }
-        finally { DeleteDirectory(root); }
+        finally
+        {
+            IndexCommandRunner.UpdateCSharpExpansionScanStartingForTesting = priorHook;
+            DeleteDirectory(root);
+        }
     }
 
-    [Fact]
-    public void Run_Update_IncompleteProjectMarkerEvidencePreventsNarrowing_Issue5347Review()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Run_Update_IncompleteProjectMarkerEvidencePreventsNarrowing_Issue5347Review(bool duringExpansion)
     {
         var root = CreateExpansionProject5347();
         var priorBudget = FileIndexer.ProjectMarkerFingerprintDirectoryBudgetForTesting;
+        var priorHook = IndexCommandRunner.UpdateCSharpExpansionScanStartingForTesting;
         try
         {
             Directory.CreateDirectory(Path.Combine(root, "nested"));
             Assert.Equal(0, RunAndCaptureJson([root, "--json"]).ExitCode);
             Update5347(root, "Worker.cs");
-            FileIndexer.ProjectMarkerFingerprintDirectoryBudgetForTesting = 1;
-            Assert.False(new FileIndexer(root).GetProjectMarkerFingerprintResult("csharp").IsComplete);
+            void ExhaustBudget()
+            {
+                FileIndexer.ProjectMarkerFingerprintDirectoryBudgetForTesting = 1;
+                Assert.False(new FileIndexer(root).GetProjectMarkerFingerprintResult("csharp").IsComplete);
+            }
+            if (duringExpansion)
+                IndexCommandRunner.UpdateCSharpExpansionScanStartingForTesting = ExhaustBudget;
+            else
+                ExhaustBudget();
             var (exitCode, json) = RunAndCaptureJson(
                 [root, "--files", "Worker.cs", "--allow-partial", "--json"]);
             Assert.Equal(CommandExitCodes.Success, exitCode);
@@ -65,6 +94,7 @@ public partial class IndexCommandRunnerTests
         }
         finally
         {
+            IndexCommandRunner.UpdateCSharpExpansionScanStartingForTesting = priorHook;
             FileIndexer.ProjectMarkerFingerprintDirectoryBudgetForTesting = priorBudget;
             DeleteDirectory(root);
         }

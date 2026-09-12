@@ -19,6 +19,8 @@ and malformed persisted-telemetry controls. Include project-marker scope/budget 
 case-only rename peak counts, and quiet full-scan fallbacks. Phase durations are diagnostics, not
 wall-clock assertions. Tests using existing global update hooks stay in the SQLite
 pool sensitive collection and restore hooks in `finally`.
+Exercise marker creation and budget exhaustion between the initial and expanded
+scans, comparing the same timing with a conservative database and full C# extraction.
 
 
 `Extract_CSharpStaticLambdaGate_BoundsRepeatedSameLineDeclarations` checks 64
@@ -1451,6 +1453,8 @@ rename・削除、設定変更、キャンセル、不正な保存済み診断�
 境界と探索上限の変更、大小文字だけの rename の最大件数、quiet 指定時の全走査への切り替えも含めます。工程時間は
 診断値とし、実時間の閾値をテスト条件にしません。既存のグローバル更新フックを使うテストは
 SQLite pool sensitive collection に配置し、`finally` で復元します。
+初期走査と展開走査の間でマーカーを追加する場合や探索上限に達する場合も検証し、
+同じタイミングで変化する保守的な DB 更新と、C# の全量抽出結果を比較してください。
 
 
 #5339 は #5332 の fixture に正常な `files --format count --json` の batch を追加し、
