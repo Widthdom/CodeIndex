@@ -112,10 +112,21 @@ public class QueryCommandRunnerBatchIssue5344Tests
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_batch_partial_shapes_5344");
         var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
         TestProjectHelper.InsertIndexedFile(dbPath, "src/matches.txt", "text", "alpha\nbeta\n");
-        foreach (var query in new[] { "alpha", "beta" })
-        foreach (var flags in new string[][] { ["--json"], ["--json", "--count"], ["--json-envelope"], ["--json-envelope", "--count"] })
+        foreach (var scope in new string[][]
         {
-            string[] child = ["find", query, "--all", "--regex", "--line-scan-limit", "1", .. flags];
+            ["--all", "--line-scan-limit", "1"],
+            ["--path", "src/matches.txt", "--exclude-comments"],
+            ["--path", "src/matches.txt", "--origin", "unknown"],
+            ["--path", "src/matches.txt", "--exclude-origin=unknown"],
+        })
+        foreach (var query in new[] { "alpha", "beta" })
+        foreach (var flags in new string[][]
+        {
+            ["--json"], ["--json", "--count"], ["--json-envelope"], ["--json-envelope", "--count"],
+            ["--json", "--fields", "path", "--max-json-bytes", "6000"],
+        })
+        {
+            string[] child = ["find", query, "--regex", .. scope, .. flags];
             var direct = RunDirect(child, dbPath);
             Assert.Equal(CommandExitCodes.PartialResult, direct.Exit);
             var ndjson = flags.SequenceEqual(new[] { "--json" });

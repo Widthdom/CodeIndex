@@ -1051,19 +1051,25 @@ compact output, and explicit or automatic envelopes use `result`; unsupported
 options and not-found failures retain their existing exit/error contracts.
 
 Exit 11 records can additionally contain `partial_result: true` and typed
-`results` (NDJSON) or `result` (count/document/envelope). This requires a complete,
-validated partial or interrupted terminal record, either last in the stream, in
-the count document, or in matching envelope `metadata.stream_terminal`. Preserve
+`results` (NDJSON) or `result` (count/document/envelope). This requires a validated
+partial/interrupted terminal last in the stream or in matching envelope
+`metadata.stream_terminal`, or a supported partial find count document. Reconcile
+terminal counts with recognized rows and count/control records; bounded envelopes
+validate rendered `result_count` while retaining inner scan counts only when their
+explicit truncation metadata explains a difference. Scoped regex find with origin
+filters also uses NDJSON and preserves unknown-origin partial results. Preserve
 all rows, terminal/cursor, truncation, and authority fields. Consumers must still
 check `status: "error"`, `exit_code: 11`, and the typed `error`; these records
 still increment `command_failures` and do not establish authoritative absence.
 For a partial `find --all`, resume with the retained `next_cursor` using the same
 query and database; continue checking the child scan/authority flags on each page.
+Bounded envelopes paginate with outer `metadata.next_cursor`, while
+`metadata.stream_terminal` preserves the inner scan evidence.
 Raw-stream diagnostics are not needed to recover these results. Parsing uses the
 existing 10,485,760-character capture cap and depth 32, rejects duplicate keys,
 invalid Unicode, mixed/truncated streams and conflicting command/exit/error
 identities, and never promotes arbitrary failed stdout. Other failures or partial
-formats without a recognized terminal keep the typed-error fallback. Explicit
+formats without a recognized partial contract keep the typed-error fallback. Explicit
 capture, cancellation, timeout and dispatch errors take precedence, and the parent
 output budget applies to the entire retained payload.
 
@@ -5534,17 +5540,22 @@ compact 出力、明示または自動の envelope は `result` を使う。未�
 定義が見つからない失敗は、既存の終了コードとエラー形式を維持する。
 
 終了コード11のレコードには、追加で `partial_result: true` と型付きの `results`
-（NDJSON）または `result`（count・単一文書・envelope）を含められる。ストリームの末尾、
-count 文書、または識別情報が一致する envelope の `metadata.stream_terminal` に、
-部分結果または中断を示す完全な終端レコードがあり、検証に成功した場合に限る。
+（NDJSON）または `result`（count・単一文書・envelope）を含められる。ストリームの末尾または
+識別情報が一致する envelope の `metadata.stream_terminal` にある部分・中断の終端情報、
+もしくは対応するfindの部分count文書の検証に成功した場合に限る。終端件数を認識可能な結果行と
+count・制御レコードに照合する。上限付きenvelopeは描画後の `result_count` を検証し、
+明示的な切り詰め情報で差を説明できる場合だけ内側の走査件数を維持する。
+スコープ付き正規表現findもoriginフィルター指定時はNDJSONとなり、判別不能なoriginによる部分結果を保持する。
 結果行、終端情報、cursor、切り詰め情報、確定性のフィールドをすべて保持する。
 利用側は引き続き `status: "error"`、`exit_code: 11`、型付き `error` を確認する必要がある。
 これらも `command_failures` に加算され、結果がないことの確定的な証拠にはならない。
 部分的な `find --all` は、保持した `next_cursor` を同じクエリとDBに渡して再開し、
-各ページの走査状態と確定性フラグを確認する。結果の取得に生ストリームの診断は不要である。
+各ページの走査状態と確定性フラグを確認する。上限付きenvelopeのページ送りは外側の
+`metadata.next_cursor` を使い、`metadata.stream_terminal` は内側の走査情報として保持する。
+結果の取得に生ストリームの診断は不要である。
 解析は既存の10,485,760文字のcapture上限と深さ32を使い、重複キー、不正なUnicode、
 混在・途中切断ストリーム、command・終了コード・errorの矛盾を拒否する。
-任意の失敗stdoutを結果として扱わず、認識可能な終端情報のない部分形式とその他の失敗は
+任意の失敗stdoutを結果として扱わず、認識可能な部分結果の契約がない形式とその他の失敗は
 型付きエラーへフォールバックする。明示的なcapture上限、取消、timeout、dispatchのエラーを
 優先し、保持したペイロード全体に親の出力上限を適用する。
 

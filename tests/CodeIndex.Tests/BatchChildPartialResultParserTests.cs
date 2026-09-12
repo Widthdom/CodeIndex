@@ -10,22 +10,31 @@ public class BatchChildPartialResultParserTests
     [Fact]
     public void Parse_PreservesValidatedPartialContractsAndRejectsUnrelatedOutput_Issue5344()
     {
-        const string row = """{"path":"src/file.cs","line":1,"content":"alpha"}""";
+        const string row = """{"path":"src/file.cs","line":1,"column":1,"content":"alpha"}""";
         var stream = row + "\n" + Terminal + "\n";
         var parsed = Assert.IsType<JsonArray>(BatchChildPartialResultParser.Parse(stream, "find", ndjson: true));
         Assert.Equal(2, parsed.Count);
         Assert.Equal("opaque-cursor", parsed[^1]!["next_cursor"]!.GetValue<string>());
-        Assert.NotNull(BatchChildPartialResultParser.Parse(Terminal, "find", ndjson: true));
-        Assert.NotNull(BatchChildPartialResultParser.Parse(Terminal, "find", ndjson: false));
-        var envelope = "{\"metadata\":{\"command\":\"find\",\"exit_code\":11,\"stream_terminal\":"
+        var zeroTerminal = Terminal.Replace("\"returned_count\":1", "\"returned_count\":0", StringComparison.Ordinal);
+        Assert.NotNull(BatchChildPartialResultParser.Parse(zeroTerminal, "find", ndjson: true));
+        Assert.NotNull(BatchChildPartialResultParser.Parse("{\"count\":0,\"results\":[]}\n" + zeroTerminal, "search", ndjson: true));
+        var count = Terminal.Replace("\"returned_count\":1", "\"count\":1,\"returned_count\":1", StringComparison.Ordinal);
+        Assert.NotNull(BatchChildPartialResultParser.Parse(count, "find", ndjson: false));
+        var envelope = "{\"metadata\":{\"command\":\"find\",\"exit_code\":11,\"result_count\":1,\"stream_terminal\":"
             + Terminal + "},\"results\":[" + row + "]}";
         Assert.NotNull(BatchChildPartialResultParser.Parse(envelope, "find", ndjson: false));
+        var trimmedEnvelope = envelope.Replace(row, "", StringComparison.Ordinal)
+            .Replace("\"result_count\":1", "\"result_count\":0,\"returned_count\":0,\"truncated\":true", StringComparison.Ordinal);
+        Assert.NotNull(BatchChildPartialResultParser.Parse(trimmedEnvelope, "find", ndjson: false));
         Assert.NotNull(BatchChildPartialResultParser.Parse(
             stream.Replace("\"partial_result\":true", "\"interrupted\":true", StringComparison.Ordinal), "search", ndjson: true));
 
         foreach (var invalid in new[]
         {
-            "", "plain text", "null", "[]", "{}", row, Terminal[..^1],
+            "", "plain text", "null", "[]", "{}", row, Terminal, Terminal[..^1],
+            stream.Replace("\"returned_count\":1", "\"returned_count\":2", StringComparison.Ordinal),
+            "{\"unrelated\":true}\n" + Terminal,
+            "{\"count\":0,\"results\":[]}\n" + stream,
             row + "\n{", stream + row, Terminal + "\n" + Terminal,
             "42\n" + Terminal, "null\n" + Terminal, "[]\n" + Terminal,
             row + "\n" + Terminal.Replace("true", "false", StringComparison.Ordinal),
@@ -45,7 +54,11 @@ public class BatchChildPartialResultParserTests
 
         foreach (var invalid in new[]
         {
-            stream, "{}", "[]", "{\"partial_result\":true}",
+            stream, Terminal, "{}", "[]", "{\"partial_result\":true}",
+            count.Replace("\"count\":1", "\"count\":2", StringComparison.Ordinal),
+            envelope.Replace(row, "", StringComparison.Ordinal),
+            envelope.Replace("\"result_count\":1", "\"result_count\":2", StringComparison.Ordinal),
+            envelope.Replace("\"returned_count\":1", "\"returned_count\":2", StringComparison.Ordinal),
             envelope.Replace("\"exit_code\":11", "\"exit_code\":0", StringComparison.Ordinal),
             envelope.Replace("\"command\":\"find\"", "\"command\":\"search\"", StringComparison.Ordinal),
             envelope.Replace("\"exit_code\":11,", "", StringComparison.Ordinal),
@@ -56,7 +69,7 @@ public class BatchChildPartialResultParserTests
         })
             Assert.Null(BatchChildPartialResultParser.Parse(invalid, "find", ndjson: false));
 
-        var exactFit = Terminal + new string(' ', JsonEnvelopeWrapper.MaxCapturedOutputChars - Terminal.Length);
+        var exactFit = count + new string(' ', JsonEnvelopeWrapper.MaxCapturedOutputChars - count.Length);
         Assert.NotNull(BatchChildPartialResultParser.Parse(exactFit, "find", ndjson: false));
         Assert.Null(BatchChildPartialResultParser.Parse(exactFit + " ", "find", ndjson: false));
     }

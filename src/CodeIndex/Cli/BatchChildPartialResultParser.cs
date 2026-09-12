@@ -32,7 +32,23 @@ internal static class BatchChildPartialResultParser
                         return null;
                     rows.Add(row);
                 }
-                return rows.Count > 0 && IsPartialTerminal(rows[^1]) ? rows : null;
+                if (rows.Count == 0 || !IsPartialTerminal(rows[^1]))
+                    return null;
+                var resultCount = 0;
+                var emptyControls = 0;
+                foreach (var row in rows.Take(rows.Count - 1).Cast<JsonObject>())
+                {
+                    if (IsEmptyControl(row))
+                    {
+                        emptyControls++;
+                        continue;
+                    }
+                    if (!IsResultRow(row, command))
+                        return null;
+                    resultCount++;
+                }
+                return emptyControls <= 1 && (emptyControls == 0 || resultCount == 0)
+                    && TerminalCount(rows[^1]!.AsObject()) == resultCount ? rows : null;
             }
 
             if (ParseNode(stdout) is not JsonObject root || !ValidRecord(root, command))
@@ -42,12 +58,28 @@ internal static class BatchChildPartialResultParser
                 if (!ValidRecord(metadata, command)
                     || !IsExit11(metadata["exit_code"])
                     || root["results"] is not JsonArray results
+                    || ReadCount(metadata["result_count"]) != results.Count
                     || results.Any(row => row is not JsonObject item || !ValidRecord(item, command)))
                     return null;
-                return metadata["stream_terminal"] is JsonObject terminal
-                    && ValidRecord(terminal, command) && IsPartialTerminal(terminal) ? root : null;
+                if (metadata["stream_terminal"] is JsonObject terminal)
+                {
+                    if (!ValidRecord(terminal, command) || !IsPartialTerminal(terminal))
+                        return null;
+                    var logicalCount = command == "find" && results.Count == 1 && results[0] is JsonObject countRow
+                        && !IsResultRow(countRow, command) && ReadCount(countRow["count"]).HasValue
+                        ? ReadCount(countRow["count"]) : results.Count;
+                    if (TerminalCount(terminal) == logicalCount)
+                        return root;
+                    // Bounded envelopes can project/trim rows. Their result_count
+                    // describes the capture; stream_terminal retains the inner scan.
+                    return IsTrue(metadata, "truncated")
+                        && ReadCount(metadata["returned_count"]) == results.Count
+                        && TerminalCount(terminal) > logicalCount ? root : null;
+                }
+                return results.Count == 1 && results[0] is JsonObject count
+                    && IsPartialCount(count, command) ? root : null;
             }
-            return IsPartialTerminal(root) ? root : null;
+            return IsPartialCount(root, command) ? root : null;
         }
         catch (Exception ex) when (ex is JsonException or InvalidDataException or InvalidOperationException or ArgumentException)
         {
@@ -71,12 +103,36 @@ internal static class BatchChildPartialResultParser
             && exitCode == CommandExitCodes.PartialResult;
 
     private static bool IsPartialTerminal(JsonNode? node)
-        => node is JsonObject && IsTrue(node, "terminal_record")
+        => node is JsonObject terminal && IsTrue(node, "terminal_record")
             && (IsTrue(node, "partial_result") || IsTrue(node, "interrupted"))
-            && (IsCount(node["returned_count"]) || IsCount(node["count"]));
+            && TerminalCount(terminal).HasValue;
 
-    private static bool IsCount(JsonNode? node)
-        => node is JsonValue value && value.TryGetValue<long>(out var count) && count >= 0;
+    private static long? TerminalCount(JsonObject terminal)
+    {
+        var count = ReadCount(terminal.ContainsKey("returned_count") ? terminal["returned_count"] : terminal["count"]);
+        return terminal.ContainsKey("count") && ReadCount(terminal["count"]) != count ? null : count;
+    }
+
+    private static long? ReadCount(JsonNode? node)
+        => node is JsonValue value && value.TryGetValue<long>(out var count) && count >= 0 ? count : null;
+
+    private static bool IsPartialCount(JsonObject record, string command)
+        => command == "find" && ReadCount(record["count"]).HasValue
+            && (IsPartialTerminal(record) && TerminalCount(record) == ReadCount(record["count"])
+                || record["terminal_record"] is null && IsTrue(record, "partial_result")
+                    && record["authoritative_count"] is JsonValue authority
+                    && authority.TryGetValue<bool>(out var authoritative) && !authoritative);
+
+    private static bool IsEmptyControl(JsonObject record)
+        => !IsPath(record["path"]) && !IsPath(record["file"])
+            && ReadCount(record["count"]) == 0 && record["results"] is JsonArray { Count: 0 };
+
+    private static bool IsResultRow(JsonObject record, string command)
+        => (IsPath(record["path"]) || IsPath(record["file"]))
+            && (command != "find" || ReadCount(record["line"]) > 0 && ReadCount(record["column"]) > 0);
+
+    private static bool IsPath(JsonNode? node)
+        => node is JsonValue value && value.TryGetValue<string>(out var path) && !string.IsNullOrWhiteSpace(path);
 
     private static bool IsTrue(JsonNode node, string name)
         => node[name] is JsonValue value && value.TryGetValue<bool>(out var flag) && flag;

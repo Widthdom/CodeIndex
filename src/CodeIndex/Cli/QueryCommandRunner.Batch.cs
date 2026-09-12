@@ -511,7 +511,14 @@ public static partial class QueryCommandRunner
 
         if (commandName is "search" or "definition" or "references" or "callers" or "callees" or "symbols" or "files" or "validate")
             return BatchOutputKind.Ndjson;
-        if (commandName == "find" && HasBatchArgument(args, "--all"))
+        if (commandName == "find"
+            && (JsonEnvelopeWrapper.HasArgument(commandName, args, "--all")
+                || JsonEnvelopeWrapper.HasArgument(commandName, args, "--origin")
+                || JsonEnvelopeWrapper.HasArgument(commandName, args, "--exclude-origin")
+                || JsonEnvelopeWrapper.HasArgument(commandName, args, "--result-kind")
+                || JsonEnvelopeWrapper.HasArgument(commandName, args, "--exclude-comments")
+                || JsonEnvelopeWrapper.HasArgument(commandName, args, "--exclude-strings")
+                || JsonEnvelopeWrapper.HasArgument(commandName, args, "--exclude-fixtures")))
             return BatchOutputKind.Ndjson;
 
         return BatchOutputKind.JsonDocument;

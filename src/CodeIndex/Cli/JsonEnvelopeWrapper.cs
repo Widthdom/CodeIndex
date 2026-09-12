@@ -345,7 +345,7 @@ internal static partial class JsonEnvelopeWrapper
         return CommandExitCodes.UsageError;
     }
 
-    private static bool HasArgument(string command, string[] args, string option)
+    internal static bool HasArgument(string command, string[] args, string option)
         => ClassifyArgumentTokens(command, args)
             .Any(token => token.IsOption
                           && (string.Equals(token.Value, option, StringComparison.Ordinal)
