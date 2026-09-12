@@ -33,6 +33,7 @@ source-candidate budget. C# name candidates and resolved-identity reference
 candidates are checked separately before relying on the edge count. Reaching
 a candidate boundary, even exactly, is conservatively incomplete. Filters can
 remove the lookahead row, so an unexamined remainder remains unknown.
+That filtered remainder uses `page_limit`, even when `candidate_scan_complete=true`.
 Workspace fan-out currently lacks combined candidate-exhaustion evidence:
 its ordinary summary preserves the existing query budget and reports unknown
 `has_more` and an unavailable total. Narrow to one database for this proof.
@@ -42,6 +43,8 @@ generated/test exclusions, noise/evidence filters, and incomplete-graph warnings
 remain in force. `--summary-only --format json-graph` remains unsupported.
 `reference_graph_complete=true` alone never proves query exhaustion.
 Cycle node sampling (`display_truncated`) is separate from SCC pagination.
+Summary authority retains SQL readiness for the full query scope, including SQL
+files that produce no returned edge or SCC. A non-SQL page cannot hide that degradation.
 
 `--max-json-bytes` is a response budget, not a query-work budget. A summary that
 cannot fit returns `E028_RESPONSE_BUDGET_TOO_SMALL`; it does not silently discard
@@ -82,6 +85,7 @@ authoritative な不在の証拠にはなりません。
 解決済み参照の候補を別々に確認し、edge 件数だけから完了を推測しません。
 候補上限ちょうどの場合も安全側に倒して未完了とします。フィルターが先読み結果を
 除去した場合、未確認の残りがあれば追加結果の有無は不明です。
+この場合は `candidate_scan_complete=true` でも省略理由を `page_limit` とします。
 複数 DB の workspace 集計には候補範囲を統合した完了証拠がないため、既存の
 処理量上限を維持して `has_more` を不明、総件数を未確定とします。
 完了を確認する場合は単一 DB に絞ってください。
@@ -91,6 +95,8 @@ noise／参照証拠のフィルター、不完全なグラフの警告は維持
 `--summary-only --format json-graph` は引き続き非対応です。
 `reference_graph_complete=true` だけでは検索完了を証明できません。
 循環内の node の表示省略（`display_truncated`）も SCC のページングとは別です。
+summary の authority は、返却 edge や SCC を生成しなかった SQL ファイルも含む
+クエリ全体の SQL readiness を確認します。ページに SQL がなくても縮退状態は隠しません。
 
 `--max-json-bytes` は応答サイズの上限であり、クエリの処理量上限ではありません。
 summary が収まらなければ `E028_RESPONSE_BUDGET_TOO_SMALL` を返し、件数や範囲の

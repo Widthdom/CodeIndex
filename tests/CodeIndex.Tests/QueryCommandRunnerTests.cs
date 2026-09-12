@@ -8048,6 +8048,31 @@ public partial class QueryCommandRunnerTests
         Assert.Equal(3, suppressionReason.GetProperty("edges_affected").GetInt32());
         Assert.Equal(2, suppressionReason.GetProperty("edges_removed").GetInt32());
         Assert.Equal(6_000, suppressionReason.GetProperty("references_removed").GetInt32());
+
+        foreach (var limit in new[] { 1, 3 })
+        {
+            var (summaryExit, summaryStdout, summaryStderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+                ["--db", dbPath, "--json", "--summary-only", "--limit", limit.ToString(CultureInfo.InvariantCulture), "--lang", "markdown", "--suppress-noise"],
+                _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, summaryExit);
+            Assert.Empty(summaryStderr);
+            using var summaryDocument = ParseJsonOutput(summaryStdout);
+            var summary = summaryDocument.RootElement;
+            Assert.Equal(1, summary.GetProperty("count").GetInt32());
+            Assert.True(summary.GetProperty("candidate_scan_complete").GetBoolean());
+            Assert.Equal(limit == 3, summary.GetProperty("query_exhausted").GetBoolean());
+            if (limit == 1)
+            {
+                Assert.Equal(JsonValueKind.Null, summary.GetProperty("has_more").ValueKind);
+                Assert.Equal("page_limit", summary.GetProperty("truncated_reason").GetString());
+                Assert.Equal("page_limit", summary.GetProperty("total_count_unavailable_reason").GetString());
+            }
+            else
+            {
+                Assert.False(summary.GetProperty("has_more").GetBoolean());
+                Assert.Equal(1, summary.GetProperty("total_count").GetInt32());
+            }
+        }
     }
 
     [Fact]

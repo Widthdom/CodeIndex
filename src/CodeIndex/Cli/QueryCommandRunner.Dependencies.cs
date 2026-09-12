@@ -721,7 +721,7 @@ public static partial class QueryCommandRunner
                         lookahead.Edges.Count > 0 ? true
                             : page.CandidateScanComplete && page.ResultWindowComplete ? false : null,
                         page.CandidateScanComplete,
-                        "candidate_scan_incomplete");
+                        page.CandidateScanComplete ? "page_limit" : "candidate_scan_incomplete");
                 }
                 else
                 {
@@ -904,7 +904,10 @@ public static partial class QueryCommandRunner
                     ? cycles.SelectMany(static cycle => cycle)
                     : symbolFilter.Edges.SelectMany(static result => new[] { result.SourcePath, result.TargetPath })
                 : outputEdges.SelectMany(static result => new[] { result.SourcePath, result.TargetPath });
-            var sqlGraphSignal = options.GroupDependencyPartialTypes && reader.DependencyCycleGroupingReady
+            // Summary totals cover the query scope, including stale SQL paths
+            // that yield no returned edge or SCC on this page.
+            var sqlGraphSignal = options.SummaryOnly
+                || (options.GroupDependencyPartialTypes && reader.DependencyCycleGroupingReady)
                 ? baseSqlGraphSignal
                 : NarrowSqlGraphContractSignalByPaths(
                     reader,

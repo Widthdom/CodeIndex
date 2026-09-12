@@ -351,6 +351,70 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunDeps_SummaryKeepsQueryWideSqlReadiness_Issue5346()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_deps_summary_sql_readiness");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        foreach (var (name, target) in new[] { ("CycleA", "CycleB"), ("CycleB", "CycleA"), ("CycleC", "CycleD"), ("CycleD", "CycleC") })
+            TestProjectHelper.WriteTextFile(project.Root, $"src/{name}.cs",
+                $"public class {name} {{ public {target} Next() => new {target}(); }}");
+        TestProjectHelper.WriteTextFile(project.Root, "src/isolated.sql", "CREATE TABLE Isolated (Id INTEGER);");
+        var (indexExit, _, _) = CaptureConsole(() => IndexCommandRunner.Run(
+            [project.Root, "--db", dbPath, "--json"], _jsonOptions));
+        Assert.Equal(CommandExitCodes.Success, indexExit);
+
+        foreach (var sqlReady in new[] { false, true })
+        {
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                if (sqlReady)
+                    writer.MarkSqlGraphContractReady();
+                else
+                    writer.SetMeta(DbContext.SqlGraphContractVersionMetaKey, "0");
+            }
+
+            foreach (var (mode, total, exhausted) in new[]
+            {
+                (new[] { "--limit", "10" }, 4, true),
+                (new[] { "--cycles", "--limit", "1" }, 2, false),
+                (new[] { "--cycles", "--limit", "2" }, 2, true),
+            })
+            {
+                var args = new[] { "--db", dbPath, "--json" }.Concat(mode).ToArray();
+                var (summaryExit, summaryStdout, summaryStderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+                    [.. args, "--summary-only"], _jsonOptions));
+                Assert.Equal(CommandExitCodes.Success, summaryExit);
+                Assert.Empty(summaryStderr);
+                using var document = ParseJsonOutput(summaryStdout);
+                var summary = document.RootElement;
+                Assert.True(summary.GetProperty("reference_graph_complete").GetBoolean());
+                Assert.Equal(total, summary.GetProperty("total_count").GetInt32());
+                Assert.Equal(exhausted, summary.GetProperty("query_exhausted").GetBoolean());
+                Assert.Equal(sqlReady, summary.GetProperty("total_count_authoritative").GetBoolean());
+                if (!sqlReady)
+                {
+                    Assert.True(summary.GetProperty("degraded").GetBoolean());
+                    Assert.False(summary.GetProperty("sql_graph_contract_ready").GetBoolean());
+                    Assert.Equal("graph_contract_degraded", summary.GetProperty("total_count_non_authoritative_reason").GetString());
+                }
+
+                // Explicitly narrowing the query to C# excludes the stale SQL scope.
+                var (narrowExit, narrowStdout, _) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+                    [.. args, "--summary-only", "--lang", "csharp"], _jsonOptions));
+                Assert.Equal(CommandExitCodes.Success, narrowExit);
+                using var narrow = ParseJsonOutput(narrowStdout);
+                Assert.True(narrow.RootElement.GetProperty("total_count_authoritative").GetBoolean());
+
+                var (detailExit, detailStdout, _) = CaptureConsole(() => QueryCommandRunner.RunDeps(args, _jsonOptions));
+                Assert.Equal(CommandExitCodes.Success, detailExit);
+                using var detail = ParseJsonOutput(detailStdout);
+                Assert.False(detail.RootElement.TryGetProperty("degraded", out var degraded) && degraded.GetBoolean());
+            }
+        }
+    }
+
+    [Fact]
     public void RunDeps_JsonSummaryDoesNotInferExhaustionFromBoundedCSharpCandidates_Issue5346()
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_deps_summary_candidate_cap");

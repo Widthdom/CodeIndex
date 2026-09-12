@@ -4,6 +4,8 @@ Dependency summary regressions in `QueryCommandRunnerGraphTests` (#5346) separat
 page counts, SQL/C# candidate boundaries, extraction completeness, and response
 budgets. Keep the three-edge limits 1/2/3/4, empty/filter/missing-graph controls,
 batch child metadata, and the 201-symbol single-edge source-budget fixture.
+Include mixed C#/SQL scope readiness and a filtered Markdown lookahead so
+whole-query authority and page-window omissions cannot inherit page-only evidence.
 Cycle summary variants share the existing ranked-SCC fixture in
 `QueryCommandRunnerTests`; run these and dependency query regressions on net8/net9.
 
@@ -1419,7 +1421,10 @@ Issue #5300 のテストは隣接・入れ子の C# callable、対象行の除�
 `QueryCommandRunnerGraphTests` の依存関係 summary 回帰テスト（#5346）は、ページ件数、
 SQL／C# の候補上限、抽出の完全性、応答サイズ上限を区別します。3 edge に対する
 limit 1／2／3／4、空結果・フィルター・グラフ欠落、batch の子メタデータ、201 symbol
-から1 edgeを作る候補上限 fixture を維持してください。循環 summary は
+から1 edgeを作る候補上限 fixture を維持してください。
+混在する C#／SQL の範囲全体の readiness と、フィルターで除去される Markdown の
+先読みも検証し、総件数の authority とページ範囲の省略を返却行だけから判断しないでください。
+循環 summary は
 `QueryCommandRunnerTests` の既存の SCC 順位 fixture を共有し、依存クエリの回帰と
 併せて net8／net9 で実行します。
 
