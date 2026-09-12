@@ -1431,13 +1431,13 @@ public static partial class QueryCommandRunner
             // The extra display candidate is only a pagination probe. Guard evaluation must
             // retain the user's requested budget or its bounded candidate scan can stop before
             // the first qualifying row.
-            var candidateWindowIncomplete = false;
+            var candidateCapReached = false;
             var page = ReadSearchResults(reader, options, exact, pageLimit, cursor, options.Limit,
-                recipeQuery, requiredPathPatterns, incomplete => candidateWindowIncomplete = incomplete);
+                recipeQuery, requiredPathPatterns, capped => candidateCapReached = capped);
             pagesRead++;
             if (page.Count == 0)
             {
-                candidateCoverageObserver?.Invoke(!candidateWindowIncomplete);
+                candidateCoverageObserver?.Invoke(!candidateCapReached);
                 break;
             }
 
@@ -1480,10 +1480,10 @@ public static partial class QueryCommandRunner
 
     private static List<SearchResult> ReadSearchResults(DbReader reader, QueryCommandOptions options, bool exact, int limit, SearchCursor? cursor = null, int? guardRequestedLimit = null,
         SearchAuditRecipeQuery? recipeQuery = null, IReadOnlyList<string>? requiredPathPatterns = null,
-        Action<bool>? candidateWindowObserver = null)
+        Action<bool>? candidateCapObserver = null)
         => reader.SearchWithCandidateEvidence(options.Query!, limit, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank, cursor, options.GuardFilters, options.GuardWindow, guardRequestedLimit, guardScope: options.GuardScope, tokenBoundary: options.TokenBoundary,
             requiredPathPatterns: requiredPathPatterns, resultRanking: recipeQuery?.ResultRanking ?? default,
-            candidateWindowObserver: candidateWindowObserver);
+            candidateCapObserver: candidateCapObserver);
 
     private static QueryCountResult CountFilteredSearchResults(DbReader reader, QueryCommandOptions options, bool exact)
     {

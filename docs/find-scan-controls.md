@@ -50,6 +50,7 @@ unavailable same-symbol-scope errors preserve the existing argument-error
 recovery. Recipe children and their parent expose `partial_result`, `degraded`,
 and recovery guidance when classification or candidate coverage is incomplete.
 An empty page inside a capped ranking window does not establish complete absence.
+Page fullness alone does not degrade an otherwise completed scan.
 
 ### Regex origin filters (#5324)
 
@@ -174,6 +175,7 @@ same-symbol 範囲を利用できない場合のエラーは、従来の引数�
 分類や候補の走査が不完全な recipe は、子結果と全体の両方に `partial_result`、
 `degraded` と復旧案内を含めます。順位付けの候補上限内で空ページになっても、完全な不在を
 示すものではありません。
+一方、ページが満杯になっただけで、完了済みの走査を不完全扱いにはしません。
 
 ### 正規表現の origin フィルター (#5324)
 

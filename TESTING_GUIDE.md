@@ -8,6 +8,8 @@ unknown origins, scan/byte caps, same-line/zero-width continuation, changed
 filters/generation, timeout and request cancellation in shared small fixtures.
 Include guarded count-unit and query-error parity, plus deduplicated ranking-cap
 exhaustion and unknown recipe coverage at child, parent, and batch levels.
+An uncapped token-boundary scan spanning multiple pages must retain complete
+coverage independently of the requested row limit.
 
 Dependency summary regressions in `QueryCommandRunnerGraphTests` (#5346) separate
 page counts, SQL/C# candidate boundaries, extraction completeness, and response
@@ -1451,6 +1453,8 @@ unknown、走査・サイズ上限、同一行・ゼロ幅一致の継続、条�
 リクエストのキャンセルを維持します。
 guard 付き件数の単位と検索エラーの同等性、重複除去後の順位付け候補上限、recipe の
 unknown 状態を子結果・全体・batch で保持することも検証します。
+上限未到達で複数ページにまたがる token-boundary 走査は、要求行数にかかわらず
+完全性を維持することを確認します。
 
 `QueryCommandRunnerGraphTests` の依存関係 summary 回帰テスト（#5346）は、ページ件数、
 SQL／C# の候補上限、抽出の完全性、応答サイズ上限を区別します。3 edge に対する

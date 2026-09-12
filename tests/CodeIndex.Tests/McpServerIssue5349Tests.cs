@@ -161,6 +161,39 @@ public partial class McpServerTests
     }
 
     [Fact]
+    public void ToolsCall_SemanticSearchTerminalCoverageIgnoresPageFullness_Issue5349()
+    {
+        const string path = "audit5349/complete-pages.cs";
+        const int count = 240;
+        var writer = new DbWriter(_db.Connection);
+        var fileId = writer.UpsertFile(new FileRecord { Path = path, Lang = "csharp",
+            Size = count * 24, Lines = count, Modified = ManualTimeProvider.FixtureUtcNow.UtcDateTime });
+        writer.InsertChunks(Enumerable.Range(0, count / 10).Select(index => new ChunkRecord
+        {
+            FileId = fileId, ChunkIndex = index, StartLine = index * 10 + 1, EndLine = (index + 1) * 10,
+            Content = string.Join('\n', Enumerable.Repeat("using System;", 10)),
+        }).ToList());
+        foreach (var limit in new[] { 1, 100 })
+        {
+            var args = new JsonObject { ["query"] = "using System", ["path"] = path,
+                ["tokenBoundary"] = true, ["origin"] = "comment", ["limit"] = limit };
+            var complete = Payload5349(Call5349("search", args));
+            Assert.Equal(0, complete["count"]!.GetValue<int>());
+            Assert.True(complete["candidate_scan_complete"]!.GetValue<bool>());
+            Assert.True(complete["origin_classification_complete"]!.GetValue<bool>());
+            Assert.True(complete["total_count_authoritative"]!.GetValue<bool>());
+            Assert.False(complete["partial_result"]!.GetValue<bool>());
+            Assert.Null(complete["recovery_guidance"]);
+
+            args["origin"] = "code";
+            args["countOnly"] = true;
+            var counted = Payload5349(Call5349("search", args));
+            Assert.Equal(count, counted["count"]!.GetValue<int>());
+            Assert.True(counted["authoritative_count"]!.GetValue<bool>());
+        }
+    }
+
+    [Fact]
     public void ToolsCall_FindResumesScanAndByteCapsWithoutLostZeroWidthMatches_Issue5349()
     {
         InsertIndexedFile("audit5349/a.cs", "csharp", "// Needle5349\nNeedle5349(); Needle5349();\nNeedle5349();\n");
