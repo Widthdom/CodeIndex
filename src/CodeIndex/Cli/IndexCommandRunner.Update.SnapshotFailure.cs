@@ -64,6 +64,7 @@ public static partial class IndexCommandRunner
         {
             CommandOutputWriter.WriteLine(JsonSerializer.Serialize(new IndexUpdateJsonResult
             {
+                CSharpWorkspaceExpansion = failure.Options.CSharpWorkspaceExpansion,
                 Status = "partial",
                 Mode = "update",
                 Summary = new IndexUpdateSummaryJsonResult

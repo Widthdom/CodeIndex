@@ -27,10 +27,16 @@ internal static class CSharpStaticInterfacePrepass
         bool loadExistingSymbolsOnlyForPendingQualifiedMemberAccess = false,
         bool patternConfigsAlreadyLoaded = false,
         CancellationToken cancellationToken = default,
-        CSharpPrepassSymbolArtifactCache? symbolArtifactCache = null)
+        CSharpPrepassSymbolArtifactCache? symbolArtifactCache = null,
+        bool captureContractFingerprint = false)
     {
         var targetCount = fileTargets.TryGetNonEnumeratedCount(out var count) ? count : 0;
+        captureContractFingerprint &= targetCount <= CSharpWorkspaceContractFingerprint.MaxFiles;
         var candidates = new List<FileTarget>(targetCount);
+        var fingerprintTargets = captureContractFingerprint
+            ? new List<(string Path, bool Suppressed)>(targetCount)
+            : null;
+        var fingerprintComplete = 1;
         var pendingPaths = includeExistingSymbols
             ? new HashSet<string>(targetCount, StringComparer.Ordinal)
             : null;
@@ -68,7 +74,10 @@ internal static class CSharpStaticInterfacePrepass
             // 再利用可能な未変更C#行はworkspace lookupに保持し、今回の抽出で置換・
             // suppressionされるpathだけをpendingPathsへ入れる。
             if (includeExistingSymbols && canReuseExistingSymbolsWithoutRead?.Invoke(target) == true)
+            {
+                fingerprintComplete = 0;
                 continue;
+            }
 
             if (canExcludeExistingPath)
                 pendingPaths!.Add(target.IndexPath);
@@ -76,11 +85,20 @@ internal static class CSharpStaticInterfacePrepass
             var generatedExtractionSuppressed = isGeneratedCodeExtractionSuppressed?.Invoke(target)
                 ?? target.GeneratedExtractionSuppressed
                 ?? indexer.IsGeneratedCodeExtractionSuppressed(target.IndexPath);
+            if (fingerprintTargets?.Count == CSharpWorkspaceContractFingerprint.MaxFiles)
+            {
+                captureContractFingerprint = false;
+                fingerprintTargets = null;
+            }
+            fingerprintTargets?.Add((target.IndexPath, generatedExtractionSuppressed));
+            if (IsOutsideProjectRoot(relativePath))
+                fingerprintComplete = 0;
             if (!generatedExtractionSuppressed)
                 candidates.Add(target);
         }
 
         var extractedByCandidate = new List<SymbolRecord>?[candidates.Count];
+        var contractChecksums = captureContractFingerprint ? new string?[candidates.Count] : null;
         var artifactChecksums = symbolArtifactCache == null
             ? null
             : new string?[candidates.Count];
@@ -141,13 +159,15 @@ internal static class CSharpStaticInterfacePrepass
 
                         if (MayContainCSharpWorkspaceReferenceTargets(content))
                         {
+                            if (contractChecksums != null)
+                                contractChecksums[candidateIndex] = CSharpWorkspaceContractFingerprint.HashSource(content);
                             var extractionFilePath = symbolArtifactCache == null
                                 ? target.IndexPath
                                 : target.FilePath;
                             var extractionProjectRoot = symbolArtifactCache == null
                                 ? null
                                 : indexer.ProjectRootForExtraction;
-                            using var regexTimeouts = symbolArtifactCache == null
+                            using var regexTimeouts = symbolArtifactCache == null && !captureContractFingerprint
                                 ? null
                                 : BoundedRegex.CaptureTimeouts(
                                     "csharp",
@@ -172,9 +192,13 @@ internal static class CSharpStaticInterfacePrepass
                                 artifactSourceLengths[candidateIndex] = content.Length;
                             if (regexTimeouts != null)
                             {
-                                artifactChecksums![candidateIndex] = checksum;
-                                artifactHadRegexTimeouts![candidateIndex] =
-                                    regexTimeouts.HasTimeouts;
+                                if (regexTimeouts.HasTimeouts)
+                                    Interlocked.Exchange(ref fingerprintComplete, 0);
+                                if (artifactChecksums != null)
+                                {
+                                    artifactChecksums[candidateIndex] = checksum;
+                                    artifactHadRegexTimeouts![candidateIndex] = regexTimeouts.HasTimeouts;
+                                }
                             }
                         }
                     }
@@ -219,6 +243,10 @@ internal static class CSharpStaticInterfacePrepass
                 out hadPendingMemberReadTargets,
                 cancellationToken)
             : [];
+        // A fingerprint covers source inputs only. Retained out-of-scan database
+        // symbols are additional contract evidence and require conservative work.
+        if (captureContractFingerprint && symbols.Count > 0)
+            fingerprintComplete = 0;
         IReadOnlyList<SymbolRecord> workspaceSymbols;
         CSharpWorkspaceSymbolEvidence pendingEvidence;
         if (symbolArtifactCache == null)
@@ -308,7 +336,10 @@ internal static class CSharpStaticInterfacePrepass
             isSourceEvidenceComplete,
             incompletePaths,
             qualifiedPatternLookups,
-            requiresMemberReadReferenceRefresh);
+            requiresMemberReadReferenceRefresh,
+            ContractSourceFingerprint: captureContractFingerprint && isSourceEvidenceComplete && fingerprintComplete != 0
+                ? CSharpWorkspaceContractFingerprint.Build(fingerprintTargets!, candidates, contractChecksums!, cancellationToken)
+                : null);
     }
 
     internal static CSharpWorkspaceSymbolEvidence AppendExtractedWorkspaceSymbols(
@@ -1312,4 +1343,5 @@ internal sealed record CSharpStaticInterfaceWorkspaceSymbols(
         bool SourceContractEvidenceComplete = true,
         IReadOnlyList<string>? IncompleteSourcePaths = null,
         ReferenceExtractor.CSharpQualifiedPatternLookups? QualifiedPatternLookups = null,
-        bool RequiresMemberReadReferenceRefresh = false);
+        bool RequiresMemberReadReferenceRefresh = false,
+        string? ContractSourceFingerprint = null);

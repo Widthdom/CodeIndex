@@ -726,11 +726,17 @@ public partial class DbReader
             StatusMetadataJsonContext.Default.StatusRebuildReclaim,
             ValidateRebuildReclaim,
             metadataDiagnostics);
+        var csharpExpansion = ReadStructuredStatusMetadata(
+            DbContext.LastIndexRunCSharpWorkspaceExpansionMetaKey,
+            "last_index_run.csharp_workspace_expansion",
+            StatusMetadataJsonContext.Default.CSharpWorkspaceExpansion,
+            static value => value.IsValid(),
+            metadataDiagnostics);
         if (mode == null && startedAt == null && durationMs == null && filesScanned == null && filesSkipped == null
             && parseErrors == null && bytesRead == null && bytesReadSkippedFileCount == null && bytesReadIncomplete == null
             && rowsUpserted == null && rowsDeleted == null && peakMemoryMb == null
             && diagnostics == null && diagnosticCount == null && diagnosticsTruncated == null
-            && referenceExtractionCapHits == null && rebuildReclaim == null)
+            && referenceExtractionCapHits == null && rebuildReclaim == null && csharpExpansion == null)
         {
             return null;
         }
@@ -754,6 +760,7 @@ public partial class DbReader
             DiagnosticsTruncated = diagnosticsTruncated,
             ReferenceExtractionCapHits = referenceExtractionCapHits,
             RebuildReclaim = rebuildReclaim,
+            CSharpWorkspaceExpansion = csharpExpansion,
         };
     }
 

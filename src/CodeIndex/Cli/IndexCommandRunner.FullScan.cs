@@ -134,6 +134,11 @@ public static partial class IndexCommandRunner
             currentHotspotFamilyMarkerFingerprints);
         var scanHadErrors = scanResult.HadErrors;
         var files = discovery.Files;
+        if (options.CSharpWorkspaceExpansion is { } expansion)
+        {
+            expansion.ExpandedTargetCount = Math.Max(expansion.OriginalTargetCount, files.Count);
+            expansion.FinalTargetCount = files.Count;
+        }
         var languageCounts = scanResult.LanguageCounts;
         var csharpPrepassCapacity = languageCounts.TryGetValue("csharp", out var csharpFileCount) ? csharpFileCount : 0;
         var targetPreparation = PrepareFullScanTargets(
