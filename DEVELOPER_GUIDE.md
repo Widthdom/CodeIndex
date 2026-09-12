@@ -2984,7 +2984,7 @@ Known credential and assignment redaction runs before this exception. A precedin
 
 Mixed-case word bodies of 16 or more letters additionally require a run of at least three lowercase letters, preserving the existing distinction between readable identifiers and repeated short alternating-case groups.
 
-Quoted credential names and quoted or collection-valued credentials are recognized before the path exception. Their complete value is replaced with the typed credential marker, including escaped quotes and whitespace-separated tails. Collection scanning allows at most 16 nested arrays/objects; malformed, unterminated, or deeper values conservatively consume the remainder of the already bounded field. A linear enclosing-token scan retains whitespace inside quotes and rejects URL/rooted-path prefixes before punctuation, with a 128-character prefix limit. Benign quoted evidence values still use the ordinary path checks.
+Quoted credential names and quoted or collection-valued credentials are recognized before the path exception. Single, double, and backtick quotes, escaped characters, and directly concatenated value parts are consumed through a real value boundary. Existing credential markers remain stable under repeated redaction. Collection scanning allows at most 16 nested arrays/objects; malformed, unterminated, or deeper values conservatively consume the remainder of the already bounded field. YAML block, tag, and anchor/alias values after a credential name also consume that remainder; this recognizer does not parse YAML to recover following fields. A linear enclosing-token scan retains quoted or escaped whitespace and rejects URL/rooted-path prefixes before punctuation, with a 128-character prefix limit. Separate quoted JSON values use independent prefixes, while rooted prefixes cannot reset at a comma. Benign quoted evidence values still use the ordinary path checks.
 
 ### Deduplication
 
@@ -7446,7 +7446,7 @@ suggestion sidecar は `DataDirectorySecurity.ResolveSensitiveSidecarDirectoryFo
 
 大文字と小文字が混在する単語の英字部分が16文字以上の場合は、小文字が3文字以上連続する箇所も必要とします。これにより、読みやすい識別子と短い大文字小文字の組が連続する文字列を区別する既存の判定を維持します。
 
-引用符付きの機密名と、引用符・配列・オブジェクトに包まれた資格情報の値は、パスの例外より先に認識します。エスケープされた引用符や空白の後に続く内容も含め、値全体を型付きの資格情報マーカーに置換します。配列・オブジェクトの入れ子は16段までとし、不正な区切り、閉じられていない値、上限を超える入れ子では、既に入力上限を適用したフィールドの残りを安全側に秘匿します。周囲のトークンは文字列長に比例する処理で検査し、引用符内の空白を保持したうえで、括弧などの前に続く URL・絶対パスを除外します。接頭部分の上限は128文字です。機密値ではない引用符付きの証拠参照には通常のパス検証を適用します。
+引用符付きの機密名と、引用符・配列・オブジェクトに包まれた資格情報の値は、パスの例外より先に認識します。単一・二重引用符、バッククォート、エスケープ文字、直結した値の断片を、実際の値の区切りまで含めて秘匿します。既存の資格情報マーカーは繰り返し秘匿しても変化しません。配列・オブジェクトの入れ子は16段までとし、不正な区切り、閉じられていない値、上限を超える入れ子では、既に入力上限を適用したフィールドの残りを安全側に秘匿します。機密名に続く YAML のブロック・タグ・アンカー／エイリアス形式の値も、フィールドの残りを秘匿します。YAML を解析して後続フィールドを復元することはありません。周囲のトークンは文字列長に比例する処理で検査し、引用符内やエスケープされた空白を保持したうえで、括弧などの前に続く URL・絶対パスを除外します。接頭部分の上限は128文字です。別々の引用符付き JSON 値は接頭部分を独立して検証し、絶対パスの接頭部分はコンマでリセットしません。機密値ではない引用符付きの証拠参照には通常のパス検証を適用します。
 
 ### 重複排除とローカル保持
 

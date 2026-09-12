@@ -1531,6 +1531,9 @@ public class ProgramCliTests
     {
         using var fixture = SuggestionFixture.Create();
         const string evidence = "artifacts/full-dogfood-20260912/FINDINGS.md#d01";
+        const string secondEvidence = "docs/report-20260912/FINDINGS.md";
+        const string thirdEvidence = "docs/report-20260913/FINDINGS.md";
+        var context = $"See {evidence}; {{\"evidence\":[\"{secondEvidence}\",\"{thirdEvidence}\"]}}";
         string[] addArgs =
         [
             "suggestions", "add",
@@ -1540,7 +1543,7 @@ public class ProgramCliTests
             "--category", "output_format",
             "--language", "csharp",
             "--agent", "codex",
-            "--context", $"See {evidence}",
+            "--context", context,
             "--title", "Local dogfood finding store",
             "--evidence-path", "src/CodeIndex/Cli/SuggestionsCommandRunner.cs",
         ];
@@ -1576,7 +1579,7 @@ public class ProgramCliTests
         Assert.Equal("output_format", suggestion.GetProperty("category").GetString());
         Assert.Equal("csharp", suggestion.GetProperty("language").GetString());
         Assert.Equal("codex", suggestion.GetProperty("agent").GetString());
-        Assert.Equal($"See {evidence}", suggestion.GetProperty("context").GetString());
+        Assert.Equal(context, suggestion.GetProperty("context").GetString());
         Assert.Equal("Local dogfood finding store", suggestion.GetProperty("sampled_title").GetString());
         Assert.Equal("src/CodeIndex/Cli/SuggestionsCommandRunner.cs", suggestion.GetProperty("evidence_paths")[0].GetString());
         Assert.Equal(suggestion.GetProperty("id").GetString(), listDoc.RootElement.GetProperty("results")[0].GetProperty("id").GetString());
@@ -1596,6 +1599,8 @@ public class ProgramCliTests
             Assert.Equal(CommandExitCodes.Success, readExitCode);
             Assert.Equal(string.Empty, readStderr);
             Assert.Contains(evidence, readStdout);
+            Assert.Contains(secondEvidence, readStdout);
+            Assert.Contains(thirdEvidence, readStdout);
             Assert.DoesNotContain("[REDACTED:", readStdout);
         }
     }

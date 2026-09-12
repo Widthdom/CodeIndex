@@ -4041,6 +4041,8 @@ Each stored suggestion has an immutable `id` and a mutable `revision_hash`. Edit
 
 Ordinary repository evidence links such as `artifacts/full-dogfood-20260912/FINDINGS.md#d01` survive `suggestions add`, `show`, and JSON/Markdown/issue-draft export. Use a relative path with forward slashes and ordinary word/date components. The recognizer checks the spelling, not file existence; absolute paths, URLs, traversal, control characters, and secret-shaped components are outside this exception. Other path spellings may still be redacted; see the [exact limits](DEVELOPER_GUIDE.md#suggestion-identity-and-revisions). Existing export text-size limits still apply.
 
+Credential values do not qualify as evidence links. When a credential uses YAML block, tag, or anchor/alias syntax, the rest of that text field is conservatively redacted, including any following evidence.
+
 To repair a previously redacted editable local draft, supply the original evidence explicitly: `cdidx suggestions update <id> --context "See artifacts/full-dogfood-20260912/FINDINGS.md#d01" --db <db>`. This replaces the full context, keeps the ID, and changes the revision. Include any other context you want to retain. Reading or exporting an old record never guesses the missing text, and submitted records keep their existing edit restrictions.
 
 On macOS and Linux, an explicit `--db` directly inside a group- or other-writable shared directory such as `/private/tmp` or `/tmp` keeps the database in place but stores its suggestion JSON, archive, and lock files in a deterministic user-scoped private temporary directory with owner-only permissions. Databases inside private directories continue to use colocated sidecars. If the selected parent or private fallback cannot be used, suggestion commands return `E021_SUGGESTION_STORE_UNAVAILABLE`; `--json` also provides a filesystem `category` such as `permission_denied`, `invalid_path`, or `io_error` and a recovery hint instead of falling through to exit 99.
@@ -8030,6 +8032,8 @@ handshake を上書きすることもありません（#4540）。
 保存済みの各提案は、不変の `id` と可変の `revision_hash` を持ちます。draft を編集すると revision hash だけが変わり、ID は変わらないため、保存済み link、短縮 ID、`show`、`delete`、export は同じ record を参照し続けます。旧 store に `hash` しかない場合、cdidx はその値を stable ID として採用し、現在の revision を計算したうえで、`hash` を互換 alias として維持します。CLI と MCP の JSON は `id` と `revision_hash` を明示します。
 
 `artifacts/full-dogfood-20260912/FINDINGS.md#d01` のような通常のリポジトリ内の証拠リンクは、`suggestions add`・`show`・JSON／Markdown／Issue draft のエクスポートで保持されます。区切りに `/` を使い、通常の単語や日付で構成した相対パスを指定してください。検証するのは文字列の構成であり、ファイルの実在ではありません。絶対パス、URL、親ディレクトリへの移動、制御文字、秘密情報の形式を持つ構成要素は例外対象外です。ほかの表記は引き続き伏字になる場合があります。[具体的な条件](DEVELOPER_GUIDE.md#提案-id-と-revision)を参照してください。エクスポート本文の既存の長さ制限も適用されます。
+
+資格情報の値は証拠リンクとして扱いません。資格情報が YAML のブロック・タグ・アンカー／エイリアス形式を使う場合は、後続の証拠を含む、そのテキストフィールドの残りを安全側に秘匿します。
 
 過去に伏字になった編集可能なローカル draft を修復するには、原文を明示します。例：`cdidx suggestions update <id> --context "参照: artifacts/full-dogfood-20260912/FINDINGS.md#d01" --db <db>`。この操作は context 全体を置き換え、ID を維持したまま revision を変更します。残したい補足情報も一緒に指定してください。既存レコードの表示やエクスポートでは失われた文字列を推測せず、送信済みレコードの編集制限も維持します。
 

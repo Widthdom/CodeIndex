@@ -24,6 +24,7 @@ public class DiagnosticRedactorTests
         Assert.DoesNotContain(awsKey, redacted);
         Assert.DoesNotContain("secret", redacted);
         Assert.DoesNotContain(privateKeyValue, redacted);
+        Assert.Equal(redacted, DiagnosticRedactor.RedactSuggestionText(redacted, out _));
         Assert.Equal(
             ["aws_access_key", "bearer_token", "credential", "high_entropy_token"],
             redactedTypes.Order(StringComparer.Ordinal));
@@ -84,6 +85,8 @@ public class DiagnosticRedactorTests
     [InlineData("tests/CodeIndex.Tests/DiagnosticRedactorTests.Issue5345.cs")]
     [InlineData("Here's (`artifacts/full-dogfood-20260912/FINDINGS.md#d01`).")]
     [InlineData("{\"evidence\":\"artifacts/full-dogfood-20260912/FINDINGS.md#d01\"}")]
+    [InlineData("{\"evidence\":[\"docs/report-20260912/FINDINGS.md\",\"docs/report-20260913/FINDINGS.md\"]}")]
+    [InlineData("{\"evidence\":[[\"docs/report-20260912/FINDINGS.md\"],[\"docs/report-20260913/FINDINGS.md\"]]}")]
     public void RedactSuggestionText_PreservesOrdinaryEvidenceReferences_Issue5345(string text)
     {
         var redacted = DiagnosticRedactor.RedactSuggestionText(text, out var types);
@@ -135,6 +138,9 @@ public class DiagnosticRedactorTests
     [InlineData("/tmp/[artifacts/full-dogfood-20260912/FINDINGS.md]")]
     [InlineData("\"/tmp/private directory/(artifacts/full-dogfood-20260912/FINDINGS.md)\"")]
     [InlineData("/tmp/\"private directory (artifacts/full-dogfood-20260912/FINDINGS.md)\"")]
+    [InlineData("/tmp/private\\ (artifacts/full-dogfood-20260912/FINDINGS.md)")]
+    [InlineData("/tmp/(\"first\",\"artifacts/full-dogfood-20260912/FINDINGS.md\")")]
+    [InlineData("file:(\"first\",\"artifacts/full-dogfood-20260912/FINDINGS.md\")")]
     [InlineData("C:\\private\\(artifacts/full-dogfood-20260912/FINDINGS.md)")]
     [InlineData("file:(artifacts/full-dogfood-20260912/FINDINGS.md)")]
     [InlineData("artifacts/full-dogfood-20260912/FINDINGS.md?query=value")]
@@ -176,15 +182,25 @@ public class DiagnosticRedactorTests
             $"'api_key': '{value}'",
             $"{{\"password\": [\"first value\", {{\"nested\": \"{value}\"}}]}}",
             $"{{\"password\": {{\"nested\": [\"{value}\"]}}}}",
+            $"password: `prefix {value}`",
+            $"password=\"{value}\"private-tail",
+            "password=\"\"private-tail",
+            "password='first'private-tail",
+            "password=[first]private-tail",
+            "password=[REDACTED:credential]private-tail",
+            "password=\"first\"\\ private-tail",
+            "password='first'\" private-tail\"",
         })
         {
             var redacted = DiagnosticRedactor.RedactSuggestionText(assignment + $"; See {evidence}", out var types);
 
             Assert.DoesNotContain(value, redacted);
+            Assert.DoesNotContain("private-tail", redacted);
             Assert.EndsWith($"; See {evidence}", redacted);
             Assert.Equal(redacted.IndexOf(evidence, StringComparison.Ordinal), redacted.LastIndexOf(evidence, StringComparison.Ordinal));
             Assert.Contains(DiagnosticRedactor.SuggestionRedactedCredential, redacted);
             Assert.Equal(["credential"], types);
+            Assert.Equal(redacted, DiagnosticRedactor.RedactSuggestionText(redacted, out _));
         }
     }
 
@@ -221,6 +237,14 @@ public class DiagnosticRedactorTests
             var malformed = "password: " + malformedValue + evidence;
             Assert.DoesNotContain(evidence, DiagnosticRedactor.RedactSuggestionText(malformed, out var malformedTypes));
             Assert.Equal(["credential"], malformedTypes);
+        }
+
+        // Unsupported YAML value syntax is deliberately fail-closed across the field.
+        foreach (var yamlHeader in new[] { "|", "|-", ">", ">-", "|2-", "!!str", "&anchor |", "*alias" })
+        {
+            var yaml = "password: " + yamlHeader + "\n  prefix\n  " + new string('x', 260) + "\n  " + evidence;
+            Assert.DoesNotContain(evidence, DiagnosticRedactor.RedactSuggestionText(yaml, out var yamlTypes));
+            Assert.Equal(["credential"], yamlTypes);
         }
     }
 

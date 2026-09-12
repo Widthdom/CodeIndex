@@ -43,14 +43,14 @@ internal static class DiagnosticRedactor
         RegexTimeout);
 
     private static readonly Regex SuggestionNamedSecretPattern = new(
-        $@"(^|[^\p{{L}}\p{{N}}_-])(?<name>[\p{{L}}\p{{N}}_-]*(?:{SensitiveNameClassifier.RegexFragmentPattern})[\p{{L}}\p{{N}}_-]*)=(?<value>(?![""'\[{{])[^&\s]+)",
+        $@"(^|[^\p{{L}}\p{{N}}_-])(?<name>[\p{{L}}\p{{N}}_-]*(?:{SensitiveNameClassifier.RegexFragmentPattern})[\p{{L}}\p{{N}}_-]*)=(?<value>(?![""'`])[^&\s]+)",
         RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant,
         RegexTimeout);
 
     private static readonly Regex SuggestionStructuredSecretPattern = new(
-        @"(^|[^\p{L}\p{N}_-])(?<quote>[""']?)(?<name>[\p{L}\p{N}_-]*(?:"
+        @"(^|[^\p{L}\p{N}_-])(?<quote>[""'`]?)(?<name>[\p{L}\p{N}_-]*(?:"
         + SensitiveNameClassifier.RegexFragmentPattern
-        + @")[\p{L}\p{N}_-]*)\k<quote>\s*[:=]\s*(?=[""'\[{])",
+        + @")[\p{L}\p{N}_-]*)\k<quote>\s*[:=]\s*(?=[""'`\[{|>!&*])",
         RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant,
         RegexTimeout);
 
@@ -394,9 +394,12 @@ internal static class DiagnosticRedactor
                 continue;
             var valueStart = match.Index + match.Length;
             var valueEnd = FindStructuredSuggestionSecretEnd(text, valueStart);
+            // Keep an existing unquoted marker stable across repeated redaction.
+            if (text.AsSpan(valueStart, valueEnd - valueStart).SequenceEqual(SuggestionRedactedCredential))
+                continue;
             builder ??= new StringBuilder(text.Length);
             builder.Append(text.AsSpan(position, valueStart - position));
-            var quote = text[valueStart] == '\'' ? '\'' : '"';
+            var quote = text[valueStart] is '\'' or '`' ? text[valueStart] : '"';
             builder.Append(quote).Append(SuggestionRedactedCredential).Append(quote);
             types.Add("credential");
             position = valueEnd;
@@ -408,6 +411,10 @@ internal static class DiagnosticRedactor
     {
         // The field is already capped. Consume each value once, including quoted
         // prefixes and nested collections, so no unredacted tail reaches the exception.
+        // YAML blocks, tags and anchors need a full YAML parser to locate their end;
+        // conservatively redact the remaining bounded field instead.
+        if (text[start] is '|' or '>' or '!' or '&' or '*')
+            return text.Length;
         Span<char> closers = stackalloc char[16];
         var depth = 0;
         var quote = '\0';
@@ -419,14 +426,14 @@ internal static class DiagnosticRedactor
                 if (ch == '\\')
                     index++;
                 else if (ch == quote)
-                {
                     quote = '\0';
-                    if (depth == 0)
-                        return index + 1;
-                }
                 continue;
             }
-            if (ch is '"' or '\'')
+            if (depth == 0 && (char.IsWhiteSpace(ch) || ch is ',' or ';' or '&' or ']' or '}' or ')' or '>'))
+                return index;
+            if (ch == '\\')
+                index++;
+            else if (ch is '"' or '\'' or '`')
                 quote = ch;
             else if (ch is '[' or '{')
             {
@@ -438,8 +445,6 @@ internal static class DiagnosticRedactor
             {
                 if (depth == 0 || closers[--depth] != ch)
                     return text.Length;
-                if (depth == 0)
-                    return index + 1;
             }
         }
         return text.Length;
@@ -450,6 +455,8 @@ internal static class DiagnosticRedactor
         private int _scanned;
         private int _tokenStart;
         private char _quote;
+        private bool _quoteHasRelativePrefix;
+        private bool _closedRelativeValue;
 
         internal bool HasRelativePrefix(int end)
         {
@@ -464,16 +471,34 @@ internal static class DiagnosticRedactor
                     if (ch == '\\' && _scanned < end)
                         _scanned++;
                     else if (ch == _quote)
+                    {
                         _quote = '\0';
+                        _closedRelativeValue = _quoteHasRelativePrefix;
+                    }
+                    continue;
                 }
+
+                if (ch == ',' && _closedRelativeValue)
+                    _tokenStart = _scanned;
+                if (ch is not (']' or '}'))
+                    _closedRelativeValue = false;
+                if (ch == '\\' && _scanned < end)
+                    _scanned++;
                 else if (char.IsWhiteSpace(ch))
                     _tokenStart = _scanned;
                 else if (ch is '"' or '`'
                     || (ch == '\'' && (index == _tokenStart || text[index - 1] is ':' or '=' or '(' or '[' or '{' or '<' or '/' or '\\')))
+                {
+                    _quoteHasRelativePrefix = IsRelativePrefix(text.AsSpan(_tokenStart, index - _tokenStart));
                     _quote = ch;
+                }
             }
 
-            var prefix = text.AsSpan(_tokenStart, end - _tokenStart);
+            return IsRelativePrefix(text.AsSpan(_tokenStart, end - _tokenStart));
+        }
+
+        private static bool IsRelativePrefix(ReadOnlySpan<char> prefix)
+        {
             if (prefix.Length > 128 || prefix.IndexOfAny("/\\%~") >= 0)
                 return false;
             prefix = prefix.TrimStart("\"'`(<[");
