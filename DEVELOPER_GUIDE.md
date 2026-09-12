@@ -1045,6 +1045,28 @@ single-document JSON is embedded as typed `result`, while successful NDJSON is
 embedded as a stable typed `results` array even when it has one row. Successful
 text remains `stdout`, while every failure uses one typed `error` object with a
 stable `error_code`, `category`, safe `message` / `hint`, and `scope`.
+`definition --json` / `--json=ndjson` / `--format json` use `results` for both
+one and multiple definitions, including `--body`. Native document/array formats,
+compact output, and explicit or automatic envelopes use `result`; unsupported
+options and not-found failures retain their existing exit/error contracts.
+
+Exit 11 records can additionally contain `partial_result: true` and typed
+`results` (NDJSON) or `result` (count/document/envelope). This requires a complete,
+validated partial or interrupted terminal record, either last in the stream, in
+the count document, or in matching envelope `metadata.stream_terminal`. Preserve
+all rows, terminal/cursor, truncation, and authority fields. Consumers must still
+check `status: "error"`, `exit_code: 11`, and the typed `error`; these records
+still increment `command_failures` and do not establish authoritative absence.
+For a partial `find --all`, resume with the retained `next_cursor` using the same
+query and database; continue checking the child scan/authority flags on each page.
+Raw-stream diagnostics are not needed to recover these results. Parsing uses the
+existing 10,485,760-character capture cap and depth 32, rejects duplicate keys,
+invalid Unicode, mixed/truncated streams and conflicting command/exit/error
+identities, and never promotes arbitrary failed stdout. Other failures or partial
+formats without a recognized terminal keep the typed-error fallback. Explicit
+capture, cancellation, timeout and dispatch errors take precedence, and the parent
+output budget applies to the entire retained payload.
+
 The common serial/parallel record writer first projects valid child JSON errors
 through `BatchChildErrorParser`, with a 64 KiB UTF-8 input cap, depth 16, unique
 object keys, matching command/exit identity when supplied, and an explicit field
@@ -5506,6 +5528,26 @@ command / output format で projection を選び、成功した単一 document J
 は型付き `result`、NDJSON は 1 row の場合も安定した型付き `results` array として埋め込む。
 成功した text command は `stdout` のまま保持する一方、すべての失敗は安定した `error_code`、
 `category`、安全な `message` / `hint`、`scope` を持つ共通の型付き `error` object を使う。
+`definition --json` / `--json=ndjson` / `--format json` は、`--body` の有無や定義が
+1件・複数件であるかにかかわらず `results` を使う。ネイティブの単一文書・配列形式、
+compact 出力、明示または自動の envelope は `result` を使う。未対応オプションと
+定義が見つからない失敗は、既存の終了コードとエラー形式を維持する。
+
+終了コード11のレコードには、追加で `partial_result: true` と型付きの `results`
+（NDJSON）または `result`（count・単一文書・envelope）を含められる。ストリームの末尾、
+count 文書、または識別情報が一致する envelope の `metadata.stream_terminal` に、
+部分結果または中断を示す完全な終端レコードがあり、検証に成功した場合に限る。
+結果行、終端情報、cursor、切り詰め情報、確定性のフィールドをすべて保持する。
+利用側は引き続き `status: "error"`、`exit_code: 11`、型付き `error` を確認する必要がある。
+これらも `command_failures` に加算され、結果がないことの確定的な証拠にはならない。
+部分的な `find --all` は、保持した `next_cursor` を同じクエリとDBに渡して再開し、
+各ページの走査状態と確定性フラグを確認する。結果の取得に生ストリームの診断は不要である。
+解析は既存の10,485,760文字のcapture上限と深さ32を使い、重複キー、不正なUnicode、
+混在・途中切断ストリーム、command・終了コード・errorの矛盾を拒否する。
+任意の失敗stdoutを結果として扱わず、認識可能な終端情報のない部分形式とその他の失敗は
+型付きエラーへフォールバックする。明示的なcapture上限、取消、timeout、dispatchのエラーを
+優先し、保持したペイロード全体に親の出力上限を適用する。
+
 serial / parallel 共通の record writer は、まず `BatchChildErrorParser` で有効な子 JSON エラーを
 許可フィールドへ射影する。入力は UTF-8 で 64 KiB、深さ 16 に制限し、object key の一意性と、
 指定されている command / exit の一致を検証する。単独の `status: "error"` object、または
