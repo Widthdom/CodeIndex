@@ -588,7 +588,7 @@ public class SuggestionStoreTests : IDisposable
             null,
             "AWS AKIA1234567890ABCDEF and password=swordfish and token=tok123 and github_token=git123 and api_key=abc123 and openai_api_key=oa123 and access-key=def456 and CDIDX_GITHUB_TOKEN=cdidx123 and Bearer AbCdEfGhIjKlMnOpQrStUvWxYz123456 should not persist");
         record.Context = $"See {evidence}; test {testIdentifier}; token artifacts/{opaqueSecret}/FINDINGS.md";
-        record.ToolInvocationContext = "secret=hunter2 access_key=ghi789";
+        record.ToolInvocationContext = "secret=hunter2 access_key=ghi789 {\"password\":\"Maple/Copper/Harbor/Calendar2026.json\"}";
         record.SampledTitle = "Sensitive text redaction";
         record.SampledTags = ["security", "suggestions"];
         record.EvidencePaths = ["src/CodeIndex/Cli/SuggestionStore.cs"];
@@ -624,6 +624,7 @@ public class SuggestionStoreTests : IDisposable
         Assert.DoesNotContain("cdidx123", stored.Description);
         Assert.DoesNotContain("hunter2", stored.ToolInvocationContext);
         Assert.DoesNotContain("ghi789", stored.ToolInvocationContext);
+        Assert.DoesNotContain("Maple/Copper/Harbor/Calendar2026.json", stored.ToolInvocationContext);
     }
 
     [Fact]

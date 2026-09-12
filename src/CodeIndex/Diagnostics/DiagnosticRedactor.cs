@@ -43,7 +43,14 @@ internal static class DiagnosticRedactor
         RegexTimeout);
 
     private static readonly Regex SuggestionNamedSecretPattern = new(
-        $@"(^|[^\p{{L}}\p{{N}}_-])(?<name>[\p{{L}}\p{{N}}_-]*(?:{SensitiveNameClassifier.RegexFragmentPattern})[\p{{L}}\p{{N}}_-]*)=(?<value>[^&\s]+)",
+        $@"(^|[^\p{{L}}\p{{N}}_-])(?<name>[\p{{L}}\p{{N}}_-]*(?:{SensitiveNameClassifier.RegexFragmentPattern})[\p{{L}}\p{{N}}_-]*)=(?<value>(?![""'\[{{])[^&\s]+)",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant,
+        RegexTimeout);
+
+    private static readonly Regex SuggestionStructuredSecretPattern = new(
+        @"(^|[^\p{L}\p{N}_-])(?<quote>[""']?)(?<name>[\p{L}\p{N}_-]*(?:"
+        + SensitiveNameClassifier.RegexFragmentPattern
+        + @")[\p{L}\p{N}_-]*)\k<quote>\s*[:=]\s*(?=[""'\[{])",
         RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant,
         RegexTimeout);
 
@@ -332,6 +339,7 @@ internal static class DiagnosticRedactor
                 types.Add("bearer_token");
                 return SuggestionRedactedBearerToken;
             });
+            redacted = RedactStructuredSuggestionSecrets(redacted, types);
             redacted = SuggestionNamedSecretPattern.Replace(redacted, match =>
                 RedactSuggestionNamedSecretMatch(match, types));
             redacted = KnownStructuredSecretPattern.Replace(redacted, _ =>
@@ -344,11 +352,12 @@ internal static class DiagnosticRedactor
                 types.Add("high_entropy_token");
                 return SuggestionRedactedHighEntropyToken;
             });
+            var tokenContext = new EvidencePathTokenContext(redacted);
             redacted = HighEntropyTokenPattern.Replace(redacted, match =>
             {
                 if (match.Value.StartsWith("[REDACTED:", StringComparison.Ordinal)
                     || LooksLikeStructuredIdentifier(match.Value)
-                    || LooksLikeRepositoryEvidencePath(redacted, match))
+                    || (tokenContext.HasRelativePrefix(match.Index) && LooksLikeRepositoryEvidencePath(redacted, match)))
                     return match.Value;
                 types.Add("high_entropy_token");
                 return SuggestionRedactedHighEntropyToken;
@@ -373,6 +382,112 @@ internal static class DiagnosticRedactor
 
         types.Add("credential");
         return $"{match.Groups[1].Value}{name}={SuggestionRedactedCredential}";
+    }
+
+    private static string RedactStructuredSuggestionSecrets(string text, ISet<string> types)
+    {
+        StringBuilder? builder = null;
+        var position = 0;
+        foreach (Match match in SuggestionStructuredSecretPattern.Matches(text))
+        {
+            if (match.Index < position || !IsSensitiveName(match.Groups["name"].Value))
+                continue;
+            var valueStart = match.Index + match.Length;
+            var valueEnd = FindStructuredSuggestionSecretEnd(text, valueStart);
+            builder ??= new StringBuilder(text.Length);
+            builder.Append(text.AsSpan(position, valueStart - position));
+            var quote = text[valueStart] == '\'' ? '\'' : '"';
+            builder.Append(quote).Append(SuggestionRedactedCredential).Append(quote);
+            types.Add("credential");
+            position = valueEnd;
+        }
+        return builder == null ? text : builder.Append(text.AsSpan(position)).ToString();
+    }
+
+    private static int FindStructuredSuggestionSecretEnd(string text, int start)
+    {
+        // The field is already capped. Consume each value once, including quoted
+        // prefixes and nested collections, so no unredacted tail reaches the exception.
+        Span<char> closers = stackalloc char[16];
+        var depth = 0;
+        var quote = '\0';
+        for (var index = start; index < text.Length; index++)
+        {
+            var ch = text[index];
+            if (quote != '\0')
+            {
+                if (ch == '\\')
+                    index++;
+                else if (ch == quote)
+                {
+                    quote = '\0';
+                    if (depth == 0)
+                        return index + 1;
+                }
+                continue;
+            }
+            if (ch is '"' or '\'')
+                quote = ch;
+            else if (ch is '[' or '{')
+            {
+                if (depth == closers.Length)
+                    return text.Length;
+                closers[depth++] = ch == '[' ? ']' : '}';
+            }
+            else if (ch is ']' or '}')
+            {
+                if (depth == 0 || closers[--depth] != ch)
+                    return text.Length;
+                if (depth == 0)
+                    return index + 1;
+            }
+        }
+        return text.Length;
+    }
+
+    private sealed class EvidencePathTokenContext(string text)
+    {
+        private int _scanned;
+        private int _tokenStart;
+        private char _quote;
+
+        internal bool HasRelativePrefix(int end)
+        {
+            // Regex callbacks arrive in order. Scan each character at most once,
+            // retaining whitespace inside quotes when identifying the enclosing token.
+            while (_scanned < end)
+            {
+                var index = _scanned++;
+                var ch = text[index];
+                if (_quote != '\0')
+                {
+                    if (ch == '\\' && _scanned < end)
+                        _scanned++;
+                    else if (ch == _quote)
+                        _quote = '\0';
+                }
+                else if (char.IsWhiteSpace(ch))
+                    _tokenStart = _scanned;
+                else if (ch is '"' or '`'
+                    || (ch == '\'' && (index == _tokenStart || text[index - 1] is ':' or '=' or '(' or '[' or '{' or '<' or '/' or '\\')))
+                    _quote = ch;
+            }
+
+            var prefix = text.AsSpan(_tokenStart, end - _tokenStart);
+            if (prefix.Length > 128 || prefix.IndexOfAny("/\\%~") >= 0)
+                return false;
+            prefix = prefix.TrimStart("\"'`(<[");
+            if (prefix.IsEmpty || !char.IsAsciiLetter(prefix[0]))
+                return true;
+            foreach (var ch in prefix)
+            {
+                if (ch == ':')
+                    return false;
+                if (!char.IsAsciiLetterOrDigit(ch) && ch is not ('+' or '-' or '.'))
+                    break;
+            }
+            return true;
+        }
     }
 
     private static bool LooksLikeRepositoryEvidencePath(string text, Match match)
@@ -424,12 +539,12 @@ internal static class DiagnosticRedactor
         // A token can use ordinary words and slashes too. Do not exempt values
         // after e.g. "bearer", "password: " or a quoted credential assignment.
         var lowerBound = Math.Max(0, end - 128);
-        while (end > lowerBound && (char.IsWhiteSpace(text[end - 1]) || text[end - 1] is '"' or '\'' or '`' or '(' or '<'))
+        while (end > lowerBound && (char.IsWhiteSpace(text[end - 1]) || text[end - 1] is '"' or '\'' or '`' or '(' or '[' or '<'))
             end--;
         if (end > lowerBound && text[end - 1] is ':' or '=')
         {
             end--;
-            while (end > lowerBound && char.IsWhiteSpace(text[end - 1]))
+            while (end > lowerBound && (char.IsWhiteSpace(text[end - 1]) || text[end - 1] is '"' or '\'' or '`'))
                 end--;
         }
         var start = end;

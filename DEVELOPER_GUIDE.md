@@ -2984,6 +2984,8 @@ Known credential and assignment redaction runs before this exception. A precedin
 
 Mixed-case word bodies of 16 or more letters additionally require a run of at least three lowercase letters, preserving the existing distinction between readable identifiers and repeated short alternating-case groups.
 
+Quoted credential names and quoted or collection-valued credentials are recognized before the path exception. Their complete value is replaced with the typed credential marker, including escaped quotes and whitespace-separated tails. Collection scanning allows at most 16 nested arrays/objects; malformed, unterminated, or deeper values conservatively consume the remainder of the already bounded field. A linear enclosing-token scan retains whitespace inside quotes and rejects URL/rooted-path prefixes before punctuation, with a 128-character prefix limit. Benign quoted evidence values still use the ordinary path checks.
+
 ### Deduplication
 
 `SuggestionStore` first checks a normalized SHA256 content hash, then compares the candidate against the most recent suggestions in the same category and language using normalized-token Jaccard similarity. The default fuzzy threshold is `0.85`; `cdidx mcp --suggestion-dedup-threshold`, `CDIDX_SUGGESTION_DEDUP_THRESHOLD`, or `.cdidxrc.json` `suggestion_dedup_threshold` can override it with a value from `0` to `1`. Fuzzy matches are returned as duplicates before GitHub submission and log the matched immutable ID plus score to stderr for auditability.
@@ -7443,6 +7445,8 @@ suggestion sidecar は `DataDirectorySecurity.ResolveSensitiveSidecarDirectoryFo
 既知の資格情報と代入値の秘匿処理を、この例外より先に実行します。直前の文脈も最大128文字まで検査し、大文字小文字を問わない `bearer` や `password:` などの機密名に続く値は例外対象外とします。この検査の上限に達した場合も例外を適用しません。文字列の境界を検証することで、絶対パス・ホーム相対パス・URL・エスケープを含むパス・別のトークンの末尾だけを受け入れることを防ぎます。空または親ディレクトリへの移動を表す構成要素、バックスラッシュ、クエリ、パス内の制御文字、不透明な構成要素は例外対象外です。この限定的な条件に合わないパスと #4403／#4751 の識別子には、既存の判定を維持します。入力32,768文字の上限と正規表現タイムアウト時の代替処理も変更しません。過去の伏字を推測で復元することはありません。編集可能なローカル draft は `suggestions update <id> --context "<原文>" --db <db>` で原文を明示した場合だけ修復でき、ID を維持したまま revision を更新します。送信済みレコードの編集制限も維持します。
 
 大文字と小文字が混在する単語の英字部分が16文字以上の場合は、小文字が3文字以上連続する箇所も必要とします。これにより、読みやすい識別子と短い大文字小文字の組が連続する文字列を区別する既存の判定を維持します。
+
+引用符付きの機密名と、引用符・配列・オブジェクトに包まれた資格情報の値は、パスの例外より先に認識します。エスケープされた引用符や空白の後に続く内容も含め、値全体を型付きの資格情報マーカーに置換します。配列・オブジェクトの入れ子は16段までとし、不正な区切り、閉じられていない値、上限を超える入れ子では、既に入力上限を適用したフィールドの残りを安全側に秘匿します。周囲のトークンは文字列長に比例する処理で検査し、引用符内の空白を保持したうえで、括弧などの前に続く URL・絶対パスを除外します。接頭部分の上限は128文字です。機密値ではない引用符付きの証拠参照には通常のパス検証を適用します。
 
 ### 重複排除とローカル保持
 

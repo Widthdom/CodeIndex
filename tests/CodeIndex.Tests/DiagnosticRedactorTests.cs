@@ -82,6 +82,8 @@ public class DiagnosticRedactorTests
     [InlineData("docs/audit-20260912/README.en.md")]
     [InlineData("src/CodeIndex/Diagnostics/DiagnosticRedactor.Issue5345.cs")]
     [InlineData("tests/CodeIndex.Tests/DiagnosticRedactorTests.Issue5345.cs")]
+    [InlineData("Here's (`artifacts/full-dogfood-20260912/FINDINGS.md#d01`).")]
+    [InlineData("{\"evidence\":\"artifacts/full-dogfood-20260912/FINDINGS.md#d01\"}")]
     public void RedactSuggestionText_PreservesOrdinaryEvidenceReferences_Issue5345(string text)
     {
         var redacted = DiagnosticRedactor.RedactSuggestionText(text, out var types);
@@ -128,6 +130,13 @@ public class DiagnosticRedactorTests
     [InlineData("//host/artifacts/full-dogfood-20260912/FINDINGS.md")]
     [InlineData("~/artifacts/full-dogfood-20260912/FINDINGS.md")]
     [InlineData("https://example.test/artifacts/full-dogfood-20260912/FINDINGS.md")]
+    [InlineData("https://example.test/(artifacts/full-dogfood-20260912/FINDINGS.md)")]
+    [InlineData("/tmp/(artifacts/full-dogfood-20260912/FINDINGS.md)")]
+    [InlineData("/tmp/[artifacts/full-dogfood-20260912/FINDINGS.md]")]
+    [InlineData("\"/tmp/private directory/(artifacts/full-dogfood-20260912/FINDINGS.md)\"")]
+    [InlineData("/tmp/\"private directory (artifacts/full-dogfood-20260912/FINDINGS.md)\"")]
+    [InlineData("C:\\private\\(artifacts/full-dogfood-20260912/FINDINGS.md)")]
+    [InlineData("file:(artifacts/full-dogfood-20260912/FINDINGS.md)")]
     [InlineData("artifacts/full-dogfood-20260912/FINDINGS.md?query=value")]
     [InlineData("artifacts/full-dogfood-20260912/FINDINGS.md\u001b")]
     [InlineData("artifacts/full-dogfood-20260912/FINDINGS.md\t")]
@@ -138,14 +147,45 @@ public class DiagnosticRedactorTests
     [InlineData("bearer artifacts/full-dogfood-20260912/FINDINGS.md")]
     [InlineData("bEaReR artifacts/full-dogfood-20260912/FINDINGS.md")]
     [InlineData("password: artifacts/full-dogfood-20260912/FINDINGS.md")]
-    [InlineData("api_key : \"artifacts/full-dogfood-20260912/FINDINGS.md\"")]
-    public void RedactSuggestionText_DoesNotExemptUnvalidatedPaths_Issue5345(string text)
+    [InlineData("api_key : \"artifacts/full-dogfood-20260912/FINDINGS.md\"", "credential")]
+    [InlineData("{\"password\":\"Maple/Copper/Harbor/Calendar2026.json\"}", "credential")]
+    [InlineData("{\"api_key\": \"artifacts/full-dogfood-20260912/FINDINGS.md\"}", "credential")]
+    [InlineData("'password': 'artifacts/full-dogfood-20260912/FINDINGS.md'", "credential")]
+    [InlineData("\"password\" = \"artifacts/full-dogfood-20260912/FINDINGS.md\"", "credential")]
+    [InlineData("password: [artifacts/full-dogfood-20260912/FINDINGS.md]", "credential")]
+    [InlineData("{\"password\": [\"artifacts/full-dogfood-20260912/FINDINGS.md\"]}", "credential")]
+    [InlineData("\"password\": artifacts/full-dogfood-20260912/FINDINGS.md")]
+    public void RedactSuggestionText_DoesNotExemptUnvalidatedPaths_Issue5345(string text, string expectedType = "high_entropy_token")
     {
         var redacted = DiagnosticRedactor.RedactSuggestionText(text, out var types);
 
         Assert.NotEqual(text, redacted);
-        Assert.Contains(DiagnosticRedactor.SuggestionRedactedHighEntropyToken, redacted);
-        Assert.Equal(["high_entropy_token"], types);
+        Assert.Contains($"[REDACTED:{expectedType}]", redacted);
+        Assert.Equal([expectedType], types);
+    }
+
+    [Fact]
+    public void RedactSuggestionText_StructuredCredentialsDoNotExposeLaterEvidenceLikeValues_Issue5345()
+    {
+        const string evidence = "artifacts/full-dogfood-20260912/FINDINGS.md#d01";
+        var value = new string('x', 260) + " " + evidence + " suffix";
+        foreach (var assignment in new[]
+        {
+            $"password=\" {value}\"",
+            $"{{\"password\":\"prefix \\\"quoted\\\" {value}\"}}",
+            $"'api_key': '{value}'",
+            $"{{\"password\": [\"first value\", {{\"nested\": \"{value}\"}}]}}",
+            $"{{\"password\": {{\"nested\": [\"{value}\"]}}}}",
+        })
+        {
+            var redacted = DiagnosticRedactor.RedactSuggestionText(assignment + $"; See {evidence}", out var types);
+
+            Assert.DoesNotContain(value, redacted);
+            Assert.EndsWith($"; See {evidence}", redacted);
+            Assert.Equal(redacted.IndexOf(evidence, StringComparison.Ordinal), redacted.LastIndexOf(evidence, StringComparison.Ordinal));
+            Assert.Contains(DiagnosticRedactor.SuggestionRedactedCredential, redacted);
+            Assert.Equal(["credential"], types);
+        }
     }
 
     [Fact]
@@ -175,6 +215,13 @@ public class DiagnosticRedactorTests
         var distantCredential = "bearer" + new string(' ', 128) + evidence;
         Assert.DoesNotContain(evidence, DiagnosticRedactor.RedactSuggestionText(distantCredential, out var contextTypes));
         Assert.Equal(["high_entropy_token"], contextTypes);
+
+        foreach (var malformedValue in new[] { "[\"unterminated ", "[{]", new string('[', 17) })
+        {
+            var malformed = "password: " + malformedValue + evidence;
+            Assert.DoesNotContain(evidence, DiagnosticRedactor.RedactSuggestionText(malformed, out var malformedTypes));
+            Assert.Equal(["credential"], malformedTypes);
+        }
     }
 
     [Theory]
