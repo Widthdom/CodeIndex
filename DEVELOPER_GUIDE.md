@@ -60,6 +60,8 @@ untruncated output. Attestation still relies on the verifier's exit status.
 
 Issue #5348 adds explicit `--origin-passes` (1–16, default 1) to CLI search/audit/regex-find. `DbSearchReader.CSharpOrigins.cs` supplies successive bounded windows to one `CSharpOriginContext`; lexical locals, interpolation frames, labels and schema state survive each window. Limits apply per pass, including overlapping chunk characters, with at most 65,536 lines / 128 Mi source characters retained per file. State never survives a query; local `total_changes()` and external `data_version` checks discard contexts if their indexed generation changes. Preserve missing/conflicting-line holes, cancellation, fixed per-query pass budgets, cursor/replay binding, and bounded retry diagnostics. A zero-progress window cannot request another pass. See [continuation behavior](docs/find-scan-controls.md#bounded-c-lexical-continuation-5348).
 
+Compare newly encountered overlap with retained bounded evidence before resuming. Conflicting overlap discards the entire provisional context: earlier interpolation decisions may depend on its closing text.
+
 Read the bounded prefix independently of the last returned chunk so later closing delimiters cannot change earlier origins across pages. Interpolation frames isolate schema-call state (including alignment commas) while retaining nested builder detection. Ordinary interpolation format text cannot cross a physical newline; verbatim/raw formats can.
 
 Issue #5321 resumes ordinary/verbatim/raw interpolation with at most 64 active interpolation frames and 64 balanced delimiters per expression. Nested comments/strings are consumed by the same cancellable prefix pass. Merge adjacent literal spans, preserve UTF-16 coordinates, and keep unsupported formats or unbalanced/missing context unknown with bounded `SearchMatchFacet.OriginUnavailable` reason/start/extent evidence. No work budget depends on requested matches or pagination.
@@ -4626,6 +4628,8 @@ JSON の `installer_output_incomplete` に記録します。判明した親の�
 ## C# 検索 origin のコンテキスト
 
 Issue #5348 は CLI の search／audit／regex-find に明示的な `--origin-passes`（1〜16、既定 1）を追加します。`DbSearchReader.CSharpOrigins.cs` は同じ `CSharpOriginContext` へ上限付きの窓を順次渡し、字句状態、補間フレーム、ラベル、schema の文脈を引き継ぎます。重複チャンクの文字数を含む上限はパスごとに適用し、保持するソースはファイルごとに最大 65,536 行／128 Mi 文字です。クエリを越えて状態を保持せず、同一接続の `total_changes()` と外部変更の `data_version` によって索引世代の変化時に文脈を破棄します。欠落・不整合な行、キャンセル、クエリごとに固定したパス数、カーソル・再実行条件の紐づけ、上限付き再試行診断を維持してください。前進できない窓では追加パスを案内しません。[継続動作の説明](docs/find-scan-controls.md#上限付き-c-字句分類の継続-5348)も参照してください。
+
+継続前に、新しく読み取った重複部分を保持済みの上限付き証拠と照合します。不一致があれば暫定文脈全体を破棄します。先行する補間の判定が、その部分の閉じ区切りに依存する場合があるためです。
 
 返す最後のチャンクとは独立して上限付きの先頭部分を読み取り、後続の閉じ区切りによってページ間で先行箇所の origin が変わらないようにします。補間フレームは配置指定のカンマを含む schema 呼び出し状態を分離し、入れ子の builder 検出も維持します。通常の補間書式部分では物理改行を許可せず、verbatim/raw の書式部分では許可します。
 

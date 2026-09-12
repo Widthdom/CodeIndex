@@ -395,11 +395,20 @@ public partial class DbReader
         {
             var generation = ReadOriginGeneration();
             var token = cancellationToken.CanBeCanceled ? cancellationToken : _cancellation;
+            var retainedLines = new Dictionary<int, string>();
+            var conflictingContext = false;
             var origins = new SearchMatchClassifier.CSharpOriginContext(group.Key,
-                start => ReadCSharpOriginWindow(group.Key, start, generation, token), OriginPasses, token);
-            if (ReadOriginGeneration() != generation)
+                start =>
+                {
+                    var window = ReadCSharpOriginWindow(group.Key, start, generation, retainedLines, token);
+                    conflictingContext |= window.StopReason == "indexed_text_mismatch";
+                    return window;
+                }, OriginPasses, token);
+            var invalidReason = ReadOriginGeneration() != generation ? "indexed_generation_changed"
+                : conflictingContext ? "indexed_text_mismatch" : null;
+            if (invalidReason is not null)
                 origins = new SearchMatchClassifier.CSharpOriginContext(group.Key,
-                    _ => new(new Dictionary<int, string>(), "indexed_generation_changed"), 1, token);
+                    _ => new(new Dictionary<int, string>(), invalidReason), 1, token);
             foreach (var result in group)
                 result.CSharpOrigins = origins;
         }

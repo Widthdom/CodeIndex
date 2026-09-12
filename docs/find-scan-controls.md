@@ -7,8 +7,9 @@
 For `search`, `audit`, and `find --regex`, explicitly request `--origin-passes <n>`
 (1–16, default 1) to continue C# lexical state across additional indexed windows.
 For example, rerun `cdidx find return --regex --path large.cs --origin code
---origin-passes 2 --count --json`. Each pass still reads at most 4,096 lines,
-8 Mi UTF-16 characters (including chunk overlap), and 128 chunks per file.
+--origin-passes 2 --count --json`. Each pass classifies at most 4,096 new lines
+and reads at most 8 Mi UTF-16 characters (including chunk overlap) and 128 chunks
+per file. Previously retained overlap is compared without replaying lexical state.
 Up to 16 passes retain at most 65,536 lines / 128 Mi source characters per file;
 result limits and page offsets do not change this budget. Smaller character/chunk
 windows can advance too, provided at least one complete new line is available.
@@ -19,7 +20,9 @@ replays its requested passes from the beginning. The pass setting binds cursors 
 recipe replay: restart **without `--cursor`** when changing it. Comments, string
 delimiters, interpolation frames and schema context carry across windows; results
 are classified only after the requested bounded work finishes. Indexed generation
-changes discard the provisional context. Live source edits require normal indexing.
+changes discard the provisional context. Conflicting overlap also discards the
+entire context, because earlier interpolation decisions may depend on its closing
+text. Live source edits require normal indexing.
 
 Unknown facets expose `origin_unavailable.reason` and, when another pass may help,
 `retry_origin_passes` plus `recovery_guidance`. Find terminal/count output also
@@ -115,8 +118,9 @@ text or JSON output when context from `--before`, `--after`, or
 `search`、`audit`、`find --regex` では `--origin-passes <n>`（1〜16、既定 1）を
 明示すると、索引済みの次の窓へ C# の字句状態を引き継げます。例えば
 `cdidx find return --regex --path large.cs --origin code --origin-passes 2 --count --json`
-で再実行します。各パスは引き続きファイルごとに最大 4,096 行、チャンクの重複分を含む
-8 Mi UTF-16 文字、128 チャンクです。最大 16 パスで保持するソースはファイルごとに
+で再実行します。各パスで新しく分類する行はファイルごとに最大 4,096 行、読み取る量は
+チャンクの重複分を含む 8 Mi UTF-16 文字、128 チャンクです。保持済みの重複部分は
+字句状態を再実行せず照合します。最大 16 パスで保持するソースはファイルごとに
 65,536 行／128 Mi 文字以内で、結果件数やページ位置で上限は変わりません。文字数・チャンク数で
 窓が小さくなっても、完全な新しい行を 1 行以上取得できれば前進できます。
 
@@ -125,6 +129,7 @@ text or JSON output when context from `--before`, `--after`, or
 パス数はカーソルと recipe 再実行の条件に含まれるため、変更するときは **`--cursor` を外して**
 再開始してください。コメント、文字列の区切り、補間フレーム、schema の文脈を窓の間で引き継ぎ、
 指定した上限付き処理が終了してから結果を分類します。索引世代が変われば暫定文脈を破棄します。
+重複行が不一致の場合も、先行する補間の判定がその閉じ区切りに依存し得るため、文脈全体を破棄します。
 実ソースの編集を反映するには通常の索引更新が必要です。
 
 unknown の facet は `origin_unavailable.reason` を返し、追加パスが役立つ場合は

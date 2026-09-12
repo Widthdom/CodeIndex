@@ -219,6 +219,50 @@ public sealed class OriginContinuationIssue5348Tests
         Assert.Equal(1, malformed.Count);
         Assert.Contains("unbalanced_interpolation", malformed.Scan.OriginIncompleteReasons!);
         Assert.Null(malformed.Scan.RetryOriginPasses);
+
+        Execute("DELETE FROM chunks");
+        var writer = new DbWriter(db.Connection);
+        var fileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/a.cs", Lang = "csharp", Lines = 129, Size = 129,
+            Modified = DateTime.UtcNow, Checksum = "overlap",
+        });
+        writer.InsertChunks(Enumerable.Range(1, 128).Select(line => new ChunkRecord
+        {
+            FileId = fileId, ChunkIndex = line - 1, StartLine = line, EndLine = line,
+            Content = line == 128 ? "/*" : "",
+        }).Append(new ChunkRecord
+        {
+            FileId = fileId, ChunkIndex = 128, StartLine = 128, EndLine = 129,
+            Content = "// changed\nNeedle();",
+        }).ToList());
+        var conflicting = reader.CountFindInFiles("Needle", regex: true, semanticFilters: new(["code"], [], []));
+        Assert.Equal(0, conflicting.Count);
+        Assert.Equal(1, conflicting.Scan.UnknownOriginMatches);
+        Assert.Contains("indexed_text_mismatch", conflicting.Scan.OriginIncompleteReasons!);
+        Assert.Null(conflicting.Scan.RetryOriginPasses);
+        Assert.Single(reader.FindInFiles("Needle", 10, regex: true, semanticFilters: new(["unknown"], [], [])));
+        var searchConflict = Assert.Single(SearchSnippetFormatter.ToCompactResults(
+            reader.Search("Needle", 10, exact: true), "Needle", exposeLiteralHighlights: true));
+        Assert.Equal("unknown", Assert.Single(searchConflict.MatchFacets).Origin);
+
+        Execute("UPDATE chunks SET content = '/*\nNeedle();' WHERE chunk_index = 128");
+        var consistent = reader.CountFindInFiles("Needle", regex: true, semanticFilters: new(["comment"], [], []));
+        Assert.Equal(1, consistent.Count);
+        Assert.Equal(0, consistent.Scan.UnknownOriginMatches);
+
+        Execute("UPDATE chunks SET content = '$@\"{' WHERE chunk_index = 125");
+        Execute("UPDATE chunks SET content = 'Needle()' WHERE chunk_index = 126");
+        Execute("UPDATE chunks SET content = '}\";' WHERE chunk_index = 127");
+        Execute("UPDATE chunks SET content = '// changed\nNeedle();' WHERE chunk_index = 128");
+        var completedInterpolation = reader.CountFindInFiles("Needle", regex: true, semanticFilters: new(["code"], [], []));
+        Assert.Equal(0, completedInterpolation.Count);
+        Assert.Equal(2, completedInterpolation.Scan.UnknownOriginMatches);
+        Assert.Contains("indexed_text_mismatch", completedInterpolation.Scan.OriginIncompleteReasons!);
+        Execute("UPDATE chunks SET content = '}\";\nNeedle();' WHERE chunk_index = 128");
+        var restoredInterpolation = reader.CountFindInFiles("Needle", regex: true, semanticFilters: new(["code"], [], []));
+        Assert.Equal(2, restoredInterpolation.Count);
+        Assert.Equal(0, restoredInterpolation.Scan.UnknownOriginMatches);
     }
 
     private static void Seed(string dbPath, string[] lines)

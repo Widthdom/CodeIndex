@@ -26,7 +26,8 @@ public partial class DbReader
     }
 
     private SearchMatchClassifier.CSharpOriginWindow ReadCSharpOriginWindow(
-        string path, int firstLine, (long Local, long External) generation, CancellationToken cancellation)
+        string path, int firstLine, (long Local, long External) generation,
+        Dictionary<int, string> retainedLines, CancellationToken cancellation)
     {
         cancellation.ThrowIfCancellationRequested();
         OriginWindowStartingForTesting?.Invoke(firstLine);
@@ -73,19 +74,26 @@ public partial class DbReader
             }
             budget -= content.Length;
             var lastOffset = truncated ? Math.Min(last - start, content.Count(ch => ch == '\n') - 1) : last - start;
-            foreach (var (offset, value) in EnumerateContentLines(content, Math.Max(0, firstLine - start), lastOffset))
+            foreach (var (offset, value) in EnumerateContentLines(content, 0, lastOffset))
             {
                 cancellation.ThrowIfCancellationRequested();
-                if (!lines.TryAdd(start + offset, value) && lines[start + offset] != value)
-                    conflictLine = Math.Min(conflictLine, start + offset);
+                var number = start + offset;
+                if (retainedLines.TryGetValue(number, out var previous) && previous != value)
+                    conflictLine = Math.Min(conflictLine, number);
+                if (number >= firstLine)
+                {
+                    lines.TryAdd(number, value);
+                    retainedLines.TryAdd(number, value);
+                }
             }
             if (truncated)
                 break;
         }
         if (conflictLine != int.MaxValue)
         {
-            lines.Remove(conflictLine);
-            reason = "indexed_text_mismatch";
+            // Earlier origins can depend on closing evidence in the overlap. The caller
+            // discards the entire provisional context, including completed interpolations.
+            return new(new Dictionary<int, string>(), "indexed_text_mismatch");
         }
         else if (chunks == SearchMatchClassifier.CSharpContextChunkLimit && reason != "character_budget_exhausted")
             reason = "chunk_budget_exhausted";
@@ -93,7 +101,7 @@ public partial class DbReader
         var contiguousEnd = firstLine;
         while (lines.ContainsKey(contiguousEnd))
             contiguousEnd++;
-        if (lines.Keys.Any(line => line > contiguousEnd) && conflictLine == int.MaxValue)
+        if (lines.Keys.Any(line => line > contiguousEnd))
             reason = "indexed_prefix_unavailable";
         return new(lines, reason);
     }
