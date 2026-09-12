@@ -1,5 +1,12 @@
 # Testing Guide
 
+Dependency summary regressions in `QueryCommandRunnerGraphTests` (#5346) separate
+page counts, SQL/C# candidate boundaries, extraction completeness, and response
+budgets. Keep the three-edge limits 1/2/3/4, empty/filter/missing-graph controls,
+batch child metadata, and the 201-symbol single-edge source-budget fixture.
+Cycle summary variants share the existing ranked-SCC fixture in
+`QueryCommandRunnerTests`; run these and dependency query regressions on net8/net9.
+
 `Extract_CSharpStaticLambdaGate_BoundsRepeatedSameLineDeclarations` checks 64
 same-line static methods with a warmed 2 MiB allocation ceiling on both runtimes,
 including C#, Razor, Blazor and CSHTML. Preserve all identities, raw start columns,
@@ -1408,6 +1415,13 @@ Issue #5300 のテストは隣接・入れ子の C# callable、対象行の除�
 パーサー（#5297）の回帰テストとともに net8.0 / net9.0 で実行します。
 
 # テストガイド
+
+`QueryCommandRunnerGraphTests` の依存関係 summary 回帰テスト（#5346）は、ページ件数、
+SQL／C# の候補上限、抽出の完全性、応答サイズ上限を区別します。3 edge に対する
+limit 1／2／3／4、空結果・フィルター・グラフ欠落、batch の子メタデータ、201 symbol
+から1 edgeを作る候補上限 fixture を維持してください。循環 summary は
+`QueryCommandRunnerTests` の既存の SCC 順位 fixture を共有し、依存クエリの回帰と
+併せて net8／net9 で実行します。
 
 #5339 は #5332 の fixture に正常な `files --format count --json` の batch を追加し、
 3件・12件ともスナップショット3個分のコピー量を上限として、件数・鮮度・確定性の出力を検証します。

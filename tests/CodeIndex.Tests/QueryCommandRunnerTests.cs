@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -7679,6 +7680,26 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(
                 nodes,
                 expandedCycles[0].GetProperty("nodes").EnumerateArray().Select(node => node.GetString()).ToArray());
+
+            foreach (var (summaryLimit, graphBudget, complete) in new[] { (1, 100, true), (2, 100, true), (1, 1, false) })
+            {
+                var (summaryExit, summaryStdout, summaryStderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+                    ["--db", dbPath, "--json", "--cycles", "--summary-only", "--limit", summaryLimit.ToString(CultureInfo.InvariantCulture),
+                        "--graph-budget", graphBudget.ToString(CultureInfo.InvariantCulture), "--lang", "csharp"], _jsonOptions));
+                Assert.Equal(CommandExitCodes.Success, summaryExit);
+                Assert.Empty(summaryStderr);
+                using var summaryDocument = ParseJsonOutput(summaryStdout);
+                var summary = summaryDocument.RootElement;
+                Assert.Equal("returned", summary.GetProperty("count_kind").GetString());
+                Assert.Equal("dependency_cycles", summary.GetProperty("count_unit").GetString());
+                Assert.Equal(complete, summary.GetProperty("candidate_scan_complete").GetBoolean());
+                Assert.Equal(complete && summaryLimit == 2, summary.GetProperty("query_exhausted").GetBoolean());
+                Assert.Equal(complete, summary.GetProperty("total_count_available").GetBoolean());
+                if (complete)
+                    Assert.Equal(2, summary.GetProperty("total_count").GetInt32());
+                else
+                    Assert.Equal("graph_edge_budget", summary.GetProperty("total_count_unavailable_reason").GetString());
+            }
 
             var (mismatchExitCode, mismatchStdout, mismatchStderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
                 ["--db", dbPath, "--json", "--cycles", "--limit", "1", "--graph-budget", "100", "--cursor", cursor!, "--lang", "csharp"],

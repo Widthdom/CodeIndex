@@ -5,7 +5,12 @@ namespace CodeIndex.Database;
 
 public partial class DbReader
 {
-    private List<FileDependencyResult> ExecuteDependencyQuery(
+    internal sealed record DependencyQueryResult(
+        List<FileDependencyResult> Edges,
+        bool CandidateScanComplete,
+        bool ResultWindowComplete);
+
+    private DependencyQueryResult ExecuteDependencyQuery(
         DependencyQueryPlan plan,
         CancellationToken cancellationToken)
     {
@@ -14,6 +19,7 @@ public partial class DbReader
         BindDependencyQueryParameters(command, plan.Parameters);
 
         var results = new List<FileDependencyResult>();
+        var sourceScanComplete = false;
         cancellationToken.ThrowIfCancellationRequested();
         using var cancellationRegistration = cancellationToken.Register(
             static state => ((SqliteCommand)state!).Cancel(),
@@ -24,6 +30,13 @@ public partial class DbReader
             while (reader.TrackedRead())
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                if (plan.Request.CaptureSummaryCoverage)
+                {
+                    sourceScanComplete = reader.GetBoolean(5);
+                    // The coverage row survives an empty edge result.
+                    if (reader.IsDBNull(0))
+                        continue;
+                }
                 results.Add(ProjectDependencyRow(reader));
             }
         }
@@ -32,9 +45,17 @@ public partial class DbReader
             throw new OperationCanceledException(cancellationToken);
         }
 
-        return RankDependencyResults(
-            results,
-            plan.Request.Limit,
-            plan.Request.SuppressDependencyNoise);
+        // Reuse the existing bounded ranking window. Looking ahead must not
+        // enlarge either the SQL candidate budget or the C# source budget.
+        var outputLimit = plan.Request.CaptureSummaryCoverage && plan.Request.Limit < int.MaxValue
+            ? plan.Request.Limit + 1
+            : plan.Request.Limit;
+        var candidateScanComplete = sourceScanComplete
+            && results.Count < DependencyNoiseProfile.GetRankingCandidateLimit(plan.Request.Limit);
+        var resultWindowComplete = results.Count <= outputLimit;
+        return new(
+            RankDependencyResults(results, outputLimit, plan.Request.SuppressDependencyNoise),
+            candidateScanComplete,
+            resultWindowComplete);
     }
 }

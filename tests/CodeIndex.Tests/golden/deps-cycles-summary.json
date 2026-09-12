@@ -176,5 +176,13 @@
   },
   "indexed_file_count": 3,
   "indexed_at": "\u003CTIMESTAMP\u003E",
-  "freshness_available": true
+  "freshness_available": true,
+  "count_kind": "returned",
+  "count_unit": "dependency_cycles",
+  "candidate_scan_complete": true,
+  "query_exhausted": true,
+  "total_count": 1,
+  "total_count_available": true,
+  "total_count_authoritative": true,
+  "total_count_unavailable_reason": null
 }

@@ -687,6 +687,7 @@ public static partial class QueryCommandRunner
 
             List<FileDependencyResult> results;
             List<FileDependencyResult> cycleCandidates;
+            DependencySummaryCoverage? summaryCoverage = null;
             var cycleCandidateRowCount = 0;
             var cycleGraphBudget = options.DependencyCycleGraphBudget;
             var cyclePageOffset = options.DependencyCycleCursor?.Offset ?? 0;
@@ -707,7 +708,29 @@ public static partial class QueryCommandRunner
             else
             {
                 WriteGraphLiveness("deps", "read_edges", options, depsFormat, machineReadable: machineReadable);
-                results = GetWorkspaceFileDependencies(reader, options, reverse, options.Limit, cancellationToken);
+                if (options.SummaryOnly && options.WorkspaceDbPaths.Count == 0)
+                {
+                    var page = reader.GetFileDependencySummaryPage(
+                        options.Limit, options.Lang, options.PathPatterns, options.ExcludePaths,
+                        options.ExcludeTests, reverse, cancellationToken, options.DependencySymbols,
+                        options.DependencySymbolFamilies, options.DependencySuppressNoise,
+                        options.DependencyEvidenceFilter);
+                    results = page.Edges.Take(options.Limit).ToList();
+                    var lookahead = ApplyDependencySymbolFilters(page.Edges.Skip(options.Limit).ToList(), options);
+                    summaryCoverage = new(
+                        lookahead.Edges.Count > 0 ? true
+                            : page.CandidateScanComplete && page.ResultWindowComplete ? false : null,
+                        page.CandidateScanComplete,
+                        "candidate_scan_incomplete");
+                }
+                else
+                {
+                    results = GetWorkspaceFileDependencies(reader, options, reverse, options.Limit, cancellationToken);
+                    // Workspace fan-out does not currently expose every member's
+                    // candidate exhaustion. Preserve its work budget and fail closed.
+                    if (options.SummaryOnly)
+                        summaryCoverage = new(null, false, "workspace_candidate_scan_unverified");
+                }
                 cycleCandidates = results;
             }
             WriteGraphLiveness("deps", "shape_output", options, depsFormat, rows: results.Count, machineReadable: machineReadable);
@@ -785,7 +808,7 @@ public static partial class QueryCommandRunner
                         AddDependencyGraphAvailabilityJsonFields(payload, reader._hasReferencesTable);
                         AddFreshnessHint(payload, reader);
                         WriteGraphLiveness("deps", "write_output", options, depsFormat, rows: 0, cycleCount: 0, machineReadable: machineReadable);
-                        var writeExitCode = WriteDepsJsonPayload(payload, options, jsonOptions);
+                        var writeExitCode = WriteDepsJsonPayload(payload, options, jsonOptions, summaryCoverage);
                         return writeExitCode == CommandExitCodes.Success ? ZeroResultExitCode(options) : writeExitCode;
                     }
 
@@ -812,7 +835,7 @@ public static partial class QueryCommandRunner
                     if (options.SummaryOnly)
                         payload["summary_only"] = true;
                     payload["note"] = "symbol_references table is missing in this index (legacy or read-only DB). Zero result is degraded, not authoritative.";
-                    var writeExitCode = WriteDepsJsonPayload(payload, options, jsonOptions);
+                    var writeExitCode = WriteDepsJsonPayload(payload, options, jsonOptions, summaryCoverage);
                     return writeExitCode == CommandExitCodes.Success ? ZeroResultExitCode(options) : writeExitCode;
                 }
                 else if (options.Json)
@@ -820,7 +843,7 @@ public static partial class QueryCommandRunner
                     var payload = BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: options.SummaryOnly ? null : "edges", graphTableAvailable: true, degraded: !zeroSqlGraphSignal.Ready, queryOptions: options, extraFields: payload => AddDependencySchemaJsonFields(payload, reader, options, jsonOptions, zeroSqlGraphSignal, zeroSymbolFilter));
                     if (options.SummaryOnly)
                         payload["summary_only"] = true;
-                    var writeExitCode = WriteDepsJsonPayload(payload, options, jsonOptions);
+                    var writeExitCode = WriteDepsJsonPayload(payload, options, jsonOptions, summaryCoverage);
                     return writeExitCode == CommandExitCodes.Success ? ZeroResultExitCode(options) : writeExitCode;
                 }
                 else
@@ -907,7 +930,7 @@ public static partial class QueryCommandRunner
                         extraFields: payload => AddDependencySchemaJsonFields(payload, reader, options, jsonOptions, sqlGraphSignal, symbolFilter.Summary));
                     if (options.SummaryOnly)
                         payload["summary_only"] = true;
-                    var writeExitCode = WriteDepsJsonPayload(payload, options, jsonOptions);
+                    var writeExitCode = WriteDepsJsonPayload(payload, options, jsonOptions, summaryCoverage);
                     return writeExitCode == CommandExitCodes.Success ? ZeroResultExitCode(options) : writeExitCode;
                 }
                 else
@@ -937,7 +960,7 @@ public static partial class QueryCommandRunner
                     AddDependencySchemaJsonFields(payload, reader, options, jsonOptions, sqlGraphSignal, symbolFilter.Summary);
                     AddFreshnessHint(payload, reader);
                     WriteGraphLiveness("deps", "write_output", options, depsFormat, rows: outputEdges.Count, cycleCount: 0, machineReadable: machineReadable);
-                    var writeExitCode = WriteDepsJsonPayload(payload, options, jsonOptions);
+                    var writeExitCode = WriteDepsJsonPayload(payload, options, jsonOptions, summaryCoverage);
                     return writeExitCode == CommandExitCodes.Success ? ZeroResultExitCode(options) : writeExitCode;
                 }
                 else
@@ -1031,7 +1054,7 @@ public static partial class QueryCommandRunner
                 AddDependencySchemaJsonFields(payload, reader, options, jsonOptions, sqlGraphSignal, symbolFilter.Summary);
                 AddFreshnessHint(payload, reader);
                 WriteGraphLiveness("deps", "write_output", options, depsFormat, rows: outputEdges.Count, cycleCount: cycles.Count, machineReadable: machineReadable);
-                return WriteDepsJsonPayload(payload, options, jsonOptions);
+                return WriteDepsJsonPayload(payload, options, jsonOptions, summaryCoverage);
             }
             else
             {
@@ -2111,14 +2134,73 @@ public static partial class QueryCommandRunner
     private static bool DepsEmitsJson(QueryCommandOptions options, string depsFormat)
         => depsFormat == OutputFormatJsonGraph || (options.Json && depsFormat == OutputFormatEdgeList);
 
-    private static int WriteDepsJsonPayload(JsonObject payload, QueryCommandOptions options, JsonSerializerOptions jsonOptions)
-        => WriteJsonPayloadWithOptionalByteLimit(
+    private sealed record DependencySummaryCoverage(bool? HasMore, bool CandidateScanComplete, string IncompleteReason);
+
+    private static int WriteDepsJsonPayload(
+        JsonObject payload,
+        QueryCommandOptions options,
+        JsonSerializerOptions jsonOptions,
+        DependencySummaryCoverage? summaryCoverage = null)
+    {
+        if (options.SummaryOnly)
+            AddDependencySummaryCountFields(payload, options, summaryCoverage);
+        return WriteJsonPayloadWithOptionalByteLimit(
             payload,
             options,
             jsonOptions,
             "deps",
             "deps",
             "Use --summary-only, reduce --limit, or increase --max-json-bytes.");
+    }
+
+    private static void AddDependencySummaryCountFields(
+        JsonObject payload,
+        QueryCommandOptions options,
+        DependencySummaryCoverage? coverage)
+    {
+        var count = payload["count"]!.GetValue<int>();
+        var candidateScanComplete = options.DependencyCycles
+            ? payload["analysis_complete"]?.GetValue<bool>() == true
+            : coverage?.CandidateScanComplete == true;
+        var hasMore = options.DependencyCycles
+            ? payload["has_more"]?.GetValue<bool>()
+            : coverage?.HasMore;
+        var queryExhausted = candidateScanComplete && hasMore == false;
+        int? totalCount = options.DependencyCycles && candidateScanComplete
+            ? payload["total_cycle_count"]!.GetValue<int>()
+            : queryExhausted ? count : null;
+        var totalAuthoritative = totalCount.HasValue
+            && payload["reference_graph_complete"]?.GetValue<bool>() == true
+            && payload["degraded"]?.GetValue<bool>() != true
+            && options.WorkspaceDbPaths.Count == 0;
+
+        payload["count_kind"] = "returned";
+        payload["count_unit"] = options.DependencyCycles ? "dependency_cycles" : "dependency_edges";
+        payload["returned_count"] = count;
+        payload["page_limit"] = options.Limit;
+        payload["has_more"] = hasMore;
+        payload["candidate_scan_complete"] = candidateScanComplete;
+        payload["query_exhausted"] = queryExhausted;
+        payload["total_count"] = totalCount;
+        payload["total_count_available"] = totalCount.HasValue;
+        payload["total_count_authoritative"] = totalAuthoritative;
+        payload["total_count_unavailable_reason"] = totalCount.HasValue ? null
+            : !candidateScanComplete
+                ? options.DependencyCycles ? "graph_edge_budget" : coverage?.IncompleteReason ?? "candidate_scan_incomplete"
+                : "page_limit";
+        if (totalCount.HasValue && !totalAuthoritative)
+            payload["total_count_non_authoritative_reason"] = options.WorkspaceDbPaths.Count > 0
+                ? "workspace_graph_coverage_unverified"
+                : payload["reference_graph_complete"]?.GetValue<bool>() != true
+                    ? "reference_graph_incomplete" : "graph_contract_degraded";
+
+        if (!options.DependencyCycles)
+        {
+            payload["truncated"] = !queryExhausted;
+            if (!queryExhausted)
+                payload["truncated_reason"] = hasMore == true ? "page_limit" : coverage?.IncompleteReason;
+        }
+    }
 
     internal sealed record DependencySymbolFilterResult(List<FileDependencyResult> Edges, DependencySymbolFilterSummary Summary);
 

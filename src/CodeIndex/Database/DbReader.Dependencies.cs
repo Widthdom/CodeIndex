@@ -251,6 +251,29 @@ public partial class DbReader
             dependencySymbolFamilies,
             suppressDependencyNoise,
             evidenceFilter);
+        return ExecuteDependencyQuery(BuildDependencyQueryPlan(request), cancellationToken).Edges;
+    }
+
+    internal DependencyQueryResult GetFileDependencySummaryPage(
+        int limit,
+        string? lang,
+        IReadOnlyList<string>? pathPatterns,
+        IReadOnlyList<string>? excludePathPatterns,
+        bool excludeTests,
+        bool reverse,
+        CancellationToken cancellationToken,
+        IReadOnlyList<string>? dependencySymbols,
+        IReadOnlyList<string>? dependencySymbolFamilies,
+        bool suppressDependencyNoise,
+        DependencyEvidenceFilter? evidenceFilter)
+    {
+        if (!_hasReferencesTable)
+            return new([], false, true);
+
+        var request = new DependencyQueryRequest(
+            limit, NormalizeQueryLanguage(lang), pathPatterns, excludePathPatterns,
+            excludeTests, reverse, dependencySymbols, dependencySymbolFamilies,
+            suppressDependencyNoise, evidenceFilter, CaptureSummaryCoverage: true);
         return ExecuteDependencyQuery(BuildDependencyQueryPlan(request), cancellationToken);
     }
 }

@@ -576,7 +576,7 @@ internal static class CliFlagSchema
                 Description = "Map: comma-separated response sections to include, or list to discover sections",
                 PrimaryCommands = Set(MapSectionCommands),
             },
-            new() { Name = "--summary-only", Description = "Map/Diff/Recipes/Audit/Files/Symbols/Deps/Hotspots/Languages: return only aggregate summary fields where supported", PrimaryCommands = Set(SummaryOnlyCommands) },
+            new() { Name = "--summary-only", Description = "Map/Diff/Recipes/Audit/Files/Symbols/Deps/Hotspots/Languages: return aggregate summary fields where supported; Deps counts returned rows and reports query exhaustion separately from graph completeness", PrimaryCommands = Set(SummaryOnlyCommands) },
             new() { Name = "--detailed", Description = "Diff: compare deterministic row-level records", PrimaryCommands = Set("diff") },
             new() { Name = "--include-content", Description = "Diff detailed JSON: include indexed content instead of redacted hashes", PrimaryCommands = Set("diff") },
             new() { Name = "--data-only", Description = "Diff: include indexed data and schema in identity while excluding readiness/provenance and volatile telemetry", PrimaryCommands = Set("diff") },
