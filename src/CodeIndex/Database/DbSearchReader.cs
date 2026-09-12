@@ -389,47 +389,17 @@ public partial class DbReader
 
     private void AttachCSharpOriginLines(List<SearchResult> results, CancellationToken cancellationToken = default)
     {
-        // Read only bounded indexed prefixes; never fill holes with invented blank lines.
-        // Share each prefix between its rows. Per-file budgets must not depend on pagination.
+        // Every row/page uses the same explicit pass budget and indexed generation.
         foreach (var group in results.Where(r => string.Equals(r.Lang, "csharp", StringComparison.OrdinalIgnoreCase))
                      .GroupBy(r => r.Path, StringComparer.Ordinal))
         {
-            // Closing interpolation evidence can occur after the last returned match.
-            var endLine = SearchMatchClassifier.CSharpContextLineLimit;
-            var budget = SearchMatchClassifier.CSharpContextCharacterLimit;
-            var lines = new Dictionary<int, string>();
-            using var cmd = _conn.CreateCommand();
-            cmd.CommandText = @"
-                SELECT c.start_line, substr(c.content, 1, @characters + 1)
-                FROM chunks c JOIN files f ON c.file_id = f.id
-                WHERE f.path = @path AND c.start_line <= @endLine
-                ORDER BY c.start_line, c.id LIMIT @chunks";
-            SqliteCommandPolicy.Add(cmd, "@path", group.Key);
-            SqliteCommandPolicy.Add(cmd, "@endLine", endLine);
-            SqliteCommandPolicy.Add(cmd, "@characters", budget);
-            SqliteCommandPolicy.Add(cmd, "@chunks", SearchMatchClassifier.CSharpContextChunkLimit);
-            using var reader = cmd.ExecuteTrackedReader();
-            while (reader.TrackedRead())
-            {
-                ThrowIfCancellationRequested();
-                cancellationToken.ThrowIfCancellationRequested();
-                var content = reader.GetString(1);
-                var truncated = content.Length > budget;
-                if (truncated)
-                {
-                    // A capped row can still prove complete preceding lines. Never admit its partial tail.
-                    var lastNewline = budget == 0 ? -1 : content.LastIndexOf('\n', budget - 1, budget);
-                    content = lastNewline < 0 ? string.Empty : content[..(lastNewline + 1)];
-                }
-                budget -= content.Length;
-                var start = reader.GetInt32(0);
-                var lastOffset = truncated ? Math.Min(endLine - start, content.Count(ch => ch == '\n') - 1) : endLine - start;
-                foreach (var (offset, value) in EnumerateContentLines(content, 0, lastOffset))
-                    lines.TryAdd(start + offset, value);
-                if (truncated)
-                    break;
-            }
-            var origins = new SearchMatchClassifier.CSharpOriginContext(group.Key, lines, cancellationToken.CanBeCanceled ? cancellationToken : _cancellation);
+            var generation = ReadOriginGeneration();
+            var token = cancellationToken.CanBeCanceled ? cancellationToken : _cancellation;
+            var origins = new SearchMatchClassifier.CSharpOriginContext(group.Key,
+                start => ReadCSharpOriginWindow(group.Key, start, generation, token), OriginPasses, token);
+            if (ReadOriginGeneration() != generation)
+                origins = new SearchMatchClassifier.CSharpOriginContext(group.Key,
+                    _ => new(new Dictionary<int, string>(), "indexed_generation_changed"), 1, token);
             foreach (var result in group)
                 result.CSharpOrigins = origins;
         }

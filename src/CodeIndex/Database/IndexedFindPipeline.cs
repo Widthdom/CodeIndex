@@ -58,6 +58,7 @@ public partial class DbReader
             FindScanState state)
         {
             state.ClassificationApplied = request.SemanticFilters is not null;
+            state.OriginPasses = _owner.OriginPasses;
             var comparison = request.Exact ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
             var regexMatcher = request.Regex
                 ? CreateFindRegexMatcher(request.Query, request.Exact)
@@ -167,7 +168,12 @@ public partial class DbReader
                         {
                             var facet = ClassifyFindMatch(file, indexedLine, lineMatch, origins);
                             if (facet.Origin == SearchMatchClassifier.Unknown)
+                            {
                                 state.UnknownOriginMatches++;
+                                state.OriginIncompleteReasons.Add(facet.OriginUnavailable?.Reason ?? "unsupported_origin_context");
+                                if (facet.OriginUnavailable?.RetryOriginPasses is { } retry)
+                                    state.RetryOriginPasses = Math.Max(state.RetryOriginPasses ?? 0, retry);
+                            }
                             if (!filters.Accepts(facet))
                             {
                                 matchOrdinal++;

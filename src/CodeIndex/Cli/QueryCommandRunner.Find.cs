@@ -10,7 +10,7 @@ namespace CodeIndex.Cli;
 public static partial class QueryCommandRunner
 {
     internal const int MaxFindLineScanLimit = 10_000_000;
-    private const string FindUsage = "Usage: cdidx find <query> (--path <glob>|--all) [--db <path>] [--json] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--fields <csv>] [--cursor <next_cursor>] [--max-json-bytes <n>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--context <n>] [--before <n>] [--after <n>] [--snippet-lines <n>] [--focus-line <line>] [--focus-column <n>] [--max-line-width <n>] [--line-scan-limit <n>] [--allow-partial] [--exact] [--regex] [--origin <origin>] [--exclude-origin <origin>] [--result-kind <kind>] [--exclude-comments] [--exclude-strings] [--exclude-fixtures] [--count]\n       cdidx find --query <query> (--path <glob>|--all) [...]\n       cdidx find [options] -- <query>";
+    private const string FindUsage = "Usage: cdidx find <query> (--path <glob>|--all) [--db <path>] [--json] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--fields <csv>] [--cursor <next_cursor>] [--max-json-bytes <n>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--context <n>] [--before <n>] [--after <n>] [--snippet-lines <n>] [--focus-line <line>] [--focus-column <n>] [--max-line-width <n>] [--line-scan-limit <n>] [--allow-partial] [--exact] [--regex] [--origin <origin>] [--exclude-origin <origin>] [--result-kind <kind>] [--exclude-comments] [--exclude-strings] [--exclude-fixtures] [--origin-passes <n>] [--count]\n       cdidx find --query <query> (--path <glob>|--all) [...]\n       cdidx find [options] -- <query>";
 
     public static int RunFind(
         string[] cmdArgs,
@@ -151,7 +151,7 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.UsageError;
         }
 
-        var semanticFilters = HasSearchOriginFilters(options)
+        var semanticFilters = HasFindOriginClassification(options)
             ? new FindSemanticFilters(options.MatchOrigins, options.ExcludeOrigins, options.ResultKinds,
                 options.ExcludeComments, options.ExcludeStrings, options.ExcludeFixtures)
             : null;
@@ -760,13 +760,19 @@ public static partial class QueryCommandRunner
         {
             payload["origin_classification_complete"] = scan.UnknownOriginMatches == 0;
             payload["unknown_origin_matches"] = scan.UnknownOriginMatches;
+            payload["origin_passes"] = scan.OriginPasses;
             if (scan.UnknownOriginMatches > 0)
             {
                 payload["authoritative_count"] = false;
                 payload["authoritative_rows"] = false;
                 payload["partial_result"] = true;
                 payload["classification_incomplete_reason"] = "origin_classification_unavailable";
-                payload["classification_recovery_guidance"] = "Inspect unknown matches without semantic exclusions; classification supports bounded C# and line-local shell context. Absence is not authoritative.";
+                payload["classification_incomplete_reasons"] = new JsonArray((scan.OriginIncompleteReasons ?? []).Select(reason => JsonValue.Create(reason)).ToArray());
+                if (scan.RetryOriginPasses is { } passes)
+                    payload["retry_origin_passes"] = passes;
+                payload["classification_recovery_guidance"] = scan.RetryOriginPasses is { } retry
+                    ? $"Restart without --cursor using --origin-passes {retry} for another bounded C# lexical pass. Missing/malformed context remains unknown; inspect those matches without exclusions."
+                    : "Inspect unknown matches without semantic exclusions; missing/malformed context or the maximum lexical budget cannot be resolved by more passes. Absence is not authoritative.";
             }
         }
         payload["candidate_files"] = scan.CandidateFiles;
@@ -786,8 +792,12 @@ public static partial class QueryCommandRunner
             payload["line_scan_limit"] = scan.LineLimit.Value;
     }
 
+    private static bool HasFindOriginClassification(QueryCommandOptions options)
+        => HasSearchOriginFilters(options) || options.OriginPasses != 1
+           || JsonEnvelopeWrapper.HasArgument("find", options.InvocationArgs, "--origin-passes");
+
     private static bool IsFindAllNdjson(QueryCommandOptions options)
-        => (options.All || HasSearchOriginFilters(options))
+        => (options.All || HasFindOriginClassification(options))
            && options.Json
            && options.OutputFormat == OutputFormatJson
            && options.JsonOutputFormat == JsonOutputFormatNdjson;
@@ -913,11 +923,16 @@ public static partial class QueryCommandRunner
             ? $"; authoritative_count={(!scan.Truncated && !resumedCountPage && scan.UnknownOriginMatches == 0).ToString().ToLowerInvariant()}"
             : $"; authoritative_rows={(scanComplete && scan.UnknownOriginMatches == 0).ToString().ToLowerInvariant()}";
         if (scan.UnknownOriginMatches > 0)
+        {
             summary += $"; unknown_origin_matches={scan.UnknownOriginMatches}; absence is not authoritative";
+            summary += $"; classification_incomplete_reasons={string.Join(",", scan.OriginIncompleteReasons ?? [])}";
+        }
         var continuationAction = FindScanContinuationAction(scan, resultLimitReached);
         if (continuationAction != null)
             summary += $"; continuation_action={continuationAction}";
         CommandErrorWriter.WriteStderr($"({summary})");
+        if (scan.RetryOriginPasses is { } passes)
+            CommandErrorWriter.WriteStderr($"Hint: restart without --cursor using --origin-passes {passes} for another bounded C# lexical pass; missing/malformed context remains unknown.");
         if (nextCursor != null)
             CommandErrorWriter.WriteStderr($"next_cursor={nextCursor}");
         var recoveryGuidance = FindScanRecoveryGuidance(scan, resultLimitReached);

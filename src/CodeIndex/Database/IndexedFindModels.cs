@@ -91,6 +91,9 @@ public partial class DbReader
     {
         internal int UnknownOriginMatches { get; set; }
         internal bool ClassificationApplied { get; set; }
+        internal int OriginPasses { get; set; } = 1;
+        internal SortedSet<string> OriginIncompleteReasons { get; } = new(StringComparer.Ordinal);
+        internal int? RetryOriginPasses { get; set; }
         internal int CandidateFiles { get; set; }
         internal int FilesScanned { get; set; }
         internal int LinesScanned { get; set; }
@@ -173,6 +176,9 @@ public partial class DbReader
                 NextByteOffset,
                 ResultLimitReached,
                 ClassificationApplied,
-                UnknownOriginMatches);
+                UnknownOriginMatches,
+                OriginIncompleteReasons.ToArray(),
+                RetryOriginPasses,
+                OriginPasses);
     }
 }

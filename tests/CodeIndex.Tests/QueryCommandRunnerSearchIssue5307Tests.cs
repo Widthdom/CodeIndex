@@ -209,6 +209,11 @@ public partial class QueryCommandRunnerTests
                 Assert.Equal(full.CSharpOrigins!.GetOrigin(page.StartLine, page.Content, column),
                     page.CSharpOrigins!.GetOrigin(page.StartLine, page.Content, column));
             }
+            reader.OriginPasses = 2;
+            var resumed = reader.Search("ArgumentList", count + 1, exact: true, deduplicate: false);
+            Assert.Equal(count, resumed.Count);
+            Assert.All(SearchSnippetFormatter.ToCompactResults(resumed, "ArgumentList", exposeLiteralHighlights: true),
+                row => Assert.Equal("code", Assert.Single(row.MatchFacets).Origin));
         }
         finally
         {

@@ -2342,7 +2342,7 @@ Search origin filters and facets carry C# block-comment, verbatim-string and raw
 
 Interpolation nesting and expression delimiters each have a depth limit of 64. Unbalanced or unsupported interpolation (including quoted/braced format components) remains `unknown` from the outer string onward. Unknown C# match facets expose `origin_unavailable` (MCP: `originUnavailable`) with a fixed `reason`, one-based `start_line` / `start_column` (MCP: `startLine` / `startColumn`) and `extent=remaining_file` (`line` for mismatched indexed text). Inspect these facets without an origin filter, or with `--origin unknown`; a code-only zero count cannot establish absence when classification is unavailable.
 
-Classification reads an indexed prefix bounded by 4,096 lines, 8,388,608 UTF-16 characters and 128 chunks per file (overlapping chunk characters count toward the read budget). Missing prefix lines or exhausted bounds produce `unknown`, which does not satisfy `--origin code`. It does not read live source or require a rebuild. Inspect unknown matches without an origin filter when reviewing incomplete or large files.
+Classification defaults to one indexed-prefix pass bounded by 4,096 lines, 8,388,608 UTF-16 characters and 128 chunks per file (overlapping chunk characters count toward the read budget). CLI `search`, `audit`, and `find --regex` accept `--origin-passes <1-16>` to explicitly continue lexical state through additional windows with the same per-pass limits. Restart without `--cursor` when changing the pass count. `origin_unavailable` adds optional `retry_origin_passes` and `recovery_guidance`; find counts/terminals also report `origin_passes` and `classification_incomplete_reasons`. Missing/conflicting lines, malformed constructs and exhausted bounds stay `unknown`, which does not satisfy `--origin code`. State is confined to one indexed snapshot and discarded on generation changes; live source reads, schema migration and rebuild are unnecessary. MCP retains one pass. See [bounded continuation and remaining limits](docs/find-scan-controls.md#bounded-c-lexical-continuation-5348).
 
 #### Shell search origins
 
@@ -6420,7 +6420,7 @@ function   CreateUser                               src/Services/UserService.cs:
 
 補間の入れ子と式の区切りの深さには、それぞれ 64 の上限があります。不均衡または未対応の補間（引用符や波括弧を含む書式部分など）は、外側の文字列以降を `unknown` とします。不明な C# の一致 facet には `origin_unavailable`（MCP: `originUnavailable`）を付け、固定の `reason`、1 始まりの `start_line` / `start_column`（MCP: `startLine` / `startColumn`）、`extent=remaining_file`（インデックス済みテキストの不一致では `line`）を示します。origin フィルターを外すか `--origin unknown` で確認してください。分類できない場合、コードのみの件数がゼロでも不存在を証明できません。
 
-分類は各ファイルのインデックス済み先頭部分を、4,096 行、UTF-16 で 8,388,608 文字、128 チャンクを上限として読み取ります（重複チャンクの文字も読み取り上限に含みます）。先頭からの行が欠けている場合や上限を超える場合は `unknown` となり、`--origin code` には一致しません。実ファイルの読み取りや rebuild は不要です。不完全なファイルや大きなファイルのレビューでは、origin フィルターを外して不明な一致も確認してください。
+分類は既定で各ファイルの索引済み先頭部分を 1 パス読み取り、4,096 行、UTF-16 で 8,388,608 文字、128 チャンクを上限とします（重複チャンクの文字も読み取り上限に含みます）。CLI の `search`、`audit`、`find --regex` では `--origin-passes <1-16>` を明示し、各パスの上限を維持したまま次の窓へ字句状態を引き継げます。パス数を変える場合は `--cursor` を外して再開始してください。`origin_unavailable` に任意の `retry_origin_passes` と `recovery_guidance` が加わり、find の件数・終端は `origin_passes` と `classification_incomplete_reasons` も示します。行の欠落・不整合、不正な構文、上限超過は `unknown` のままで、`--origin code` には一致しません。状態は同じ索引スナップショット内に限定し、世代変更時に破棄します。実ソースの読み取り、スキーマ移行、rebuild は不要です。MCP は 1 パスを維持します。[上限付き継続と残る制限](docs/find-scan-controls.md#上限付き-c-字句分類の継続-5348)も参照してください。
 
 #### Shell検索の由来分類
 
