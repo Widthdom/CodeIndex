@@ -14,8 +14,12 @@ public partial class DbReaderTests
         _writer.SetMeta(DbContext.LastIndexRunModeMetaKey, "update");
         var valid = new CSharpWorkspaceExpansion
         {
-            Trigger = "member_reference_targets", Decision = "expanded", Reason = "baseline_unavailable",
-            OriginalTargetCount = 1, ExpandedTargetCount = 3, FinalTargetCount = 3,
+            Trigger = "member_reference_targets",
+            Decision = "expanded",
+            Reason = "baseline_unavailable",
+            OriginalTargetCount = 1,
+            ExpandedTargetCount = 3,
+            FinalTargetCount = 3,
         };
         _writer.SetMeta(key, JsonSerializer.Serialize(valid, StatusMetadataJsonContext.Default.CSharpWorkspaceExpansion));
         Assert.Equal(3, _reader.GetStatus().LastIndexRun?.CSharpWorkspaceExpansion?.FinalTargetCount);

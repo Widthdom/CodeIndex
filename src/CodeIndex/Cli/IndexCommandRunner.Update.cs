@@ -465,8 +465,10 @@ public static partial class IndexCommandRunner
                     && !options.SymbolKindFilter.IsActive
                     && !postExtractionHooks.Value.HasHooks
                     && ExtractorPluginRegistry.GetStatusSnapshot(projectRoot) is
-                        { PluginAssemblyCount: 0, PatternConfigCount: 0, SymbolExtractorCount: 0,
-                          ReferenceExtractorCount: 0, DiagnosticCount: 0 },
+                    {
+                        PluginAssemblyCount: 0, PatternConfigCount: 0, SymbolExtractorCount: 0,
+                        ReferenceExtractorCount: 0, DiagnosticCount: 0
+                    },
                 Updated = updated,
                 Removed = removed,
                 CancellationToken = cancellationToken,
