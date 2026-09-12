@@ -2166,6 +2166,24 @@ Successful records retain captured child `stderr`. Successful single-document JS
 `result`, successful NDJSON is embedded as a stable `results` array even when it
 contains one row, and successful text remains raw `stdout`. Failures use a typed
 `error` with `error_code`, `category`, sanitized `message` / `hint`, and `scope`.
+Definition's default JSON is NDJSON: one or multiple definitions, including body
+output, appear in `results`. Single-document formats and JSON envelopes use `result`.
+Validated partial query output adds `partial_result: true` and `results` or `result`
+to an exit-11 error record, retaining rows, terminal metadata and continuation cursors.
+NDJSON also retains `--verbose` / `--profile` diagnostic records without counting them as result rows.
+The record keeps `status: "error"`, its typed `error`, exit 11 and failure accounting;
+partial output does not prove absence. For `find --all`, read the final `results`
+item (or `result.metadata.stream_terminal` for envelopes, or `result` for counts),
+check its scan/authority flags and pass `next_cursor` back with the same query and DB.
+For bounded envelopes, use outer `metadata.next_cursor` for pagination;
+`metadata.stream_terminal` retains the inner scan evidence.
+No `--include-raw-streams` is needed. Malformed or incomplete captures and partial
+formats without a recognized partial contract retain the typed-error fallback; normal
+capture and parent-output limits still apply. This also covers scoped regex find
+with origin filters when unknown origins make its rows or counts partial. Terminal
+and envelope counts are checked against retained rows so a missing row cannot be
+silently skipped by following a retained cursor.
+
 Valid child JSON errors preserve their classification and documented budget/retry
 fields by default, including `E028_RESPONSE_BUDGET_TOO_SMALL`, `requested_bytes`,
 `effective_bytes`, `minimum_required_bytes`, its known/uncertain flags and reasons,
@@ -6225,7 +6243,23 @@ stream を必要とする場合は `--json-summary` を渡します。この場�
 成功した record は捕捉した child `stderr` を保持します。成功した単一 document JSON は型付き
 `result`、成功した NDJSON は 1 row の場合も安定して `results` array に埋め込み、成功した text は
 raw `stdout` のまま保持します。失敗時は `error_code`、`category`、機密情報を除去した
-`message` / `hint`、`scope` を持つ型付き `error` を返します。有効な子 JSON エラーの分類と
+`message` / `hint`、`scope` を持つ型付き `error` を返します。
+definitionの既定JSONはNDJSONで、本文出力を含め、1件・複数件とも `results` に入ります。
+単一文書形式とJSON envelopeは `result` を使います。検証済みの部分結果は、終了コード11の
+エラーレコードに `partial_result: true` と `results` または `result` を追加し、
+結果行・終端情報・再開cursorを保持します。NDJSONでは `--verbose` / `--profile` の
+診断レコードも結果行の件数に数えず保持します。`status: "error"`、型付き `error`、終了コード11、
+失敗件数への加算は維持され、部分結果は不存在を確定する証拠にはなりません。
+`find --all` では `results` の最後の要素（envelopeなら `result.metadata.stream_terminal`、
+countなら `result`）の走査状態と確定性を確認し、同じクエリとDBに `next_cursor` を渡して再開します。
+上限付きenvelopeのページ送りには外側の `metadata.next_cursor` を使い、
+`metadata.stream_terminal` は内側の走査情報として確認してください。
+`--include-raw-streams` は不要です。不正・途中切断の出力や認識可能な部分結果の契約がない形式は
+型付きエラーへフォールバックし、通常のcapture上限と親の出力上限も適用されます。
+スコープ付き正規表現findのoriginフィルターで、判別不能なoriginにより結果行やcountが部分的になる場合も対象です。
+終端とenvelopeの件数を保持した行に照合し、cursorの再開で欠落した行を黙って飛ばさないようにします。
+
+有効な子 JSON エラーの分類と
 文書化されたサイズ上限・再試行情報は既定で保持されます。対象は `E028_RESPONSE_BUDGET_TOO_SMALL`、
 `requested_bytes`、`effective_bytes`、`minimum_required_bytes` と既知・不確実性のフラグ／理由、
 `retry`（`action`、`option`、`recommended_bytes`、`maximum_effective_bytes`、`command`）です。

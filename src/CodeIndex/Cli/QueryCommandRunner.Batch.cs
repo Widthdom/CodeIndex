@@ -281,6 +281,18 @@ public static partial class QueryCommandRunner
         }
         else
         {
+            var partialOutputKind = JsonEnvelopeWrapper.ShouldWrap(commandName, subArgs)
+                ? BatchOutputKind.JsonDocument : outputKind;
+            if (error is null
+                && exitCode == CommandExitCodes.PartialResult
+                && partialOutputKind != BatchOutputKind.Text
+                && CliCommandCatalog.IsBatchReadOnlyCommand(commandName, subArgs)
+                && BatchChildPartialResultParser.Parse(
+                    stdout, commandName, partialOutputKind == BatchOutputKind.Ndjson) is { } partialOutput)
+            {
+                payload["partial_result"] = true;
+                payload[partialOutputKind == BatchOutputKind.Ndjson ? "results" : "result"] = partialOutput;
+            }
             if (error is null
                 && (outputKind != BatchOutputKind.Text || JsonEnvelopeWrapper.ShouldWrap(commandName, subArgs))
                 && CliCommandCatalog.IsBatchReadOnlyCommand(commandName, subArgs))
@@ -428,6 +440,8 @@ public static partial class QueryCommandRunner
     {
         if (commandName == "goto")
             return BatchOutputKind.JsonDocument;
+        if (commandName is "definition" or "find" && JsonEnvelopeWrapper.ShouldWrap(commandName, args))
+            return BatchOutputKind.JsonDocument;
 
         var jsonRequested = false;
         string? jsonMode = null;
@@ -495,9 +509,16 @@ public static partial class QueryCommandRunner
             return BatchOutputKind.JsonDocument;
         }
 
-        if (commandName is "search" or "references" or "callers" or "callees" or "symbols" or "files" or "validate")
+        if (commandName is "search" or "definition" or "references" or "callers" or "callees" or "symbols" or "files" or "validate")
             return BatchOutputKind.Ndjson;
-        if (commandName == "find" && HasBatchArgument(args, "--all"))
+        if (commandName == "find"
+            && (JsonEnvelopeWrapper.HasArgument(commandName, args, "--all")
+                || JsonEnvelopeWrapper.HasArgument(commandName, args, "--origin")
+                || JsonEnvelopeWrapper.HasArgument(commandName, args, "--exclude-origin")
+                || JsonEnvelopeWrapper.HasArgument(commandName, args, "--result-kind")
+                || JsonEnvelopeWrapper.HasArgument(commandName, args, "--exclude-comments")
+                || JsonEnvelopeWrapper.HasArgument(commandName, args, "--exclude-strings")
+                || JsonEnvelopeWrapper.HasArgument(commandName, args, "--exclude-fixtures")))
             return BatchOutputKind.Ndjson;
 
         return BatchOutputKind.JsonDocument;
