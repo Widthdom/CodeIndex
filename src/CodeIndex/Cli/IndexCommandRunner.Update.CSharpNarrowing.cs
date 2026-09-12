@@ -15,6 +15,7 @@ public static partial class IndexCommandRunner
         var telemetry = context.Options.CSharpWorkspaceExpansion!;
         if (!state.CapturedContractFingerprint
             || !context.ContractNarrowingAllowed()
+            || context.ProjectMarkerFingerprint is not { } projectMarkerFingerprint
             || state.CSharpWorkspace.ContractSourceFingerprint == null
             || state.CSharpWorkspaceInputSnapshot is not { IsComplete: true } inputs
             || state.CSharpWorkspaceSnapshots == null
@@ -23,11 +24,14 @@ public static partial class IndexCommandRunner
 
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         void Add(string value) => CSharpWorkspaceContractFingerprint.Append(hash, value);
-        Add("csharp_workspace_inputs_v1");
+        Add("csharp_workspace_inputs_v2");
         // A new binary must earn its own proof, even if its public version is unchanged.
         Add(typeof(IndexCommandRunner).Module.ModuleVersionId.ToString("D"));
         Add(context.ProjectRoot);
         Add(state.CSharpWorkspace.ContractSourceFingerprint);
+        // Project markers change family scopes even when every C# path and
+        // contributing source is unchanged. This evidence has its own scan budget.
+        Add(projectMarkerFingerprint);
         Add(context.Options.MaxFileSizeBytes!.Value.ToString(CultureInfo.InvariantCulture));
         Add(context.Options.MaxSymbolsPerFile.ToString(CultureInfo.InvariantCulture));
         Add(context.Options.MaxReferencesPerFile.ToString(CultureInfo.InvariantCulture));

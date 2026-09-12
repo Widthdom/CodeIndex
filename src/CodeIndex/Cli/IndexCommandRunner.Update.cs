@@ -455,6 +455,8 @@ public static partial class IndexCommandRunner
                 ScopedCleanupHadContract = scopedCleanupHadContract,
                 HadIndexedCSharpFilesBeforeUpdate =
                     hadIndexedCSharpFilesBeforeUpdate,
+                ProjectMarkerFingerprint = currentHotspotFamilyMarkerFingerprints.TryGetValue("csharp", out var projectMarkers)
+                    && projectMarkers.IsComplete ? projectMarkers.Fingerprint : null,
                 ContractNarrowingAllowed = () => priorIndexComplete
                     && priorSymbolExtractorVersionsMatchCurrent
                     && referenceIdentityContractMatchedBeforeMutation

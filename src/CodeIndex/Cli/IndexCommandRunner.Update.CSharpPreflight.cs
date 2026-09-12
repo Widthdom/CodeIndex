@@ -19,6 +19,7 @@ public static partial class IndexCommandRunner
         internal required bool ScopedCleanupHadCSharp { get; init; }
         internal required bool ScopedCleanupHadContract { get; init; }
         internal required bool HadIndexedCSharpFilesBeforeUpdate { get; init; }
+        internal required string? ProjectMarkerFingerprint { get; init; }
         internal required Func<bool> ContractNarrowingAllowed { get; init; }
         internal required int Updated { get; init; }
         internal required int Removed { get; init; }
@@ -375,7 +376,9 @@ public static partial class IndexCommandRunner
             }
 
             AddExpandedUpdateCSharpTargets(context, state, scanResult);
-            context.Options.CSharpWorkspaceExpansion.ExpandedTargetCount = context.TargetPaths.Count;
+            context.Options.CSharpWorkspaceExpansion.ExpandedTargetCount = Math.Max(
+                context.Options.CSharpWorkspaceExpansion.OriginalTargetCount,
+                context.TargetPaths.Count);
             var prepassTimer = Stopwatch.StartNew();
             BuildExpandedUpdateCSharpWorkspace(context, state);
             context.Options.CSharpWorkspaceExpansion.WorkspacePrepassMs = prepassTimer.ElapsedMilliseconds;

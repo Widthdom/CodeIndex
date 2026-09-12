@@ -63,7 +63,7 @@ public static partial class IndexCommandRunner
         output.Stopwatch.Stop();
         var memoryTimeline = BuildMemoryTimeline(output.MemorySamples);
         WarnIfMemoryThresholdExceeded(memoryTimeline);
-        if (!output.Options.Json)
+        if (!output.Options.Json && !output.Options.Quiet)
             WriteCSharpWorkspaceExpansionSummary(output.Options.CSharpWorkspaceExpansion);
         // Detect cwd drift between option-parsing and finalize. See RunUpdateMode for the
         // rationale; the warning is informational because we already absolutized paths.

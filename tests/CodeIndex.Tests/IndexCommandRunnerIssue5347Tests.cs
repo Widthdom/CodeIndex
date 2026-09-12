@@ -236,9 +236,9 @@ public partial class IndexCommandRunnerTests
         Assert.Equal(scoped, ReadSemanticRows5347(root));
     }
 
-    private static string[] ReadSemanticRows5347(string root)
+    private static string[] ReadSemanticRows5347(string root, string databaseFileName = "codeindex.db")
     {
-        using var db = new DbContext(DbOpenIntent.WriteIndex, Path.Combine(root, ".cdidx", "codeindex.db"));
+        using var db = new DbContext(DbOpenIntent.WriteIndex, Path.Combine(root, ".cdidx", databaseFileName));
         var rows = new List<string>();
         foreach (var sql in new[]
         {
