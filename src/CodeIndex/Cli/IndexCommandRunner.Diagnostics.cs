@@ -133,7 +133,8 @@ public static partial class IndexCommandRunner
         IndexMemoryTimelineJsonResult? memoryTimeline,
         IReadOnlyList<string>? diagnostics,
         ReferenceExtractionCapHitSummary? referenceExtractionCapHits,
-        IReadOnlyList<string>? indexIncompleteReasons)
+        IReadOnlyList<string>? indexIncompleteReasons,
+        CSharpWorkspaceExpansion? csharpExpansion = null)
     {
         writer.SetMetaValues(
             (DbContext.LastIndexRunModeMetaKey, mode),
@@ -151,6 +152,10 @@ public static partial class IndexCommandRunner
                 ? null
                 : JsonSerializer.Serialize(referenceExtractionCapHits, StatusMetadataJsonContext.Default.ReferenceExtractionCapHitSummary)),
             (DbContext.LastIndexRunRebuildReclaimMetaKey, null),
+            (DbContext.LastIndexRunCSharpWorkspaceExpansionMetaKey, csharpExpansion == null
+                ? null
+                : JsonSerializer.Serialize(csharpExpansion, StatusMetadataJsonContext.Default.CSharpWorkspaceExpansion)),
+            (DbContext.CSharpWorkspaceContractBaselineMetaKey, null),
             (DbContext.LastIndexRunPeakMemoryMbMetaKey, memoryTimeline == null
                 ? null
                 : (memoryTimeline.PeakWorkingSetBytes / (1024 * 1024)).ToString(System.Globalization.CultureInfo.InvariantCulture)));

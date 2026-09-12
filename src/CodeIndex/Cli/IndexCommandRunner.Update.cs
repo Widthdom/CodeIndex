@@ -98,6 +98,13 @@ public static partial class IndexCommandRunner
         // static-interface refresh が全 C# を追加しても、rename cleanup / changed-between
         // purge の計画対象は caller が選んだ path のまま固定する。
         var originalTargetPaths = targetPaths.ToArray();
+        var csharpExpansion = new CSharpWorkspaceExpansion
+        {
+            OriginalTargetCount = targetPaths.Count,
+            ExpandedTargetCount = targetPaths.Count,
+            FinalTargetCount = targetPaths.Count,
+        };
+        options.CSharpWorkspaceExpansion = csharpExpansion;
 
         var typeScriptJavaScriptConfigChanged = ContainsJavaScriptTypeScriptConfigPath(targetPaths);
         var extractorConfigurationChanged = ContainsExtractorConfigurationPath(projectRoot, targetPaths);
@@ -109,6 +116,9 @@ public static partial class IndexCommandRunner
             || extractorConfigurationChanged
             || ambiguousLanguageProjectMarkerChanged)
         {
+            csharpExpansion.Decision = "full_scan";
+            csharpExpansion.Trigger = csharpExpansion.Reason = priorScopedUpdateRequiresFullScan
+                ? "prior_partial_index" : "configuration_changed";
             if (extractorConfigurationChanged)
                 ExtractorPluginRegistry.ReloadPatternConfigsForProjectRoot(projectRoot);
 
@@ -445,6 +455,20 @@ public static partial class IndexCommandRunner
                 ScopedCleanupHadContract = scopedCleanupHadContract,
                 HadIndexedCSharpFilesBeforeUpdate =
                     hadIndexedCSharpFilesBeforeUpdate,
+                ContractNarrowingAllowed = () => priorIndexComplete
+                    && priorSymbolExtractorVersionsMatchCurrent
+                    && referenceIdentityContractMatchedBeforeMutation
+                    && csharpSymbolNameContractMatchesCurrent
+                    && priorMetadataTargetCsharpMatchesCurrent
+                    && projectRootWritten
+                    && !options.SymbolsOnly
+                    && !options.SymbolKindFilter.IsActive
+                    && !postExtractionHooks.Value.HasHooks
+                    && ExtractorPluginRegistry.GetStatusSnapshot(projectRoot) is
+                    {
+                        PluginAssemblyCount: 0, PatternConfigCount: 0, SymbolExtractorCount: 0,
+                        ReferenceExtractorCount: 0, DiagnosticCount: 0
+                    },
                 Updated = updated,
                 Removed = removed,
                 CancellationToken = cancellationToken,
@@ -496,6 +520,9 @@ public static partial class IndexCommandRunner
             });
         if (csharpMutationGuard.InputSnapshotFailurePath != null)
         {
+            csharpExpansion.Decision = "deferred";
+            csharpExpansion.Reason = "incomplete_workspace";
+            csharpExpansion.FinalTargetCount = 0;
             return WriteUpdateSnapshotFailure(
                 csharpMutationGuard.InputSnapshotFailurePath,
                 new UpdateSnapshotFailureContext
@@ -538,6 +565,18 @@ public static partial class IndexCommandRunner
         csharpWorkspaceSnapshots =
             csharpMutationGuard.CSharpWorkspaceSnapshots;
         csharpWorkspace = csharpMutationGuard.CSharpWorkspace;
+        if (deferCSharpMutationsForIncompleteWorkspace)
+        {
+            csharpExpansion.Decision = "deferred";
+            csharpExpansion.Reason = "incomplete_workspace";
+        }
+        else if (csharpPreflight.CanNarrowTargets && targetPaths.Count > originalTargetPaths.Length)
+        {
+            targetPaths.Clear();
+            targetPaths.UnionWith(originalTargetPaths);
+            csharpExpansion.Decision = "narrowed";
+        }
+        csharpExpansion.FinalTargetCount = targetPaths.Count;
 
         bool TryValidateCSharpWorkspaceInputSnapshot(
             out string? changedPath)
@@ -572,6 +611,7 @@ public static partial class IndexCommandRunner
         using var referenceGraphRefresh = writer.BeginReferenceGraphRefreshScope();
         using var hotspotAggregateRefresh = writer.BeginDeferredHotspotReferenceAggregateRefresh();
         mutationPhaseStarted = true;
+        writer.SetMeta(DbContext.CSharpWorkspaceContractBaselineMetaKey, null);
         // Preflight errors are recorded before the scan barrier, where readiness writes are
         // forbidden. Once that barrier succeeds, demote before recovery/evidence or the
         // later partial-run metadata could leave Issues/Fold readiness falsely authoritative.
@@ -1002,7 +1042,15 @@ public static partial class IndexCommandRunner
                 memoryTimelineForStamp,
                 indexRunDiagnostics,
                 writer.GetReferenceExtractionCapHits(issuesTableAvailableAfter),
-                writer.GetPersistedIndexOmissionReasons());
+                writer.GetPersistedIndexOmissionReasons(),
+                csharpExpansion);
+            if (!csharpWorkspaceDriftDetected
+                && !deferCSharpMutationsForIncompleteWorkspace
+                && csharpPreflight.ContractBaselineFingerprint is { } contractFingerprint)
+            {
+                writer.SetMeta(DbContext.CSharpWorkspaceContractBaselineMetaKey,
+                    BuildCSharpContractBaseline(runStartedAtUtc.ToString("o", System.Globalization.CultureInfo.InvariantCulture), contractFingerprint));
+            }
             successMetadataTxn.Commit();
         }
         return WriteUpdateFinalOutput(new UpdateFinalOutputContext

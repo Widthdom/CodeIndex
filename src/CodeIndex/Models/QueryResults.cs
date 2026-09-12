@@ -2397,6 +2397,9 @@ public sealed class StatusPreparedCommandCache
 
 public sealed class StatusLastIndexRun
 {
+    [JsonPropertyName("csharp_workspace_expansion")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public CSharpWorkspaceExpansion? CSharpWorkspaceExpansion { get; set; }
     public string? Mode { get; set; }
     [JsonPropertyName("started_at")]
     public DateTime? StartedAt { get; set; }
@@ -2545,6 +2548,7 @@ public sealed class StatusIndexFileError
 [JsonSerializable(typeof(List<StatusIndexFileError>))]
 [JsonSerializable(typeof(ReferenceExtractionCapHitSummary))]
 [JsonSerializable(typeof(StatusRebuildReclaim))]
+[JsonSerializable(typeof(CSharpWorkspaceExpansion))]
 internal sealed partial class StatusMetadataJsonContext : JsonSerializerContext
 {
 }

@@ -224,16 +224,26 @@ public sealed class OriginContinuationIssue5348Tests
         var writer = new DbWriter(db.Connection);
         var fileId = writer.UpsertFile(new FileRecord
         {
-            Path = "src/a.cs", Lang = "csharp", Lines = 129, Size = 129,
-            Modified = DateTime.UtcNow, Checksum = "overlap",
+            Path = "src/a.cs",
+            Lang = "csharp",
+            Lines = 129,
+            Size = 129,
+            Modified = DateTime.UtcNow,
+            Checksum = "overlap",
         });
         writer.InsertChunks(Enumerable.Range(1, 128).Select(line => new ChunkRecord
         {
-            FileId = fileId, ChunkIndex = line - 1, StartLine = line, EndLine = line,
+            FileId = fileId,
+            ChunkIndex = line - 1,
+            StartLine = line,
+            EndLine = line,
             Content = line == 128 ? "/*" : "",
         }).Append(new ChunkRecord
         {
-            FileId = fileId, ChunkIndex = 128, StartLine = 128, EndLine = 129,
+            FileId = fileId,
+            ChunkIndex = 128,
+            StartLine = 128,
+            EndLine = 129,
             Content = "// changed\nNeedle();",
         }).ToList());
         var conflicting = reader.CountFindInFiles("Needle", regex: true, semanticFilters: new(["code"], [], []));
@@ -271,12 +281,19 @@ public sealed class OriginContinuationIssue5348Tests
         var writer = new DbWriter(db.Connection);
         var id = writer.UpsertFile(new FileRecord
         {
-            Path = "src/a.cs", Lang = "csharp", Lines = lines.Length, Size = string.Join('\n', lines).Length,
-            Modified = DateTime.UtcNow, Checksum = "fixture",
+            Path = "src/a.cs",
+            Lang = "csharp",
+            Lines = lines.Length,
+            Size = string.Join('\n', lines).Length,
+            Modified = DateTime.UtcNow,
+            Checksum = "fixture",
         });
         writer.InsertChunks(Enumerable.Range(0, (lines.Length + 79) / 80).Select(index => new ChunkRecord
         {
-            FileId = id, ChunkIndex = index, StartLine = index * 80 + 1, EndLine = Math.Min(lines.Length, (index + 1) * 80),
+            FileId = id,
+            ChunkIndex = index,
+            StartLine = index * 80 + 1,
+            EndLine = Math.Min(lines.Length, (index + 1) * 80),
             Content = string.Join('\n', lines.Skip(index * 80).Take(80)),
         }).ToList());
     }

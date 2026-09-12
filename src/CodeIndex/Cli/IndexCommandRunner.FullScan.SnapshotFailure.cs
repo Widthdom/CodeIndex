@@ -105,6 +105,7 @@ public static partial class IndexCommandRunner
         {
             CommandOutputWriter.WriteLine(JsonSerializer.Serialize(new IndexFullScanJsonResult
             {
+                CSharpWorkspaceExpansion = failure.Options.CSharpWorkspaceExpansion,
                 Status = "partial",
                 Mode = failure.Options.Rebuild ? "rebuild" : "incremental",
                 UnknownExtensionFileCount = failure.UnknownExtensionFiles.Count,

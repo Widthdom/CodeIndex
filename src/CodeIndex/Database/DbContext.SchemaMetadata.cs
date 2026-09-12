@@ -173,6 +173,8 @@ public partial class DbContext : IDisposable
     public const string LastIndexRunDiagnosticsTruncatedMetaKey = "last_index_run_diagnostics_truncated";
     public const string LastIndexRunReferenceExtractionCapHitsMetaKey = "last_index_run_reference_extraction_cap_hits_json";
     public const string LastIndexRunRebuildReclaimMetaKey = "last_index_run_rebuild_reclaim_json";
+    public const string LastIndexRunCSharpWorkspaceExpansionMetaKey = "last_index_run_csharp_workspace_expansion_json";
+    internal const string CSharpWorkspaceContractBaselineMetaKey = "csharp_workspace_contract_baseline";
     public const int LastIndexRunDiagnosticSampleLimit = 50;
     public const string LastFailedIndexRunStatusMetaKey = "last_failed_index_run_status";
     public const string LastFailedIndexRunModeMetaKey = "last_failed_index_run_mode";
