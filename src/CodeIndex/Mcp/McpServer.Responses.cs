@@ -544,7 +544,7 @@ public partial class McpServer : IDisposable
             "map" => new JsonObject { ["limit"] = 5, ["excludeTests"] = true },
             "analyze_symbol" => new JsonObject { ["query"] = "Run", ["includeBody"] = true },
             "impact_analysis" => new JsonObject { ["query"] = "Run", ["maxHops"] = 2, ["withPaths"] = true },
-            "status" => new JsonObject(),
+            "status" => new JsonObject { ["explainField"] = "index_complete", ["format"] = "compact" },
             "outline" => new JsonObject { ["path"] = "src/app.cs" },
             "deps" => new JsonObject { ["path"] = "src/", ["reverse"] = false, ["limit"] = 10 },
             "languages" => new JsonObject(),

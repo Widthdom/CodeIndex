@@ -26,7 +26,7 @@ public partial class McpServer
         "read_resource" => new HashSet<string>(StringComparer.Ordinal) { "uri", "startLine", "endLine", "maxBytes", "cursor", "includeGenerated" },
         "map" => new HashSet<string>(StringComparer.Ordinal) { "limit", "lang", "path", "excludePaths", "excludeTests", "sections", "depth", "minEntrypointConfidence", "project", "solution" },
         "analyze_symbol" => new HashSet<string>(StringComparer.Ordinal) { "query", "lang", "limit", "cursor", "includeBody", "path", "excludePaths", "excludeTests", "includeGenerated", "exactName", "exact", "maxLineWidth", "countOnly", "format", "project", "solution" },
-        "status" => new HashSet<string>(StringComparer.Ordinal) { "check", "scopes", "staleAfterSeconds", "explain", "config", "logPath", "updateCheck", "format", "fields" },
+        "status" => new HashSet<string>(StringComparer.Ordinal) { "check", "scopes", "staleAfterSeconds", "explain", "explainField", "maxBytes", "config", "logPath", "updateCheck", "format", "fields" },
         "outline" => new HashSet<string>(StringComparer.Ordinal) { "path", "fields", "sort", "limit", "cursor", "maxBytes" },
         "batch_query" => new HashSet<string>(StringComparer.Ordinal) { "queries", "maxResponseBytes", "estimateOnly" },
         "deps" => new HashSet<string>(StringComparer.Ordinal) { "path", "reverse", "format", "cycles", "lang", "limit", "graphBudget", "cursor", "resolutionStates", "referenceKinds", "suppressNoise", "summaryOnly", "includeAllCycleNodes", "groupPartialTypes", "nodeMappings", "cycleNode", "nodeGeneration", "mappingCursor", "maxBytes", "excludePaths", "excludeTests", "includeGenerated", "project", "solution" },
