@@ -17,6 +17,7 @@ internal sealed partial class LspServer : IDisposable
             case "textDocument/hover":
             case "textDocument/completion":
             case "textDocument/documentHighlight":
+            case "textDocument/prepareCallHierarchy":
                 _ = ReadRequiredLspPosition(root, "params", "position");
                 break;
             case "textDocument/inlayHint":

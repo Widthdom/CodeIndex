@@ -3628,6 +3628,9 @@ MCP stdio is line protocol: send one compact UTF-8 JSON-RPC object per LF-delimi
 
 ### LSP Server (for LSP-native editors)
 
+Indexed call hierarchy is available through the standard prepare/incoming/outgoing
+methods. See [supported languages, error behavior and limits](docs/lsp-call-hierarchy.md#english).
+
 `cdidx lsp --db .cdidx/codeindex.db` starts a read-only Language Server Protocol
 server over stdio. It reuses the existing CodeIndex database and exposes
 `initialize`, `workspace/symbol`, `textDocument/documentSymbol`,
@@ -7698,6 +7701,8 @@ request は JSON-RPC `-32002`（`Server not initialized`）を返します。重
 `textDocument/inlayHint` は end position を含まない requested LSP range を尊重し、
 indexed return type が symbol name の直前にすでに明記されている場合は type label を
 省略するため、field / property / method の明示型を hint として重複表示しません。
+標準の準備・呼び出し元・呼び出し先メソッドによるコール階層に対応しています。
+[対象言語・エラー動作・上限](docs/lsp-call-hierarchy.md#日本語)を参照してください。
 未実装の optional LSP method は advertise しません。現在の support matrix では
 `textDocument/prepareRename`、`textDocument/rename`、`textDocument/foldingRange`、
 `textDocument/selectionRange`、`textDocument/signatureHelp` は JSON-RPC `-32601`

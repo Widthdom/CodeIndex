@@ -1,5 +1,12 @@
 # Developer Guide
 
+## LSP call hierarchy (#5351)
+
+`LspServer.CallHierarchy.cs` adapts persisted call identities to standard LSP items;
+`DbReader.CallHierarchy.cs` retains individual sites rather than grouped display rows.
+Preserve generation checks, cancellation, checksum verification and explicit failure
+when evidence or budgets cannot support the result. See [the contract](docs/lsp-call-hierarchy.md#english).
+
 ## C# scoped-update expansion (#5347)
 
 See [C# update scope diagnostics](docs/csharp-update-expansion.md#english) for the
@@ -4559,6 +4566,13 @@ For symmetry, the MCP server no longer echoes raw `Exception.Message` content in
 ---
 
 <a id="開発者ガイド"></a>
+
+### LSPコール階層 (#5351)
+
+`LspServer.CallHierarchy.cs` は永続化済みの呼び出し識別情報を標準LSP項目へ変換し、
+`DbReader.CallHierarchy.cs` は表示用の集約行ではなく個々の呼び出し箇所を返します。
+世代確認、キャンセル、チェックサム検証を維持し、証拠や上限の制約で結果を保証できない
+場合は明示的に失敗させてください。[契約](docs/lsp-call-hierarchy.md#日本語)を参照してください。
 
 名前付きクエリの行選択（#5325）は、各クエリの固定 10,000 候補をフィルター・重複排除した後、
 `ApplySearchOutputSelection` を独立に利用します。重複排除前の候補上限到達は
