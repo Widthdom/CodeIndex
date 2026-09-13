@@ -22,43 +22,43 @@ public partial class McpServerTests
         Assert.Equal(new[] { "freshness", "readiness", "all" }, tool["inputSchema"]!["properties"]!["explain"]!["enum"]!.AsArray().Select(v => v!.GetValue<string>()));
         var schema = tool["outputSchema"]!.AsObject();
         foreach (var field in new[] { "index_complete", "db_pragma_settings.busy_timeout_ms", " INDEX_COMPLETE ", "Index generation completeness", "DB_PRAGMA_SETTINGS.BUSY_TIMEOUT_MS" })
-        foreach (var mode in new[] { "full", "compact", "bounded" })
-        {
-            var args = new JsonObject { ["explainField"] = field, ["format"] = mode == "compact" ? "compact" : "full" };
-            var cliArgs = new List<string> { "status", "--explain", field, "--json" };
-            if (mode == "compact") cliArgs.Add("--compact");
-            if (mode == "bounded")
+            foreach (var mode in new[] { "full", "compact", "bounded" })
             {
-                args["maxBytes"] = 8192;
-                cliArgs.AddRange(["--max-json-bytes", "8192"]);
+                var args = new JsonObject { ["explainField"] = field, ["format"] = mode == "compact" ? "compact" : "full" };
+                var cliArgs = new List<string> { "status", "--explain", field, "--json" };
+                if (mode == "compact") cliArgs.Add("--compact");
+                if (mode == "bounded")
+                {
+                    args["maxBytes"] = 8192;
+                    cliArgs.AddRange(["--max-json-bytes", "8192"]);
+                }
+                var response = CallStatusExplanation(server, args);
+                Assert.Null(response["error"]);
+                Assert.Null(response["result"]!["isError"]);
+                var payload = response["result"]!["structuredContent"]!;
+                Assert.True(MatchesSchema(payload, schema, schema), payload.ToJsonString());
+                var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() => ProgramRunner.Run(cliArgs.ToArray(), options, "1.0.0-test"));
+                Assert.True(exitCode == 0, $"{field}/{mode}: {stdout}{stderr}");
+                Assert.Empty(stderr);
+                var cli = JsonNode.Parse(stdout)!;
+                var row = mode == "full" ? payload : Assert.Single(payload["results"]!.AsArray())!;
+                var cliRow = mode == "full" ? cli : Assert.Single(cli["results"]!.AsArray())!;
+                foreach (var property in cliRow.AsObject())
+                    Assert.True(JsonNode.DeepEquals(property.Value, row[property.Key]), $"{field}/{mode}: {property.Key}");
+                if (mode != "full")
+                {
+                    Assert.Equal(ProjectionFieldRegistry.GetStatusExplainCompactFields(), row.AsObject().Select(p => p.Key));
+                    foreach (var property in payload["metadata"]!.AsObject())
+                        Assert.True(JsonNode.DeepEquals(property.Value, cli["metadata"]![property.Key]), property.Key);
+                }
+                if (mode == "bounded") Assert.True(Encoding.UTF8.GetByteCount(payload.ToJsonString()) + 1 <= 8192);
+                foreach (var key in new[] { "db_path", "project_root", "elapsed_ms", "indexed_at_head_sha", "result_stable_at", "mcp_session", "sqlite_diagnostics", "version" })
+                {
+                    Assert.Null(payload[key]);
+                    Assert.Null(payload["metadata"]?[key]);
+                }
+                Assert.DoesNotContain(missingDb, response.ToJsonString(), StringComparison.Ordinal);
             }
-            var response = CallStatusExplanation(server, args);
-            Assert.Null(response["error"]);
-            Assert.Null(response["result"]!["isError"]);
-            var payload = response["result"]!["structuredContent"]!;
-            Assert.True(MatchesSchema(payload, schema, schema), payload.ToJsonString());
-            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() => ProgramRunner.Run(cliArgs.ToArray(), options, "1.0.0-test"));
-            Assert.True(exitCode == 0, $"{field}/{mode}: {stdout}{stderr}");
-            Assert.Empty(stderr);
-            var cli = JsonNode.Parse(stdout)!;
-            var row = mode == "full" ? payload : Assert.Single(payload["results"]!.AsArray())!;
-            var cliRow = mode == "full" ? cli : Assert.Single(cli["results"]!.AsArray())!;
-            foreach (var property in cliRow.AsObject())
-                Assert.True(JsonNode.DeepEquals(property.Value, row[property.Key]), $"{field}/{mode}: {property.Key}");
-            if (mode != "full")
-            {
-                Assert.Equal(ProjectionFieldRegistry.GetStatusExplainCompactFields(), row.AsObject().Select(p => p.Key));
-                foreach (var property in payload["metadata"]!.AsObject())
-                    Assert.True(JsonNode.DeepEquals(property.Value, cli["metadata"]![property.Key]), property.Key);
-            }
-            if (mode == "bounded") Assert.True(Encoding.UTF8.GetByteCount(payload.ToJsonString()) + 1 <= 8192);
-            foreach (var key in new[] { "db_path", "project_root", "elapsed_ms", "indexed_at_head_sha", "result_stable_at", "mcp_session", "sqlite_diagnostics", "version" })
-            {
-                Assert.Null(payload[key]);
-                Assert.Null(payload["metadata"]?[key]);
-            }
-            Assert.DoesNotContain(missingDb, response.ToJsonString(), StringComparison.Ordinal);
-        }
         Assert.False(Directory.Exists(Path.GetDirectoryName(missingDb)));
     }
 
@@ -170,7 +170,9 @@ public partial class McpServerTests
         var directError = CallStatusExplanation(server, args)["result"]!["structuredContent"]!;
         var request = new JsonObject
         {
-            ["jsonrpc"] = "2.0", ["id"] = 5352, ["method"] = "tools/call",
+            ["jsonrpc"] = "2.0",
+            ["id"] = 5352,
+            ["method"] = "tools/call",
             ["params"] = new JsonObject
             {
                 ["name"] = "batch_query",
@@ -236,7 +238,9 @@ public partial class McpServerTests
     private static JsonObject CreateStatusExplanationRequest(JsonObject args, int id = 5352)
         => new()
         {
-            ["jsonrpc"] = "2.0", ["id"] = id, ["method"] = "tools/call",
+            ["jsonrpc"] = "2.0",
+            ["id"] = id,
+            ["method"] = "tools/call",
             ["params"] = new JsonObject { ["name"] = "status", ["arguments"] = args.DeepClone() },
         };
 }
