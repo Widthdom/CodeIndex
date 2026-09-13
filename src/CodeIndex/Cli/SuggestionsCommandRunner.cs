@@ -11,7 +11,7 @@ namespace CodeIndex.Cli;
 
 internal static partial class SuggestionsCommandRunner
 {
-    private const string Usage = "Usage: cdidx suggestions [list|show|export|add|update|delete] [id|description] [--db <path>] [--json] [--description <text>] [--context <text>] [--title <text>] [--evidence-path <path>] [--status <all|draft|submitted_pending_triage|open_in_upstream|resolved_in_upstream|wont_fix|duplicate|superseded|submitted|unsubmitted>] [--actor <name>] [--reason <text>] [--language <lang>] [--category <category>] [--since <datetime>] [--agent <name>] [--query <text>] [--count|--summary-only|--compact] [--max-json-bytes <n>] [--limit <n>] [--offset <n>] [--format <json|markdown|issue-drafts>] [--output <path>] [--overwrite] [--open-issues <path|github|github:owner/name>] [--repo <owner/name>] [--issue-state <open|closed|all>] [--duplicate-confidence <low|medium|high>|--duplicate-threshold <score>]";
+    private const string Usage = "Usage: cdidx suggestions [list|show|export|add|update|link|delete] [id|description] [--db <path>] [--json] [--description <text>] [--context <text>] [--title <text>] [--evidence-path <path>] [--status <all|draft|submitted_pending_triage|open_in_upstream|resolved_in_upstream|wont_fix|duplicate|superseded|submitted|unsubmitted>] [--actor <name>] [--reason <text>] [--language <lang>] [--category <category>] [--since <datetime>] [--agent <name>] [--query <text>] [--count|--summary-only|--compact] [--max-json-bytes <n>] [--limit <n>] [--offset <n>] [--format <json|markdown|issue-drafts>] [--output <path>] [--overwrite] [--open-issues <path|github|github:owner/name>] [--repo <owner/name>] [--issue <number-or-url>] [--issue-state <open|closed|all>] [--duplicate-confidence <low|medium|high>|--duplicate-threshold <score>]";
     internal const int MaxOpenIssuesJsonBytes = IssueDuplicatePreflight.MaxOpenIssuesJsonBytes;
     internal const int MaxOpenIssuesJsonDepth = IssueDuplicatePreflight.MaxOpenIssuesJsonDepth;
     internal const int MaxSuggestionExportTextFieldLength = 4096;
@@ -126,8 +126,10 @@ internal static partial class SuggestionsCommandRunner
             return WriteUsageError("--duplicate-confidence and --duplicate-threshold can only be used with `suggestions export --format issue-drafts`.", options.Json, jsonOptions);
         if (options.OpenIssuesPath != null && (verb != "export" || options.ExportFormat != "issue-drafts"))
             return WriteUsageError("--open-issues can only be used with `suggestions export --format issue-drafts`.", options.Json, jsonOptions);
-        if (options.OpenIssuesRepository != null && (verb != "export" || options.ExportFormat != "issue-drafts"))
-            return WriteUsageError("--repo can only be used with `suggestions export --format issue-drafts --open-issues github`.", options.Json, jsonOptions);
+        if (options.OpenIssuesRepository != null && verb != "link" && (verb != "export" || options.ExportFormat != "issue-drafts"))
+            return WriteUsageError("--repo can only be used with `suggestions link` or `suggestions export --format issue-drafts --open-issues github`.", options.Json, jsonOptions);
+        if (options.Issue != null && verb != "link")
+            return WriteUsageError("--issue can only be used with `suggestions link`.", options.Json, jsonOptions);
         if (options.IssueStateSpecified
             && (verb != "export" || options.ExportFormat != "issue-drafts" || !IssueDuplicatePreflight.IsGitHubOpenIssuesSource(options.OpenIssuesPath)))
             return WriteUsageError("--issue-state can only be used with `suggestions export --format issue-drafts --open-issues github`.", options.Json, jsonOptions);
@@ -139,8 +141,8 @@ internal static partial class SuggestionsCommandRunner
             return WriteUsageError("--output can only be used with `suggestions export --format markdown` or `suggestions export --format issue-drafts`.", options.Json, jsonOptions);
         if (options.Overwrite && options.OutputPath == null)
             return WriteUsageError("--overwrite requires --output <path>.", options.Json, jsonOptions);
-        if ((options.ActorSpecified || options.ReasonSpecified) && (verb != "update" || !options.StatusSpecified))
-            return WriteUsageError("--actor and --reason can only be used with `suggestions update <id> --status <state>`.", options.Json, jsonOptions);
+        if ((options.ActorSpecified || options.ReasonSpecified) && verb != "link" && (verb != "update" || !options.StatusSpecified))
+            return WriteUsageError("--actor and --reason can only be used with `suggestions link` or `suggestions update <id> --status <state>`.", options.Json, jsonOptions);
         if (verb == "export"
             && options.Json
             && options.ExportFormat == "markdown"
@@ -162,6 +164,8 @@ internal static partial class SuggestionsCommandRunner
             databasePath = storeContext.DatabasePath;
             if (verb == "add")
                 return RunAdd(store, options, jsonOptions);
+            if (verb == "link")
+                return RunLink(store, options, jsonOptions);
             if (verb == "update")
                 return RunUpdate(store, store.LoadAll(), options, jsonOptions);
             if (verb == "delete")
@@ -275,7 +279,7 @@ internal static partial class SuggestionsCommandRunner
             return WriteUsageError("A status transition cannot be combined with query or export options.", options.Json, jsonOptions);
         if (!TryParseLifecycleStatus(options.Status, out var targetStatus))
             return WriteUsageError(
-                "--status for `suggestions update` must be one of draft, open_in_upstream, resolved_in_upstream, wont_fix, duplicate, or superseded; submitted_pending_triage is managed by GitHub submission.",
+                "--status for `suggestions update` must be one of draft, open_in_upstream, resolved_in_upstream, wont_fix, duplicate, or superseded; submitted_pending_triage is managed by GitHub submission or explicit issue linking.",
                 options.Json,
                 jsonOptions);
 
@@ -377,7 +381,7 @@ internal static partial class SuggestionsCommandRunner
             $"Invalid suggestion status transition from {GetStatus(record)} to {ToSnakeCase(targetStatus)}.",
             CommandExitCodes.UsageError,
             targetStatus is SuggestionStatus.OpenInUpstream or SuggestionStatus.ResolvedInUpstream
-                ? "Upstream lifecycle states require a stored upstream issue URL or number; submitted_pending_triage is set only by successful GitHub submission."
+                ? "Upstream lifecycle states require a stored upstream issue URL or number; submitted_pending_triage is set by successful GitHub submission or explicit issue linking."
                 : "Choose a different lifecycle state; repeating the current state is not a transition.",
             category: "invalid_status_transition");
 
@@ -557,6 +561,13 @@ internal static partial class SuggestionsCommandRunner
             Console.WriteLine($"upstream_url: {record.UpstreamUrl}");
         if (record.UpstreamIssueNumber != null)
             Console.WriteLine($"upstream_issue_number: {record.UpstreamIssueNumber}");
+        if (record.UpstreamAssociation is { } association)
+        {
+            Console.WriteLine($"upstream_repository: {association.Repository}");
+            Console.WriteLine($"upstream_association: {association.Provenance} ({association.Verification})");
+            Console.WriteLine($"upstream_linked_at: {association.LinkedAt:O}");
+            Console.WriteLine($"upstream_linked_by: {association.LinkedBy}");
+        }
         var evidencePaths = NormalizeEvidencePaths(record);
         if (evidencePaths.Count > 0)
         {
@@ -972,7 +983,8 @@ internal static partial class SuggestionsCommandRunner
         record.PreviousStatus == null ? null : ToSnakeCase(record.PreviousStatus.Value),
         record.StatusChangedAt,
         record.StatusChangedBy,
-        record.StatusChangeReason);
+        record.StatusChangeReason,
+        record.UpstreamAssociation);
 
     private static SuggestionDetailJsonResult ToDetail(SuggestionRecord record) => ToDetail(record, capTextFields: false);
 
@@ -1011,7 +1023,8 @@ internal static partial class SuggestionsCommandRunner
         record.PreviousStatus == null ? null : ToSnakeCase(record.PreviousStatus.Value),
         record.StatusChangedAt,
         record.StatusChangedBy,
-        BoundSuggestionOutputValue(record.StatusChangeReason, capTextFields));
+        BoundSuggestionOutputValue(record.StatusChangeReason, capTextFields),
+        record.UpstreamAssociation);
 
     private static SuggestionIssueDraftJsonResult ToIssueDraft(SuggestionRecord record, IssueDuplicatePreflight preflight, Options options)
     {
@@ -1045,11 +1058,19 @@ internal static partial class SuggestionsCommandRunner
                 record.PreviousStatus == null ? null : ToSnakeCase(record.PreviousStatus.Value),
                 record.StatusChangedAt,
                 record.StatusChangedBy,
-                BoundSuggestionOutputValue(record.StatusChangeReason, capTextFields: true)),
+                BoundSuggestionOutputValue(record.StatusChangeReason, capTextFields: true),
+                record.UpstreamUrl,
+                record.UpstreamIssueNumber,
+                record.UpstreamAssociation),
             new SuggestionIssueDraftDuplicatePreflightJsonResult(
                 preflight.Checked,
                 duplicateMatches.Count,
-                duplicateMatches));
+                duplicateMatches)
+            {
+                AlreadyPublished = IsSubmitted(record),
+                UpstreamUrl = record.UpstreamUrl,
+                UpstreamIssueNumber = record.UpstreamIssueNumber,
+            });
     }
 
     private static IssueDraftTriageMetadataJsonResult BuildSuggestionIssueDraftTriage(
@@ -1073,7 +1094,9 @@ internal static partial class SuggestionsCommandRunner
             severity,
             confidence,
             evidencePaths.Count,
-            BuildSuggestionIssueDraftDuplicateGuidance(duplicatePreflightChecked, duplicateMatchCount));
+            IsSubmitted(record)
+                ? $"Already published{(record.UpstreamUrl == null ? string.Empty : " at " + record.UpstreamUrl)}; use the existing issue and do not file again. Remote state is not implied by the local association."
+                : BuildSuggestionIssueDraftDuplicateGuidance(duplicatePreflightChecked, duplicateMatchCount));
     }
 
     private static string BuildSuggestionIssueDraftDuplicateGuidance(bool duplicatePreflightChecked, int duplicateMatchCount)
@@ -1233,6 +1256,13 @@ internal static partial class SuggestionsCommandRunner
                 sb.AppendLine($"- upstream_url: {record.UpstreamUrl}");
             if (record.UpstreamIssueNumber != null)
                 sb.AppendLine($"- upstream_issue_number: `{record.UpstreamIssueNumber}`");
+            if (record.UpstreamAssociation is { } association)
+            {
+                sb.AppendLine($"- upstream_repository: `{association.Repository}`");
+                sb.AppendLine($"- upstream_association: `{association.Provenance}` (`{association.Verification}`)");
+                sb.AppendLine($"- upstream_linked_at: `{association.LinkedAt:O}`");
+                sb.AppendLine($"- upstream_linked_by: {association.LinkedBy}");
+            }
             if (record.LastSubmitAttempt != null)
                 sb.AppendLine($"- last_submit_attempt: `{record.LastSubmitAttempt:O}`");
             if (record.SubmitAttemptCount > 0)
@@ -1581,6 +1611,14 @@ internal static partial class SuggestionsCommandRunner
                     }
                     options.OpenIssuesRepository = repository;
                     break;
+                case "--issue":
+                    if (!TryReadSchemaValue("--issue", out var issue, out var issueError))
+                    {
+                        options.Error = issueError;
+                        return options;
+                    }
+                    options.Issue = issue;
+                    break;
                 case "--issue-state":
                     if (!TryReadSchemaValue("--issue-state", out var issueState, out var issueStateError))
                     {
@@ -1753,6 +1791,7 @@ internal static partial class SuggestionsCommandRunner
         public bool FormatSpecified { get; set; }
         public string? OpenIssuesPath { get; set; }
         public string? OpenIssuesRepository { get; set; }
+        public string? Issue { get; set; }
         public string IssueState { get; set; } = IssueDuplicatePreflight.DefaultIssueState;
         public bool IssueStateSpecified { get; set; }
         public string DuplicateConfidence { get; set; } = IssueDuplicatePreflight.DefaultDuplicateConfidence;
@@ -1769,7 +1808,8 @@ internal static partial class SuggestionsCommandRunner
         public bool HasPagination => Limit.HasValue || OffsetSpecified;
         public bool HasContentEditableFields => LanguageSpecified || CategorySpecified || DescriptionSpecified || ContextSpecified || TitleSpecified || EvidencePathsSpecified || AgentSpecified;
         public bool HasQueryOnlyOptions => HasQueryOnlyOptionsExceptStatus || StatusSpecified;
-        public bool HasQueryOnlyOptionsExceptStatus => HasPagination || Since != null || HasHistoryQueryProjectionOptions || FormatSpecified || OutputPath != null || Overwrite || OpenIssuesPath != null || OpenIssuesRepository != null || IssueStateSpecified || DuplicateConfidenceSpecified || DuplicateThresholdSpecified;
+        public bool HasQueryOnlyOptionsExceptStatus => HasQueryOnlyOptionsExceptStatusAndRepository || OpenIssuesRepository != null;
+        public bool HasQueryOnlyOptionsExceptStatusAndRepository => HasPagination || Since != null || HasHistoryQueryProjectionOptions || FormatSpecified || OutputPath != null || Overwrite || OpenIssuesPath != null || IssueStateSpecified || DuplicateConfidenceSpecified || DuplicateThresholdSpecified;
         public bool HasHistoryQueryProjectionOptions => Query != null || HasStructuredProjectionOptions;
         public bool HasStructuredProjectionOptions => Count || SummaryOnly || Compact || MaxJsonBytes != null;
     }
@@ -1810,7 +1850,8 @@ internal sealed record SuggestionListItemJsonResult(
     [property: JsonPropertyName("previous_status")] string? PreviousStatus,
     [property: JsonPropertyName("status_changed_at")] DateTime? StatusChangedAt,
     [property: JsonPropertyName("status_changed_by")] string? StatusChangedBy,
-    [property: JsonPropertyName("status_change_reason")] string? StatusChangeReason);
+    [property: JsonPropertyName("status_change_reason")] string? StatusChangeReason,
+    [property: JsonPropertyName("upstream_association")] SuggestionUpstreamAssociation? UpstreamAssociation = null);
 
 internal sealed record SuggestionDetailJsonResult(
     [property: JsonPropertyName("api_version")] string ApiVersion,
@@ -1845,7 +1886,8 @@ internal sealed record SuggestionDetailJsonResult(
     [property: JsonPropertyName("previous_status")] string? PreviousStatus,
     [property: JsonPropertyName("status_changed_at")] DateTime? StatusChangedAt,
     [property: JsonPropertyName("status_changed_by")] string? StatusChangedBy,
-    [property: JsonPropertyName("status_change_reason")] string? StatusChangeReason);
+    [property: JsonPropertyName("status_change_reason")] string? StatusChangeReason,
+    [property: JsonPropertyName("upstream_association")] SuggestionUpstreamAssociation? UpstreamAssociation = null);
 
 internal sealed record SuggestionExportJsonResult(
     [property: JsonPropertyName("api_version")] string ApiVersion,
@@ -1900,12 +1942,26 @@ internal sealed record SuggestionIssueDraftSourceJsonResult(
     [property: JsonPropertyName("previous_status")] string? PreviousStatus,
     [property: JsonPropertyName("status_changed_at")] DateTime? StatusChangedAt,
     [property: JsonPropertyName("status_changed_by")] string? StatusChangedBy,
-    [property: JsonPropertyName("status_change_reason")] string? StatusChangeReason);
+    [property: JsonPropertyName("status_change_reason")] string? StatusChangeReason,
+    [property: JsonPropertyName("upstream_url")] string? UpstreamUrl = null,
+    [property: JsonPropertyName("upstream_issue_number")] int? UpstreamIssueNumber = null,
+    [property: JsonPropertyName("upstream_association")] SuggestionUpstreamAssociation? UpstreamAssociation = null);
 
 internal sealed record SuggestionIssueDraftDuplicatePreflightJsonResult(
     [property: JsonPropertyName("checked")] bool Checked,
     [property: JsonPropertyName("match_count")] int MatchCount,
-    [property: JsonPropertyName("matches")] List<SuggestionIssueDraftDuplicateMatchJsonResult> Matches);
+    [property: JsonPropertyName("matches")] List<SuggestionIssueDraftDuplicateMatchJsonResult> Matches)
+{
+    [JsonPropertyName("already_published")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool AlreadyPublished { get; init; }
+    [JsonPropertyName("upstream_url")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? UpstreamUrl { get; init; }
+    [JsonPropertyName("upstream_issue_number")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? UpstreamIssueNumber { get; init; }
+}
 
 internal sealed record SuggestionIssueDraftDuplicateMatchJsonResult(
     [property: JsonPropertyName("number")] int? Number,

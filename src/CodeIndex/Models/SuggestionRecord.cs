@@ -134,6 +134,9 @@ public class SuggestionRecord
     /// <summary>Upstream GitHub Issue URL when known / 判明している場合の upstream GitHub Issue URL</summary>
     public string? UpstreamUrl { get; set; }
 
+    /// <summary>Audit evidence for an explicitly linked external issue / 明示的に関連付けた外部 Issue の監査証跡</summary>
+    public SuggestionUpstreamAssociation? UpstreamAssociation { get; set; }
+
     /// <summary>UTC timestamp of the last upstream sync / 最後に upstream と同期したUTCタイムスタンプ</summary>
     public DateTime? LastSyncedAt { get; set; }
 
@@ -187,4 +190,18 @@ public class SuggestionRecord
         "feature_request",
         "other"
     };
+}
+
+/// <summary>Local association evidence, independent of submission and resolution / 投稿・解決とは独立したローカル関連付けの証跡</summary>
+public sealed record SuggestionUpstreamAssociation(
+    [property: JsonPropertyName("repository")] string Repository,
+    [property: JsonPropertyName("linked_at")] DateTime LinkedAt,
+    [property: JsonPropertyName("linked_by")] string LinkedBy,
+    [property: JsonPropertyName("reason")] string? Reason)
+{
+    [JsonPropertyName("provenance")]
+    public string Provenance => "manual_external";
+
+    [JsonPropertyName("verification")]
+    public string Verification => "not_performed";
 }

@@ -631,6 +631,16 @@ internal static class CliFlagSchema
             new() { Name = "--open-issues", ValuePlaceholder = "<path|github|github:owner/name>", ValueKind = CliOptionValueKind.FilePath, SupplementalCompletionValues = ["github"], Description = "Preflight issue drafts against issue JSON or GitHub issues", PrimaryCommands = Set("search", "map", "suggestions") },
             new() { Name = "--repo", ValuePlaceholder = "<owner/name>", ValueKind = CliOptionValueKind.Repository, Description = "Issue-drafts: GitHub repository for --open-issues github", PrimaryCommands = Set("search", "map", "suggestions") },
             new() { Name = "--issue-state", ValueDomain = Values(["open", "closed", "all"]), Description = "Issue-drafts: GitHub issue history state to inspect", PrimaryCommands = Set("search", "map", "suggestions") },
+            new()
+            {
+                Name = "--issue", ValuePlaceholder = "<number-or-url>", ValueKind = CliOptionValueKind.FreeText,
+                Description = "Suggestions link: existing GitHub issue number or URL; never creates an issue",
+                PrimaryCommands = Set("suggestions"),
+                CompletionSubcommands = new Dictionary<string, IReadOnlySet<string>>(StringComparer.Ordinal)
+                {
+                    ["suggestions"] = Set("link"),
+                },
+            },
             new() { Name = "--duplicate-confidence", ValueDomain = Values(["low", "medium", "high"]), Description = "Issue-drafts: preset duplicate-preflight match threshold", PrimaryCommands = Set("search", "suggestions") },
             new() { Name = "--duplicate-threshold", ValuePlaceholder = "<score>", Description = "Issue-drafts: explicit duplicate-preflight minimum score from 0 to 1", PrimaryCommands = Set("search", "suggestions") },
             new() { Name = "--issue-title", ValuePlaceholder = "<title>", Description = "Search issue-drafts: override the title for an ad hoc search draft", PrimaryCommands = Set("search") },
@@ -652,8 +662,8 @@ internal static class CliFlagSchema
             },
             new() { Name = "--category", ValueDomain = Values(SuggestionRecord.ValidCategories), Description = "Suggestions: filter by category", PrimaryCommands = Set("suggestions") },
             new() { Name = "--agent", ValuePlaceholder = "<agent>", Description = "Suggestions: filter by agent", PrimaryCommands = Set("suggestions") },
-            new() { Name = "--actor", ValuePlaceholder = "<name>", Description = "Suggestions update: actor recorded for a manual status transition", PrimaryCommands = Set("suggestions") },
-            new() { Name = "--reason", ValuePlaceholder = "<text>", Description = "Suggestions update: optional reason recorded for a manual status transition", PrimaryCommands = Set("suggestions") },
+            new() { Name = "--actor", ValuePlaceholder = "<name>", Description = "Suggestions update/link: actor recorded for a manual operation", PrimaryCommands = Set("suggestions") },
+            new() { Name = "--reason", ValuePlaceholder = "<text>", Description = "Suggestions update/link: optional reason recorded for a manual operation", PrimaryCommands = Set("suggestions") },
             new() { Name = "--description", ValuePlaceholder = "<text>", Description = "Suggestions add: local suggestion description", PrimaryCommands = Set("suggestions") },
             new() { Name = "--title", ValuePlaceholder = "<title>", Description = "Suggestions add: optional issue-draft title source", PrimaryCommands = Set("suggestions") },
             new() { Name = "--evidence-path", ValuePlaceholder = "<path>", ValueKind = CliOptionValueKind.FilePath, Description = "Suggestions add: repository-relative evidence path; repeat for multiple paths", PrimaryCommands = Set("suggestions") },
@@ -906,6 +916,11 @@ internal static class CliFlagSchema
     /// </summary>
     public static IReadOnlyList<CliFlag> GetCompletionFlagsForCommand(string command, string? subcommand = null)
     {
+        if (command == "suggestions" && subcommand == "link")
+        {
+            var names = Set("--repo", "--issue", "--actor", "--reason", "--db", "--json");
+            return All.Where(flag => flag.AppliesToCompletionContext(command, subcommand) && names.Contains(flag.Name)).ToList();
+        }
         if (command == "audit" && subcommand is "baseline-export" or "baseline-compare" or "baseline-review")
         {
             var names = subcommand == "baseline-review"

@@ -11,7 +11,7 @@ namespace CodeIndex.Tests;
 /// SuggestionStoreのテスト（ローカルJSON蓄積 + 重複排除）。
 /// </summary>
 [Collection("Console sensitive")]
-public class SuggestionStoreTests : IDisposable
+public partial class SuggestionStoreTests : IDisposable
 {
     private readonly string _tempDir;
     private readonly SuggestionStore _store;
