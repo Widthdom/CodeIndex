@@ -19,7 +19,7 @@ namespace CodeIndex.Cli;
 /// 全ての read-modify-write 操作はファイルロックでシリアライズされ、
 /// 並行書き込み者が互いの変更をサイレントに上書きすることを防ぐ。
 /// </summary>
-public class SuggestionStore
+public partial class SuggestionStore
 {
     internal const int MaxStatusChangedByLength = 256;
     internal const int MaxStatusChangeReasonLength = 2048;
@@ -166,6 +166,15 @@ public class SuggestionStore
         AppendRevisionValue(normalized, record.StatusChangedAt?.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture));
         AppendRevisionValue(normalized, record.StatusChangedBy);
         AppendRevisionValue(normalized, record.StatusChangeReason);
+        if (record.UpstreamAssociation is { } association)
+        {
+            AppendRevisionValue(normalized, record.UpstreamUrl);
+            AppendRevisionValue(normalized, record.UpstreamIssueNumber?.ToString(CultureInfo.InvariantCulture));
+            AppendRevisionValue(normalized, association.Repository);
+            AppendRevisionValue(normalized, association.LinkedAt.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture));
+            AppendRevisionValue(normalized, association.LinkedBy);
+            AppendRevisionValue(normalized, association.Reason);
+        }
         var hashBytes = SHA256.HashData(Encoding.UTF8.GetBytes(normalized.ToString()));
         return HexEncoding.ToLowerHexString(hashBytes);
     }
@@ -231,6 +240,8 @@ public class SuggestionStore
         SubmissionInFlight,
         RevisionConflict,
         InvalidTransition,
+        InvalidAssociation,
+        AssociationConflict,
     }
 
     /// <summary>
@@ -1067,14 +1078,19 @@ public class SuggestionStore
     /// write または rename が失敗した場合、一時ファイルをベストエフォートで削除して
     /// <c>.cdidx/</c> に孤児 <c>.tmp</c> が蓄積するのを防ぐ。
     /// </summary>
-    private void SaveUnlocked(List<SuggestionRecord> records)
+    private void SaveUnlocked(List<SuggestionRecord> records, Action<string>? validateBeforePublish = null)
     {
         var dir = Path.GetDirectoryName(_filePath);
         if (!string.IsNullOrEmpty(dir))
             DataDirectorySecurity.CreateSensitiveDirectory(dir);
 
         NormalizeRecordDefaults(records);
-        AtomicFileWriter.WriteJson(_filePath, records, s_jsonOptions, AtomicFileWriter.WriteProfile.Sensitive);
+        if (validateBeforePublish == null)
+            AtomicFileWriter.WriteJson(_filePath, records, s_jsonOptions, AtomicFileWriter.WriteProfile.Sensitive);
+        else
+            AtomicFileWriter.WriteWithPrePublishValidation(_filePath,
+                stream => JsonSerializer.Serialize(stream, records, s_jsonOptions),
+                AtomicFileWriter.WriteProfile.Sensitive, overwrite: true, validateBeforePublish);
     }
 
     private static bool HasUpstreamSubmission(SuggestionRecord record) =>
@@ -1395,6 +1411,7 @@ public class SuggestionStore
         EvidencePaths = record.EvidencePaths?.ToArray(),
         UpstreamIssueNumber = record.UpstreamIssueNumber,
         UpstreamUrl = record.UpstreamUrl,
+        UpstreamAssociation = record.UpstreamAssociation,
         LastSyncedAt = record.LastSyncedAt,
         LastSubmitError = record.LastSubmitError,
         LastSubmitAttempt = record.LastSubmitAttempt,

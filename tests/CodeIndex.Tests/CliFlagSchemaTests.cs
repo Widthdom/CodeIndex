@@ -875,6 +875,17 @@ public class CliFlagSchemaTests
     public void NestedValueDomainsAndValidateConfigJsonMatchAcceptedCliContracts_Issue5163()
     {
         Assert.Equal(
+            ["--actor", "--db", "--issue", "--json", "--reason", "--repo"],
+            CliFlagSchema.GetCompletionFlagsForCommand("suggestions", "link").Select(flag => flag.Name).Order(StringComparer.Ordinal));
+        Assert.Contains("--issue <number-or-url>", ConsoleUi.GetUsageLine("suggestions-link"));
+        foreach (var sibling in new[] { "list", "show", "export", "add", "update", "delete" })
+            Assert.DoesNotContain(CliFlagSchema.GetCompletionFlagsForCommand("suggestions", sibling), flag => flag.Name == "--issue");
+        Assert.Contains("[ \"$cmd\" = \"suggestions\" ] && [ \"$nested\" = \"link\" ]", ConsoleCompletionRenderer.GetCompletionScript("bash"));
+        Assert.Contains("[[ $subcmd == suggestions && $nested == link ]]", ConsoleCompletionRenderer.GetCompletionScript("zsh"));
+        Assert.Contains("'__fish_cdidx_using_context suggestions link' -l issue -r", ConsoleCompletionRenderer.GetCompletionScript("fish"));
+        Assert.Contains("($subcmd -eq 'suggestions' -and $nested -eq 'link')", ConsoleCompletionRenderer.GetCompletionScript("powershell"));
+
+        Assert.Equal(
             SuggestionsCommandRunner.StatusFilterValues,
             CliFlagSchema.GetCanonicalValuesForCommand("suggestions", "--status"));
         Assert.Equal(
