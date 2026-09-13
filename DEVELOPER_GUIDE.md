@@ -67,11 +67,15 @@ untruncated output. Attestation still relies on the verifier's exit status.
 
 ## C# search-origin context
 
+Issue #5348 adds explicit `--origin-passes` (1–16, default 1) to CLI search/audit/regex-find. `DbSearchReader.CSharpOrigins.cs` supplies successive bounded windows to one `CSharpOriginContext`; lexical locals, interpolation frames, labels and schema state survive each window. Limits apply per pass, including overlapping chunk characters, with at most 65,536 lines / 128 Mi source characters retained per file. State never survives a query; local `total_changes()` and external `data_version` checks discard contexts if their indexed generation changes. Preserve missing/conflicting-line holes, cancellation, fixed per-query pass budgets, cursor/replay binding, and bounded retry diagnostics. A zero-progress window cannot request another pass. See [continuation behavior](docs/find-scan-controls.md#bounded-c-lexical-continuation-5348).
+
+Compare newly encountered overlap with retained bounded evidence before resuming. Conflicting overlap discards the entire provisional context: earlier interpolation decisions may depend on its closing text.
+
 Read the bounded prefix independently of the last returned chunk so later closing delimiters cannot change earlier origins across pages. Interpolation frames isolate schema-call state (including alignment commas) while retaining nested builder detection. Ordinary interpolation format text cannot cross a physical newline; verbatim/raw formats can.
 
 Issue #5321 resumes ordinary/verbatim/raw interpolation with at most 64 active interpolation frames and 64 balanced delimiters per expression. Nested comments/strings are consumed by the same cancellable prefix pass. Merge adjacent literal spans, preserve UTF-16 coordinates, and keep unsupported formats or unbalanced/missing context unknown with bounded `SearchMatchFacet.OriginUnavailable` reason/start/extent evidence. No work budget depends on requested matches or pagination.
 
-`DbSearchReader.AttachCSharpOriginLines` supplies shared, indexed file prefixes to the snippet classifier. Preserve the per-file 4,096-line, 8 Mi-character and 128-chunk read limits, including overlap accounting; query pagination must not change those budgets. The character limit leaves room above existing 4 Mi-character semantic-analysis windows. Keep missing lines absent so the lexical classifier returns `unknown` rather than assuming code. Ordinary/token-boundary row and count paths and MCP must retain identical origin decisions and original UTF-16 coordinates. No persisted schema changes are involved.
+`DbSearchReader.AttachCSharpOriginLines` supplies shared, indexed file prefixes to the snippet classifier. Preserve the per-pass, per-file 4,096-line, 8 Mi-character and 128-chunk read limits, including overlap accounting; query pagination must not change those budgets. The character limit leaves room above existing 4 Mi-character semantic-analysis windows. Keep missing lines absent so the lexical classifier returns `unknown` rather than assuming code. Ordinary/token-boundary row and count paths and MCP must retain identical origin decisions and original UTF-16 coordinates. No persisted schema changes are involved.
 
 Build `CSharpOriginContext` once per file prefix with cancellation and share its origin spans across rows and occurrences. Track schema argument positions during that same lexical pass, with at most 64 active builder invocations and a 64-line lookback; overflow leaves affected labels unknown. Cache regex/help classification per opening line, with cancellation at label lookup. Do not rescan preceding lines or reconstruct schema context per match or per literal.
 
@@ -4641,11 +4645,15 @@ JSON の `installer_output_incomplete` に記録します。判明した親の�
 
 ## C# 検索 origin のコンテキスト
 
+Issue #5348 は CLI の search／audit／regex-find に明示的な `--origin-passes`（1〜16、既定 1）を追加します。`DbSearchReader.CSharpOrigins.cs` は同じ `CSharpOriginContext` へ上限付きの窓を順次渡し、字句状態、補間フレーム、ラベル、schema の文脈を引き継ぎます。重複チャンクの文字数を含む上限はパスごとに適用し、保持するソースはファイルごとに最大 65,536 行／128 Mi 文字です。クエリを越えて状態を保持せず、同一接続の `total_changes()` と外部変更の `data_version` によって索引世代の変化時に文脈を破棄します。欠落・不整合な行、キャンセル、クエリごとに固定したパス数、カーソル・再実行条件の紐づけ、上限付き再試行診断を維持してください。前進できない窓では追加パスを案内しません。[継続動作の説明](docs/find-scan-controls.md#上限付き-c-字句分類の継続-5348)も参照してください。
+
+継続前に、新しく読み取った重複部分を保持済みの上限付き証拠と照合します。不一致があれば暫定文脈全体を破棄します。先行する補間の判定が、その部分の閉じ区切りに依存する場合があるためです。
+
 返す最後のチャンクとは独立して上限付きの先頭部分を読み取り、後続の閉じ区切りによってページ間で先行箇所の origin が変わらないようにします。補間フレームは配置指定のカンマを含む schema 呼び出し状態を分離し、入れ子の builder 検出も維持します。通常の補間書式部分では物理改行を許可せず、verbatim/raw の書式部分では許可します。
 
 Issue #5321 は、同時に開いている補間フレームを最大 64、式ごとの対応する区切りを最大 64 として、通常／verbatim／raw 補間から走査を再開します。入れ子のコメントと文字列も同じキャンセル可能な先頭部分の走査で処理します。隣接するリテラル区間を結合し、UTF-16 座標を保持してください。未対応の書式や不均衡・欠落した文脈は、上限付きの `SearchMatchFacet.OriginUnavailable` の理由・開始位置・範囲を伴う不明状態にします。処理上限は一致数やページングに依存しません。
 
-`DbSearchReader.AttachCSharpOriginLines` は共有のインデックス済みファイル先頭部分を snippet 分類器へ渡します。ファイルごとの 4,096 行、8 Mi 文字、128 チャンクの読み取り上限と重複分の計上を維持し、query のページングで上限を変えないでください。文字数上限は既存の 4 Mi 文字の意味解析ウィンドウより大きく設定しています。欠落行を補わず、字句分類器がコードと推測せず `unknown` を返すようにします。通常／token-boundary の行・件数経路と MCP で同じ origin 判定と元の UTF-16 座標を維持してください。永続スキーマの変更はありません。
+`DbSearchReader.AttachCSharpOriginLines` は共有のインデックス済みファイル先頭部分を snippet 分類器へ渡します。ファイル・パスごとの 4,096 行、8 Mi 文字、128 チャンクの読み取り上限と重複分の計上を維持し、query のページングで上限を変えないでください。文字数上限は既存の 4 Mi 文字の意味解析ウィンドウより大きく設定しています。欠落行を補わず、字句分類器がコードと推測せず `unknown` を返すようにします。通常／token-boundary の行・件数経路と MCP で同じ origin 判定と元の UTF-16 座標を維持してください。永続スキーマの変更はありません。
 
 `CSharpOriginContext` はキャンセルに対応してファイル先頭部分ごとに一度だけ構築し、origin の区間を行・一致間で共有します。同じ字句走査で schema の引数位置を追跡し、同時に開いている builder 呼び出しは最大 64、遡及範囲は 64 行とし、超過時は対象ラベルを不明にします。regex/help 分類は開始行ごとにキャッシュし、ラベル照会時にもキャンセルを確認してください。一致やリテラルごとに先行行を再走査したり schema コンテキストを再構築したりしないでください。
 

@@ -518,7 +518,8 @@ public static partial class QueryCommandRunner
                 || JsonEnvelopeWrapper.HasArgument(commandName, args, "--result-kind")
                 || JsonEnvelopeWrapper.HasArgument(commandName, args, "--exclude-comments")
                 || JsonEnvelopeWrapper.HasArgument(commandName, args, "--exclude-strings")
-                || JsonEnvelopeWrapper.HasArgument(commandName, args, "--exclude-fixtures")))
+                || JsonEnvelopeWrapper.HasArgument(commandName, args, "--exclude-fixtures")
+                || JsonEnvelopeWrapper.HasArgument(commandName, args, "--origin-passes")))
             return BatchOutputKind.Ndjson;
 
         return BatchOutputKind.JsonDocument;

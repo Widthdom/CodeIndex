@@ -90,6 +90,7 @@ public static partial class QueryCommandRunner
             }
 
             reader.IncludeGenerated = options.IncludeGenerated;
+            reader.OriginPasses = options.OriginPasses;
             options.InvocationGenerationFingerprint = options.Json
                                                       && options.JsonOutputFormat == JsonOutputFormatNdjson
                                                       && !options.ResultsOnly

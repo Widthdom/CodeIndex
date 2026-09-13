@@ -1233,6 +1233,8 @@ public static partial class QueryCommandRunner
             args.Add("--exclude-strings");
         if (options.ExcludeFixtures)
             args.Add("--exclude-fixtures");
+        if (options.OriginPasses != 1)
+            AddReplayValueOption(args, "--origin-passes", options.OriginPasses.ToString(CultureInfo.InvariantCulture));
         foreach (var origin in options.MatchOrigins)
             AddValue("--origin", origin);
         foreach (var origin in options.ExcludeOrigins)

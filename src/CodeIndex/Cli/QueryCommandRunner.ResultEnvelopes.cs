@@ -254,6 +254,8 @@ public static partial class QueryCommandRunner
             query["exclude_strings"] = true;
         if (options.ExcludeFixtures)
             query["exclude_fixtures"] = true;
+        if (options.OriginPasses != 1)
+            query["origin_passes"] = options.OriginPasses;
         var generatedFileFilterAvailable = ActiveSqliteDiagnosticsReader.Value?.GeneratedFileFilterAvailable;
         query["include_generated"] = options.IncludeGenerated;
         query["generated_code_policy"] = options.IncludeGenerated

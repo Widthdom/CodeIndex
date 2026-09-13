@@ -166,6 +166,7 @@ public sealed class QueryCommandOptions
     public bool ExcludeComments { get; init; }
     public bool ExcludeStrings { get; init; }
     public bool ExcludeFixtures { get; init; }
+    public int OriginPasses { get; init; } = 1;
     public bool ExactName { get; init; }
     public bool ExactSubstring { get; init; }
     public bool TokenBoundary { get; init; }
