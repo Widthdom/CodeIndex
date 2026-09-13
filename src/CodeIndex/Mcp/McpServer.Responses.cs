@@ -540,6 +540,7 @@ public partial class McpServer : IDisposable
             "excerpt" => new JsonObject { ["path"] = "src/app.cs", ["startLine"] = 1, ["endLine"] = 5 },
             "read_resource" => new JsonObject { ["uri"] = "cdidx://file/src/app.cs", ["startLine"] = 1, ["endLine"] = 5 },
             "find_in_file" => new JsonObject { ["path"] = "src/app.cs", ["query"] = "Run", ["before"] = 1, ["after"] = 1 },
+            "find" => new JsonObject { ["query"] = "TODO|FIXME", ["regex"] = true, ["all"] = true, ["origin"] = "comment", ["limit"] = 20, ["lineScanLimit"] = 20000 },
             "map" => new JsonObject { ["limit"] = 5, ["excludeTests"] = true },
             "analyze_symbol" => new JsonObject { ["query"] = "Run", ["includeBody"] = true },
             "impact_analysis" => new JsonObject { ["query"] = "Run", ["maxHops"] = 2, ["withPaths"] = true },
@@ -598,7 +599,7 @@ public partial class McpServer : IDisposable
                 => $"Language support: Supports symbol extraction for: {SymbolLanguageList()}. Search-only languages can still be indexed and filtered by file tools but may have no symbol rows.",
             "search"
                 => "Language support: Supports indexed file/content filters for every detected language; call `languages` for the full catalog.",
-            "find_in_file" or "files" or "map"
+            "find" or "find_in_file" or "files" or "map"
                 => $"Language support: Supports indexed file/content filters for every detected language listed by `languages`: {DetectedLanguageList()}. Symbol and graph fields are available only for the languages whose capabilities are advertised by `languages`.",
             "excerpt" or "read_resource" or "status" or "validate"
                 => $"Language support: Language-agnostic over indexed files and diagnostics for every detected language listed by `languages`: {DetectedLanguageList()}. This tool does not interpret a `lang` filter.",

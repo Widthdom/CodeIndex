@@ -102,7 +102,7 @@ public partial class McpServerTests
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"format":"full"}}""")!;
         var response = _server.HandleMessage(request)!;
 
-        var tools = response["result"]!["tools"]!.AsArray();
+        var tools = ReadAllToolsListPages(response);
         Assert.Equal(McpToolFilter.KnownToolNames.Count, tools.Count);
         foreach (var tool in tools)
         {
@@ -141,7 +141,10 @@ public partial class McpServerTests
         var compactTools = compactResult["tools"]!.AsArray();
         var fullTools = fullResponse["result"]!["tools"]!.AsArray();
 
-        Assert.Equal(McpToolFilter.KnownToolNames.Count, compactTools.Count);
+        Assert.Equal(Math.Min(McpServer.DefaultToolsListPageSize, McpToolFilter.KnownToolNames.Count), compactTools.Count);
+        Assert.Equal(
+            McpToolFilter.KnownToolNames.Order(StringComparer.Ordinal),
+            ReadAllToolsListPages(compactResponse).Select(tool => tool!["name"]!.GetValue<string>()).Order(StringComparer.Ordinal));
         Assert.Equal(
             fullTools.Select(tool => tool!["name"]!.GetValue<string>()),
             compactTools.Select(tool => tool!["name"]!.GetValue<string>()));
@@ -312,7 +315,7 @@ public partial class McpServerTests
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
         var response = _server.HandleMessage(request)!;
 
-        var tools = response["result"]!["tools"]!.AsArray();
+        var tools = ReadAllToolsListPages(response);
         Assert.Equal(McpToolFilter.KnownToolNames.Count, tools.Count);
 
         var names = tools.Select(t => t!["name"]!.GetValue<string>()).ToList();
@@ -324,6 +327,7 @@ public partial class McpServerTests
         Assert.Contains("callees", names);
         Assert.Contains("symbols", names);
         Assert.Contains("files", names);
+        Assert.Contains("find", names);
         Assert.Contains("find_in_file", names);
         Assert.Contains("excerpt", names);
         Assert.Contains("read_resource", names);
@@ -874,7 +878,7 @@ public partial class McpServerTests
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
         var response = _server.HandleMessage(request)!;
 
-        var advertised = response["result"]!["tools"]!.AsArray()
+        var advertised = ReadAllToolsListPages(response)
             .Select(tool => tool!["name"]!.GetValue<string>())
             .OrderBy(name => name, StringComparer.Ordinal)
             .ToArray();
@@ -883,6 +887,26 @@ public partial class McpServerTests
             .ToArray();
 
         Assert.Equal(known, advertised);
+    }
+
+    private JsonArray ReadAllToolsListPages(JsonNode response)
+    {
+        var result = response["result"]!;
+        var tools = result["tools"]!.DeepClone().AsArray();
+        while (result["nextCursor"]?.GetValue<string>() is { } cursor)
+        {
+            result = _server.HandleMessage(new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = 100,
+                ["method"] = "tools/list",
+                ["params"] = new JsonObject { ["cursor"] = cursor },
+            })!["result"]!;
+            foreach (var tool in result["tools"]!.AsArray())
+                tools.Add(tool!.DeepClone());
+            Assert.True(tools.Count <= McpToolFilter.KnownToolNames.Count);
+        }
+        return tools;
     }
 
     [Fact]

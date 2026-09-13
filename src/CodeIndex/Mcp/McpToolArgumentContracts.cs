@@ -5,7 +5,7 @@ public partial class McpServer
     private static bool IsKnownToolName(string toolName) => toolName switch
     {
         "search" or "definition" or "references" or "callers" or "callees" or "symbols" or
-        "files" or "find_in_file" or "excerpt" or "read_resource" or "map" or "analyze_symbol" or "status" or
+        "files" or "find" or "find_in_file" or "excerpt" or "read_resource" or "map" or "analyze_symbol" or "status" or
         "outline" or "batch_query" or "deps" or "impact_analysis" or "languages" or "validate" or
         "unused_symbols" or "symbol_hotspots" or "ping" or "index" or "backfill_fold" or
         "suggest_improvement" => true,
@@ -14,13 +14,14 @@ public partial class McpServer
 
     private static IReadOnlySet<string> GetAllowedToolArguments(string toolName) => toolName switch
     {
-        "search" => new HashSet<string>(StringComparer.Ordinal) { "query", "recipe", "listRecipes", "auditScope", "limit", "lang", "snippetLines", "snippetFocus", "maxLineWidth", "rawQuery", "cursor", "path", "excludePaths", "excludeTests", "includeGenerated", "since", "noDedup", "exactSubstring", "tokenBoundary", "exact", "prefix", "requireBefore", "requireAfter", "rejectBefore", "rejectAfter", "guardWindow", "guardScope", "countOnly", "format", "project", "solution" },
+        "search" => new HashSet<string>(StringComparer.Ordinal) { "query", "recipe", "listRecipes", "auditScope", "limit", "lang", "snippetLines", "snippetFocus", "maxLineWidth", "rawQuery", "cursor", "path", "excludePaths", "excludeTests", "includeGenerated", "since", "noDedup", "exactSubstring", "tokenBoundary", "exact", "prefix", "requireBefore", "requireAfter", "rejectBefore", "rejectAfter", "guardWindow", "guardScope", "countOnly", "format", "project", "solution", "origin", "excludeOrigin", "resultKind", "excludeComments", "excludeStrings", "excludeFixtures" },
         "definition" => new HashSet<string>(StringComparer.Ordinal) { "query", "kind", "lang", "limit", "visibility", "excludeVisibility", "includeBody", "lsp_compatible", "lspCompatible", "path", "excludePaths", "excludeTests", "includeGenerated", "since", "exactName", "exact", "format", "project", "solution" },
         "references" => new HashSet<string>(StringComparer.Ordinal) { "query", "selector", "kind", "lang", "limit", "offset", "maxLineWidth", "lsp_compatible", "lspCompatible", "path", "excludePaths", "excludeTests", "includeGenerated", "includeQualifiedCommonCalls", "exactName", "exact", "countOnly", "format", "project", "solution" },
         "callers" or "callees" => new HashSet<string>(StringComparer.Ordinal) { "query", "selector", "kind", "rawKinds", "includeQualifiedCommonCalls", "includeMemberReads", "rankBy", "lang", "limit", "offset", "path", "excludePaths", "excludeTests", "includeGenerated", "exactName", "exact", "countOnly", "format", "project", "solution" },
         "symbols" => new HashSet<string>(StringComparer.Ordinal) { "query", "names", "kind", "lang", "visibility", "excludeVisibility", "limit", "cursor", "path", "excludePaths", "excludeTests", "includeGenerated", "since", "exactName", "exact", "countOnly", "format", "project", "solution" },
         "files" => new HashSet<string>(StringComparer.Ordinal) { "query", "lang", "limit", "cursor", "path", "excludePaths", "excludeTests", "includeGenerated", "since", "orderBySize", "rawBytes", "project", "solution" },
-        "find_in_file" => new HashSet<string>(StringComparer.Ordinal) { "query", "path", "limit", "lang", "excludePaths", "excludeTests", "includeGenerated", "before", "after", "snippetLines", "focusLine", "focusColumn", "maxLineWidth", "exact", "regex" },
+        "find" => new HashSet<string>(StringComparer.Ordinal) { "query", "path", "all", "lineScanLimit", "limit", "lang", "excludePaths", "excludeTests", "includeGenerated", "before", "after", "snippetLines", "focusLine", "focusColumn", "maxLineWidth", "exact", "regex", "origin", "excludeOrigin", "resultKind", "excludeComments", "excludeStrings", "excludeFixtures", "cursor", "countOnly", "maxBytes" },
+        "find_in_file" => new HashSet<string>(StringComparer.Ordinal) { "query", "path", "limit", "lang", "excludePaths", "excludeTests", "includeGenerated", "before", "after", "snippetLines", "focusLine", "focusColumn", "maxLineWidth", "exact", "regex", "origin", "excludeOrigin", "resultKind", "excludeComments", "excludeStrings", "excludeFixtures", "cursor", "countOnly", "maxBytes" },
         "excerpt" => new HashSet<string>(StringComparer.Ordinal) { "path", "startLine", "endLine", "before", "after", "focusLine", "focusColumn", "focusLength", "maxLineWidth", "maxOutputBytes" },
         "read_resource" => new HashSet<string>(StringComparer.Ordinal) { "uri", "startLine", "endLine", "maxBytes", "cursor", "includeGenerated" },
         "map" => new HashSet<string>(StringComparer.Ordinal) { "limit", "lang", "path", "excludePaths", "excludeTests", "sections", "depth", "minEntrypointConfidence", "project", "solution" },

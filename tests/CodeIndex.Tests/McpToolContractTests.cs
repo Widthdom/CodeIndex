@@ -437,8 +437,19 @@ public class McpToolContractTests
         var response = server.HandleMessage(request)
             ?? throw new InvalidOperationException("tools/list returned no response.");
 
-        return response["result"]?.AsObject()
+        var result = response["result"]?.AsObject()
             ?? throw new InvalidOperationException("tools/list response did not contain a result object.");
+        var page = result;
+        while (page["nextCursor"]?.GetValue<string>() is { } cursor)
+        {
+            request["params"] = new JsonObject { ["cursor"] = cursor };
+            page = server.HandleMessage(request)!["result"]!.AsObject();
+            foreach (var tool in page["tools"]!.AsArray())
+                result["tools"]!.AsArray().Add(tool!.DeepClone());
+            Assert.True(result["tools"]!.AsArray().Count <= McpToolFilter.KnownToolNames.Count);
+        }
+        result.Remove("nextCursor");
+        return result;
     }
 
     private static Dictionary<string, JsonObject> GetAdvertisedTools(bool full = false)

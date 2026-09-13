@@ -45,6 +45,39 @@ public class HttpMcpTransportTests : IDisposable
         Assert.False(_fixture.IsValueCreated);
     }
 
+    [Fact]
+    public async Task HttpTransport_SemanticFindAndSearchShareContinuationContract_Issue5349()
+    {
+        TestProjectHelper.InsertIndexedFile(_dbPath, "src/http5349.cs", "csharp", "// Needle5349\nNeedle5349(); Needle5349();\n");
+        await using var harness = await McpHttpHarness.StartAsync(_dbPath);
+        using (var initialize = await harness.PostJsonAsync("""{"jsonrpc":"2.0","id":0,"method":"initialize","params":{}}"""))
+            Assert.Equal(HttpStatusCode.OK, initialize.StatusCode);
+        using (var discovery = await harness.PostJsonAsync("""{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"format":"full","names":["find"]}}"""))
+        {
+            var catalog = JsonNode.Parse(await discovery.Content.ReadAsStringAsync())!;
+            Assert.Equal("find", catalog["result"]!["tools"]![0]!["name"]!.GetValue<string>());
+        }
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"find","arguments":{"query":"Needle5349","all":true,"regex":true,"origin":"code","limit":1}}}""")!;
+        var columns = new List<int>();
+        for (var page = 0; page < 2; page++)
+        {
+            using var response = await harness.PostJsonAsync(request.ToJsonString());
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            var body = JsonNode.Parse(await response.Content.ReadAsStringAsync())!;
+            Assert.Null(body["error"]);
+            var payload = body["result"]!["structuredContent"]!;
+            columns.Add(payload["results"]![0]!["column"]!.GetValue<int>());
+            if (page == 0)
+                request["params"]!["arguments"]!["cursor"] = payload["next_cursor"]!.DeepClone();
+            else
+                Assert.Null(payload["next_cursor"]);
+        }
+        Assert.Equal(new[] { 1, 15 }, columns);
+        using var search = await harness.PostJsonAsync("""{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"search","arguments":{"query":"Needle5349","origin":"comment"}}}""");
+        var found = JsonNode.Parse(await search.Content.ReadAsStringAsync())!;
+        Assert.Equal(1, found["result"]!["structuredContent"]!["count"]!.GetValue<int>());
+    }
+
     private long InsertIndexedFile(string path, string content, bool splitIntoProductionChunks = false)
     {
         var normalized = content.Replace("\r\n", "\n", StringComparison.Ordinal);

@@ -1380,11 +1380,33 @@ public static partial class QueryCommandRunner
             : rows.Skip(responseOffset).ToList();
     }
 
+    internal static (List<CompactSearchResult> Rows, bool ScanComplete, bool ClassificationComplete) ReadSemanticSearchRows(
+        DbReader reader,
+        QueryCommandOptions options,
+        int requestedLimit,
+        SearchAuditRecipeQuery? recipeQuery = null,
+        IReadOnlyList<string>? requiredPathPatterns = null)
+    {
+        var scanComplete = false;
+        var classificationComplete = true;
+        var rows = ReadOriginFilteredSearchDisplayRows(reader, options,
+            options.Exact || options.ExactSubstring || options.TokenBoundary, requestedLimit,
+            complete => classificationComplete &= complete,
+            complete => scanComplete = complete, recipeQuery, requiredPathPatterns);
+        if (options.CountOnly && options.GuardFilters.Count > 0 && !options.TokenBoundary)
+            rows = rows.DistinctBy(row => SearchDisplayResultUnitKey.Create(row.Result)).ToList();
+        return (rows.Select(row => row.Compact).ToList(), scanComplete, classificationComplete);
+    }
+
     private static List<SearchDisplayRow> ReadOriginFilteredSearchDisplayRows(
         DbReader reader,
         QueryCommandOptions options,
         bool exact,
-        int requestedLimit)
+        int requestedLimit,
+        Action<bool>? originCoverageObserver = null,
+        Action<bool>? candidateCoverageObserver = null,
+        SearchAuditRecipeQuery? recipeQuery = null,
+        IReadOnlyList<string>? requiredPathPatterns = null)
     {
         requestedLimit = Math.Max(0, requestedLimit);
         if (requestedLimit == 0)
@@ -1409,13 +1431,19 @@ public static partial class QueryCommandRunner
             // The extra display candidate is only a pagination probe. Guard evaluation must
             // retain the user's requested budget or its bounded candidate scan can stop before
             // the first qualifying row.
-            var page = ReadSearchResults(reader, options, exact, pageLimit, cursor, options.Limit);
+            var candidateCapReached = false;
+            var page = ReadSearchResults(reader, options, exact, pageLimit, cursor, options.Limit,
+                recipeQuery, requiredPathPatterns, capped => candidateCapReached = capped);
             pagesRead++;
             if (page.Count == 0)
+            {
+                candidateCoverageObserver?.Invoke(!candidateCapReached);
                 break;
+            }
 
             candidates.AddRange(page);
-            displayRows = BuildSearchDisplayRows(candidates, options, exact);
+            displayRows = BuildSearchDisplayRows(candidates, options, exact,
+                recipeQuery: recipeQuery, originCoverageObserver: originCoverageObserver);
 
             var last = page[^1];
             if (last.NextOffset <= currentOffset)
@@ -1450,8 +1478,12 @@ public static partial class QueryCommandRunner
         return SearchOriginFilterMaxCandidates;
     }
 
-    private static List<SearchResult> ReadSearchResults(DbReader reader, QueryCommandOptions options, bool exact, int limit, SearchCursor? cursor = null, int? guardRequestedLimit = null)
-        => reader.Search(options.Query!, limit, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank, cursor, options.GuardFilters, options.GuardWindow, guardRequestedLimit, guardScope: options.GuardScope, tokenBoundary: options.TokenBoundary);
+    private static List<SearchResult> ReadSearchResults(DbReader reader, QueryCommandOptions options, bool exact, int limit, SearchCursor? cursor = null, int? guardRequestedLimit = null,
+        SearchAuditRecipeQuery? recipeQuery = null, IReadOnlyList<string>? requiredPathPatterns = null,
+        Action<bool>? candidateCapObserver = null)
+        => reader.SearchWithCandidateEvidence(options.Query!, limit, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank, cursor, options.GuardFilters, options.GuardWindow, guardRequestedLimit, guardScope: options.GuardScope, tokenBoundary: options.TokenBoundary,
+            requiredPathPatterns: requiredPathPatterns, resultRanking: recipeQuery?.ResultRanking ?? default,
+            candidateCapObserver: candidateCapObserver);
 
     private static QueryCountResult CountFilteredSearchResults(DbReader reader, QueryCommandOptions options, bool exact)
     {

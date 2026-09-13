@@ -30,7 +30,7 @@ internal static class McpToolOutputSchemas
             "files" => RowsProperties(),
             "excerpt" => ExcerptProperties(),
             "read_resource" => ReadResourceProperties(),
-            "find_in_file" => QueryRowsProperties(),
+            "find" or "find_in_file" => QueryRowsProperties(),
             "map" => MapProperties(),
             "analyze_symbol" => AnalyzeSymbolProperties(),
             "impact_analysis" => ImpactAnalysisProperties(),
@@ -141,7 +141,7 @@ internal static class McpToolOutputSchemas
         {
             "search" => StringArray(),
             "definition" or "references" or "callers" or "callees"
-                or "symbols" or "files" or "find_in_file" => StringArray("count", "results"),
+                or "symbols" or "files" or "find" or "find_in_file" => StringArray("count", "results"),
             "excerpt" => StringArray("path", "totalLines"),
             "read_resource" => StringArray("resource", "_meta"),
             "map" => StringArray("fileCount"),

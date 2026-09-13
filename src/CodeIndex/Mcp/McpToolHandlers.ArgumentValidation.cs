@@ -10,7 +10,7 @@ public partial class McpServer
 {
     private static JsonObject? ValidateCommonListArguments(JsonNode? args)
     {
-        foreach (var propertyName in new[] { "path", "project", "excludePaths", "names", "sections", "capability", "scopes", "visibility", "excludeVisibility", "includeSymbolKind", "excludeSymbolKind", "commits", "changedBetween", "files" })
+        foreach (var propertyName in new[] { "path", "project", "excludePaths", "names", "sections", "capability", "scopes", "visibility", "excludeVisibility", "includeSymbolKind", "excludeSymbolKind", "commits", "changedBetween", "files", "origin", "excludeOrigin", "resultKind" })
         {
             if (ValidateStringListArgument(args, propertyName) is JsonObject error)
                 return error;
@@ -268,16 +268,16 @@ public partial class McpServer
                 "focusLine" or "focusColumn" or "focusLength" or "startLine" or "endLine" or
                 "maxHops" or "maxDepth" or "depth" or "parallelism" or "maxFileBytes" or "maxSymbolsPerFile" or "maxReferencesPerFile" or "debounce" or
                 "staleAfterSeconds" or
-                "guardWindow" or "maxOutputBytes" or "maxResponseBytes" or "maxBytes" or "graphBudget" => "integer",
+                "guardWindow" or "maxOutputBytes" or "maxResponseBytes" or "maxBytes" or "graphBudget" or "lineScanLimit" => "integer",
             "check" or "excludeTests" or "includeGenerated" or "indexedOnly" or "rawQuery" or "noDedup" or "exactSubstring" or "tokenBoundary" or
                 "exactName" or "exact" or "prefix" or "countOnly" or "includeBody" or "lsp_compatible" or
                 "lspCompatible" or
                 "regex" or "withPaths" or "rebuild" or "dryRun" or "dry_run" or "force" or
                 "optimize" or "reverse" or "cycles" or "suppressNoise" or "summaryOnly" or "includeAllCycleNodes" or "groupPartialTypes" or "nodeMappings" or "config" or "logPath" or "updateCheck" or
                 "rawKinds" or "includeQualifiedCommonCalls" or "includeMemberReads" or "orderBySize" or "rawBytes" or "byBucket" or "memoryTrace" or "watch" or
-                "estimateOnly" or "listRecipes" => "boolean",
+                "estimateOnly" or "listRecipes" or "all" or "excludeComments" or "excludeStrings" or "excludeFixtures" => "boolean",
             "project" or "capability" or "scopes" or "fields" or "visibility" or "excludeVisibility" or "includeSymbolKind" or "excludeSymbolKind" or
-                "commits" or "changedBetween" or "files" or
+                "commits" or "changedBetween" or "files" or "origin" or "excludeOrigin" or "resultKind" or
                 "requireBefore" or "requireAfter" or "rejectBefore" or "rejectAfter" => "string_or_array",
             "query" or "selector" or "uri" or "lang" or "kind" or "format" or "rankBy" or "sort" or "since" or "cursor" or "guardScope" or
                 "solution" or "symbol" or "groupBy" or "category" or "language" or "severity" or "explain" or "snippetFocus" or
@@ -297,7 +297,7 @@ public partial class McpServer
     private static bool ToolAllowsStringOrArrayPath(string toolName) => toolName switch
     {
         "search" or "definition" or "references" or "callers" or "callees" or "symbols" or
-        "files" or "find_in_file" or "map" or "analyze_symbol" or "deps" or "impact_analysis" or
+        "files" or "find" or "find_in_file" or "map" or "analyze_symbol" or "deps" or "impact_analysis" or
         "validate" or "unused_symbols" or "symbol_hotspots" => true,
         _ => false,
     };
