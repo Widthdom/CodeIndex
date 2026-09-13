@@ -516,7 +516,7 @@ public partial class McpServer
             ["capability_groups"] = new JsonObject
             {
                 ["workspace_health"] = ToolNameArray(enabledToolNames, "status", "validate", "languages", "ping"),
-                ["discovery"] = ToolNameArray(enabledToolNames, "search", "map", "files", "symbols", "outline", "deps"),
+                ["discovery"] = ToolNameArray(enabledToolNames, "search", "find", "map", "files", "symbols", "outline", "deps"),
                 ["symbol_navigation"] = ToolNameArray(enabledToolNames, "definition", "references", "callers", "callees", "analyze_symbol", "impact_analysis"),
                 ["file_reading"] = ToolNameArray(enabledToolNames, "excerpt", "find_in_file", "read_resource"),
                 ["batching"] = ToolNameArray(enabledToolNames, "batch_query"),

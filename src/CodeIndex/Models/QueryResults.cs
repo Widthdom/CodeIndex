@@ -674,8 +674,10 @@ public class ExcerptRecoveryHint
 
 public class FileFindResult
 {
+    [JsonPropertyName("match_facets")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<SearchMatchFacet>? MatchFacets { get; set; }
+    [JsonPropertyName("result_kinds")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<string>? ResultKinds { get; set; }
     [JsonPropertyName("api_version")]

@@ -3874,14 +3874,15 @@ The MCP `tools/list` response includes an `examples` array for every registered 
 
 | Tool | Description |
 |---|---|
-| `search` | Full-text search across code chunks |
+| `search` | Full-text search across code chunks with [origin/result-kind and fixture filters](docs/find-scan-controls.md#mcp-search-and-continuation-5349), also available for recipes |
 | `definition` | Reconstruct a symbol declaration and optional body |
 | `references` | Find indexed references for supported languages; identical constructor `call` + `instantiate` rows collapse by default |
 | `callers` | List callers for a named symbol in supported languages; `kind` filters by reference kind. The default keeps invocation-like kinds visible (`call`, `instantiate`, `subscribe`) while hiding metadata edges (`attribute`, `annotation`) and compile-time `type_reference` rows (e.g. `nameof(X)` / `typeof(T)`). Human-readable output prints the grouped reference-kind tag at the start of each row, joining multiple distinct kinds with `+` (for example `call+subscribe`) when one container mixes kinds, so terminals can distinguish `call` from `instantiate` / `subscribe` / mixed without `--json`. The reference-kind column widens dynamically to fit the longest label in the batch. The MCP response keeps the scalar `referenceKind` (back-compat with existing consumers; it reports the preferred summary kind `instantiate` > `subscribe` > `MIN(call)`) and adds a sorted `referenceKinds` array plus `hasMixedReferenceKinds` so consumers that need the full picture can avoid trusting a single collapsed label. `callers` is not a reliable path to metadata — an attribute / annotation row is attributed to the enclosing body-range symbol (the class for a member declaration) or drops entirely when the target is file-level (`[assembly: ...]`, where `containerName` is `null`). Use `references` with `kind: "attribute"` / `kind: "annotation"` for metadata enumeration. Identical constructor `call` + `instantiate` rows at one physical site collapse. |
 | `callees` | List callees for a named symbol in supported languages; the default keeps invocation-like kinds visible (`call`, `instantiate`, `subscribe`) while hiding metadata edges (`attribute`, `annotation`) and compile-time `type_reference` rows. MCP responses also include the sorted `referenceKinds` array and `hasMixedReferenceKinds` alongside the scalar `referenceKind`, since callee rows stay split per kind but still surface the mixed-kind contract for AI clients. Identical constructor `call` + `instantiate` rows at one physical site collapse. |
 | `symbols` | Find functions, classes, interfaces, imports, and namespaces by name |
 | `files` | List indexed files |
-| `find_in_file` | Find literal substring matches inside known indexed files with line/column context |
+| `find` | Bounded repository-wide literal/regex search with semantic filters, scan budgets, and continuation; see [MCP find controls](docs/find-scan-controls.md#mcp-search-and-continuation-5349) |
+| `find_in_file` | Find literal/regex matches inside known indexed files with line/column context; `path` remains required and regex semantic filters share the [MCP find controls](docs/find-scan-controls.md#mcp-search-and-continuation-5349) |
 | `excerpt` | Reconstruct a specific line range from indexed chunks |
 | `map` | Summarize languages, modules, hotspots, and likely entrypoints |
 | `analyze_symbol` | Bundle definition, nearby symbols, references, callers, callees, file metadata, workspace trust metadata, and graph support metadata. Bundled `callers` / `callees` rows carry the same `referenceKind` (preferred summary, back-compat) plus `referenceKinds` (sorted distinct) and `hasMixedReferenceKinds` fields as the standalone tools, so mixed `call` + `subscribe` containers stay visible in the bundle. |
@@ -7888,14 +7889,15 @@ cdidx は現行 Codex client 向けに MCP `2025-06-18` を交渉し、`2025-03-
 
 | ツール | 説明 |
 |---|---|
-| `search` | コードチャンクの全文検索 |
+| `search` | コードチャンクの全文検索。[origin・結果種別・fixture フィルター](docs/find-scan-controls.md#mcp-の検索と継続取得-5349)は recipe にも対応 |
 | `definition` | シンボルの宣言と必要なら本体を再構成して取得 |
 | `references` | 対応言語でインデックス済み参照を検索。constructor site の `call` + `instantiate` 重複は既定で集約 |
 | `callers` | 対応言語で指定シンボルの caller を列挙。`kind` は reference kind を指し、既定では invocation 系の kind（`call`、`instantiate`、`subscribe`）のみを表示して `attribute` / `annotation` のような metadata edge とコンパイル時の `type_reference`（`nameof(X)` / `typeof(T)` 等）は除外する。人間向け出力では各行の先頭に reference kind タグを表示し、1 つの container で複数 kind が混在する場合は `call+subscribe` のように `+` で連結して示すため、`--json` を付けなくても `call` / `instantiate` / `subscribe` / mixed を見分けられる。reference-kind 列の幅はバッチ内の最長ラベルに合わせて動的に広がる。MCP レスポンスは後方互換のため scalar な `referenceKind`（preferred 順 `instantiate` > `subscribe` > `MIN(call)` の要約 kind）を残しつつ、ソート済みの `referenceKinds` 配列と `hasMixedReferenceKinds` も追加したので、全 kind が必要な consumer は要約ラベルに騙されずに済む。metadata 行の container は注釈対象そのものではなく body-range 上の外側シンボル（メンバ宣言ならクラス）に設定され、`[assembly: ...]` のようなファイルレベル target では `containerName` が `null` になって `callers` 結果から脱落する。C# の `[...]` 属性や Java 系 `@Annotation(...)` を列挙したいときは `references --kind attribute|annotation` / MCP `references` を使う。同じ物理位置にある constructor の `call` + `instantiate` 重複は集約する。 |
 | `callees` | 対応言語で指定シンボルの callee を列挙。既定は invocation 系の kind（`call`、`instantiate`、`subscribe`）のみで、`attribute` / `annotation` のような metadata edge とコンパイル時の `type_reference` は除外する。MCP レスポンスには scalar な `referenceKind` に加えて、ソート済みの `referenceKinds` 配列と `hasMixedReferenceKinds` も含める。callee 側は kind 単位で行が分かれるが、AI クライアントが caller 側と同じ mixed-kind 契約を扱えるようにするため。同じ物理位置にある constructor の `call` + `instantiate` 重複は集約する。 |
 | `symbols` | 関数・クラス・インターフェース・import・namespace を名前で検索 |
 | `files` | インデックス済みファイル一覧 |
-| `find_in_file` | 既知のインデックス済みファイル内でリテラル部分文字列一致を行・列付きで検索 |
+| `find` | 意味フィルター・走査上限・継続取得に対応したリポジトリ横断のリテラル／正規表現検索。[MCP find の指定方法](docs/find-scan-controls.md#mcp-の検索と継続取得-5349)を参照 |
+| `find_in_file` | 既知の索引済みファイル内を行・列付きでリテラル／正規表現検索。`path` は引き続き必須で、正規表現の意味フィルターは [MCP find の指定方法](docs/find-scan-controls.md#mcp-の検索と継続取得-5349)と共通 |
 | `excerpt` | インデックス済みチャンクから特定行範囲を再構成 |
 | `map` | 言語、モジュール、ホットスポット、推定エントリポイントを要約 |
 | `analyze_symbol` | 定義、近傍シンボル、参照、caller、callee、ファイル情報、ワークスペース信頼メタデータ、graph 対応メタデータをまとめて返す。バンドルされた `callers` / `callees` 行にも単独の `callers` / `callees` と同じ `referenceKind`（後方互換の優先サマリー種別）、`referenceKinds`（distinct kind の昇順配列）、`hasMixedReferenceKinds` が付くため、`call` + `subscribe` が混在する container も要約 1 ラベルに潰れず見える。 |

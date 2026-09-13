@@ -48,6 +48,7 @@ public sealed class McpToolFilter
         "callees",
         "symbols",
         "files",
+        "find",
         "find_in_file",
         "excerpt",
         "read_resource",

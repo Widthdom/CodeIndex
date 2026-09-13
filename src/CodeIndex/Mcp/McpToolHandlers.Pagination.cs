@@ -109,7 +109,7 @@ public partial class McpServer
             category: stale ? McpErrorEnvelope.CategoryIndexStale : McpErrorEnvelope.CategoryInvalidArgument,
             suggestion: stale
                 ? $"The index changed after this {toolName} cursor was issued. Restart pagination without cursor."
-                : $"Use the exact next_cursor returned by the previous {toolName} page with unchanged filters, format, and limit.",
+                : $"Use the exact next_cursor returned by the previous {toolName} page with unchanged query, filters, and output mode. Only change page limits if the tool supports it.",
             retrySafe: stale,
             extraData: new JsonObject
             {
@@ -135,7 +135,7 @@ public partial class McpServer
                 id,
                 toolName,
                 "cursor_query_mismatch",
-                $"cursor does not match this {toolName} query, filters, format, or limit.",
+                $"cursor does not match this {toolName} query or options.",
                 stale: false);
         }
         if (!string.Equals(cursor.GenerationFingerprint, generationFingerprint, StringComparison.Ordinal))

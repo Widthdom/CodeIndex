@@ -25,6 +25,7 @@ public partial class McpServer
         AddToolDefinitions(tools, CreateIndexMaintenanceTools());
         AddToolDefinitions(tools, CreateAuditAndFeedbackTools());
 
+        AddSemanticSearchTools(tools);
         AddProjectScopeProperties(tools);
         AddGraphSelectorSchemas(tools);
         AddCommonSchemaConstraints(tools);
