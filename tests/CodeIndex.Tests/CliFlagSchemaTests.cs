@@ -875,6 +875,15 @@ public class CliFlagSchemaTests
     public void NestedValueDomainsAndValidateConfigJsonMatchAcceptedCliContracts_Issue5163()
     {
         Assert.Equal(
+            ["--actor", "--db", "--issue", "--json", "--reason", "--repo"],
+            CliFlagSchema.GetCompletionFlagsForCommand("suggestions", "link").Select(flag => flag.Name).Order(StringComparer.Ordinal));
+        Assert.Contains("--issue <number-or-url>", ConsoleUi.GetUsageLine("suggestions-link"));
+        foreach (var sibling in new[] { "list", "show", "export", "add", "update", "delete" })
+            Assert.DoesNotContain(CliFlagSchema.GetCompletionFlagsForCommand("suggestions", sibling), flag => flag.Name == "--issue");
+        foreach (var shell in new[] { "bash", "zsh", "fish", "powershell" })
+            Assert.Contains("issue", ConsoleCompletionRenderer.GetCompletionScript(shell));
+
+        Assert.Equal(
             SuggestionsCommandRunner.StatusFilterValues,
             CliFlagSchema.GetCanonicalValuesForCommand("suggestions", "--status"));
         Assert.Equal(
