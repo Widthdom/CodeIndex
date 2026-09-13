@@ -37,7 +37,9 @@ the original audit timestamp, or relabelling a historical cdidx submission as
 external. Different or incomplete existing identities produce
 `upstream_association_conflict`; reassociation is not supported. Submission
 reservations and stale revisions are checked under the existing store lock.
-Failed atomic publication leaves the previous store intact.
+Failed atomic publication leaves the previous store intact. The completed staged
+JSON must fit the 8 MiB store read limit; oversized results fail with a storage
+error before replacement, preserving the readable original history.
 
 Full list/show/JSON exports include the association; human show and Markdown
 export also display its provenance. Compact lists retain the lifecycle status;
@@ -91,7 +93,9 @@ Issue の新規作成やリモート検証は行いません。ASCII の `owner/
 過去の cdidx 投稿を外部投稿として記録し直すこともありません。異なる、または不完全な
 既存識別情報には `upstream_association_conflict` を返します。付け替えには対応しません。
 既存のストアロック内で投稿中の予約と古い revision を検査します。
-原子的な公開処理が失敗した場合、以前のストアを保持します。
+原子的な公開処理が失敗した場合、以前のストアを保持します。完成した一時 JSON は
+ストアの読み取り上限8 MiBに収まる必要があります。超過時は置換前にストレージエラーとし、
+読み取り可能な元の履歴を維持します。
 
 通常の一覧・詳細・JSON エクスポートには関連付け情報が含まれ、人間向け詳細表示と
 Markdown エクスポートにも出所を表示します。簡略一覧は状態を保持します。

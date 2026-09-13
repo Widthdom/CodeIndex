@@ -150,6 +150,23 @@ public partial class SuggestionStoreTests
     }
 
     [Fact]
+    public void TryLinkIssue_RejectsOversizedResultWithoutQuarantiningOldStore_Issue5350()
+    {
+        const string prefix = "[{\"hash\":\"near-capacity\",\"category\":\"bug\",\"description\":\"Capacity boundary fixture\",\"context\":\"";
+        const string suffix = "\"}]";
+        var original = prefix + new string('x', SuggestionStore.MaxSuggestionStoreBytes - prefix.Length - suffix.Length - 16) + suffix;
+        File.WriteAllText(_store.FilePath, original);
+        var record = Assert.Single(_store.LoadAll());
+
+        Assert.Throws<IOException>(() => _store.TryLinkIssue(record.Id, record.RevisionHash, "owner/repo", "1", null, null, out _));
+
+        Assert.Equal(original, File.ReadAllText(_store.FilePath));
+        Assert.Equal(record.Id, Assert.Single(_store.LoadAll()).Id);
+        Assert.False(File.Exists(_store.FilePath + ".bak"));
+        Assert.DoesNotContain(Directory.EnumerateFiles(_tempDir), path => path.EndsWith(".tmp", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void TryLinkIssue_FailedAtomicPublicationPreservesHistory_Issue5350()
     {
         var record = MakeRecord("bug", null, "Existing history survives a failed association write");

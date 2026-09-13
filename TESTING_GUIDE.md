@@ -1130,7 +1130,7 @@ Candidate-ordered parallel-index recovery tests must prove that the fatal result
 
 ## Conventions
 
-Issue #5350 uses `SuggestionStoreTests.Association.cs` and `SuggestionLinkCommandTests` for same-issue consolidation, immutable manual provenance, idempotency, identity/revision conflicts, offline operation, legacy records, no resubmission callbacks, and list/show/export parity. The instance-scoped pre-publication failure seam verifies previous-store preservation and temporary-file cleanup. Run these with suggestion, CLI schema/help and GitHub/MCP submission tests on net8/net9.
+Issue #5350 uses `SuggestionStoreTests.Association.cs` and `SuggestionLinkCommandTests` for same-issue consolidation, immutable manual provenance, idempotency, identity/revision conflicts, offline operation, legacy records, the 8 MiB store boundary, no resubmission callbacks, and list/show/export parity. The instance-scoped pre-publication failure seam verifies previous-store preservation and temporary-file cleanup. Run these with suggestion, CLI schema/help and GitHub/MCP submission tests on net8/net9.
 
 - Keep test names descriptive. The current suite mostly uses `Method_Scenario_ExpectedBehavior`.
 - Keep tests deterministic. Do not depend on machine-global git config, locale-specific output, or ambient files.
@@ -2506,7 +2506,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 
 ## 規約
 
-Issue #5350 は `SuggestionStoreTests.Association.cs` と `SuggestionLinkCommandTests` で、同一 Issue への統合、手動登録の証跡保持、冪等性、識別情報・revision の競合、オフライン動作、旧レコード、再投稿コールバックの抑止、一覧・詳細・エクスポートの一致を検証します。インスタンス単位の公開直前失敗フックで、以前のストアの保持と一時ファイルの片付けを確認します。提案・CLI スキーマ／ヘルプ・GitHub/MCP 投稿の既存テストとともに net8/net9 で実行してください。
+Issue #5350 は `SuggestionStoreTests.Association.cs` と `SuggestionLinkCommandTests` で、同一 Issue への統合、手動登録の証跡保持、冪等性、識別情報・revision の競合、オフライン動作、旧レコード、ストアの8 MiB境界、再投稿コールバックの抑止、一覧・詳細・エクスポートの一致を検証します。インスタンス単位の公開直前失敗フックで、以前のストアの保持と一時ファイルの片付けを確認します。提案・CLI スキーマ／ヘルプ・GitHub/MCP 投稿の既存テストとともに net8/net9 で実行してください。
 
 - テスト名は説明的にする。現在のスイートは `Method_Scenario_ExpectedBehavior` 形式が中心です。
 - テストは決定的に保つ。マシン全体の git 設定、ロケール依存出力、外部の残存ファイルに依存しないこと。

@@ -73,12 +73,19 @@ public partial class SuggestionStore
             // Preserve actual attempt/error/sync/resolution evidence. Only cancel future retries.
             // 実際の試行・エラー・同期・解決の証跡は維持し、今後の再試行予約だけを解除する。
             record.NextRetryAt = null;
-            SaveUnlocked(records, ValidateAssociationWriteForTesting);
+            SaveUnlocked(records, ValidateAssociationWrite);
             result = record;
             return MutationResult.Success;
         });
         updated = result;
         return mutationResult;
+    }
+
+    private void ValidateAssociationWrite(string stagedPath)
+    {
+        if (new FileInfo(stagedPath).Length > MaxSuggestionStoreBytes)
+            throw new IOException($"Linked suggestion store would exceed the {MaxSuggestionStoreBytes}-byte read limit; the original history was preserved.");
+        ValidateAssociationWriteForTesting?.Invoke(stagedPath);
     }
 
     internal static bool IsValidIssueAssociation(string? repository, string? issue)

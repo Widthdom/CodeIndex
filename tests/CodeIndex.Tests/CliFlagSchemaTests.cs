@@ -880,8 +880,10 @@ public class CliFlagSchemaTests
         Assert.Contains("--issue <number-or-url>", ConsoleUi.GetUsageLine("suggestions-link"));
         foreach (var sibling in new[] { "list", "show", "export", "add", "update", "delete" })
             Assert.DoesNotContain(CliFlagSchema.GetCompletionFlagsForCommand("suggestions", sibling), flag => flag.Name == "--issue");
-        foreach (var shell in new[] { "bash", "zsh", "fish", "powershell" })
-            Assert.Contains("issue", ConsoleCompletionRenderer.GetCompletionScript(shell));
+        Assert.Contains("[ \"$cmd\" = \"suggestions\" ] && [ \"$nested\" = \"link\" ]", ConsoleCompletionRenderer.GetCompletionScript("bash"));
+        Assert.Contains("[[ $subcmd == suggestions && $nested == link ]]", ConsoleCompletionRenderer.GetCompletionScript("zsh"));
+        Assert.Contains("'__fish_cdidx_using_context suggestions link' -l issue -r", ConsoleCompletionRenderer.GetCompletionScript("fish"));
+        Assert.Contains("($subcmd -eq 'suggestions' -and $nested -eq 'link')", ConsoleCompletionRenderer.GetCompletionScript("powershell"));
 
         Assert.Equal(
             SuggestionsCommandRunner.StatusFilterValues,
