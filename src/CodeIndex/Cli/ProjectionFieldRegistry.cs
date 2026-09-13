@@ -72,6 +72,16 @@ internal static class ProjectionFieldRegistry
     internal static IReadOnlyList<string> GetStatusExplainCompactFields()
         => StatusExplainCompactFields;
 
+    internal static void AddStatusExplainCompactMetadata(JsonObject metadata, IReadOnlyList<string> omittedFields)
+    {
+        metadata["explanation_schema"] = "compact";
+        metadata["explanation_required_fields"] = new JsonArray(
+            StatusExplainCompactFields.Select(field => (JsonNode?)field).ToArray());
+        metadata["explanation_omitted_optional_field_count"] = omittedFields.Count;
+        metadata["explanation_omitted_optional_fields"] = new JsonArray(
+            omittedFields.Select(field => (JsonNode?)field).ToArray());
+    }
+
     internal static JsonObject ProjectCompactStatusWorkspaceCheck(
         JsonObject workspaceCheck)
     {

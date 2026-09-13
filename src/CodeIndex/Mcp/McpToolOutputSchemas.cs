@@ -147,7 +147,7 @@ internal static class McpToolOutputSchemas
             "map" => StringArray("fileCount"),
             "analyze_symbol" => StringArray("query", "graph_sections"),
             "impact_analysis" => StringArray("query", "impact_mode"),
-            "status" => StringArray("version", "summary"),
+            "status" => StringArray(),
             "outline" => StringArray("path"),
             "deps" => StringArray("count", "format"),
             "languages" => StringArray("languages"),
@@ -181,6 +181,23 @@ internal static class McpToolOutputSchemas
                 RequiredSchema("graph"),
                 RequiredSchema("cycles"),
                 RequiredSchema("cycle_summaries"),
+            },
+            "status" => new JsonArray
+            {
+                RequiredSchema("version", "summary"),
+                RequiredSchema(ProjectionFieldRegistry.GetStatusExplainCompactFields().ToArray()),
+                new JsonObject
+                {
+                    ["required"] = StringArray("metadata", "results"),
+                    ["properties"] = new JsonObject
+                    {
+                        ["results"] = new JsonObject
+                        {
+                            ["type"] = "array", ["minItems"] = 1, ["maxItems"] = 1,
+                            ["items"] = RequiredSchema(ProjectionFieldRegistry.GetStatusExplainCompactFields().ToArray()),
+                        },
+                    },
+                },
             },
             _ => null,
         };
@@ -386,6 +403,13 @@ internal static class McpToolOutputSchemas
             ["version"] = StringSchema(),
             ["index_matches_workspace"] = BooleanSchema(),
             ["readiness"] = Reference("readiness"),
+            ["field"] = StringSchema(),
+            ["meaning"] = StringSchema(),
+            ["source"] = StringSchema(),
+            ["dependencies"] = ArraySchema(StringSchema()),
+            ["interpretation"] = StringSchema(),
+            ["remediation"] = StringSchema(),
+            ["metadata"] = ObjectSchema(),
         };
 
     private static JsonObject OutlineProperties()

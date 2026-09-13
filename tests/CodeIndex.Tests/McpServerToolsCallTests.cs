@@ -5362,6 +5362,13 @@ public partial class McpServerTests
         Assert.Equal(60, structured["effective_config"]!["stale_after_seconds"]!.GetValue<int>());
         Assert.False(structured["effective_config"]!["update_check_requested"]!.GetValue<bool>());
         Assert.False(string.IsNullOrWhiteSpace(structured["log_path"]!.GetValue<string>()));
+        foreach (var mode in new[] { "freshness", "all", " READINESS " })
+        {
+            request["params"]!["arguments"]!["explain"] = mode;
+            var aggregate = _server.HandleMessage(request)!["result"]!["structuredContent"]!["explain"]!;
+            Assert.Equal(mode != " READINESS ", aggregate["freshness"] is not null);
+            Assert.Equal(mode != "freshness", aggregate["readiness"] is not null);
+        }
     }
 
     [Fact]

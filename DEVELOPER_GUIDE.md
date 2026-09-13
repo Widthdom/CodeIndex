@@ -1,5 +1,10 @@
 # Developer Guide
 
+MCP `status.explainField` shares the CLI serializer-derived field explanations and
+compact metadata. Keep this static path ahead of database access and runtime
+diagnostic enrichment. See [MCP status explanations](docs/mcp-status-explanations.md#english)
+for argument compatibility, output schemas, byte scopes and measured retry errors.
+
 ## C# scoped-update expansion (#5347)
 
 See [C# update scope diagnostics](docs/csharp-update-expansion.md#english) for the
@@ -4561,6 +4566,11 @@ For symmetry, the MCP server no longer echoes raw `Exception.Message` content in
 ---
 
 <a id="開発者ガイド"></a>
+
+MCP の `status.explainField` は、CLI の serializer 由来フィールド説明と compact metadata を
+共有します。静的な説明の分岐は DB アクセスと実行時診断の付加より前に維持してください。
+引数の併用条件、出力スキーマ、バイト数の計測範囲、実測値付き再試行エラーについては
+[MCP status の説明](docs/mcp-status-explanations.md#日本語)を参照してください。
 
 名前付きクエリの行選択（#5325）は、各クエリの固定 10,000 候補をフィルター・重複排除した後、
 `ApplySearchOutputSelection` を独立に利用します。重複排除前の候補上限到達は
