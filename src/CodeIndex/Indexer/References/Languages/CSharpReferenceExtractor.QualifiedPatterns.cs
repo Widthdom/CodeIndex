@@ -95,24 +95,6 @@ public static partial class ReferenceExtractor
             && (nextTokenIndex + 1 >= preparedLine.Length
                 || preparedLine[nextTokenIndex + 1] is not ('=' or '>'));
 
-    private static bool IsCSharpQualifiedConstantPatternReferenceSite(
-        string preparedLine,
-        (IReadOnlyList<(int Start, int End)> Segments, int NextIndex, bool LastSeparatorWasDot, bool HasLeadingGlobalQualifier) parsed)
-    {
-        if (!parsed.LastSeparatorWasDot || parsed.Segments.Count < 2)
-            return false;
-
-        var headCursor = parsed.Segments[0].Start;
-        if (parsed.HasLeadingGlobalQualifier
-            && headCursor >= "global::".Length
-            && preparedLine.AsSpan(headCursor - "global::".Length, "global::".Length).Equals("global::", StringComparison.Ordinal))
-        {
-            headCursor -= "global::".Length;
-        }
-
-        return IsCSharpConstantPatternAnchor(preparedLine, ref headCursor);
-    }
-
     private static bool IsCSharpConstantPatternAnchor(string text, ref int cursor)
     {
         cursor = SkipCSharpTriviaBackward(text, cursor);
