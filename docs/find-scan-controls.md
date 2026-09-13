@@ -52,6 +52,38 @@ and recovery guidance when classification or candidate coverage is incomplete.
 An empty page inside a capped ranking window does not establish complete absence.
 Page fullness alone does not degrade an otherwise completed scan.
 
+### Bounded C# lexical continuation (#5348)
+
+For `search`, `audit`, and `find --regex`, explicitly request `--origin-passes <n>`
+(1–16, default 1) to continue C# lexical state across additional indexed windows.
+For example, rerun `cdidx find return --regex --path large.cs --origin code
+--origin-passes 2 --count --json`. Each pass classifies at most 4,096 new lines
+and reads at most 8 Mi UTF-16 characters (including chunk overlap) and 128 chunks
+per file. Previously retained overlap is compared without replaying lexical state.
+Up to 16 passes retain at most 65,536 lines / 128 Mi source characters per file;
+result limits and page offsets do not change this budget. Smaller character/chunk
+windows can advance too, provided at least one complete new line is available.
+
+Lexical state is resumed within that invocation's indexed snapshot; no checkpoint
+survives the query and no schema migration or reindex is required. Every new query
+replays its requested passes from the beginning. The pass setting binds cursors and
+recipe replay: restart **without `--cursor`** when changing it. Comments, string
+delimiters, interpolation frames and schema context carry across windows; results
+are classified only after the requested bounded work finishes. Indexed generation
+changes discard the provisional context. Conflicting overlap also discards the
+entire context, because earlier interpolation decisions may depend on its closing
+text. Live source edits require normal indexing.
+
+Unknown facets expose `origin_unavailable.reason` and, when another pass may help,
+`retry_origin_passes` plus `recovery_guidance`. Find terminal/count output also
+exposes `origin_passes`, `classification_incomplete_reasons`, and optional
+`retry_origin_passes`. A retry may make further bounded progress without completing
+the file. Missing/conflicting chunks, malformed constructs, an individual line or
+chunk prefix that cannot fit, and the 16-pass ceiling can still prevent completion;
+inspect those regions manually. Find retains unknowns and partial exit `11`,
+including explicit `--origin unknown` and unknown matches rejected by filters.
+MCP search retains its existing one-pass behavior and shared classifier.
+
 ### Regex origin filters (#5324)
 
 Use `cdidx find 'XmlReader\.Create' --regex --path src/ --origin code --json`.
@@ -176,6 +208,33 @@ same-symbol 範囲を利用できない場合のエラーは、従来の引数�
 `degraded` と復旧案内を含めます。順位付けの候補上限内で空ページになっても、完全な不在を
 示すものではありません。
 一方、ページが満杯になっただけで、完了済みの走査を不完全扱いにはしません。
+
+### 上限付き C# 字句分類の継続 (#5348)
+
+`search`、`audit`、`find --regex` では `--origin-passes <n>`（1〜16、既定 1）を
+明示すると、索引済みの次の窓へ C# の字句状態を引き継げます。例えば
+`cdidx find return --regex --path large.cs --origin code --origin-passes 2 --count --json`
+で再実行します。各パスで新しく分類する行はファイルごとに最大 4,096 行、読み取る量は
+チャンクの重複分を含む 8 Mi UTF-16 文字、128 チャンクです。保持済みの重複部分は
+字句状態を再実行せず照合します。最大 16 パスで保持するソースはファイルごとに
+65,536 行／128 Mi 文字以内で、結果件数やページ位置で上限は変わりません。文字数・チャンク数で
+窓が小さくなっても、完全な新しい行を 1 行以上取得できれば前進できます。
+
+状態の継続は同じ呼び出しの索引スナップショット内に限定し、クエリを越えてチェックポイントを
+保持しません。スキーマ移行や再索引は不要で、新しいクエリは指定パス数を先頭から再実行します。
+パス数はカーソルと recipe 再実行の条件に含まれるため、変更するときは **`--cursor` を外して**
+再開始してください。コメント、文字列の区切り、補間フレーム、schema の文脈を窓の間で引き継ぎ、
+指定した上限付き処理が終了してから結果を分類します。索引世代が変われば暫定文脈を破棄します。
+重複行が不一致の場合も、先行する補間の判定がその閉じ区切りに依存し得るため、文脈全体を破棄します。
+実ソースの編集を反映するには通常の索引更新が必要です。
+
+unknown の facet は `origin_unavailable.reason` を返し、追加パスが役立つ場合は
+`retry_origin_passes` と `recovery_guidance` も返します。find の終端・件数出力には
+`origin_passes`、`classification_incomplete_reasons`、任意の `retry_origin_passes` が加わります。
+再試行は前進してもファイル全体を完了できるとは限りません。チャンクの欠落・不整合、不正な構文、
+窓に収まらない単独行やチャンク先頭、16 パスの上限で完了できない部分は手動で確認してください。
+`--origin unknown` の明示指定やフィルターで除外した unknown を含め、unknown と partial 終了コード
+`11` は find で維持します。MCP search は共通分類器を使い、従来の 1 パス動作を維持します。
 
 ### 正規表現の origin フィルター (#5324)
 

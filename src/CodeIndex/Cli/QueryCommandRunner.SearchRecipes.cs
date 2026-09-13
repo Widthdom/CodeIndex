@@ -1774,6 +1774,8 @@ public static partial class QueryCommandRunner
             args.Add("--exclude-strings");
         if (options.ExcludeFixtures)
             args.Add("--exclude-fixtures");
+        if (options.OriginPasses != 1)
+            AddReplayValueOption(args, "--origin-passes", options.OriginPasses.ToString(CultureInfo.InvariantCulture));
         foreach (var origin in options.MatchOrigins)
             AddReplayValueOption(args, "--origin", origin);
         foreach (var origin in options.ExcludeOrigins)
@@ -5777,6 +5779,8 @@ public static partial class QueryCommandRunner
             args.Add("--exclude-strings");
         if (options.ExcludeFixtures)
             args.Add("--exclude-fixtures");
+        if (options.OriginPasses != 1)
+            AddReplayValueOption(args, "--origin-passes", options.OriginPasses.ToString(CultureInfo.InvariantCulture));
         foreach (var origin in options.MatchOrigins)
             AddReplayValueOption(args, "--origin", origin);
         foreach (var origin in options.ExcludeOrigins)
@@ -6159,6 +6163,8 @@ public static partial class QueryCommandRunner
             args.Add("--exclude-strings");
         if (options.ExcludeFixtures)
             args.Add("--exclude-fixtures");
+        if (options.OriginPasses != 1)
+            AddReplayValueOption(args, "--origin-passes", options.OriginPasses.ToString(CultureInfo.InvariantCulture));
         if (options.Since.HasValue)
             AddReplayValueOption(args, "--since", options.Since.Value.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture));
         if (options.NoDedup)

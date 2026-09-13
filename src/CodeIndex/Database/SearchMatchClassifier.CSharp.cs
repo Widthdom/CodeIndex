@@ -6,6 +6,10 @@ internal static partial class SearchMatchClassifier
     // Leave room above the existing 4 Mi-character semantic-analysis windows.
     internal const int CSharpContextCharacterLimit = 8 * 1024 * 1024;
     internal const int CSharpContextChunkLimit = 128;
+    internal const int CSharpOriginPassLimit = 16;
+
+    internal sealed record CSharpOriginWindow(IReadOnlyDictionary<int, string> Lines,
+        string StopReason = "indexed_prefix_unavailable");
 
     private static string ClassifyCSharpContext(
         string path, int line, string text, int index, IReadOnlyDictionary<int, string>? context)
@@ -22,13 +26,23 @@ internal static partial class SearchMatchClassifier
         private int _unknownLine = int.MaxValue;
         private int _unknownColumn;
         private string _unknownReason = "indexed_prefix_unavailable";
+        private int? _retryPasses;
 
         public CSharpOriginContext(string path, IReadOnlyDictionary<int, string> context,
             CancellationToken cancellation = default)
+            : this(path, _ => new CSharpOriginWindow(context), 1, cancellation)
         {
+        }
+
+        // Continuations are private to this construction and its indexed snapshot. Never
+        // publish provisional interpolation origins or reuse lexical state across queries.
+        public CSharpOriginContext(string path, Func<int, CSharpOriginWindow> readWindow,
+            int passLimit, CancellationToken cancellation = default)
+        {
+            ArgumentOutOfRangeException.ThrowIfLessThan(passLimit, 1);
+            ArgumentOutOfRangeException.ThrowIfGreaterThan(passLimit, CSharpOriginPassLimit);
             _cancellation = cancellation;
             var schema = IsSchemaDescriptionPath(path) ? new CSharpSchemaCalls() : null;
-            var remaining = CSharpContextCharacterLimit;
             var state = 0; // code, block comment, verbatim string, raw string, ordinary string, format
             var quotes = 0;
             var dollars = 0;
@@ -37,240 +51,256 @@ internal static partial class SearchMatchClassifier
             var pendingLine = 0;
             var pendingColumn = 0;
             CSharpStringLabel? label = null;
-            for (var line = 1; line <= CSharpContextLineLimit; line++)
+            var line = 1;
+            for (var pass = 1; pass <= passLimit; pass++)
             {
                 cancellation.ThrowIfCancellationRequested();
-                if (!context.TryGetValue(line, out var source) || source.Length > remaining)
-                {
-                    SetUnknown(pendingLine > 0 ? pendingLine : line, pendingLine > 0 ? pendingColumn : 0,
-                        source is null ? "indexed_prefix_unavailable" : "character_budget_exhausted");
-                    return;
-                }
-                remaining -= source.Length;
-                var parsed = new CSharpOriginLine(path, source, schema is not null, cancellation);
-                _lines.Add(line, parsed);
-                var i = 0;
-                while (i < source.Length)
+                var window = readWindow(line);
+                var context = window.Lines;
+                var remaining = CSharpContextCharacterLimit;
+                var firstLine = line;
+                var endLine = (long)line + CSharpContextLineLimit;
+                var stopReason = window.StopReason;
+                for (; line < endLine; line++)
                 {
                     cancellation.ThrowIfCancellationRequested();
-                    if ((state == 0 || state == 5) && expressions.TryPeek(out var expression))
+                    if (!context.TryGetValue(line, out var source) || source.Length > remaining)
                     {
-                        var ch = source[i];
-                        if (ch == '}' && expression.Delimiters.Count == 0)
-                        {
-                            var run = CountRun(source, i, '}');
-                            var required = expression.State == 3 ? expression.Dollars : 1;
-                            if (run < required)
-                            {
-                                SetUnknown(pendingLine, pendingColumn, "unbalanced_interpolation");
-                                return;
-                            }
-                            parsed.Add(i, i + required, StringLiteral, expression.Label);
-                            i += required;
-                            state = expression.State;
-                            quotes = expression.Quotes;
-                            dollars = expression.Dollars;
-                            quote = '"';
-                            label = expression.Label;
-                            schema = expression.Schema;
-                            expressions.Pop();
-                            continue;
-                        }
-                        if (state == 5)
-                        {
-                            if (ch is '{' or '"')
-                            {
-                                SetUnknown(pendingLine, pendingColumn, "unsupported_interpolation_format");
-                                return;
-                            }
-                            parsed.Add(i, i + 1, StringLiteral, expression.Label);
-                            i++;
-                            continue;
-                        }
-                        if (ch is '(' or '[' or '{')
-                        {
-                            if (expression.Delimiters.Count == 64)
-                            {
-                                SetUnknown(pendingLine, pendingColumn, "interpolation_nesting_limit");
-                                return;
-                            }
-                            expression.Delimiters.Push(ch);
-                        }
-                        else if (ch is ')' or ']' or '}')
-                        {
-                            var expected = ch == ')' ? '(' : ch == ']' ? '[' : '{';
-                            if (!expression.Delimiters.TryPop(out var opener) || opener != expected)
-                            {
-                                SetUnknown(pendingLine, pendingColumn, "unbalanced_interpolation");
-                                return;
-                            }
-                        }
-                        else if (ch == ':' && expression.Delimiters.Count == 0 &&
-                            !(i + 1 < source.Length && source[i + 1] == ':') && !(i > 0 && source[i - 1] == ':'))
-                        {
-                            state = 5;
-                            continue;
-                        }
-                    }
-                    if (state == 1 || state == 0 && source.AsSpan(i).StartsWith("/*", StringComparison.Ordinal))
-                    {
-                        var start = i;
-                        var end = source.IndexOf("*/", state == 1 ? i : i + 2, StringComparison.Ordinal);
-                        state = end < 0 ? 1 : 0;
-                        i = end < 0 ? source.Length : end + 2;
-                        parsed.Add(start, i, Comment);
-                        continue;
-                    }
-                    if (state == 0 && source.AsSpan(i).StartsWith("//", StringComparison.Ordinal))
-                    {
-                        parsed.Add(i, source.Length, Comment);
+                        if (source is not null)
+                            stopReason = "character_budget_exhausted";
                         break;
                     }
-
-                    var startIndex = i;
-                    var ordinary = state == 4;
-                    if (state == 0)
-                    {
-                        if (source[i] is not ('"' or '\''))
-                        {
-                            schema?.Consume(source, i, line);
-                            i++;
-                            continue;
-                        }
-                        quote = source[i];
-                        var run = quote == '"' ? CountRun(source, i, '"') : 1;
-                        var verbatim = quote == '"' && (i > 0 && source[i - 1] == '@' ||
-                            i > 1 && source[i - 1] == '$' && source[i - 2] == '@');
-                        var raw = !verbatim && run >= 3;
-                        dollars = 0;
-                        var prefix = i - 1;
-                        if (prefix >= 0 && source[prefix] == '@')
-                            prefix--;
-                        if (quote == '"')
-                            while (prefix >= 0 && source[prefix--] == '$')
-                                dollars++;
-                        if (dollars > 64)
-                        {
-                            SetUnknown(line, i, "interpolation_nesting_limit");
-                            return;
-                        }
-                        i += raw ? run : 1;
-                        var schemaOrigin = parsed.HasDescriptionProperty
-                            ? startIndex == parsed.DescriptionQuote ? SchemaDescription : null
-                            : schema?.Exhausted == true ? Unknown
-                            : schema?.IsDescriptionArgument(line) == true ? SchemaDescription : null;
-                        label = new CSharpStringLabel(parsed, schemaOrigin);
-                        state = raw ? 3 : verbatim ? 2 : 4;
-                        ordinary = state == 4;
-                        quotes = run;
-                        if (dollars > 0 && pendingLine == 0)
-                        {
-                            pendingLine = line;
-                            pendingColumn = startIndex;
-                        }
-                    }
-
-                    var enteredExpression = false;
+                    remaining -= source.Length;
+                    var parsed = new CSharpOriginLine(path, source, schema is not null, cancellation);
+                    _lines.Add(line, parsed);
+                    var i = 0;
                     while (i < source.Length)
                     {
-                        if ((i & 4095) == 0)
-                            cancellation.ThrowIfCancellationRequested();
-                        var ch = source[i];
-                        if (dollars > 0 && ch == '}')
+                        cancellation.ThrowIfCancellationRequested();
+                        if ((state == 0 || state == 5) && expressions.TryPeek(out var expression))
                         {
-                            var run = CountRun(source, i, '}');
-                            if (state == 3 ? run >= dollars : run % 2 != 0)
+                            var ch = source[i];
+                            if (ch == '}' && expression.Delimiters.Count == 0)
                             {
-                                SetUnknown(pendingLine, pendingColumn, "unbalanced_interpolation");
-                                return;
-                            }
-                            i += run;
-                            continue;
-                        }
-                        if (dollars > 0 && ch == '{')
-                        {
-                            if (state != 3 && i + 1 < source.Length && source[i + 1] == '{')
-                            {
-                                i += 2;
+                                var run = CountRun(source, i, '}');
+                                var required = expression.State == 3 ? expression.Dollars : 1;
+                                if (run < required)
+                                {
+                                    SetUnknown(pendingLine, pendingColumn, "unbalanced_interpolation");
+                                    return;
+                                }
+                                parsed.Add(i, i + required, StringLiteral, expression.Label);
+                                i += required;
+                                state = expression.State;
+                                quotes = expression.Quotes;
+                                dollars = expression.Dollars;
+                                quote = '"';
+                                label = expression.Label;
+                                schema = expression.Schema;
+                                expressions.Pop();
                                 continue;
                             }
-                            var braces = 1;
-                            while (state == 3 && braces < dollars && i + braces < source.Length && source[i + braces] == '{')
-                                braces++;
-                            if (state != 3 || braces >= dollars)
+                            if (state == 5)
                             {
-                                var run = CountRun(source, i, '{');
-                                if (expressions.Count == 64 || state == 3 && run >= 2 * dollars)
+                                if (ch is '{' or '"')
+                                {
+                                    SetUnknown(pendingLine, pendingColumn, "unsupported_interpolation_format");
+                                    return;
+                                }
+                                parsed.Add(i, i + 1, StringLiteral, expression.Label);
+                                i++;
+                                continue;
+                            }
+                            if (ch is '(' or '[' or '{')
+                            {
+                                if (expression.Delimiters.Count == 64)
                                 {
                                     SetUnknown(pendingLine, pendingColumn, "interpolation_nesting_limit");
                                     return;
                                 }
-                                i += state == 3 ? run : 1;
-                                parsed.Add(startIndex, i, StringLiteral, label);
-                                expressions.Push(new InterpolationFrame(state, quotes, dollars, label, schema));
-                                schema = schema is null ? null : new CSharpSchemaCalls();
-                                state = 0;
-                                enteredExpression = true;
-                                break;
+                                expression.Delimiters.Push(ch);
                             }
-                            i += braces;
-                            continue;
-                        }
-                        if (state == 3 && ch == '"')
-                        {
-                            var run = CountRun(source, i, '"');
-                            if (run >= quotes)
+                            else if (ch is ')' or ']' or '}')
                             {
-                                i += quotes;
-                                state = 0;
-                                break;
+                                var expected = ch == ')' ? '(' : ch == ']' ? '[' : '{';
+                                if (!expression.Delimiters.TryPop(out var opener) || opener != expected)
+                                {
+                                    SetUnknown(pendingLine, pendingColumn, "unbalanced_interpolation");
+                                    return;
+                                }
                             }
-                            i += run;
-                            continue;
-                        }
-                        if (state == 2 && ch == '"')
-                        {
-                            if (i + 1 < source.Length && source[i + 1] == '"')
+                            else if (ch == ':' && expression.Delimiters.Count == 0 &&
+                                !(i + 1 < source.Length && source[i + 1] == ':') && !(i > 0 && source[i - 1] == ':'))
                             {
-                                i += 2;
+                                state = 5;
                                 continue;
                             }
-                            i++;
-                            state = 0;
+                        }
+                        if (state == 1 || state == 0 && source.AsSpan(i).StartsWith("/*", StringComparison.Ordinal))
+                        {
+                            var start = i;
+                            var end = source.IndexOf("*/", state == 1 ? i : i + 2, StringComparison.Ordinal);
+                            state = end < 0 ? 1 : 0;
+                            i = end < 0 ? source.Length : end + 2;
+                            parsed.Add(start, i, Comment);
+                            continue;
+                        }
+                        if (state == 0 && source.AsSpan(i).StartsWith("//", StringComparison.Ordinal))
+                        {
+                            parsed.Add(i, source.Length, Comment);
                             break;
                         }
-                        if (ordinary)
+
+                        var startIndex = i;
+                        var ordinary = state == 4;
+                        if (state == 0)
                         {
-                            if (ch == '\\')
+                            if (source[i] is not ('"' or '\''))
                             {
-                                i = Math.Min(source.Length, i + 2);
+                                schema?.Consume(source, i, line);
+                                i++;
                                 continue;
                             }
-                            if (ch == quote)
+                            quote = source[i];
+                            var run = quote == '"' ? CountRun(source, i, '"') : 1;
+                            var verbatim = quote == '"' && (i > 0 && source[i - 1] == '@' ||
+                                i > 1 && source[i - 1] == '$' && source[i - 2] == '@');
+                            var raw = !verbatim && run >= 3;
+                            dollars = 0;
+                            var prefix = i - 1;
+                            if (prefix >= 0 && source[prefix] == '@')
+                                prefix--;
+                            if (quote == '"')
+                                while (prefix >= 0 && source[prefix--] == '$')
+                                    dollars++;
+                            if (dollars > 64)
                             {
+                                SetUnknown(line, i, "interpolation_nesting_limit");
+                                return;
+                            }
+                            i += raw ? run : 1;
+                            var schemaOrigin = parsed.HasDescriptionProperty
+                                ? startIndex == parsed.DescriptionQuote ? SchemaDescription : null
+                                : schema?.Exhausted == true ? Unknown
+                                : schema?.IsDescriptionArgument(line) == true ? SchemaDescription : null;
+                            label = new CSharpStringLabel(parsed, schemaOrigin);
+                            state = raw ? 3 : verbatim ? 2 : 4;
+                            ordinary = state == 4;
+                            quotes = run;
+                            if (dollars > 0 && pendingLine == 0)
+                            {
+                                pendingLine = line;
+                                pendingColumn = startIndex;
+                            }
+                        }
+
+                        var enteredExpression = false;
+                        while (i < source.Length)
+                        {
+                            if ((i & 4095) == 0)
+                                cancellation.ThrowIfCancellationRequested();
+                            var ch = source[i];
+                            if (dollars > 0 && ch == '}')
+                            {
+                                var run = CountRun(source, i, '}');
+                                if (state == 3 ? run >= dollars : run % 2 != 0)
+                                {
+                                    SetUnknown(pendingLine, pendingColumn, "unbalanced_interpolation");
+                                    return;
+                                }
+                                i += run;
+                                continue;
+                            }
+                            if (dollars > 0 && ch == '{')
+                            {
+                                if (state != 3 && i + 1 < source.Length && source[i + 1] == '{')
+                                {
+                                    i += 2;
+                                    continue;
+                                }
+                                var braces = 1;
+                                while (state == 3 && braces < dollars && i + braces < source.Length && source[i + braces] == '{')
+                                    braces++;
+                                if (state != 3 || braces >= dollars)
+                                {
+                                    var run = CountRun(source, i, '{');
+                                    if (expressions.Count == 64 || state == 3 && run >= 2 * dollars)
+                                    {
+                                        SetUnknown(pendingLine, pendingColumn, "interpolation_nesting_limit");
+                                        return;
+                                    }
+                                    i += state == 3 ? run : 1;
+                                    parsed.Add(startIndex, i, StringLiteral, label);
+                                    expressions.Push(new InterpolationFrame(state, quotes, dollars, label, schema));
+                                    schema = schema is null ? null : new CSharpSchemaCalls();
+                                    state = 0;
+                                    enteredExpression = true;
+                                    break;
+                                }
+                                i += braces;
+                                continue;
+                            }
+                            if (state == 3 && ch == '"')
+                            {
+                                var run = CountRun(source, i, '"');
+                                if (run >= quotes)
+                                {
+                                    i += quotes;
+                                    state = 0;
+                                    break;
+                                }
+                                i += run;
+                                continue;
+                            }
+                            if (state == 2 && ch == '"')
+                            {
+                                if (i + 1 < source.Length && source[i + 1] == '"')
+                                {
+                                    i += 2;
+                                    continue;
+                                }
                                 i++;
                                 state = 0;
                                 break;
                             }
+                            if (ordinary)
+                            {
+                                if (ch == '\\')
+                                {
+                                    i = Math.Min(source.Length, i + 2);
+                                    continue;
+                                }
+                                if (ch == quote)
+                                {
+                                    i++;
+                                    state = 0;
+                                    break;
+                                }
+                            }
+                            i++;
                         }
-                        i++;
+                        if (!enteredExpression)
+                            parsed.Add(startIndex, i, StringLiteral, label);
+                        if (state == 0 && expressions.Count == 0)
+                            pendingLine = 0;
                     }
-                    if (!enteredExpression)
-                        parsed.Add(startIndex, i, StringLiteral, label);
-                    if (state == 0 && expressions.Count == 0)
-                        pendingLine = 0;
+                    if (state == 4 || state == 5 && expressions.TryPeek(out var format) && format.State == 4)
+                    {
+                        SetUnknown(pendingLine > 0 ? pendingLine : line, pendingLine > 0 ? pendingColumn : 0,
+                            "unterminated_ordinary_string");
+                        return;
+                    }
                 }
-                if (state == 4 || state == 5 && expressions.TryPeek(out var format) && format.State == 4)
-                {
-                    SetUnknown(pendingLine > 0 ? pendingLine : line, pendingLine > 0 ? pendingColumn : 0,
-                        "unterminated_ordinary_string");
-                    return;
-                }
+                if (line == endLine)
+                    stopReason = "line_budget_exhausted";
+                var resumable = stopReason is "line_budget_exhausted" or "character_budget_exhausted" or "chunk_budget_exhausted";
+                if (resumable && line > firstLine && pass < passLimit)
+                    continue;
+                if (resumable && line > firstLine && passLimit < CSharpOriginPassLimit)
+                    _retryPasses = passLimit + 1;
+                SetUnknown(pendingLine > 0 ? pendingLine : line, pendingLine > 0 ? pendingColumn : 0, stopReason);
+                return;
             }
-            if (pendingLine > 0)
-                SetUnknown(pendingLine, pendingColumn, "unterminated_interpolation");
-            else
-                SetUnknown(CSharpContextLineLimit + 1, 0, "line_budget_exhausted");
         }
 
         private sealed class InterpolationFrame(int state, int quotes, int dollars, CSharpStringLabel? label, CSharpSchemaCalls? schema)
@@ -319,6 +349,10 @@ internal static partial class SearchMatchClassifier
                 StartLine = _unknownLine == int.MaxValue ? line : _unknownLine,
                 StartColumn = _unknownColumn + 1,
                 Extent = "remaining_file",
+                RetryOriginPasses = _retryPasses,
+                RecoveryGuidance = _retryPasses is { } passes
+                    ? $"Restart the query without --cursor using --origin-passes {passes}; each pass retains the 4096-line, 8 Mi-character and 128-chunk limits."
+                    : "Inspect the indexed context for missing or malformed source; additional passes cannot prove this region within the supported bounds.",
             };
         }
 

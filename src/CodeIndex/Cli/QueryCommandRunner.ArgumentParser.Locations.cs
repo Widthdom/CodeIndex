@@ -57,6 +57,17 @@ public static partial class QueryCommandRunner
                 case "--exclude-fixtures":
                     excludeFixtures = true;
                     break;
+                case "--origin-passes":
+                    if (!TryReadRawOptionValue(args, ref i, normalizedArg, inlineValue, out var passesValue, out var passesError))
+                        AddParseError(passesError!);
+                    else if (!int.TryParse(passesValue, out var passes) || passes < 1 || passes > SearchMatchClassifier.CSharpOriginPassLimit)
+                        AddParseError("Error: --origin-passes must be between 1 and 16.");
+                    else
+                    {
+                        WarnIfDuplicateSingleValueOption(normalizedArg, passesValue!);
+                        originPasses = passes;
+                    }
+                    break;
                 case "--actionable":
                     unusedActionable = true;
                     break;

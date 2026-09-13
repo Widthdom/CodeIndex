@@ -89,6 +89,7 @@ public static partial class QueryCommandRunner
         private bool excludeComments;
         private bool excludeStrings;
         private bool excludeFixtures;
+        private int originPasses = 1;
         private List<string>? parseErrors;
         private bool searchGuardValidationError;
         private bool missingNumericOptionValue;
@@ -528,6 +529,7 @@ public static partial class QueryCommandRunner
                 ExcludeComments = excludeComments,
                 ExcludeStrings = excludeStrings,
                 ExcludeFixtures = excludeFixtures,
+                OriginPasses = originPasses,
                 ExactName = exactName,
                 ExactSubstring = exactSubstring,
                 TokenBoundary = tokenBoundary,

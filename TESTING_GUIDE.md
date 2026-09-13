@@ -131,6 +131,8 @@ EOF; Windows runs it through the synchronous-pipe adapter.
 
 ## C# multiline search-origin coverage
 
+`OriginContinuationIssue5348Tests` covers three lexical windows, comments and ordinary/verbatim/raw interpolations, malformed/missing context, Unicode and zero-width coordinates, row/count/search/find parity, cursor pass binding, character limits, cancellation, generation invalidation, and conflicting/consistent overlaps at the 128-chunk boundary. The existing #5307 chunk-limit fixture also resumes with two passes. Run these with #5307/#5321/#5324 and CLI help/completion tests on net8/net9; retain one-pass defaults and unknown/partial controls.
+
 Keep cross-chunk closing evidence independent of row limits in database, CLI counts and MCP tests; include schema alignment commas/nested builders and ordinary-format newline rejection with verbatim/raw controls.
 
 Issue #5321 extends this fixture with interpolation recovery before row/count/recipe/MCP matches and chunk-budget boundaries. The focused classifier matrix covers expression code, nested strings/comments, ordinary/verbatim/raw forms, escaped braces, malformed delimiters, format text, nesting limits, Unicode coordinates and bounded unavailability metadata. Run both net8/net9 lanes with the #5307 negative controls.
@@ -1537,6 +1539,8 @@ net8/net9 で #3831 の末尾保持と JSON 成功・失敗時の収集完了フ
 中断、BOM・Unicode の復号、EOF を確認し、Windows では同期パイプ用アダプターを通します。
 
 ## C# 複数行検索 origin の検証
+
+`OriginContinuationIssue5348Tests` は 3 つの字句処理窓、コメント、通常／verbatim／raw 補間、不正・欠落文脈、Unicode とゼロ幅の座標、行／件数／search／find の一致、パス数とカーソルの紐づけ、文字数上限、キャンセル、世代変更による無効化、128 チャンク境界で重複行が不一致・一致する場合を検証します。既存の #5307 チャンク上限 fixture でも 2 パスで継続します。#5307／#5321／#5324 と CLI のヘルプ・補完テストとともに net8／net9 で実行し、既定の 1 パス動作と unknown／partial の対照を維持してください。
 
 チャンクをまたぐ終端の証拠が行数上限に依存しないことを、DB・CLI 件数・MCP のテストで維持してください。schema の配置指定カンマ／入れ子の builder と、通常書式での改行拒否および verbatim/raw の対照も含めます。
 

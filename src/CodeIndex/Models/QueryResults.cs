@@ -110,7 +110,10 @@ public readonly record struct FindScanSummary(
     int? NextByteOffset = null,
     bool ResultLimitReached = false,
     bool ClassificationApplied = false,
-    int UnknownOriginMatches = 0);
+    int UnknownOriginMatches = 0,
+    IReadOnlyList<string>? OriginIncompleteReasons = null,
+    int? RetryOriginPasses = null,
+    int OriginPasses = 1);
 
 public readonly record struct FindCountResult(int Count, int FileCount, FindScanSummary Scan);
 
@@ -247,6 +250,10 @@ public sealed class SearchOriginUnavailable
     public int StartLine { get; set; }
     public int StartColumn { get; set; }
     public string Extent { get; set; } = string.Empty;
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? RetryOriginPasses { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? RecoveryGuidance { get; set; }
 }
 
 public sealed record FtsQueryDiagnostics(
