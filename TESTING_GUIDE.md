@@ -19,6 +19,11 @@ Include guarded count-unit and query-error parity, plus deduplicated ranking-cap
 exhaustion and unknown recipe coverage at child, parent, and batch levels.
 An uncapped token-boundary scan spanning multiple pages must retain complete
 coverage independently of the requested row limit.
+Issue #5360 extends the shared guard-count fixture across multiple chunks/files,
+semantic-filter presence, token-boundary mode, both count selectors, empty matches,
+and a small presentation limit. Assert exact per-file histograms and CLI count
+authority; the separate 201-row fixture must retain the MCP scan-cap signal after
+chunk deduplication. Run #5349/#5360 alongside #4349 and #5300 on net8/net9.
 
 Dependency summary regressions in `QueryCommandRunnerGraphTests` (#5346) separate
 page counts, SQL/C# candidate boundaries, extraction completeness, and response
@@ -1476,6 +1481,11 @@ guard 付き件数の単位と検索エラーの同等性、重複除去後の�
 unknown 状態を子結果・全体・batch で保持することも検証します。
 上限未到達で複数ページにまたがる token-boundary 走査は、要求行数にかかわらず
 完全性を維持することを確認します。
+Issue #5360 は共通の guard 集計フィクスチャを、複数チャンク・ファイル、意味フィルターの
+有無、token-boundary、両方の件数指定、0件、小さな表示件数上限へ拡張します。
+ファイル別の正確な集計と CLI の件数の信頼性を検証し、独立した201行のフィクスチャでは
+チャンクの重複除去後も MCP の走査上限到達を保持してください。
+#5349/#5360 を #4349、#5300 とともに net8/net9 で実行します。
 
 `QueryCommandRunnerGraphTests` の依存関係 summary 回帰テスト（#5346）は、ページ件数、
 SQL／C# の候補上限、抽出の完全性、応答サイズ上限を区別します。3 edge に対する

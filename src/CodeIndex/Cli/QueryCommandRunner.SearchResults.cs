@@ -1512,7 +1512,7 @@ public static partial class QueryCommandRunner
         return new QueryCountResult(units.Count, files.Count);
     }
 
-    private readonly record struct SearchDisplayResultUnitKey(string Path, long ChunkId, int StartLine, int EndLine)
+    internal readonly record struct SearchDisplayResultUnitKey(string Path, long ChunkId, int StartLine, int EndLine)
     {
         public static SearchDisplayResultUnitKey Create(SearchResult result)
             => result.ChunkId != 0
