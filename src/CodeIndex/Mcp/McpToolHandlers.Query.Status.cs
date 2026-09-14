@@ -18,6 +18,10 @@ public partial class McpServer
 
     private JsonNode ExecuteStatus(JsonNode? id, JsonNode? args)
     {
+        if (args is JsonObject arguments && arguments.ContainsKey("explainField"))
+            return ExecuteStatusFieldExplanation(id, arguments);
+        if (args is JsonObject statusArguments && statusArguments.ContainsKey("maxBytes"))
+            return CreateToolErrorResponse(id, "maxBytes requires explainField for status.");
         var checkWorkspace = args?["check"]?.GetValue<bool>() ?? false;
         var staleAfterSeconds = ReadOptionalIntArgument(args, "staleAfterSeconds") ?? (int)TimeSpan.FromDays(1).TotalSeconds;
         if (staleAfterSeconds <= 0)

@@ -1,5 +1,14 @@
 # Testing Guide
 
+MCP status-field explanation coverage in `McpServerStatusExplanationTests.cs` (#5352)
+shares missing-database fixtures across CLI/MCP normal, compact and bounded output,
+serializer keys, nested paths, aliases, invalid inputs and exact byte boundaries.
+Batch cases preserve measured errors through `batch_query` and verify successful
+individual retries when JSON-RPC batch allocations cannot fit an explanation.
+Keep tools/list schema validation and aggregate explain controls alongside these tests.
+Run `--filter 'FullyQualifiedName~Issue5352|FullyQualifiedName~Issue5093|FullyQualifiedName~RunStatus_Explain|FullyQualifiedName~ToolsCall_Status'`
+on net8/net9 and verify initialized stdio MCP calls.
+
 MCP search parity coverage (#5349) lives in `McpServerIssue5349Tests` and
 `HttpMcpTransportTests`. Run `--filter FullyQualifiedName~Issue5349` on net8/net9
 with existing MCP schema/dispatch and CLI find/search-classification tests.
@@ -1420,6 +1429,14 @@ Check the following:
 ---
 
 <a id="テストガイド"></a>
+
+`McpServerStatusExplanationTests.cs`（#5352）は未作成 DB の共通フィクスチャで、CLI/MCP の
+通常・compact・バイト上限付き出力、serializer のキー、ネストしたパス、別名、不正入力、
+厳密なバイト境界を検証します。tools/list のスキーマ検証と既存の集約説明の対照も維持してください。
+バッチの検証では `batch_query` が実測済みエラー情報を保持することと、JSON-RPC バッチの
+割当量に説明が収まらない場合に個別の再試行が成功することを確認します。
+net8/net9 で `--filter 'FullyQualifiedName~Issue5352|FullyQualifiedName~Issue5093|FullyQualifiedName~RunStatus_Explain|FullyQualifiedName~ToolsCall_Status'`
+を実行し、初期化済み stdio MCP の呼び出しも確認してください。
 
 名前付き検索の行選択（#5325）は、重複チャンクを含む小さな共通 fixture で単一・複数・
 共有ファイル・空クエリ、selector、全体／クエリ上限、rich / compact / 投影 JSON、text、

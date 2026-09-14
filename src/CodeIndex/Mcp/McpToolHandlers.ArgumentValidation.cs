@@ -280,7 +280,7 @@ public partial class McpServer
                 "commits" or "changedBetween" or "files" or "origin" or "excludeOrigin" or "resultKind" or
                 "requireBefore" or "requireAfter" or "rejectBefore" or "rejectAfter" => "string_or_array",
             "query" or "selector" or "uri" or "lang" or "kind" or "format" or "rankBy" or "sort" or "since" or "cursor" or "guardScope" or
-                "solution" or "symbol" or "groupBy" or "category" or "language" or "severity" or "explain" or "snippetFocus" or
+                "solution" or "symbol" or "groupBy" or "category" or "language" or "severity" or "explain" or "explainField" or "snippetFocus" or
                 "bucket" or "minConfidence" or "extension" or "alias" or "description" or "context" or "toolInvocationContext" or "db" or
                 "followSymlinks" or "recipe" or "auditScope" or "cycleNode" or "nodeGeneration" or "mappingCursor" => "string",
             "minEntrypointConfidence" => "number",

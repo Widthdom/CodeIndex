@@ -458,12 +458,18 @@ public static partial class QueryCommandRunner
 
     private static int WriteStatusReadinessExplanationJson(string fieldName, JsonSerializerOptions jsonOptions)
     {
+        var payload = BuildStatusFieldExplanationJson(fieldName, jsonOptions);
+        CommandOutputWriter.WriteJsonNode(payload, jsonOptions);
+        return payload.ContainsKey("error_code") ? CommandExitCodes.UsageError : CommandExitCodes.Success;
+    }
+
+    internal static JsonObject BuildStatusFieldExplanationJson(string fieldName, JsonSerializerOptions jsonOptions)
+    {
         var field = FindStatusFieldExplanation(fieldName, jsonOptions);
         if (field == null)
         {
             var safeFieldName = SanitizeStatusExplainInput(fieldName);
-            return CommandErrorWriter.WriteJsonOrHuman(
-                true,
+            return CommandErrorWriter.BuildJsonPayload(
                 jsonOptions,
                 $"unknown status field `{safeFieldName}`.",
                 CommandExitCodes.UsageError,
@@ -480,7 +486,7 @@ public static partial class QueryCommandRunner
         foreach (var dependency in field.EffectiveDependencies.Take(MaxStatusExplainDependencies))
             dependencies.Add(dependency);
 
-        var payload = new JsonObject
+        return new JsonObject
         {
             ["api_version"] = JsonOutputContract.ApiVersion,
             ["field"] = field.FieldName,
@@ -504,8 +510,6 @@ public static partial class QueryCommandRunner
             ["known_field_limit"] = MaxStatusExplainKnownFields,
             ["known_fields_truncated"] = knownFieldsTruncated,
         };
-        CommandOutputWriter.WriteJsonNode(payload, jsonOptions);
-        return CommandExitCodes.Success;
     }
 
     private static StatusFieldExplanation? FindStatusFieldExplanation(

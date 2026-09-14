@@ -894,17 +894,7 @@ internal static partial class JsonEnvelopeWrapper
                 metadata["max_json_bytes"] = controls.MaxJsonBytes.Value;
             if (statusExplainOmittedOptionalFields is not null)
             {
-                metadata["explanation_schema"] = "compact";
-                metadata["explanation_required_fields"] = new JsonArray(
-                    ProjectionFieldRegistry.GetStatusExplainCompactFields()
-                        .Select(field => (JsonNode?)field)
-                        .ToArray());
-                metadata["explanation_omitted_optional_field_count"] =
-                    statusExplainOmittedOptionalFields.Count;
-                metadata["explanation_omitted_optional_fields"] = new JsonArray(
-                    statusExplainOmittedOptionalFields
-                        .Select(field => (JsonNode?)field)
-                        .ToArray());
+                ProjectionFieldRegistry.AddStatusExplainCompactMetadata(metadata, statusExplainOmittedOptionalFields);
             }
             if (pageItems.Count > count)
             {
