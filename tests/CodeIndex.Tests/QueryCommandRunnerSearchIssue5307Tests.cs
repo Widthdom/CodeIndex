@@ -258,11 +258,17 @@ public partial class QueryCommandRunnerTests
                         var (exit, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                             ["ArgumentList", "--db", db, tokenBoundary ? "--token-boundary" : "--exact-substring",
                             "--origin", origin, "--snippet-lines", "4", count ? "--json" : "--json=array", .. count ? new[] { "--count" } : []], _jsonOptions));
-                        Assert.True(exit == CommandExitCodes.Success, $"{tokenBoundary}/{origin}/{count}: {stdout} {stderr}");
+                        Assert.True(exit == (count ? CommandExitCodes.PartialResult : CommandExitCodes.Success), $"{tokenBoundary}/{origin}/{count}: {stdout} {stderr}");
                         Assert.Empty(stderr);
                         using var json = ParseJsonOutput(stdout);
                         if (count)
+                        {
                             Assert.Equal(expected, json.RootElement.GetProperty("count").GetInt32());
+                            Assert.False(json.RootElement.GetProperty("origin_classification_complete").GetBoolean());
+                            Assert.False(json.RootElement.GetProperty("authoritative_count").GetBoolean());
+                            Assert.Contains("indexed_prefix_unavailable", json.RootElement.GetProperty("classification_incomplete_reasons")
+                                .EnumerateArray().Select(reason => reason.GetString()));
+                        }
                         else
                         {
                             var rows = json.RootElement.EnumerateArray().ToArray();

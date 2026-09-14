@@ -63,7 +63,8 @@ public static partial class QueryCommandRunner
         }
 
         var results = reader.Search(options.Query!, int.MaxValue, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank, guardFilters: options.GuardFilters, guardWindow: options.GuardWindow, guardScope: options.GuardScope, tokenBoundary: options.TokenBoundary);
-        var displayRows = BuildSearchDisplayRows(results, options, exact);
+        var originCoverage = new SearchCountOriginCoverage(options);
+        var displayRows = BuildSearchDisplayRows(results, options, exact, countOriginCoverage: originCoverage);
         var groupBy = NormalizeSearchAggregationKey(options.GroupBy!);
         var groups = BuildSearchGroupedCounts(groupBy, displayRows);
         var fallbackGroupSelection = ApplySearchGroupOutputSelection(groups, options);
@@ -84,20 +85,21 @@ public static partial class QueryCommandRunner
                         options.Limit,
                         fallbackGroupSelection.Groups),
                     CliJsonSerializerContextFactory.Create(jsonOptions).SearchGroupedCountJsonResult);
-            return WriteJsonObjectWithOptionalByteLimit(
-                json,
+            return originCoverage.ExitCode(WriteJsonObjectWithOptionalByteLimit(
+                originCoverage.EnrichJson(json, jsonOptions),
                 options,
                 "grouped search count",
                 "Reduce --limit or increase --max-json-bytes.",
-                jsonOptions);
+                jsonOptions));
         }
         else
         {
             WriteSearchGroupedCounts(groupBy, fallbackGroupSelection.Groups, displayRows.Count, fileCount, fallbackGroupSelection.TotalGroups);
             WriteExactSubstringHintIfNeeded(exactSubstringHint);
+            originCoverage.WriteHumanWarning();
         }
 
-        return CommandExitCodes.Success;
+        return originCoverage.ExitCode();
     }
 
     private static List<SearchGroupedCountItemJsonResult> BuildSearchGroupedCounts(string groupBy, List<SearchDisplayRow> rows)
@@ -304,7 +306,8 @@ public static partial class QueryCommandRunner
     private static int RunSearchAggregation(DbReader reader, QueryCommandOptions options, JsonSerializerOptions jsonOptions, bool exact, SearchQueryHint? exactSubstringHint)
     {
         var results = reader.Search(options.Query!, int.MaxValue, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank, guardFilters: options.GuardFilters, guardWindow: options.GuardWindow, guardScope: options.GuardScope, tokenBoundary: options.TokenBoundary);
-        var rows = BuildSearchDisplayRows(results, options, exact);
+        var originCoverage = new SearchCountOriginCoverage(options);
+        var rows = BuildSearchDisplayRows(results, options, exact, countOriginCoverage: originCoverage);
         var groupBy = NormalizeSearchAggregationKey(options.CountBy ?? options.UniqueBy!);
         var groups = BuildSearchGroupedCounts(groupBy, rows);
         var selection = ApplySearchGroupOutputSelection(groups, options);
@@ -328,12 +331,12 @@ public static partial class QueryCommandRunner
                         options.Limit,
                         selection.Groups),
                     CliJsonSerializerContextFactory.Create(jsonOptions).SearchAggregationJsonResult);
-            return WriteJsonObjectWithOptionalByteLimit(
-                json,
+            return originCoverage.ExitCode(WriteJsonObjectWithOptionalByteLimit(
+                originCoverage.EnrichJson(json, jsonOptions),
                 options,
                 "search aggregation",
                 "Reduce --limit or increase --max-json-bytes.",
-                jsonOptions);
+                jsonOptions));
         }
         else
         {
@@ -351,9 +354,10 @@ public static partial class QueryCommandRunner
                 WriteSearchGroupedCounts(groupBy, selection.Groups, rows.Count, fileCount, selection.TotalGroups);
             }
             WriteExactSubstringHintIfNeeded(exactSubstringHint);
+            originCoverage.WriteHumanWarning();
         }
 
-        return CommandExitCodes.Success;
+        return originCoverage.ExitCode();
     }
 
     private static string NormalizeSearchAggregationKey(string key)
@@ -506,6 +510,7 @@ public static partial class QueryCommandRunner
     private static int WriteGroupedSearchResults(
         List<SearchDisplayRow> rows,
         QueryCountResult matchedCounts,
+        SearchCountOriginCoverage originCoverage,
         QueryCommandOptions options,
         JsonSerializerOptions jsonOptions)
     {
@@ -533,17 +538,17 @@ public static partial class QueryCommandRunner
                     truncated ? "Increase --limit or --per-file-limit, or use a resumable JSON envelope." : null,
                     groups),
                 CliJsonSerializerContextFactory.Create(jsonOptions).SearchFileGroupedJsonResult);
-        return WriteJsonObjectWithOptionalByteLimit(
-            json,
+        return originCoverage.ExitCode(WriteJsonObjectWithOptionalByteLimit(
+            originCoverage.EnrichJson(json, jsonOptions),
             options,
             "grouped search results",
             "Reduce --limit, --per-file-limit, or increase --max-json-bytes.",
-            jsonOptions);
+            jsonOptions));
     }
 
-    private static QueryCountResult CountSearchMatches(DbReader reader, QueryCommandOptions options, bool exact)
+    private static QueryCountResult CountSearchMatches(DbReader reader, QueryCommandOptions options, bool exact, SearchCountOriginCoverage? originCoverage = null)
         => HasSearchOriginFilters(options)
-            ? CountFilteredSearchResults(reader, options, exact)
+            ? CountFilteredSearchResults(reader, options, exact, originCoverage)
             : reader.CountSearchResults(
                 options.Query!,
                 options.Lang,
@@ -964,14 +969,18 @@ public static partial class QueryCommandRunner
                 out var total,
                 out var fileCount,
                 out var freshnessObservations,
-                out var hasFailures);
+                out var hasFailures,
+                out var queryOriginCoverage);
+            var originCoverage = new SearchCountOriginCoverage(options);
+            foreach (var coverage in queryOriginCoverage.Values)
+                originCoverage.Merge(coverage);
 
             if (options.Json)
             {
                 var freshness = BuildSearchRecipeQueryFreshness(
                     freshnessContext!,
                     freshnessObservations);
-                var json = JsonSerializer.Serialize(
+                var payload = JsonSerializer.SerializeToNode(
                     new SearchNamedBatchCountSummaryRunJsonResult(
                         JsonOutputContract.ApiVersion,
                         queryCounts.Count,
@@ -979,15 +988,21 @@ public static partial class QueryCommandRunner
                         fileCount,
                         freshness,
                         queryCounts),
-                    CliJsonSerializerContextFactory.Create(jsonOptions).SearchNamedBatchCountSummaryRunJsonResult);
+                    CliJsonSerializerContextFactory.Create(jsonOptions).SearchNamedBatchCountSummaryRunJsonResult)!.AsObject();
+                foreach (var child in payload["queries"]!.AsArray().OfType<JsonObject>())
+                    if (queryOriginCoverage.TryGetValue(child["name"]!.GetValue<string>(), out var coverage))
+                        coverage.AddJsonFields(child);
+                if (hasFailures)
+                    payload["degraded"] = true;
+                originCoverage.AddJsonFields(payload);
                 var writeExitCode = WriteJsonObjectWithOptionalByteLimit(
-                    json,
+                    payload.ToJsonString(jsonOptions),
                     options,
                     "named-query count summary",
                     "Use a larger --max-json-bytes value or narrow the named-query selection.",
                     jsonOptions);
                 if (writeExitCode != CommandExitCodes.Success || !hasFailures)
-                    return writeExitCode;
+                    return originCoverage.ExitCode(writeExitCode);
 
                 CommandErrorWriter.WriteStderr(
                     $"Error [{CommandErrorCodes.UsageError}]: one or more named queries failed; inspect query_freshness.invalid_query_names.");
@@ -996,8 +1011,9 @@ public static partial class QueryCommandRunner
 
             Console.WriteLine(total.ToString(CultureInfo.InvariantCulture));
             CommandErrorWriter.WriteStderr($"({total} named-query results in {fileCount} files across {queryCounts.Count} queries)");
+            originCoverage.WriteHumanWarning();
             if (!hasFailures)
-                return CommandExitCodes.Success;
+                return originCoverage.ExitCode();
 
             CommandErrorWriter.WriteStderr(
                 $"Error [{CommandErrorCodes.UsageError}]: one or more named queries failed.");
@@ -1134,7 +1150,8 @@ public static partial class QueryCommandRunner
         string? queryOverride = null,
         bool? rawFtsOverride = null,
         SearchAuditRecipeQuery? recipeQuery = null,
-        Action<bool>? originCoverageObserver = null)
+        Action<bool>? originCoverageObserver = null,
+        SearchCountOriginCoverage? countOriginCoverage = null)
     {
         var rows = new List<SearchDisplayRow>(results.Count);
         var seenMatchLocations = options.NoDedup ? null : new HashSet<string>(StringComparer.Ordinal);
@@ -1181,6 +1198,7 @@ public static partial class QueryCommandRunner
 
             // Observe every candidate before filtering; rejected unknown origins must
             // not turn absence in a filtered baseline into a resolved finding.
+            countOriginCoverage?.Observe(compact);
             if (HasSearchOriginFilters(facetFilters))
                 originCoverageObserver?.Invoke(compact.MatchFacets.Count > 0
                     && compact.MatchFacets.All(facet => facet.Origin != SearchMatchClassifier.Unknown));
@@ -1485,10 +1503,10 @@ public static partial class QueryCommandRunner
             requiredPathPatterns: requiredPathPatterns, resultRanking: recipeQuery?.ResultRanking ?? default,
             candidateCapObserver: candidateCapObserver);
 
-    private static QueryCountResult CountFilteredSearchResults(DbReader reader, QueryCommandOptions options, bool exact)
+    private static QueryCountResult CountFilteredSearchResults(DbReader reader, QueryCommandOptions options, bool exact, SearchCountOriginCoverage? originCoverage)
     {
         var results = ReadSearchResults(reader, options, exact, int.MaxValue);
-        var rows = BuildSearchDisplayRows(results, options, exact);
+        var rows = BuildSearchDisplayRows(results, options, exact, countOriginCoverage: originCoverage);
         if (options.GuardFilters.Count > 0 && !options.TokenBoundary)
             return CountFilteredSearchResultUnits(rows);
 

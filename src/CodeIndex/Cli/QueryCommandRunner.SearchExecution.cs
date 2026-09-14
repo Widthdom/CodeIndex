@@ -17,6 +17,7 @@ public static partial class QueryCommandRunner
     private sealed record SearchRowExecution(
         FtsQueryDiagnostics FtsQueryDiagnostics,
         QueryCountResult GroupedCounts,
+        SearchCountOriginCoverage GroupedOriginCoverage,
         List<SearchDisplayRow> DisplayRows,
         IReadOnlyList<SearchDisplayRow> SarifSourceRows,
         SearchOutputSelection Selection);
@@ -87,15 +88,19 @@ public static partial class QueryCommandRunner
             return WritePlainSearchCount(reader, plan);
 
         var rows = PreparePlainSearchRows(reader, plan);
-        return rows.DisplayRows.Count == 0
+        var exitCode = rows.DisplayRows.Count == 0
             ? WriteEmptyPlainSearchResults(reader, plan, rows, outcome)
             : WritePlainSearchResults(reader, plan, rows, outcome);
+        if (options.OutputFormat == OutputFormatGrouped && !options.Json)
+            rows.GroupedOriginCoverage.WriteHumanWarning();
+        return rows.GroupedOriginCoverage.ExitCode(exitCode);
     }
 
     private static int WritePlainSearchCount(DbReader reader, SearchExecutionPlan plan)
     {
         var options = plan.Options;
-        var counts = CountSearchMatches(reader, options, plan.ExactSearch);
+        var originCoverage = new SearchCountOriginCoverage(options);
+        var counts = CountSearchMatches(reader, options, plan.ExactSearch, originCoverage);
         var queryDiagnostics = DbReader.AnalyzeFtsQuery(
             plan.Query,
             options.RawFts,
@@ -103,7 +108,7 @@ public static partial class QueryCommandRunner
             options.Lang);
         if (options.Json)
         {
-            return WriteJsonObjectWithOptionalByteLimit(
+            return originCoverage.ExitCode(WriteJsonObjectWithOptionalByteLimit(
                 BuildCountJsonPayload(
                     reader,
                     plan.JsonOptions,
@@ -112,16 +117,18 @@ public static partial class QueryCommandRunner
                     query: plan.Query,
                     queryOptions: options,
                     ftsQueryDiagnostics: queryDiagnostics,
-                    exactSubstringHint: plan.ExactSubstringHint).ToJsonString(plan.JsonOptions),
+                    exactSubstringHint: plan.ExactSubstringHint,
+                    extraFields: originCoverage.AddJsonFields).ToJsonString(plan.JsonOptions),
                 options,
                 "search count",
                 "Narrow the query or increase --max-json-bytes.",
-                plan.JsonOptions);
+                plan.JsonOptions));
         }
 
         Console.WriteLine($"{counts.Count}");
         WriteExactSubstringHintIfNeeded(plan.ExactSubstringHint);
-        return CommandExitCodes.Success;
+        originCoverage.WriteHumanWarning();
+        return originCoverage.ExitCode();
     }
 
     private static SearchRowExecution PreparePlainSearchRows(
@@ -134,8 +141,9 @@ public static partial class QueryCommandRunner
             options.RawFts,
             options.Prefix,
             options.Lang);
+        var groupedOriginCoverage = new SearchCountOriginCoverage(options);
         var groupedCounts = options.OutputFormat == OutputFormatGrouped
-            ? CountSearchMatches(reader, options, plan.ExactSearch)
+            ? CountSearchMatches(reader, options, plan.ExactSearch, groupedOriginCoverage)
             : default;
         var displayRows = ReadSearchDisplayRows(
             reader,
@@ -147,6 +155,7 @@ public static partial class QueryCommandRunner
         return new SearchRowExecution(
             ftsQueryDiagnostics,
             groupedCounts,
+            groupedOriginCoverage,
             selection.Rows,
             sarifSourceRows,
             selection);

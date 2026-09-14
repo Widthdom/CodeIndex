@@ -5099,9 +5099,11 @@ public static partial class QueryCommandRunner
         out int total,
         out int fileCount,
         out List<SearchQueryFreshnessObservation> freshnessObservations,
-        out bool hasFailures)
+        out bool hasFailures,
+        out Dictionary<string, SearchCountOriginCoverage> queryOriginCoverage)
     {
         var queryCounts = new List<SearchNamedBatchCountSummaryQueryJsonResult>();
+        queryOriginCoverage = new(StringComparer.Ordinal);
         freshnessObservations = [];
         var paths = new HashSet<string>(StringComparer.Ordinal);
         total = 0;
@@ -5126,7 +5128,10 @@ public static partial class QueryCommandRunner
                     guardFilters: options.GuardFilters,
                     guardWindow: options.GuardWindow,
                     guardScope: options.GuardScope);
-                var rows = BuildSearchDisplayRows(results, options, userExact, namedQuery.Query);
+                var originCoverage = new SearchCountOriginCoverage(options);
+                var rows = BuildSearchDisplayRows(results, options, userExact, namedQuery.Query,
+                    countOriginCoverage: originCoverage);
+                queryOriginCoverage.Add(namedQuery.Name, originCoverage);
                 var count = rows.Count;
                 var fileCountForQuery = rows.Select(row => row.Result.Path).Distinct(StringComparer.Ordinal).Count();
                 foreach (var path in rows.Select(row => row.Result.Path))

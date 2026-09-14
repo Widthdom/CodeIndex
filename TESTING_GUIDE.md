@@ -1,5 +1,12 @@
 # Testing Guide
 
+Ad hoc count authority (#5357) extends `OriginContinuationIssue5348Tests` on
+net8/net9. Keep one-pass/continued code and unknown counts, ordinary/count-format,
+grouped/count-by/unique and named child/parent routes, zero results, output
+selection, human warnings and partial opt-in in the shared lexical-window fixture.
+Missing/malformed context must remain non-authoritative without a retry-pass hint;
+retain recipe and regex-find controls alongside the search regression run.
+
 MCP status-field explanation coverage in `McpServerStatusExplanationTests.cs` (#5352)
 shares missing-database fixtures across CLI/MCP normal, compact and bounded output,
 serializer keys, nested paths, aliases, invalid inputs and exact byte boundaries.
@@ -1465,6 +1472,13 @@ Issue #5300 のテストは隣接・入れ子の C# callable、対象行の除�
 パーサー（#5297）の回帰テストとともに net8.0 / net9.0 で実行します。
 
 # テストガイド
+
+通常検索の件数の確定性 (#5357) は `OriginContinuationIssue5348Tests` を拡張し、
+net8/net9 で検証します。共通の字句窓 fixture で、1 パス／追加パスの code・unknown 件数、
+通常の件数指定と count 形式、grouped・count-by・unique、名前付きクエリの子と全体、
+ゼロ件、出力選択、人向け警告、partial の明示許容を維持してください。欠落・不正な文脈では
+追加パスの案内を出さず、件数を非確定として扱います。search の回帰検証に加え、recipe と
+正規表現 find の対照テストも実行してください。
 
 MCP 検索の同等性 (#5349) は `McpServerIssue5349Tests` と `HttpMcpTransportTests` で
 検証します。`--filter FullyQualifiedName~Issue5349` を net8/net9 で実行し、既存の

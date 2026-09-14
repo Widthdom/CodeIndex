@@ -30,7 +30,7 @@ public static partial class QueryCommandRunner
         }
         if (options.Json && options.OutputFormat == OutputFormatGrouped)
         {
-            var groupedExitCode = WriteGroupedSearchResults([], groupedCounts, options, jsonOptions);
+            var groupedExitCode = WriteGroupedSearchResults([], groupedCounts, rows.GroupedOriginCoverage, options, jsonOptions);
             return groupedExitCode == CommandExitCodes.Success ? ZeroResultExitCode(options) : groupedExitCode;
         }
         if (options.Json
@@ -166,7 +166,7 @@ public static partial class QueryCommandRunner
             }
             if (options.OutputFormat == OutputFormatGrouped)
             {
-                return WriteGroupedSearchResults(displayRows, groupedCounts, options, jsonOptions);
+                return WriteGroupedSearchResults(displayRows, groupedCounts, rows.GroupedOriginCoverage, options, jsonOptions);
             }
             if (options.OutputFormat == OutputFormatCsv || options.OutputFormat == OutputFormatTsv)
             {
