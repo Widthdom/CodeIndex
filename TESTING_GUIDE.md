@@ -6,6 +6,8 @@ grouped/count-by/unique and named child/parent routes, zero results, output
 selection, human warnings and partial opt-in in the shared lexical-window fixture.
 Missing/malformed context must remain non-authoritative without a retry-pass hint;
 retain recipe and regex-find controls alongside the search regression run.
+Explicit `--read-only` must keep all count routes, including named children and
+their parent, non-authoritative even after origin classification completes.
 
 MCP status-field explanation coverage in `McpServerStatusExplanationTests.cs` (#5352)
 shares missing-database fixtures across CLI/MCP normal, compact and bounded output,
@@ -1479,6 +1481,8 @@ net8/net9 で検証します。共通の字句窓 fixture で、1 パス／追�
 ゼロ件、出力選択、人向け警告、partial の明示許容を維持してください。欠落・不正な文脈では
 追加パスの案内を出さず、件数を非確定として扱います。search の回帰検証に加え、recipe と
 正規表現 find の対照テストも実行してください。
+明示した `--read-only` では、分類が完了しても、名前付きクエリの子と全体を含むすべての
+件数経路でスナップショットの確定性低下を保持してください。
 
 MCP 検索の同等性 (#5349) は `McpServerIssue5349Tests` と `HttpMcpTransportTests` で
 検証します。`--filter FullyQualifiedName~Issue5349` を net8/net9 で実行し、既存の

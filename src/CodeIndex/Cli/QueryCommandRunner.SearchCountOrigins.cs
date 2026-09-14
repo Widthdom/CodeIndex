@@ -56,7 +56,11 @@ public static partial class QueryCommandRunner
                 return;
             payload["origin_classification_complete"] = Complete;
             payload["origin_passes"] = options.OriginPasses;
-            var degraded = !Complete || JsonBool(payload, "degraded") == true;
+            // Classification cannot restore authority to a potentially stale snapshot.
+            // Include diagnostics here for named children as well as their parent.
+            AddActiveSqliteDiagnostics(payload);
+            var degraded = !Complete || JsonBool(payload, "degraded") == true
+                || JsonBool(payload, "wal_stale_snapshot_risk") == true;
             payload["degraded"] = degraded;
             payload["authoritative_count"] = !degraded && JsonBool(payload, "authoritative_count") != false;
             if (Complete)

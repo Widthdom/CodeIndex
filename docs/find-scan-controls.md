@@ -22,7 +22,8 @@ without semantic exclusions and manually review missing/malformed context or
 regions beyond the maximum budget. Increasing output limits cannot repair lexical
 coverage. Complete zero counts remain authoritative; intentional group/row output
 omissions remain separate from classification completeness. Existing index and
-query degradation checks still apply. This query fix requires no reindex.
+query degradation checks still apply: complete classification cannot restore
+count authority when `wal_stale_snapshot_risk:true`. This query fix requires no reindex.
 
 ### MCP search and continuation (#5349)
 
@@ -202,7 +203,8 @@ unknown の候補があれば、除外後がゼロ件でも `origin_classificati
 実行できます。意味フィルターによる除外を外して unknown を確認し、欠落・不正な文脈や最大予算を
 越える領域は手動で調べてください。出力上限を増やしても字句分類の網羅性は回復しません。
 完全に評価したゼロ件は確定性を保ち、意図的なグループ・行の出力省略と分類完了状態は区別します。
-索引やクエリに関する従来の確定性チェックも適用されます。この修正に再索引は不要です。
+索引やクエリに関する従来の確定性チェックも適用されます。`wal_stale_snapshot_risk:true` の
+場合は、分類が完了しても件数を確定扱いにはしません。この修正に再索引は不要です。
 
 ### MCP の検索と継続取得 (#5349)
 

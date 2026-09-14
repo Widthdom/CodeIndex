@@ -170,6 +170,17 @@ public sealed class OriginContinuationIssue5348Tests
                     using var partial = JsonDocument.Parse(acceptedJson);
                     AssertSearchOriginAuthority(partial.RootElement, false);
                 }
+                else
+                {
+                    var (snapshotExit, snapshotJson, _) = CaptureConsole(() => ProgramRunner.Run(
+                        [.. args, "--read-only"], JsonOptions, "test"));
+                    Assert.Equal(0, snapshotExit);
+                    using var snapshot = JsonDocument.Parse(snapshotJson);
+                    AssertSnapshotLimitedCount(snapshot.RootElement);
+                    if (mode[0] == "--named-query")
+                        foreach (var child in snapshot.RootElement.GetProperty("queries").EnumerateArray())
+                            AssertSnapshotLimitedCount(child);
+                }
             }
         }
 
@@ -373,6 +384,14 @@ public sealed class OriginContinuationIssue5348Tests
         Assert.Equal(!complete, result.GetProperty("degraded").GetBoolean());
         if (!complete)
             Assert.True(result.GetProperty("partial_result").GetBoolean());
+    }
+
+    private static void AssertSnapshotLimitedCount(JsonElement result)
+    {
+        Assert.True(result.GetProperty("origin_classification_complete").GetBoolean());
+        Assert.True(result.GetProperty("wal_stale_snapshot_risk").GetBoolean());
+        Assert.True(result.GetProperty("degraded").GetBoolean());
+        Assert.False(result.GetProperty("authoritative_count").GetBoolean());
     }
 
     private static void Seed(string dbPath, string[] lines)
