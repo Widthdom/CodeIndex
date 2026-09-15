@@ -1,5 +1,14 @@
 # Testing Guide
 
+MCP status-field explanation coverage in `McpServerStatusExplanationTests.cs` (#5352)
+shares missing-database fixtures across CLI/MCP normal, compact and bounded output,
+serializer keys, nested paths, aliases, invalid inputs and exact byte boundaries.
+Batch cases preserve measured errors through `batch_query` and verify successful
+individual retries when JSON-RPC batch allocations cannot fit an explanation.
+Keep tools/list schema validation and aggregate explain controls alongside these tests.
+Run `--filter 'FullyQualifiedName~Issue5352|FullyQualifiedName~Issue5093|FullyQualifiedName~RunStatus_Explain|FullyQualifiedName~ToolsCall_Status'`
+on net8/net9 and verify initialized stdio MCP calls.
+
 ## LSP call hierarchy coverage (#5351)
 
 `LspCallHierarchyTests` runs framed, initialized LSP sessions against real indexed
@@ -1139,6 +1148,8 @@ Candidate-ordered parallel-index recovery tests must prove that the fatal result
 
 ## Conventions
 
+Issue #5350 uses `SuggestionStoreTests.Association.cs` and `SuggestionLinkCommandTests` for same-issue consolidation, immutable manual provenance, idempotency, identity/revision conflicts, offline operation, legacy records, the 8 MiB store boundary, no resubmission callbacks, and list/show/export parity. The instance-scoped pre-publication failure seam verifies previous-store preservation and temporary-file cleanup. Run these with suggestion, CLI schema/help and GitHub/MCP submission tests on net8/net9.
+
 - Keep test names descriptive. The current suite mostly uses `Method_Scenario_ExpectedBehavior`.
 - Keep tests deterministic. Do not depend on machine-global git config, locale-specific output, or ambient files.
 - Prefer `ManualTimeProvider` for fake clocks and `TestDeterminism.CreateRandom` for randomized fixture input so repeated test runs replay the same timeline and data. Use `TestDeterminism.WaitUntilAsync` or the synchronous `WaitUntil` for bounded polling/eventual assertions instead of local `Task.Delay` loops or fixed sleeps. Use `AssertConditionRemainsTrue` for short absence/stability observations, and `TestDeterminism.RunConcurrentlyAsync` when a test needs workers to start from the same gate.
@@ -1427,6 +1438,14 @@ Check the following:
 ---
 
 <a id="テストガイド"></a>
+
+`McpServerStatusExplanationTests.cs`（#5352）は未作成 DB の共通フィクスチャで、CLI/MCP の
+通常・compact・バイト上限付き出力、serializer のキー、ネストしたパス、別名、不正入力、
+厳密なバイト境界を検証します。tools/list のスキーマ検証と既存の集約説明の対照も維持してください。
+バッチの検証では `batch_query` が実測済みエラー情報を保持することと、JSON-RPC バッチの
+割当量に説明が収まらない場合に個別の再試行が成功することを確認します。
+net8/net9 で `--filter 'FullyQualifiedName~Issue5352|FullyQualifiedName~Issue5093|FullyQualifiedName~RunStatus_Explain|FullyQualifiedName~ToolsCall_Status'`
+を実行し、初期化済み stdio MCP の呼び出しも確認してください。
 
 ### LSPコール階層の検証 (#5351)
 
@@ -2521,6 +2540,8 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   MCP filesystem 認可の race test は、曖昧な `.m` / `.pl` 言語判定で使う早期 prefix read を含む実際の file-open / handle-enumeration seam で差し替えを行い、double-swap した path を列挙後に決定的に復元し、source file、language-map / pattern sidecar、保持中 directory handle が、より広い cache 済み認可 scope を継承できないことを検証してください。
 
 ## 規約
+
+Issue #5350 は `SuggestionStoreTests.Association.cs` と `SuggestionLinkCommandTests` で、同一 Issue への統合、手動登録の証跡保持、冪等性、識別情報・revision の競合、オフライン動作、旧レコード、ストアの8 MiB境界、再投稿コールバックの抑止、一覧・詳細・エクスポートの一致を検証します。インスタンス単位の公開直前失敗フックで、以前のストアの保持と一時ファイルの片付けを確認します。提案・CLI スキーマ／ヘルプ・GitHub/MCP 投稿の既存テストとともに net8/net9 で実行してください。
 
 - テスト名は説明的にする。現在のスイートは `Method_Scenario_ExpectedBehavior` 形式が中心です。
 - テストは決定的に保つ。マシン全体の git 設定、ロケール依存出力、外部の残存ファイルに依存しないこと。

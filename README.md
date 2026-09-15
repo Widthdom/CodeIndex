@@ -60,7 +60,7 @@ and [supported languages](USER_GUIDE.md#supported-languages).
 | Indexing and freshness | [Index a project](USER_GUIDE.md#index-a-project), [check status](USER_GUIDE.md#check-status) |
 | Search and audits | [Search code](USER_GUIDE.md#search-code), [regex find controls](docs/find-scan-controls.md) |
 | JSON fields and limits | [Output format](USER_GUIDE.md#json-output-format), [Status JSON contract](DEVELOPER_GUIDE.md#status-json-contract) |
-| MCP, LSP, and compatibility | [AI Integration](USER_GUIDE.md#ai-integration), [Integration Policy](INTEGRATION_POLICY.md) |
+| MCP, LSP, and compatibility | [AI Integration](USER_GUIDE.md#ai-integration), [status field explanations](docs/mcp-status-explanations.md#english), [Integration Policy](INTEGRATION_POLICY.md) |
 | Installation and releases | [Distribution](DISTRIBUTION.md), [platforms](docs/platform-support.md), [release verification](USER_GUIDE.md#release-artifact-verification), [cloud bootstrap](CLOUD_BOOTSTRAP_PROMPT.md) |
 | Development | [Developer Guide](DEVELOPER_GUIDE.md), [Testing Guide](TESTING_GUIDE.md), [Agent Guide](AGENT_GUIDE.md) |
 | Changes and security | [Changelog](CHANGELOG.md), [Security Policy](SECURITY.md) |
@@ -131,7 +131,7 @@ AIツールやエディターから利用する場合は `cdidx mcp` または
 | 索引と鮮度の管理 | [プロジェクトをインデックス](USER_GUIDE.md#プロジェクトをインデックス)、[状態確認](USER_GUIDE.md#状態確認) |
 | 検索・監査 | [コード検索](USER_GUIDE.md#コード検索)、[正規表現 find の制御](docs/find-scan-controls.md#日本語) |
 | JSONフィールドと上限 | [出力形式](USER_GUIDE.md#json-出力形式)、[Status JSON 契約](DEVELOPER_GUIDE.md#status-json-契約) |
-| MCP・LSPと互換性 | [AIとの連携](USER_GUIDE.md#aiとの連携)、[統合ポリシー](INTEGRATION_POLICY.md) |
+| MCP・LSPと互換性 | [AIとの連携](USER_GUIDE.md#aiとの連携)、[status フィールドの説明](docs/mcp-status-explanations.md#日本語)、[統合ポリシー](INTEGRATION_POLICY.md) |
 | 導入とリリース | [配布チャネル](DISTRIBUTION.md)、[対応環境](docs/platform-support.md)、[成果物の検証](USER_GUIDE.md#リリースアセットの検証)、[クラウドでの導入](CLOUD_BOOTSTRAP_PROMPT.md#日本語) |
 | 開発 | [開発者ガイド](DEVELOPER_GUIDE.md#開発者ガイド)、[テストガイド](TESTING_GUIDE.md#テストガイド)、[エージェントガイド](AGENT_GUIDE.md) |
 | 変更履歴とセキュリティ | [変更履歴](CHANGELOG.md)、[セキュリティポリシー](SECURITY.md) |

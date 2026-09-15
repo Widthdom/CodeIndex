@@ -35,7 +35,7 @@ internal static class CliCommandMetadata
             ("db", ReadOnly("integrity", "schema", "prune", "checkpoint", "checkpoints", "restore", "restore-backups")),
             ("recipes", ReadOnly("list")),
             ("audit", ReadOnly("baseline-export", "baseline-compare", "baseline-review")),
-            ("suggestions", ReadOnly("list", "show", "export", "add", "update", "delete")),
+            ("suggestions", ReadOnly("list", "show", "export", "add", "update", "link", "delete")),
             ("export", ReadOnly("ctags")),
         ]);
 

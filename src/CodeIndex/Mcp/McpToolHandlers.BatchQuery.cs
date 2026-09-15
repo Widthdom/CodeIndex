@@ -204,7 +204,9 @@ public partial class McpServer
                 collector.AppendError(slot, errorText,
                     category: structured?["category"]?.GetValue<string>(),
                     suggestion: structured?["suggestion"]?.GetValue<string>(),
-                    retrySafe: retrySafe);
+                    retrySafe: retrySafe,
+                    extraData: toolName == "status" && slot.ToolArgs is JsonObject statusArgs
+                        && statusArgs.ContainsKey("explainField") ? structured : null);
                 return;
             }
 
