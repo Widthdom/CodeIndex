@@ -1,5 +1,14 @@
 # Testing Guide
 
+Ad hoc count authority (#5357) extends `OriginContinuationIssue5348Tests` on
+net8/net9. Keep one-pass/continued code and unknown counts, ordinary/count-format,
+grouped/count-by/unique and named child/parent routes, zero results, output
+selection, human warnings and partial opt-in in the shared lexical-window fixture.
+Missing/malformed context must remain non-authoritative without a retry-pass hint;
+retain recipe and regex-find controls alongside the search regression run.
+Explicit `--read-only` must keep all count routes, including named children and
+their parent, non-authoritative even after origin classification completes.
+
 MCP status-field explanation coverage in `McpServerStatusExplanationTests.cs` (#5352)
 shares missing-database fixtures across CLI/MCP normal, compact and bounded output,
 serializer keys, nested paths, aliases, invalid inputs and exact byte boundaries.
@@ -28,6 +37,11 @@ Include guarded count-unit and query-error parity, plus deduplicated ranking-cap
 exhaustion and unknown recipe coverage at child, parent, and batch levels.
 An uncapped token-boundary scan spanning multiple pages must retain complete
 coverage independently of the requested row limit.
+Issue #5360 extends the shared guard-count fixture across multiple chunks/files,
+semantic-filter presence, token-boundary mode, both count selectors, empty matches,
+and a small presentation limit. Assert exact per-file histograms and CLI count
+authority; the separate 201-row fixture must retain the MCP scan-cap signal after
+chunk deduplication. Run #5349/#5360 alongside #4349 and #5300 on net8/net9.
 
 Dependency summary regressions in `QueryCommandRunnerGraphTests` (#5346) separate
 page counts, SQL/C# candidate boundaries, extraction completeness, and response
@@ -1484,6 +1498,15 @@ Issue #5300 のテストは隣接・入れ子の C# callable、対象行の除�
 
 # テストガイド
 
+通常検索の件数の確定性 (#5357) は `OriginContinuationIssue5348Tests` を拡張し、
+net8/net9 で検証します。共通の字句窓 fixture で、1 パス／追加パスの code・unknown 件数、
+通常の件数指定と count 形式、grouped・count-by・unique、名前付きクエリの子と全体、
+ゼロ件、出力選択、人向け警告、partial の明示許容を維持してください。欠落・不正な文脈では
+追加パスの案内を出さず、件数を非確定として扱います。search の回帰検証に加え、recipe と
+正規表現 find の対照テストも実行してください。
+明示した `--read-only` では、分類が完了しても、名前付きクエリの子と全体を含むすべての
+件数経路でスナップショットの確定性低下を保持してください。
+
 MCP 検索の同等性 (#5349) は `McpServerIssue5349Tests` と `HttpMcpTransportTests` で
 検証します。`--filter FullyQualifiedName~Issue5349` を net8/net9 で実行し、既存の
 MCP スキーマ・dispatch と CLI find・検索分類のテストも併せて確認してください。
@@ -1494,6 +1517,11 @@ guard 付き件数の単位と検索エラーの同等性、重複除去後の�
 unknown 状態を子結果・全体・batch で保持することも検証します。
 上限未到達で複数ページにまたがる token-boundary 走査は、要求行数にかかわらず
 完全性を維持することを確認します。
+Issue #5360 は共通の guard 集計フィクスチャを、複数チャンク・ファイル、意味フィルターの
+有無、token-boundary、両方の件数指定、0件、小さな表示件数上限へ拡張します。
+ファイル別の正確な集計と CLI の件数の信頼性を検証し、独立した201行のフィクスチャでは
+チャンクの重複除去後も MCP の走査上限到達を保持してください。
+#5349/#5360 を #4349、#5300 とともに net8/net9 で実行します。
 
 `QueryCommandRunnerGraphTests` の依存関係 summary 回帰テスト（#5346）は、ページ件数、
 SQL／C# の候補上限、抽出の完全性、応答サイズ上限を区別します。3 edge に対する

@@ -1842,6 +1842,14 @@ MCP stderr diagnostics are prefixed with `[rid=<opaque-token> rid_type=<id-type>
 
 ### MCP query pagination
 
+Guarded non-token-boundary `search` counts share the CLI's
+`SearchDisplayResultUnitKey`: indexed rows use `(path, chunk id)`, with
+`(path, start line, end line)` as the fallback for an absent chunk id.
+Deduplicate both the count and `top_files` input after the bounded row scan.
+Compute truncation from the original row count before deduplication; a capped
+non-semantic scan must keep `total: null` even when few distinct units remain.
+Semantic-filter coverage and token-boundary row counting retain their own rules.
+
 MCP `search` responses include `result_stable_at`, copied from the index freshness timestamp for the database snapshot used by that call. Clients that page through search results should compare `result_stable_at` across calls; if it changes, an intervening index mutation may have shifted the result set and the client should restart pagination.
 
 Non-empty `search` responses also include `next_cursor`. Passing that value back as the `cursor` argument with the same query and filters continues after the last returned `(score, chunk rowid)` anchor. The cursor is an opaque response value; clients should not construct or edit it.
@@ -6327,6 +6335,14 @@ operator は environment variable で既定値を上書きできる。
 MCP stderr diagnostic は request context に id がある場合、`[rid=<opaque-token> rid_type=<id-type> rid_length=<decode 後の値長> cid=<correlation-id>]` prefix を付ける。すべての `tools/call` は同じ opaque な `request_id` / `request_id_type` / `request_id_length` tuple、`event: "mcp.tool.invocation"`、tool name、elapsed milliseconds、status、可能な場合の result count、error metadata、argument key、argument length を含む structured JSON line も出す。request id の生値と argument value はこの telemetry に記録しない。
 
 ### MCP クエリページング
+
+guard 付きで token-boundary を使わない `search` の集計は、CLI と同じ
+`SearchDisplayResultUnitKey` を使います。索引済みの行は `(path, chunk id)`、
+chunk id がない場合は `(path, start line, end line)` で識別します。
+上限付きの行走査後に件数と `top_files` の入力を重複除去してください。
+切り詰め判定は重複除去前の行数で行い、意味フィルターなしの走査が上限に達した場合は、
+残る単位数が少なくても `total: null` を維持します。
+意味フィルターの網羅性判定と token-boundary の行単位集計は、それぞれの規則を維持します。
 
 MCP `search` response には、その call が使った DB snapshot の index freshness timestamp からコピーした `result_stable_at` を含める。client が search result を page する場合は、call 間で `result_stable_at` を比較すること。値が変わっていれば、途中の index mutation により result set がずれた可能性があるため、pagination を最初からやり直すべきである。
 

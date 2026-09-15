@@ -1617,6 +1617,14 @@ The MCP `search` tool exposes the same mode as camelCase arguments:
 `requireBefore`, `requireAfter`, `rejectBefore`, `rejectAfter`, and
 `guardWindow` / `guardScope`.
 
+Guarded CLI `--count` and MCP `countOnly: true` / `format: "count"` count
+distinct indexed chunks, so several matching lines in one chunk count once.
+MCP `top_files` uses the same units. With `--token-boundary` / `tokenBoundary: true`,
+counts retain the token-boundary result-row semantics. Non-semantic MCP counts
+still scan at most 200 display rows: reaching that cap keeps `truncated: true`
+and `total: null`, even if grouping leaves fewer than 200 distinct chunks.
+Narrow the query or path before treating a capped count as complete.
+
 `--guard-scope same-symbol` (MCP `guardScope: "same-symbol"`) intersects the
 normal before/after line window with the smallest unambiguous indexed C# callable
 range. Block bodies and simple expression bodies are supported; expression bodies
@@ -5773,6 +5781,14 @@ fallback hint が含まれます。query text、`--lang`、`--path`、`--exclude
 MCP cursor の offset を小さくしてください。
 MCP `search` tool では同じ mode を camelCase 引数 `requireBefore`, `requireAfter`,
 `rejectBefore`, `rejectAfter`, `guardWindow`, `guardScope` で指定できます。
+
+guard 付きの CLI `--count` と MCP `countOnly: true` / `format: "count"` は、
+索引済みチャンクを重複なく数えるため、同じチャンク内の複数の一致行は1件になります。
+MCP `top_files` も同じ単位で集計します。`--token-boundary` / `tokenBoundary: true` では、
+トークン境界検索の結果行単位を維持します。意味フィルターなしの MCP 集計は引き続き
+最大200表示行を走査し、上限に達した場合は重複除去後のチャンク数が200未満でも
+`truncated: true` と `total: null` を保持します。上限到達時は検索語やパスを絞り込んでから
+完全な件数として扱ってください。
 
 `--guard-scope same-symbol`（MCP では `guardScope: "same-symbol"`）は通常の前後の行窓を、
 曖昧さのない最内側の索引済み C# callable 範囲で制限します。

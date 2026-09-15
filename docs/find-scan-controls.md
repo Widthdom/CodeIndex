@@ -2,6 +2,29 @@
 
 ## English
 
+### Ad hoc search count authority (#5357)
+
+CLI `search --count` / `--format count`, `--group-by ... --count`, `--count-by`,
+`--unique`, grouped results, and named-query count summaries observe origin
+coverage before origin/result-kind exclusions and output selection. With semantic
+filters (or grouping by origin), unknown candidates set
+`origin_classification_complete:false`, `degraded:true`, `authoritative_count:false`,
+and `partial_result:true`, even when filtering leaves zero results. Named count
+summaries carry this evidence per query and for the combined result. Counts still
+describe accepted indexed search result rows, not regex-find occurrences.
+
+Incomplete classification returns exit `11`; `--allow-partial` permits `0` while
+preserving the incomplete metadata. Human counts warn on stderr. JSON includes
+`origin_passes`, bounded `classification_incomplete_reasons`, and
+`classification_recovery_guidance`. When `retry_origin_passes` is present, rerun
+with that `--origin-passes` value for another bounded pass. Inspect unknown matches
+without semantic exclusions and manually review missing/malformed context or
+regions beyond the maximum budget. Increasing output limits cannot repair lexical
+coverage. Complete zero counts remain authoritative; intentional group/row output
+omissions remain separate from classification completeness. Existing index and
+query degradation checks still apply: complete classification cannot restore
+count authority when `wal_stale_snapshot_risk:true`. This query fix requires no reindex.
+
 ### MCP search and continuation (#5349)
 
 MCP `search` (including recipes), `find`, and `find_in_file` accept `origin`,
@@ -162,6 +185,26 @@ text or JSON output when context from `--before`, `--after`, or
 `--snippet-lines` is needed.
 
 ## 日本語
+
+### 通常検索の件数の確定性 (#5357)
+
+CLI の `search --count` / `--format count`、`--group-by ... --count`、`--count-by`、
+`--unique`、グループ化した結果、名前付きクエリの件数要約は、origin・結果種別の除外や
+出力選択より前に分類の網羅性を確認します。意味フィルター付き、または origin ごとの集計で
+unknown の候補があれば、除外後がゼロ件でも `origin_classification_complete:false`、
+`degraded:true`、`authoritative_count:false`、`partial_result:true` を返します。
+名前付きクエリの件数要約は各クエリと全体の両方にこの情報を保持します。件数の単位は
+引き続き採用された索引検索の結果行であり、正規表現 find の一致箇所数とは異なります。
+
+分類が不完全な場合の終了コードは `11` です。`--allow-partial` は不完全さの情報を保ったまま
+`0` を許容し、人向けの件数出力は標準エラーへ警告します。JSON は `origin_passes`、上限付きの
+`classification_incomplete_reasons`、`classification_recovery_guidance` を返します。
+`retry_origin_passes` があれば、その値を `--origin-passes` に指定して追加の上限付き分類を
+実行できます。意味フィルターによる除外を外して unknown を確認し、欠落・不正な文脈や最大予算を
+越える領域は手動で調べてください。出力上限を増やしても字句分類の網羅性は回復しません。
+完全に評価したゼロ件は確定性を保ち、意図的なグループ・行の出力省略と分類完了状態は区別します。
+索引やクエリに関する従来の確定性チェックも適用されます。`wal_stale_snapshot_risk:true` の
+場合は、分類が完了しても件数を確定扱いにはしません。この修正に再索引は不要です。
 
 ### MCP の検索と継続取得 (#5349)
 
