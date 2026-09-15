@@ -18,6 +18,15 @@ Keep tools/list schema validation and aggregate explain controls alongside these
 Run `--filter 'FullyQualifiedName~Issue5352|FullyQualifiedName~Issue5093|FullyQualifiedName~RunStatus_Explain|FullyQualifiedName~ToolsCall_Status'`
 on net8/net9 and verify initialized stdio MCP calls.
 
+## LSP call hierarchy coverage (#5351)
+
+`LspCallHierarchyTests` runs framed, initialized LSP sessions against real indexed
+temporary projects on net8.0/net9.0. Keep exact overload/same-name identities,
+recursive and repeated sites, UTF-16/file-URI ranges, existing navigation controls,
+unsaved/stale/incomplete/ambiguous evidence, exact file identity, overlapping large
+callable ranges, high-degree/response-size bounds and cancellation with session
+reuse together. See [the protocol contract](docs/lsp-call-hierarchy.md#english).
+
 MCP search parity coverage (#5349) lives in `McpServerIssue5349Tests` and
 `HttpMcpTransportTests`. Run `--filter FullyQualifiedName~Issue5349` on net8/net9
 with existing MCP schema/dispatch and CLI find/search-classification tests.
@@ -1451,6 +1460,15 @@ Check the following:
 割当量に説明が収まらない場合に個別の再試行が成功することを確認します。
 net8/net9 で `--filter 'FullyQualifiedName~Issue5352|FullyQualifiedName~Issue5093|FullyQualifiedName~RunStatus_Explain|FullyQualifiedName~ToolsCall_Status'`
 を実行し、初期化済み stdio MCP の呼び出しも確認してください。
+
+### LSPコール階層の検証 (#5351)
+
+`LspCallHierarchyTests` は実際に索引を作成した一時プロジェクトを使い、初期化済みの
+LSPセッションにフレーム形式で要求を送り、net8.0/net9.0で検証します。同名・
+オーバーロードの正確な識別、再帰・複数の呼び出し箇所、UTF-16とファイルURIの範囲、
+既存ナビゲーション、未保存・古い・未完成・曖昧な証拠、正確なファイル識別、重なり合う
+大きな関数範囲、高次数・応答サイズの上限、キャンセル後のセッション継続を併せて
+維持してください。[プロトコル契約](docs/lsp-call-hierarchy.md#日本語)を参照してください。
 
 名前付き検索の行選択（#5325）は、重複チャンクを含む小さな共通 fixture で単一・複数・
 共有ファイル・空クエリ、selector、全体／クエリ上限、rich / compact / 投影 JSON、text、

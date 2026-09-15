@@ -24,6 +24,7 @@ internal sealed partial class LspServer : IDisposable
             ["definitionProvider"] = true,
             ["declarationProvider"] = true,
             ["referencesProvider"] = true,
+            ["callHierarchyProvider"] = true,
             ["documentSymbolProvider"] = new JsonObject
             {
                 ["workDoneProgress"] = true,

@@ -34,6 +34,12 @@ internal sealed class LspLiveDocumentStore
 
     internal long EvictedBytes => _evictedBytes;
 
+    internal IEnumerable<KeyValuePair<string, string>> Documents => _documents;
+
+    // Once text has been discarded, indexed graph navigation cannot prove that all
+    // open buffers agree with the index. Reconnect after saving to recover.
+    internal bool HasDiscardedText { get; private set; }
+
     internal int VersionTombstoneCount =>
         _documentVersions.Keys.Count(key => !_documents.ContainsKey(key));
 
@@ -49,6 +55,7 @@ internal sealed class LspLiveDocumentStore
         var textBytes = Encoding.UTF8.GetByteCount(text);
         if (textBytes > _maxDocumentBytes || textBytes > _maxLiveBytes)
         {
+            HasDiscardedText = true;
             RememberVersion(key, version);
             Remove(key, preserveVersion: true);
             TrimVersionTombstones();
@@ -78,6 +85,7 @@ internal sealed class LspLiveDocumentStore
             _documentBytes = Math.Max(0, _documentBytes - bytes);
             if (recordEviction)
             {
+                HasDiscardedText = true;
                 _evictionCount++;
                 _evictedBytes += bytes;
             }
