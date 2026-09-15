@@ -1,5 +1,10 @@
 # Developer Guide
 
+Python string masking preserves UTF-16 reference coordinates for persisted CLI
+columns and LSP ranges. See [Python reference coordinates](docs/python-reference-coordinates.md#english)
+for examples and the normal index refresh required for unchanged files from older
+extractor contracts.
+
 MCP `status.explainField` shares the CLI serializer-derived field explanations and
 compact metadata. Keep this static path ahead of database access and runtime
 diagnostic enrichment. See [MCP status explanations](docs/mcp-status-explanations.md#english)
@@ -4616,6 +4621,10 @@ CLI、レシピの再実行・フィンガープリント、MCP スキーマ、`
 API version 1 の互換性を維持し、新しい guard scope は contract version 1 を公開します。
 
 # 開発者ガイド
+
+Python の文字列マスクは UTF-16 の参照座標を保持し、保存済みの CLI 参照列と LSP の範囲を
+一致させます。具体例と、古い抽出契約で保存した未変更ファイルに必要な通常の索引更新は
+[Python の参照座標](docs/python-reference-coordinates.md#日本語)を参照してください。
 
 ## C# 部分更新の展開（#5347）
 

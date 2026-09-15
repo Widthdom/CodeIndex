@@ -1,5 +1,14 @@
 # Testing Guide
 
+Python reference-coordinate coverage (#5362) checks empty/ASCII/BMP/astral,
+escaped, raw, byte, adjacent, triple-quoted and literal f-strings with repeated
+same-line calls and string/comment decoys. Run `--filter FullyQualifiedName~Issue5362`
+on net8/net9 with the full symbol/reference extractor and LSP suites. The real UTF-8
+fixture in `IndexCommandRunnerPythonCoordinatesTests.cs` compares persisted columns,
+resolved target counts, CLI JSON and initialized Content-Length-framed LSP ranges.
+The existing Python full-scan upgrade fixture covers contracts 1 and 2, repairing
+unchanged reference rows while retaining unrelated-file reuse.
+
 Ad hoc count authority (#5357) extends `OriginContinuationIssue5348Tests` on
 net8/net9. Keep one-pass/continued code and unknown counts, ordinary/count-format,
 grouped/count-by/unique and named child/parent routes, zero results, output
@@ -1497,6 +1506,15 @@ Issue #5300 のテストは隣接・入れ子の C# callable、対象行の除�
 パーサー（#5297）の回帰テストとともに net8.0 / net9.0 で実行します。
 
 # テストガイド
+
+Python の参照座標テスト (#5362) は、空・ASCII・BMP・補助平面文字、エスケープ、raw、
+bytes、隣接文字列、三重引用符、式のない f-string を、同一行の複数呼び出しと文字列・
+コメント内の偽の呼び出しを含めて検証します。`--filter FullyQualifiedName~Issue5362`
+を net8/net9 で実行し、シンボル・参照抽出と LSP の全テストも併せて確認してください。
+`IndexCommandRunnerPythonCoordinatesTests.cs` の実際の UTF-8 ファイルを使うテストで、
+保存済みの列、解決済みターゲット数、CLI JSON、初期化済みで Content-Length フレームを
+使う LSP の範囲を比較します。既存の Python 全体索引更新テストは契約バージョン 1・2
+からの更新で、無関係なファイルの再利用を維持しつつ未変更の参照行を修復することを検証します。
 
 通常検索の件数の確定性 (#5357) は `OriginContinuationIssue5348Tests` を拡張し、
 net8/net9 で検証します。共通の字句窓 fixture で、1 パス／追加パスの code・unknown 件数、
