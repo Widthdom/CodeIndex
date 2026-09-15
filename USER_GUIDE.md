@@ -3639,12 +3639,11 @@ MCP stdio is line protocol: send one compact UTF-8 JSON-RPC object per LF-delimi
 `cdidx lsp --db .cdidx/codeindex.db` starts a read-only Language Server Protocol
 server over stdio. It reuses the existing CodeIndex database and exposes
 `initialize`, `workspace/symbol`, `textDocument/documentSymbol`,
-`textDocument/definition`, `textDocument/declaration`,
-`textDocument/typeDefinition`, `textDocument/implementation`, and
+`textDocument/definition`, `textDocument/declaration`, and
 `textDocument/references` for editors that can launch an arbitrary LSP command
 but do not speak MCP. It also advertises full `textDocument` sync and
 conservative `hover`, `completion`, `documentHighlight`, `semanticTokens/full`,
-`codeLens`, and `inlayHint` providers backed by indexed symbols and references
+and `inlayHint` providers backed by indexed symbols and references
 where available.
 C# constructor navigation is source-position-aware. For `new Type(...)`,
 `textDocument/definition` and `textDocument/declaration` use the exact indexed
@@ -3675,8 +3674,11 @@ out-of-phase notifications are ignored. Sending `exit` before a successful
 end position) and omits type labels when the indexed return type is already
 written immediately before the symbol name, so explicit field, property, and
 method types are not repeated as hints.
-Optional LSP methods that are not implemented are also not advertised. In the
-current support matrix, `textDocument/prepareRename`, `textDocument/rename`,
+Clients should use the `capabilities` returned by `initialize` to discover
+supported providers. Optional LSP methods that are not implemented are also not
+advertised. In the current support matrix, `textDocument/typeDefinition`,
+`textDocument/implementation`, `textDocument/codeLens`,
+`textDocument/prepareRename`, `textDocument/rename`,
 `textDocument/foldingRange`, `textDocument/selectionRange`, and
 `textDocument/signatureHelp` return JSON-RPC `-32601` (`Method not found`).
 Completion is symbol-index-backed: it searches indexed symbols for the token at
@@ -3756,9 +3758,8 @@ reader stops before decoding the over-limit bytes and reports
 `position_file_too_large`.
 `textDocument/references` honors `context.includeDeclaration`; when true, the
 definition locations are prepended to the reference result without duplicating
-identical locations. `declaration`, `typeDefinition`, and `implementation`
-requests reuse the same indexed definition lookup and return the same location
-shape as `definition`.
+identical locations. `declaration` requests reuse the same indexed definition
+lookup and return the same location shape as `definition`.
 Tracked `workspaceFolders` are used when resolving position-based requests for
 indexed absolute paths, including folders added or removed through
 `workspace/didChangeWorkspaceFolders`; relative indexed paths remain anchored to
@@ -7686,10 +7687,9 @@ MCP stdio は line protocol です。LF 区切りの各行に compact な UTF-8 
 任意の LSP command を起動できるが MCP には対応していない editor 向けに
 `initialize`、`workspace/symbol`、`textDocument/documentSymbol`、
 `textDocument/definition`、`textDocument/declaration`、
-`textDocument/typeDefinition`、`textDocument/implementation`、
 `textDocument/references` を公開します。さらに full `textDocument` sync と、
 indexed symbols / references で答えられる範囲に限定した `hover`、`completion`、
-`documentHighlight`、`semanticTokens/full`、`codeLens`、`inlayHint` provider を
+`documentHighlight`、`semanticTokens/full`、`inlayHint` provider を
 advertise します。
 C# の constructor navigation は source position を考慮します。`new Type(...)` に
 対する `textDocument/definition` と `textDocument/declaration` は、index 済みの
@@ -7716,7 +7716,9 @@ request は JSON-RPC `-32002`（`Server not initialized`）を返します。重
 `textDocument/inlayHint` は end position を含まない requested LSP range を尊重し、
 indexed return type が symbol name の直前にすでに明記されている場合は type label を
 省略するため、field / property / method の明示型を hint として重複表示しません。
-未実装の optional LSP method は advertise しません。現在の support matrix では
+対応する provider は `initialize` が返す `capabilities` で確認してください。
+未実装の optional LSP method は advertise しません。現在の対応状況では
+`textDocument/typeDefinition`、`textDocument/implementation`、`textDocument/codeLens`、
 `textDocument/prepareRename`、`textDocument/rename`、`textDocument/foldingRange`、
 `textDocument/selectionRange`、`textDocument/signatureHelp` は JSON-RPC `-32601`
 （`Method not found`）を返します。completion は symbol index ベースです。要求位置の
@@ -7785,7 +7787,7 @@ disk 上の position-line materialization も 4194304-byte 上限付きで strea
 最初の length check 後に file がこの上限を超えて増大した場合、上限超過 byte を decode する前に
 読み取りを停止し、`position_file_too_large` を報告します。
 `textDocument/references` は `context.includeDeclaration` を尊重し、true の場合は definition location を
-重複なしで reference result の先頭に追加します。`declaration`、`typeDefinition`、`implementation`
+重複なしで reference result の先頭に追加します。`declaration`
 request は同じ indexed definition lookup を再利用し、`definition` と同じ location shape を返します。
 追跡中の `workspaceFolders` は indexed absolute path に対する position-based request の解決に使われ、
 `workspace/didChangeWorkspaceFolders` で追加・削除された folder も反映されます。relative indexed path は
