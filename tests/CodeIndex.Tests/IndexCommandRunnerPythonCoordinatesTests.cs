@@ -76,7 +76,9 @@ public partial class IndexCommandRunnerTests
             static string Frame(string payload) => $"Content-Length: {Encoding.UTF8.GetByteCount(payload)}\r\n\r\n{payload}";
             var request = JsonSerializer.Serialize(new
             {
-                jsonrpc = "2.0", id = 2, method = "textDocument/references",
+                jsonrpc = "2.0",
+                id = 2,
+                method = "textDocument/references",
                 @params = new
                 {
                     textDocument = new { uri = new Uri(sourcePath).AbsoluteUri },
