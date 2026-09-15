@@ -116,18 +116,104 @@ public sealed class OriginContinuationIssue5348Tests
                 {
                     var args = new[] { command, "Needle", "--path", "src/a.cs", "--db", dbPath, "--origin", origin,
                         "--origin-passes", passes.ToString(), "--json", "--count", command == "find" ? "--regex" : "--exact" };
-                    var (_, output, error) = CaptureConsole(() => ProgramRunner.Run(args, JsonOptions, "test"));
+                    var (exit, output, error) = CaptureConsole(() => ProgramRunner.Run(args, JsonOptions, "test"));
                     Assert.Empty(error);
                     using var count = JsonDocument.Parse(output);
                     Assert.Equal(expected.Length, count.RootElement.GetProperty("count").GetInt32());
-                    if (command == "find")
-                    {
-                        Assert.Equal(passes == 3, count.RootElement.GetProperty("origin_classification_complete").GetBoolean());
-                        if (passes < 3)
-                            Assert.Equal(passes + 1, count.RootElement.GetProperty("retry_origin_passes").GetInt32());
-                    }
+                    Assert.Equal(passes == 3 ? 0 : CommandExitCodes.PartialResult, exit);
+                    Assert.Equal(passes == 3, count.RootElement.GetProperty("origin_classification_complete").GetBoolean());
+                    Assert.Equal(passes == 3, count.RootElement.GetProperty("authoritative_count").GetBoolean());
+                    if (passes < 3)
+                        Assert.Equal(passes + 1, count.RootElement.GetProperty("retry_origin_passes").GetInt32());
                 }
             }
+        }
+
+        // #5357: every ad hoc count route observes unknown candidates before filters
+        // and output limits; search counts result rows, whereas find counts occurrences.
+        foreach (var passes in new[] { 1, 3 })
+        {
+            var complete = passes == 3;
+            foreach (var mode in new[]
+            {
+                new[] { "Needle", "--format", "count" },
+                new[] { "Needle", "--group-by", "file", "--count" },
+                new[] { "Needle", "--count-by", "file" },
+                new[] { "Needle", "--unique", "origin" },
+                new[] { "Needle", "--format", "grouped", "--per-file-limit", "1" },
+                new[] { "--named-query", "hit=Needle", "--named-query", "empty=AbsentTerm", "--count" },
+            })
+            {
+                var args = new[] { "search", "--db", dbPath, "--origin", "code", "--origin-passes", passes.ToString(),
+                    "--exact", "--limit", "1" }.Concat(mode.Contains("grouped") ? [] : new[] { "--json" }).Concat(mode).ToArray();
+                var (exit, output, error) = CaptureConsole(() => ProgramRunner.Run(args, JsonOptions, "test"));
+                Assert.True(error.Length == 0, $"{string.Join(' ', mode)}: {error}");
+                Assert.True(exit == (complete ? 0 : CommandExitCodes.PartialResult), $"{string.Join(' ', mode)}: {output}");
+                using var count = JsonDocument.Parse(output);
+                AssertSearchOriginAuthority(count.RootElement, complete);
+                var countField = mode[0] == "--named-query" ? "result_count"
+                    : mode.Contains("grouped") ? "matched_count" : "count";
+                Assert.Equal(complete ? 3 : 1, count.RootElement.GetProperty(countField).GetInt32());
+                if (mode[0] == "--named-query")
+                {
+                    var children = count.RootElement.GetProperty("queries").EnumerateArray().ToArray();
+                    AssertSearchOriginAuthority(children[0], complete);
+                    AssertSearchOriginAuthority(children[1], true);
+                    Assert.Equal(0, children[1].GetProperty("count").GetInt32());
+                }
+                if (!complete)
+                {
+                    Assert.Contains("--origin-passes 2", count.RootElement.GetProperty("classification_recovery_guidance").GetString());
+                    var (accepted, acceptedJson, _) = CaptureConsole(() => ProgramRunner.Run(
+                        [.. args, "--allow-partial"], JsonOptions, "test"));
+                    Assert.Equal(0, accepted);
+                    using var partial = JsonDocument.Parse(acceptedJson);
+                    AssertSearchOriginAuthority(partial.RootElement, false);
+                }
+                else
+                {
+                    var (snapshotExit, snapshotJson, _) = CaptureConsole(() => ProgramRunner.Run(
+                        [.. args, "--read-only"], JsonOptions, "test"));
+                    Assert.Equal(0, snapshotExit);
+                    using var snapshot = JsonDocument.Parse(snapshotJson);
+                    AssertSnapshotLimitedCount(snapshot.RootElement);
+                    if (mode[0] == "--named-query")
+                        foreach (var child in snapshot.RootElement.GetProperty("queries").EnumerateArray())
+                            AssertSnapshotLimitedCount(child);
+                }
+            }
+        }
+
+        foreach (var filters in new[]
+        {
+            new[] { "--origin", "code" }, new[] { "--exclude-origin", "unknown" },
+            new[] { "--exclude-comments" }, new[] { "--result-kind", "identifier" },
+        })
+        {
+            foreach (var query in new[] { "Needle", "AbsentTerm" })
+            {
+                var args = new[] { "search", query, "--db", dbPath, "--count", "--json", "--token-boundary" }
+                    .Concat(filters).ToArray();
+                var (exit, output, _) = CaptureConsole(() => ProgramRunner.Run(args, JsonOptions, "test"));
+                Assert.Equal(query == "Needle" ? CommandExitCodes.PartialResult : 0, exit);
+                using var count = JsonDocument.Parse(output);
+                AssertSearchOriginAuthority(count.RootElement, query != "Needle");
+            }
+        }
+        var (plainExit, plainOutput, plainError) = CaptureConsole(() => ProgramRunner.Run(
+            ["search", "Needle", "--db", dbPath, "--origin", "code", "--count"], JsonOptions, "test"));
+        Assert.Equal(CommandExitCodes.PartialResult, plainExit);
+        Assert.Equal("1", plainOutput.Trim());
+        Assert.Contains("not authoritative", plainError);
+
+        // Intentionally omitted origin groups do not make fully classified totals partial.
+        var (groupExit, groupOutput, _) = CaptureConsole(() => ProgramRunner.Run(
+            ["search", "Needle", "--db", dbPath, "--origin-passes", "3", "--count-by", "origin", "--limit", "1", "--json"], JsonOptions, "test"));
+        Assert.Equal(0, groupExit);
+        using (var groups = JsonDocument.Parse(groupOutput))
+        {
+            Assert.True(groups.RootElement.GetProperty("groups_truncated").GetBoolean());
+            AssertSearchOriginAuthority(groups.RootElement, true);
         }
 
         foreach (var (passes, origin, expectedCount) in new[] { (3, "code", 3), (1, "unknown", 3) })
@@ -214,11 +300,27 @@ public sealed class OriginContinuationIssue5348Tests
         Assert.Equal(1, missing.Count);
         Assert.Contains("indexed_prefix_unavailable", missing.Scan.OriginIncompleteReasons!);
         Assert.Null(missing.Scan.RetryOriginPasses);
+        AssertUnrecoverableSearchCount("indexed_prefix_unavailable");
         Execute("UPDATE chunks SET content = '$\"{Call(}\";' WHERE start_line = 1");
         var malformed = reader.CountFindInFiles("Needle", regex: true, semanticFilters: new(["unknown"], [], []));
         Assert.Equal(1, malformed.Count);
         Assert.Contains("unbalanced_interpolation", malformed.Scan.OriginIncompleteReasons!);
         Assert.Null(malformed.Scan.RetryOriginPasses);
+        AssertUnrecoverableSearchCount("unbalanced_interpolation");
+
+        void AssertUnrecoverableSearchCount(string reason)
+        {
+            var (exit, output, error) = CaptureConsole(() => ProgramRunner.Run(
+                ["search", "Needle", "--db", dbPath, "--origin", "code", "--origin-passes", "2", "--format", "count", "--json"], JsonOptions, "test"));
+            Assert.Equal(CommandExitCodes.PartialResult, exit);
+            Assert.Empty(error);
+            using var count = JsonDocument.Parse(output);
+            AssertSearchOriginAuthority(count.RootElement, false);
+            Assert.Contains(reason, count.RootElement.GetProperty("classification_incomplete_reasons")
+                .EnumerateArray().Select(value => value.GetString()));
+            Assert.False(count.RootElement.TryGetProperty("retry_origin_passes", out _));
+            Assert.Contains("manually", count.RootElement.GetProperty("classification_recovery_guidance").GetString());
+        }
 
         Execute("DELETE FROM chunks");
         var writer = new DbWriter(db.Connection);
@@ -273,6 +375,23 @@ public sealed class OriginContinuationIssue5348Tests
         var restoredInterpolation = reader.CountFindInFiles("Needle", regex: true, semanticFilters: new(["code"], [], []));
         Assert.Equal(2, restoredInterpolation.Count);
         Assert.Equal(0, restoredInterpolation.Scan.UnknownOriginMatches);
+    }
+
+    private static void AssertSearchOriginAuthority(JsonElement result, bool complete)
+    {
+        Assert.Equal(complete, result.GetProperty("origin_classification_complete").GetBoolean());
+        Assert.Equal(complete, result.GetProperty("authoritative_count").GetBoolean());
+        Assert.Equal(!complete, result.GetProperty("degraded").GetBoolean());
+        if (!complete)
+            Assert.True(result.GetProperty("partial_result").GetBoolean());
+    }
+
+    private static void AssertSnapshotLimitedCount(JsonElement result)
+    {
+        Assert.True(result.GetProperty("origin_classification_complete").GetBoolean());
+        Assert.True(result.GetProperty("wal_stale_snapshot_risk").GetBoolean());
+        Assert.True(result.GetProperty("degraded").GetBoolean());
+        Assert.False(result.GetProperty("authoritative_count").GetBoolean());
     }
 
     private static void Seed(string dbPath, string[] lines)
