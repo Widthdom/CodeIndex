@@ -6152,8 +6152,10 @@ public partial class IndexCommandRunnerTests
         }
     }
 
-    [Fact]
-    public void Run_FullScan_ReindexesPythonSemanticTypeKindsWhenExtractorContractChanges_Issue4615()
+    [Theory]
+    [InlineData("1")]
+    [InlineData("2")]
+    public void Run_FullScan_ReindexesPythonSemanticTypeKindsWhenExtractorContractChanges_Issue4615_Issue5362(string oldVersion)
     {
         var projectRoot = CreateTempProject();
         try
@@ -6164,6 +6166,9 @@ public partial class IndexCommandRunnerTests
                 """
                 def target():
                     return 1
+
+                def caller():
+                    s = '😀'; target()
 
                 type UserId = int
                 """);
@@ -6179,8 +6184,10 @@ public partial class IndexCommandRunnerTests
                 cmd.CommandText = """
                     UPDATE symbols SET signature = 'def stale():' WHERE name = 'target';
                     UPDATE symbols SET kind = 'import' WHERE name = 'UserId';
-                    UPDATE codeindex_meta SET value = '1' WHERE key = 'symbol_extractor_version_python';
+                    UPDATE symbol_references SET column_number = 13 WHERE symbol_name = 'target';
+                    UPDATE codeindex_meta SET value = @oldVersion WHERE key = 'symbol_extractor_version_python';
                     """;
+                cmd.Parameters.AddWithValue("@oldVersion", oldVersion);
                 cmd.ExecuteNonQuery();
             }
 
@@ -6201,6 +6208,10 @@ public partial class IndexCommandRunnerTests
             using var typeKindCmd = verify.CreateCommand();
             typeKindCmd.CommandText = "SELECT kind FROM symbols WHERE name = 'UserId'";
             Assert.Equal("typealias", typeKindCmd.ExecuteScalar() as string);
+
+            using var columnCmd = verify.CreateCommand();
+            columnCmd.CommandText = "SELECT column_number FROM symbol_references WHERE symbol_name = 'target' AND reference_kind = 'call'";
+            Assert.Equal(15L, columnCmd.ExecuteScalar());
 
             using var versionCmd = verify.CreateCommand();
             versionCmd.CommandText = "SELECT value FROM codeindex_meta WHERE key = 'symbol_extractor_version_python'";

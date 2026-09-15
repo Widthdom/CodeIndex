@@ -11882,6 +11882,37 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_PythonStringsPreserveUtf16ReferenceColumns_Issue5362()
+    {
+        string[] literals =
+        [
+            "''", "'ascii'", "'日本語'", "'😀'", "\"終了() # 😀\"",
+            "'escaped \\' quote'", "r'終了() \\ 😀'", "b'bytes'", "'a' '😀'",
+            "'''終了() 😀'''", "f'終了() 😀'",
+        ];
+        foreach (var literal in literals)
+        {
+            var prefix = "    s = " + literal + "; ";
+            var between = "終了(); s = '😀'; ";
+            var line = prefix + between + "終了() # 終了()";
+            var content = "def 終了():\n    pass\ndef 開始():\n" + line;
+            var (_, references) = ExtractSymbolsAndReferences("python", content);
+            var calls = references.Where(reference => reference.ReferenceKind == "call").ToArray();
+
+            Assert.Equal(new[] { prefix.Length + 1, prefix.Length + between.Length + 1 },
+                calls.Select(reference => reference.Column));
+            Assert.All(calls, reference =>
+            {
+                Assert.Equal("終了", reference.SymbolName);
+                Assert.Equal("開始", reference.ContainerName);
+                Assert.Equal(4, reference.Line);
+                Assert.Equal(line.Trim(), reference.Context);
+                Assert.Equal("終了", line.Substring(reference.Column - 1, 2));
+            });
+        }
+    }
+
+    [Fact]
     public void Extract_PythonTripleQuotedString_DoesNotLeakPhantomCallReferences()
     {
         // Regression for issue #291: call-looking identifiers inside a Python

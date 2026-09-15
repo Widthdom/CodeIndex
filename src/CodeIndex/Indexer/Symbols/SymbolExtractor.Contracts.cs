@@ -5,7 +5,9 @@ public static partial class SymbolExtractor
     public const int DefaultContractVersion = 1;
     public const int ExpandedLanguageContractVersion = 2;
     public const int YamlContractVersion = 3;
-    public const int PythonContractVersion = 2;
+    // Refresh unchanged Python files to repair reference columns after string literals (#5362).
+    // 未変更の Python ファイルも再抽出し、文字列後の参照列を修復する (#5362)。
+    public const int PythonContractVersion = 3;
     // Version 15 (#5188) re-extracts C# calls so local-function lexical targets and
     // value-shadowing evidence are persisted for existing indexes.
     // バージョン 15 (#5188) は既存 index の C# call を再抽出し、local function の

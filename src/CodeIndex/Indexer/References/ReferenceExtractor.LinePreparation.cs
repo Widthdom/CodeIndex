@@ -32,7 +32,7 @@ public static partial class ReferenceExtractor
             UseCSharpTriggerFastPath: lang == "csharp",
             MaskRustLifetimes: lang == "rust",
             MaskStringLiterals: lang != "cobol",
-            PreserveStringLiteralWidth: lang is "crystal" or "groovy" or "prolog" or "ambiguous_pl",
+            PreserveStringLiteralWidth: lang is "python" or "crystal" or "groovy" or "prolog" or "ambiguous_pl",
             MaskNimRawStrings: lang == "nim",
             IncludeBacktickStringDelimiter: lang is not ("kotlin" or "r"),
             PreserveStringLiteralLength: ScientificNativeReferenceExtractor.Supports(lang),
