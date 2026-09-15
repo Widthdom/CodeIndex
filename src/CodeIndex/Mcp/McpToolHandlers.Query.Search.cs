@@ -140,6 +140,8 @@ public partial class McpServer
                     return CreateToolErrorResponse(id, FormatSearchGuardCandidateLimitError(ex));
                 }
                 var truncatedCount = countResults.Count >= MaxLimit;
+                if (guardFilters.Count > 0 && !tokenBoundary)
+                    countResults = countResults.DistinctBy(QueryCommandRunner.SearchDisplayResultUnitKey.Create).ToList();
                 var payload = BuildCountOnlyPayload(countResults.Count, truncatedCount ? null : countResults.Count, truncatedCount, countResults, result => result.Path);
                 payload["query"] = query;
                 AddSameSymbolGuardContext(payload, guardFilters, guardScope, guardWindow);

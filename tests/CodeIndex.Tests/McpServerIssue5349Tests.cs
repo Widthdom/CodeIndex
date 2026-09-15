@@ -67,30 +67,84 @@ public partial class McpServerTests
     [Fact]
     public void ToolsCall_SemanticGuardCountsAndQueryErrorsMatchSharedContracts_Issue5349()
     {
-        InsertIndexedFile("audit5349/guard-a.cs", "csharp", "Guard5349();\nNeedle5349();\nNeedle5349();\n");
-        InsertIndexedFile("audit5349/guard-b.cs", "csharp", "Guard5349();\nNeedle5349();\n");
-        foreach (var tokenBoundary in new[] { false, true })
+        // Issue #5360: several display rows share a chunk; one file also spans two chunks.
+        var writer = new DbWriter(_db.Connection);
+        foreach (var (path, chunks) in new (string, string[])[]
         {
-            var args = new JsonObject
+            ("audit5349/guard-a.cs", ["Guard5349();\nNeedle5349();\nNeedle5349();", "Guard5349();\nNeedle5349();"]),
+            ("audit5349/guard-b.cs", ["Guard5349();\nNeedle5349();"]),
+        })
+        {
+            var fileId = writer.UpsertFile(new FileRecord
             {
-                ["query"] = "Needle5349",
-                ["path"] = "audit5349/",
-                ["origin"] = "code",
-                [tokenBoundary ? "tokenBoundary" : "exact"] = true,
-                ["requireBefore"] = "Guard5349",
-                ["guardWindow"] = 8,
-                ["countOnly"] = true
-            };
-            var counted = Payload5349(Call5349("search", args));
-            string[] cliArgs = ["search", "Needle5349", "--path", "audit5349/", "--origin", "code",
+                Path = path,
+                Lang = "csharp",
+                Size = string.Join('\n', chunks).Length,
+                Lines = chunks.Sum(chunk => chunk.Split('\n').Length),
+                Modified = ManualTimeProvider.FixtureUtcNow.UtcDateTime,
+            });
+            var startLine = 1;
+            writer.InsertChunks(chunks.Select((content, index) =>
+            {
+                var chunk = new ChunkRecord
+                {
+                    FileId = fileId,
+                    ChunkIndex = index,
+                    StartLine = startLine,
+                    EndLine = startLine + content.Split('\n').Length - 1,
+                    Content = content,
+                };
+                startLine = chunk.EndLine + 1;
+                return chunk;
+            }).ToList());
+        }
+        foreach (var tokenBoundary in new[] { false, true })
+            foreach (var semantic in new[] { false, true })
+                foreach (var formatCount in new[] { false, true })
+                {
+                    var args = new JsonObject
+                    {
+                        ["query"] = "Needle5349",
+                        ["path"] = "audit5349/",
+                        [tokenBoundary ? "tokenBoundary" : "exact"] = true,
+                        ["requireBefore"] = "Guard5349",
+                        ["guardWindow"] = 8,
+                        ["limit"] = 1,
+                    };
+                    if (semantic) args["origin"] = "code";
+                    if (formatCount) args["format"] = "count";
+                    else args["countOnly"] = true;
+                    var counted = Payload5349(Call5349("search", args));
+                    string[] cliArgs = ["search", "Needle5349", "--path", "audit5349/",
+                .. semantic ? new[] { "--origin", "code" } : Array.Empty<string>(),
                 tokenBoundary ? "--token-boundary" : "--exact", "--require-before", "Guard5349", "--guard-window", "8",
                 "--count", "--json", "--db", _dbPath];
-            var (_, output, _) = CaptureConsole(() => ProgramRunner.Run(cliArgs, JsonOptions, "test"));
-            var expected = JsonNode.Parse(output)!["count"]!.GetValue<int>();
-            Assert.Equal(expected, counted["count"]!.GetValue<int>());
-            Assert.Equal(expected, counted["top_files"]!.AsArray().Sum(file => file!["count"]!.GetValue<int>()));
-            if (!tokenBoundary) Assert.Equal(2, expected);
-        }
+                    var (exitCode, output, error) = CaptureConsole(() => ProgramRunner.Run(cliArgs, JsonOptions, "test"));
+                    Assert.Equal(CommandExitCodes.Success, exitCode);
+                    Assert.Empty(error);
+                    var cli = JsonNode.Parse(output)!;
+                    var expected = tokenBoundary ? 4 : 3;
+                    Assert.Equal(expected, cli["count"]!.GetValue<int>());
+                    Assert.Equal(2, cli["file_count"]!.GetValue<int>());
+                    Assert.True(cli["authoritative_count"]!.GetValue<bool>());
+                    Assert.Equal(expected, counted["count"]!.GetValue<int>());
+                    Assert.Equal(expected, counted["total"]!.GetValue<int>());
+                    Assert.False(counted["truncated"]!.GetValue<bool>());
+                    Assert.Empty(counted["results"]!.AsArray());
+                    Assert.Equal(expected, counted["top_files"]!.AsArray().Sum(file => file!["count"]!.GetValue<int>()));
+                    var histogram = counted["top_files"]!.AsArray().ToDictionary(
+                        file => file!["path"]!.GetValue<string>(), file => file!["count"]!.GetValue<int>());
+                    Assert.Equal(2, histogram.Count);
+                    Assert.Equal(tokenBoundary ? 3 : 2, histogram["audit5349/guard-a.cs"]);
+                    Assert.Equal(1, histogram["audit5349/guard-b.cs"]);
+
+                    args["requireBefore"] = "MissingGuard5349";
+                    var empty = Payload5349(Call5349("search", args));
+                    Assert.Equal(0, empty["count"]!.GetValue<int>());
+                    Assert.Equal(0, empty["total"]!.GetValue<int>());
+                    Assert.False(empty["truncated"]!.GetValue<bool>());
+                    Assert.Empty(empty["top_files"]!.AsArray());
+                }
 
         foreach (var countOnly in new[] { false, true })
         {
@@ -106,6 +160,44 @@ public partial class McpServerTests
             Assert.Equal("invalid_argument", actual["structuredContent"]!["category"]!.GetValue<string>());
             Assert.Equal(expected["content"]!.ToJsonString(), actual["content"]!.ToJsonString());
         }
+    }
+
+    [Fact]
+    public void ToolsCall_GuardedCountKeepsScanCapAfterChunkDeduplication_Issue5360()
+    {
+        const string path = "audit5360/capped.cs";
+        InsertIndexedFile(path, "csharp", string.Join('\n', Enumerable.Repeat("Guard5360(); Needle5360();", 201)));
+        foreach (var tokenBoundary in new[] { false, true })
+            foreach (var guarded in new[] { false, true })
+            {
+                var args = new JsonObject
+                {
+                    ["query"] = "Needle5360",
+                    ["path"] = path,
+                    [tokenBoundary ? "tokenBoundary" : "exact"] = true,
+                    ["countOnly"] = true,
+                };
+                if (guarded)
+                {
+                    args["requireBefore"] = "Guard5360";
+                    args["guardScope"] = "same-line";
+                }
+                var counted = Payload5349(Call5349("search", args));
+                var expected = tokenBoundary ? 200 : 1;
+                Assert.Equal(expected, counted["count"]!.GetValue<int>());
+                Assert.Equal(expected, Assert.Single(counted["top_files"]!.AsArray())!["count"]!.GetValue<int>());
+                Assert.Empty(counted["results"]!.AsArray());
+                if (guarded || tokenBoundary)
+                {
+                    Assert.True(counted["truncated"]!.GetValue<bool>());
+                    Assert.Null(counted["total"]);
+                }
+                else
+                {
+                    Assert.False(counted["truncated"]!.GetValue<bool>());
+                    Assert.Equal(1, counted["total"]!.GetValue<int>());
+                }
+            }
     }
 
     [Fact]
