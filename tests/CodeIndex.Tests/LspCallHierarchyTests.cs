@@ -166,6 +166,66 @@ public sealed class LspCallHierarchyTests
         AssertError(fixture.Request("callHierarchy/incomingCalls", new { item = leaf }), -32801, "live_document_evicted_reconnect_required");
     }
 
+    [Fact]
+    public void FramedHierarchy_RejectsOversizedResponseAndKeepsSessionUsable_Issue5351()
+    {
+        var source = new StringBuilder("class Calls\n{\n void Leaf() {}\n");
+        for (var i = 0; i < LspServer.MaxCallHierarchyItems; i++)
+            source.AppendLine($" void {new string('節', 2048)}{i}() {{ Leaf(); }}");
+        source.AppendLine("}");
+        using var fixture = new Fixture(source.ToString());
+        var leaf = fixture.Prepare(2, "Leaf");
+        AssertError(fixture.Request("callHierarchy/incomingCalls", new { item = leaf }), -32803, "response_budget_exceeded");
+        Assert.Empty(fixture.Expand(leaf, incoming: false));
+        Assert.Equal(leaf["data"]!.GetValue<string>(), fixture.Prepare(2, "Leaf")["data"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void FramedHierarchy_PreparesWithinExactFileIdentity_Issue5351()
+    {
+        const string source = "class B\n{\n public void Leaf() {}\n}\nclass Calls\n{\n void Caller(B b)\n {\n        b.Leaf();\n }\n}";
+        const string foreign = "class Foreign\n{\n\n\n\n\n\n\n     void Leaf() {}\n}";
+        using var fixture = new Fixture(source, additionalFiles: new Dictionary<string, string> { ["Foreign.cs"] = foreign });
+        // Model case-colliding indexed files even on a case-insensitive test filesystem.
+        // The foreign file must never be selected or read for this document's position.
+        using (var db = new DbContext(DbOpenIntent.WriteIndex, fixture.DbPath))
+        using (var command = db.Connection.CreateCommand())
+        {
+            command.CommandText = "UPDATE files SET path = 'calls.cs' WHERE path = 'Foreign.cs'";
+            command.ExecuteNonQuery();
+        }
+        var declared = fixture.Prepare(2, "Leaf");
+        var atCall = fixture.Prepare(8, "Leaf");
+        Assert.Equal(fixture.Uri, atCall["uri"]!.GetValue<string>());
+        Assert.Equal(declared["data"]!.GetValue<string>(), atCall["data"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void FramedHierarchy_BoundsMetadataForOverlappingCallables_Issue5351()
+    {
+        const int nestedCount = 40;
+        var source = new StringBuilder("class Calls\n{\n void Leaf() {}\n void Root() {\n Leaf();\n");
+        for (var i = 0; i < nestedCount; i++)
+            source.AppendLine($" void Node{i}() {{\n Leaf();");
+        for (var i = 0; i < 2000; i++)
+            source.AppendLine("// " + new string('x', 1000));
+        source.AppendLine(new string('}', nestedCount + 2));
+        using var fixture = new Fixture(source.ToString());
+        using (var db = new DbContext(DbOpenIntent.QueryOnly, fixture.DbPath))
+        {
+            var reader = new DbReader(db);
+            var node = Assert.Single(reader.GetCallHierarchyDeclarations("Calls.cs", 6, 256).Where(symbol => symbol.Name == "Node0"));
+            Assert.NotNull(reader.GetCallHierarchySymbol(node.SymbolId!.Value));
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            for (var i = 0; i < 100; i++)
+                Assert.NotNull(reader.GetCallHierarchySymbol(node.SymbolId.Value));
+            var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+            Assert.True(allocated < 4 * 1024 * 1024, $"Metadata queries allocated {allocated} bytes for overlapping 2 MiB ranges.");
+        }
+        var leaf = fixture.Prepare(2, "Leaf");
+        Assert.Equal(nestedCount + 1, fixture.Expand(leaf, incoming: true).Count);
+    }
+
     [Theory]
     [InlineData("java", "class Calls {\n void leaf() {}\n void caller() { leaf(); }\n}", 1)]
     [InlineData("js", "function leaf() {}\nfunction caller() { leaf(); }", 0)]
@@ -283,11 +343,17 @@ public sealed class LspCallHierarchyTests
         internal JsonNode Capabilities { get; }
         internal List<string> Notices { get; } = [];
 
-        internal Fixture(string source, string fileName = "Calls.cs", Encoding? encoding = null)
+        internal Fixture(string source, string fileName = "Calls.cs", Encoding? encoding = null,
+            IReadOnlyDictionary<string, string>? additionalFiles = null)
         {
             SourcePath = Path.Combine(_root, fileName);
             DbPath = Path.Combine(_root, ".cdidx", "codeindex.db");
             File.WriteAllText(SourcePath, source, encoding ?? new UTF8Encoding(false));
+            if (additionalFiles != null)
+            {
+                foreach (var file in additionalFiles)
+                    File.WriteAllText(Path.Combine(_root, file.Key), file.Value);
+            }
             Reindex();
             var db = new DbContext(DbOpenIntent.QueryOnly, DbPath);
             Server = new LspServer(db, DbPath, "test", ProgramRunner.CreateDefaultJsonOptions(), _root);

@@ -8,6 +8,38 @@ internal sealed record IndexedCallSite(
 
 public partial class DbReader
 {
+    // Position and endpoint lookups return metadata only. Reconstructing overlapping
+    // definition excerpts would bypass the LSP request's bounded source-file cache.
+    internal List<SymbolResult> GetCallHierarchyDeclarations(string path, int line, int limit) =>
+        GetSymbolsAtLine(path, line, limit, kind: null, lang: null);
+
+    internal SymbolResult? GetCallHierarchySymbol(long symbolId)
+    {
+        using var command = _conn.CreateCommand();
+        command.CommandText = $"""
+            SELECT f.path, f.lang, s.kind, s.name, s.line,
+                   {GetSymbolColumnSql("start_line", "s.line")},
+                   {GetSymbolColumnSql("end_line", "s.line")},
+                   {GetSymbolColumnSql("body_start_line")},
+                   {GetSymbolColumnSql("body_end_line")},
+                   {GetSymbolColumnSql("signature")},
+                   {GetSymbolColumnSql("container_kind")},
+                   {GetSymbolColumnSql("container_name")},
+                   {GetSymbolColumnSql("visibility")},
+                   {GetSymbolColumnSql("return_type")}, s.id,
+                   {GetSymbolColumnSql("container_qualified_name")},
+                   {GetSymbolColumnSql("sub_kind")},
+                   {GetSymbolColumnSql("start_column")}
+            FROM symbols s
+            JOIN files f ON f.id = s.file_id
+            WHERE s.id = @symbol
+            LIMIT 1
+            """;
+        SqliteCommandPolicy.Add(command, "@symbol", symbolId);
+        using var rows = command.ExecuteTrackedReader();
+        return rows.TrackedRead() ? ReadSymbolResult(rows) : null;
+    }
+
     // LSP needs individual sites and both endpoints, rather than the grouped CLI rows.
     // Use the same persisted reference identities and call kind; never bind by name.
     internal List<IndexedCallSite> GetCallHierarchySites(long symbolId, bool incoming, int limit)

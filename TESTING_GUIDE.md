@@ -5,8 +5,9 @@
 `LspCallHierarchyTests` runs framed, initialized LSP sessions against real indexed
 temporary projects on net8.0/net9.0. Keep exact overload/same-name identities,
 recursive and repeated sites, UTF-16/file-URI ranges, existing navigation controls,
-unsaved/stale/incomplete/ambiguous evidence, high-degree bounds and cancellation
-with session reuse together. See [the protocol contract](docs/lsp-call-hierarchy.md#english).
+unsaved/stale/incomplete/ambiguous evidence, exact file identity, overlapping large
+callable ranges, high-degree/response-size bounds and cancellation with session
+reuse together. See [the protocol contract](docs/lsp-call-hierarchy.md#english).
 
 MCP search parity coverage (#5349) lives in `McpServerIssue5349Tests` and
 `HttpMcpTransportTests`. Run `--filter FullyQualifiedName~Issue5349` on net8/net9
@@ -1432,8 +1433,9 @@ Check the following:
 `LspCallHierarchyTests` は実際に索引を作成した一時プロジェクトを使い、初期化済みの
 LSPセッションにフレーム形式で要求を送り、net8.0/net9.0で検証します。同名・
 オーバーロードの正確な識別、再帰・複数の呼び出し箇所、UTF-16とファイルURIの範囲、
-既存ナビゲーション、未保存・古い・未完成・曖昧な証拠、高次数の上限、キャンセル後の
-セッション継続を併せて維持してください。[プロトコル契約](docs/lsp-call-hierarchy.md#日本語)を参照してください。
+既存ナビゲーション、未保存・古い・未完成・曖昧な証拠、正確なファイル識別、重なり合う
+大きな関数範囲、高次数・応答サイズの上限、キャンセル後のセッション継続を併せて
+維持してください。[プロトコル契約](docs/lsp-call-hierarchy.md#日本語)を参照してください。
 
 名前付き検索の行選択（#5325）は、重複チャンクを含む小さな共通 fixture で単一・複数・
 共有ファイル・空クエリ、selector、全体／クエリ上限、rich / compact / 投影 JSON、text、

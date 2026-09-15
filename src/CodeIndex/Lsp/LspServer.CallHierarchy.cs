@@ -80,7 +80,7 @@ internal sealed partial class LspServer
                 if (read.Generation != _reader.GetCallHierarchyGeneration()
                     || (_ownedQueryDb != null && !_ownedQueryDb.IsQueryOnlySnapshotCurrent()))
                     throw new CallHierarchyException("index_generation_changed", changed: true);
-                var response = Result(id, items);
+                var response = Result(id?.DeepClone(), items);
                 if (Encoding.UTF8.GetByteCount(response.ToJsonString(_jsonOptions)) > MaxCallHierarchyResponseBytes)
                     throw new CallHierarchyException("response_budget_exceeded");
                 return response;
@@ -127,19 +127,39 @@ internal sealed partial class LspServer
                 return null;
             throw new CallHierarchyException("position_unavailable");
         }
-        ReadCallHierarchyFile(context.IndexedPath, read);
-        var definitions = _reader.GetDefinitions(context.Token, MaxReferencePositionCandidates + 1,
-            exact: true, pathPatterns: [context.IndexedPath]);
+        var lines = ReadCallHierarchyFile(context.IndexedPath, read);
+        var definitions = _reader.GetCallHierarchyDeclarations(context.IndexedPath,
+            context.Line + 1, MaxReferencePositionCandidates + 1);
         if (definitions.Count > MaxReferencePositionCandidates)
             throw new CallHierarchyException("symbol_candidate_budget_exceeded");
-        var selected = FindDefinitionsAtPosition(definitions, context);
+        var lineCache = new Dictionary<int, string?> { [context.Line] = lines[context.Line] };
+        var selected = definitions.Where(definition =>
+        {
+            if (definition.Line != context.Line + 1)
+                return false;
+            var identifier = GetSymbolIdentifierPosition(definition, context.ResolvedPath, lineCache);
+            return context.StartCharacter < identifier.EndColumn - 1
+                && context.EndCharacter > identifier.StartColumn - 1;
+        }).ToList();
         if (selected.Count == 0)
         {
             var resolution = _reader.GetReferencePositionResolution(context.IndexedPath, context.Token,
                 context.Line + 1, context.StartCharacter + 1, MaxReferencePositionCandidates);
             if (!resolution.IdentityAvailable || resolution.CandidatesTruncated)
                 throw new CallHierarchyException("reference_identity_unavailable");
-            selected = ResolveReferenceTargetsAtPosition(context);
+            selected = resolution.Candidates.Where(candidate => candidate.Authoritative)
+                .Select(candidate => candidate.Definition).ToList();
+            if (selected.Count != 1)
+            {
+                selected = resolution.Candidates.Select(candidate => candidate.Definition).ToList();
+                if (TryGetCSharpInvocationArgumentCount(context, out var argumentCount))
+                {
+                    var matchingArity = selected.Where(candidate =>
+                        TryGetCSharpDefinitionParameterCount(candidate, out var count) && count == argumentCount).ToList();
+                    if (matchingArity.Count > 0)
+                        selected = matchingArity;
+                }
+            }
             if (selected.Count == 0)
                 throw new CallHierarchyException("unresolved_or_ambiguous_position");
         }
@@ -169,8 +189,9 @@ internal sealed partial class LspServer
         var prefix = CallHierarchyDataPrefix(read);
         if (!token.StartsWith(prefix, StringComparison.Ordinal))
             throw new CallHierarchyException("stale_item", changed: true);
-        var resolution = _reader.ResolveGraphSymbolSelector(token[prefix.Length..]);
-        if (resolution.Status != GraphSymbolSelectorStatus.Success || resolution.Definition is not { } definition)
+        if (!SymbolSelector.TryParse(token[prefix.Length..], out var selector)
+            || selector.GenerationFingerprint == null || !_reader.IsCurrentSymbolSelector(selector)
+            || _reader.GetCallHierarchySymbol(selector.SymbolId) is not { } definition)
             throw new CallHierarchyException("stale_item", changed: true);
         if (!IsCallHierarchyCallable(definition))
             throw new ArgumentException("Call hierarchy item is not callable.");
@@ -183,7 +204,7 @@ internal sealed partial class LspServer
         if (sites.Count > MaxCallHierarchySites)
             throw new CallHierarchyException("call_site_budget_exceeded");
         var groups = new Dictionary<long, (JsonObject Item, JsonArray Ranges)>();
-        var definitionsById = new Dictionary<long, DefinitionResult> { [definition.SymbolId.Value] = definition };
+        var definitionsById = new Dictionary<long, SymbolResult> { [definition.SymbolId.Value] = definition };
         var seen = new HashSet<(long Source, long Target, int Line, int Column, int Length)>();
         foreach (var site in sites)
         {
@@ -230,11 +251,11 @@ internal sealed partial class LspServer
             result.Add(new JsonObject { [incoming ? "from" : "to"] = group.Item, ["fromRanges"] = group.Ranges });
         return result;
 
-        DefinitionResult GetDefinition(long symbolId)
+        SymbolResult GetDefinition(long symbolId)
         {
             if (definitionsById.TryGetValue(symbolId, out var cached))
                 return cached;
-            var found = _reader.GetDefinitionBySelector(new SymbolSelector(symbolId))
+            var found = _reader.GetCallHierarchySymbol(symbolId)
                 ?? throw new CallHierarchyException("call_endpoint_unavailable");
             definitionsById.Add(symbolId, found);
             return found;
@@ -244,7 +265,7 @@ internal sealed partial class LspServer
     private string CallHierarchyDataPrefix(CallHierarchyRead read) =>
         _callHierarchySession + ":" + SymbolSelector.BuildGenerationFingerprint(read.Generation) + ":";
 
-    private JsonObject CreateCallHierarchyItem(DefinitionResult symbol, CallHierarchyRead read)
+    private JsonObject CreateCallHierarchyItem(SymbolResult symbol, CallHierarchyRead read)
     {
         var lines = ReadCallHierarchyFile(symbol.Path, read);
         var fullPath = read.Files[symbol.Path].FullPath;
