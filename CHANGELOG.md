@@ -130,6 +130,43 @@ Recent releases (v1.41.0 onward) remain below. Older releases retain both langua
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.50.0] - 2026-09-16
+
+#### Added
+
+- **MCP semantic search and bounded repository find (#5349)** — `search`, recipes, and regex `find_in_file` now accept CLI origin/result-kind and fixture filters. The additive `find` tool supports repository-wide scanning, scan budgets, count pages, and generation-bound continuation. Structured results retain unknown-origin authority, partial results, and recovery guidance across STDIO, HTTP, and batches; byte-limited find pages preserve omitted matches for resumption. Guarded semantic counts follow CLI result units, and incomplete recipe classification/candidate coverage remains non-authoritative with recovery metadata. Completed scans retain authority regardless of page size.
+- **Link manually published issues to local suggestions (#5350)** — `suggestions link <id> --repo <owner/name> --issue <number-or-url>` atomically records an existing GitHub issue with manual provenance and a UTC audit timestamp, without network verification or issue creation. Multiple suggestions can share one issue; identical repeats preserve history and conflicting links are rejected. List/show/export and duplicate submission recognize the association without fabricating submission attempts or implementation completion.
+
+- Association writes that would exceed the store's 8 MiB read limit fail before replacement, preserving the original history.
+- **Added indexed LSP call hierarchy (#5351)** — Editors can prepare and expand incoming/outgoing calls using generation-bound symbol identities, UTF-16 ranges and repeated call sites. Unavailable, ambiguous, stale or over-budget evidence produces explicit LSP errors; successful results retain indexed-graph limitations.
+- **MCP can explain individual status fields (#5352)** — `status` accepts `explainField` for the shared CLI field/member explanations without reading runtime values. Compact and byte-bounded output preserve required explanation fields, omission accounting, and measured minimum-size retry errors, including batch retry guidance. Existing aggregate `explain` modes retain their meanings.
+
+#### Changed
+
+- **Explain C# incremental-update expansion and reduce proven independent work (#5347)** — scoped updates report bounded trigger/decision, original/expanded/final target counts, and preflight phase costs in immediate output and persisted status. Matching complete source-input evidence can narrow re-extraction while retaining workspace snapshot guards; missing evidence, contract/configuration changes, hooks, filters and incomplete inputs retain conservative processing.
+
+#### Fixed
+
+- **Batch summaries preserve structured partial query results and definition NDJSON (#5344)** — validated exit-11 results retain rows, terminal metadata, continuation cursors and diagnostic records alongside their error status and failure accounting. Definition JSON uses a stable `results` array for one or multiple rows, while document formats keep `result`. Malformed captures and unrelated failures retain typed errors, and parent output limits still apply.
+- **Preserve ordinary repository evidence links in suggestions (#5345)** — bounded, validated relative file references such as `artifacts/full-dogfood-20260912/FINDINGS.md#d01` now survive saving, display, and JSON/Markdown/issue-draft export. Credential detection remains active, including quoted/concatenated values, YAML blocks, and path-like text; URL/rooted-path suffixes remain excluded, and the identifier controls from #4403 and #4751 remain covered. Previously redacted editable drafts can be repaired with `suggestions update --context` only when the original text is explicitly supplied.
+- **Dependency summaries distinguish returned counts from complete totals (#5346)** — `deps --summary-only --json` now reports count units, additional-result evidence, candidate coverage, query exhaustion, and total-count availability/authority. Bounded lookahead preserves existing candidate budgets; cycle summaries reuse their analysis totals, and incomplete graphs or stale SQL contracts anywhere in the query scope cannot make totals authoritative.
+- **Continue bounded C# origin classification beyond the initial prefix (#5348)** — `search`, `audit`, and `find --regex` accept `--origin-passes` (1–16, default 1). Each additional pass resumes lexical state within the indexed snapshot while retaining the 4,096-line, 8 Mi-character and 128-chunk limits. Generation changes or conflicting overlap discard the provisional context. Unknown diagnostics identify exhausted budgets and bounded retry actions; missing or malformed context remains unknown, and find origin filters, counts and cursor pages retain conservative completeness semantics.
+- **Search counts preserve unknown origin coverage (#5357)** — Ad hoc counts, grouped counts/results, aggregations and named-query count summaries now report non-authoritative partial results when candidates have unknown origins, including candidates rejected by semantic filters. JSON and human output provide classification recovery guidance; `--allow-partial` preserves the metadata while accepting exit 0. Complete zero counts and intentional output selection remain distinct from incomplete classification. Existing SQLite snapshot degradation keeps counts non-authoritative even after classification completes.
+- **Guarded MCP search counts now match CLI result units (#5360)** — Without token-boundary mode, `countOnly` and `format: "count"` count each matched indexed chunk once and use the same units in `top_files`. Bounded scan truncation, semantic-filter coverage, and token-boundary row counts retain their existing behavior.
+- **Preserve Python reference columns after string literals (#5362)** — String masking now retains UTF-16 source offsets, including astral characters and repeated calls on one line, keeping persisted CLI columns and LSP reference ranges aligned. A normal whole-workspace index refresh repairs unchanged Python files using extractor contract 3; no forced rebuild is required.
+- **LSP navigation selects local candidates by exact indexed file identity (#5373)** — Definition, declaration and reference lookups no longer treat case-colliding paths, literal glob characters or directory prefixes as the requested file. Exact selection happens before candidate limits, while overload resolution and authoritative references across files retain their existing behavior. No reindex is required.
+- **Named-query search counts now honor token boundaries (#5376)** — `--count`, `--format count`, and `--summary-only` forward `--token-boundary` just like ordinary counts and named result rows, excluding matches inside longer identifiers while preserving result-row count units and origin coverage.
+- **LSP document symbols use exact indexed file identity (#5382)** — Both indexed lookup and the unsupported-live-extraction fallback now select the literal, case-sensitive indexed path before candidate limits. Other files cannot corrupt the document's hierarchy or ranges, displace its symbols, or cause false partial-result truncation.
+
+#### Documentation
+
+- Keep the bilingual README focused on an introduction, quick start, capabilities, documentation links, contribution policy, and license. Consolidate query, audit, indexing, and status details into existing user/developer guide sections, retain one badge block at the top, and align documentation checks with the linked references.
+- **Corrected the documented LSP capabilities (#5363)** — Both user-guide language sections now identify `textDocument/typeDefinition`, `textDocument/implementation`, and `textDocument/codeLens` as unadvertised, unsupported methods that return JSON-RPC `-32601`. Clients are directed to discover supported providers through `initialize`, and the shared definition-lookup description now applies only to `declaration`.
+
+#### Internal
+
+- Remove an unused private C# qualified constant-pattern helper whose sole call was removed when canonical `member_read` references were introduced. Constant-pattern and member-read extraction behavior is unchanged.
+
 ### [1.49.0] - 2026-09-12
 
 #### Added
@@ -802,6 +839,42 @@ v1.41.0 以降はこのファイルに、それ以前の日英の履歴は次の
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.50.0] - 2026-09-16
+
+#### 追加
+
+- **MCP の意味フィルターと上限付きリポジトリ横断検索 (#5349)** — `search`、recipe、正規表現の `find_in_file` で CLI と同じ origin・結果種別・fixture フィルターを使えるようになりました。新しい `find` は横断走査、走査上限、件数ページ、索引世代に紐づく継続取得に対応します。STDIO・HTTP・batch の構造化結果で unknown の確定性、部分結果、復旧案内を保持し、応答サイズで省略した一致も次ページから取得できます。guard 付き意味フィルターの件数は CLI と同じ結果単位で数え、recipe の分類・候補走査が不完全な場合は復旧情報を保持して非確定とします。完了済みの走査はページサイズにかかわらず確定性を維持します。
+- **手動公開した Issue をローカル提案に関連付けられるようになりました (#5350)** — `suggestions link <id> --repo <owner/name> --issue <number-or-url>` は、リモート検証や Issue 作成を行わず、既存 GitHub Issue、手動登録の出所、UTC の監査日時を原子的に保存します。複数提案を1つの Issue に関連付けられ、同一の再実行は履歴を維持し、競合するリンクは拒否します。一覧・詳細・エクスポート・重複投稿は関連付けを認識し、投稿試行や実装完了を捏造しません。
+- 関連付け後の JSON がストアの読み取り上限8 MiBを超える場合は置換前に失敗し、元の履歴を保持します。
+- **索引に基づくLSPコール階層を追加しました (#5351)** — 世代に結び付いたシンボル識別情報、UTF-16範囲、複数の呼び出し箇所を使い、エディターから呼び出し元・先を展開できます。利用不能・曖昧・古い証拠や上限超過には明示的なLSPエラーを返し、成功時も索引グラフの制限を通知します。
+- **MCP から個別の status フィールドを説明できるようになりました (#5352)** — `status` の `explainField` が、実行時の値を読まず CLI と共通のフィールド・メンバー説明を返します。compact 形式とバイト上限付き出力でも必須説明フィールド、省略情報、実測した最小サイズを示す再試行エラーを維持し、バッチでの再試行も案内します。既存の集約用 `explain` モードの意味は変わりません。
+
+#### 変更
+
+- **C# 差分更新の展開理由を示し、独立性を確認できた処理量を削減 (#5347)** — 部分更新の直後の出力と保存済み status に、上限付きの契機・判断、元／展開後／最終対象数、前処理の工程別コストを出力します。完全なソース入力の証拠が一致する場合は全体スナップショット検証を維持して再抽出対象を絞り、証拠不足、契約・設定変更、フック、フィルター、不完全な入力では保守的な処理を継続します。
+
+#### 修正
+
+- **batch summaryが構造化された部分結果とdefinitionのNDJSONを保持するようになりました (#5344)** — 検証済みの終了コード11の結果は、エラー状態と失敗件数を維持しながら、結果行・終端情報・再開cursor・診断レコードを保持します。definitionのJSONは1件・複数件とも安定した `results` 配列になり、単一文書形式は `result` を維持します。不正な出力や無関係な失敗は型付きエラーとなり、親の出力上限も引き続き適用されます。
+- **提案内の通常のリポジトリ証拠リンクを保持します（#5345）** — `artifacts/full-dogfood-20260912/FINDINGS.md#d01` のような、長さと構成を検証した相対ファイル参照を、保存・表示・JSON／Markdown／Issue draft のエクスポートで保持するようになりました。引用符付きの値・連結値・YAML ブロック・パス形式の文字列内でも資格情報の検出を維持し、URL・絶対パスの末尾は引き続き例外対象から除外します。#4403 と #4751 の識別子の回帰テストも維持します。過去に伏字になった編集可能な draft は、`suggestions update --context` で原文を明示した場合だけ修復できます。
+- **依存関係 summary が返却件数と完全な総件数を区別します (#5346)** — `deps --summary-only --json` は件数の単位、追加結果の証拠、候補範囲、検索完了、総件数の確定可否と authority を報告します。先読みは既存の候補上限を維持し、循環 summary は解析済みの総件数を再利用します。不完全なグラフやクエリ範囲内の古い SQL 契約がある場合は、総件数を authoritative としません。
+- **C# の origin 分類を最初のプレフィックス以降へ上限付きで継続可能に (#5348)** — `search`、`audit`、`find --regex` に `--origin-passes`（1〜16、既定 1）を追加しました。追加パスは同じ索引スナップショット内で字句状態を引き継ぎ、各パスの 4,096 行・8 Mi 文字・128 チャンクの上限を維持します。索引世代の変更や重複行の不一致があれば暫定文脈を破棄します。unknown の診断は到達した上限と上限付き再試行を案内し、文脈の欠落や不正な構文は unknown のまま扱い、find の origin フィルター・件数・カーソルページで保守的な完全性判定を維持します。
+- **検索件数が origin 分類の不完全さを保持するよう修正 (#5357)** — 通常の件数、グループ化した件数・結果、集計、名前付きクエリの件数要約で、意味フィルターで除外した候補を含め unknown があれば非確定の部分結果として報告します。JSON と人向け出力は分類の復旧案内を示し、`--allow-partial` は情報を保持して終了コード 0 を許容します。完全に評価したゼロ件や意図的な出力選択は分類の不完全さと区別します。SQLite スナップショットの確定性が低下している場合は、分類完了後も件数を非確定として保持します。
+- **guard 付き MCP 検索の件数を CLI と同じ単位に修正しました (#5360)** — token-boundary を使わない `countOnly` と `format: "count"` は、一致した索引済みチャンクを1回だけ数え、`top_files` も同じ単位で集計します。上限付き走査の切り詰め判定、意味フィルターの網羅性、token-boundary の行単位集計は従来の挙動を維持します。
+- **Python の文字列リテラル後の参照列を保持 (#5362)** — 文字列のマスクが UTF-16 のソース位置を保持し、補助平面文字や同一行の複数の呼び出しでも、保存済みの CLI 参照列と LSP 参照範囲が一致します。抽出契約バージョン 3 により、通常のワークスペース全体の索引更新で未変更の Python ファイルも修復され、強制再構築は不要です。
+- **LSP のナビゲーションで文書内の候補を索引内のファイルの完全一致で選択します (#5373)** — 定義・宣言・参照の検索で、大小文字だけが異なるパス、glob の特殊文字を含むパス、ディレクトリの接頭辞から別ファイルを誤選択しなくなりました。候補数の上限より前に完全一致で絞り、オーバーロード解決や別ファイルの確定済み参照先への移動は従来の動作を維持します。再索引は不要です。
+- **名前付き検索の件数取得がトークン境界を尊重するようになりました (#5376)** — `--count`、`--format count`、`--summary-only` が通常の件数取得や名前付きの結果行と同様に `--token-boundary` を渡し、長い識別子の内部一致を除外します。結果行を単位とする件数と origin の判定範囲は維持します。
+- **LSP 文書シンボルが索引ファイルの完全一致を使用 (#5382)** — 通常の索引取得とライブ抽出が利用できない場合のフォールバックで、候補数の上限より先に、大小文字を区別したリテラルな索引パスを選択します。別ファイルの宣言による階層・範囲の破損、要求文書のシンボル欠落、部分結果の誤った切り詰め通知を防ぎます。
+
+#### ドキュメント
+
+- README の日英双方を概要・導入・主な機能・ドキュメント案内・貢献方針・ライセンスに絞りました。検索・監査・索引・status の詳細を既存のユーザー／開発者ガイドへ統合し、バッジを冒頭の1組にまとめ、参照先に合わせてドキュメント検証を更新しました。
+- **LSP の対応機能に関する記載を訂正しました (#5363)** — ユーザーガイドの英日両セクションで、`textDocument/typeDefinition`、`textDocument/implementation`、`textDocument/codeLens` は対応機能として通知されず、JSON-RPC `-32601` を返す未対応メソッドであることを明記しました。対応機能は `initialize` で確認するよう案内し、定義検索を共有するという説明の対象を `declaration` のみに訂正しました。
+
+#### 内部変更
+
+- 正規の `member_read` 参照の導入時に唯一の呼び出しが削除されていた、C# の修飾定数パターン用の未使用 private ヘルパーを削除しました。定数パターンとメンバー読み取りの参照抽出の挙動は変わりません。
+
 ### [1.49.0] - 2026-09-12
 
 #### 追加
@@ -1349,7 +1422,8 @@ v1.41.0 以降はこのファイルに、それ以前の日英の履歴は次の
 - **読取不能な marker fixture が target framework 間の並列テストへ干渉しないようになりました (#5019)** — MCP の marker-fingerprint fixture を repository の build output 外にある独立した一時 workspace へ移し、別 target framework の source-policy scan が意図的に unreadable にした directory へ再帰進入しないようにしました。
 - **parallel detached-snapshot fixture が thread-pool timing や広範な status diagnostics に依存しなくなりました (#5033)** — interactive batch loop を専用 test thread で実行し、非同期 completion signal と軽量な file-count query で generation refresh を確認するため、suite 負荷下でも net8 test が安定して完了します。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.49.0...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.50.0...HEAD
+[1.50.0]: https://github.com/Widthdom/CodeIndex/compare/v1.49.0...v1.50.0
 [1.49.0]: https://github.com/Widthdom/CodeIndex/compare/v1.48.0...v1.49.0
 [1.48.0]: https://github.com/Widthdom/CodeIndex/compare/v1.47.0...v1.48.0
 [1.47.0]: https://github.com/Widthdom/CodeIndex/compare/v1.46.1...v1.47.0
