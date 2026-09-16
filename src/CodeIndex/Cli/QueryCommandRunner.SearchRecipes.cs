@@ -5127,7 +5127,8 @@ public static partial class QueryCommandRunner
                     !options.NoVisibilityRank,
                     guardFilters: options.GuardFilters,
                     guardWindow: options.GuardWindow,
-                    guardScope: options.GuardScope);
+                    guardScope: options.GuardScope,
+                    tokenBoundary: options.TokenBoundary);
                 var originCoverage = new SearchCountOriginCoverage(options);
                 var rows = BuildSearchDisplayRows(results, options, userExact, namedQuery.Query,
                     countOriginCoverage: originCoverage);
