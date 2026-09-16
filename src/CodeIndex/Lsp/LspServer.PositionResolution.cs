@@ -19,7 +19,7 @@ internal sealed partial class LspServer : IDisposable
 {
     private List<DefinitionResult> ResolveLspDefinitions(PositionTokenContext context)
     {
-        var localDefinitions = _reader.GetDefinitions(context.Token, DefaultLimit, exact: true, pathPatterns: [context.IndexedPath]);
+        var localDefinitions = GetLocalLspDefinitions(context);
         if (localDefinitions.Count > 0)
         {
             var positionDefinitions = FindDefinitionsAtPosition(localDefinitions, context);
@@ -49,7 +49,7 @@ internal sealed partial class LspServer : IDisposable
 
     private IReadOnlyList<ReferenceResult> ResolveLspReferences(PositionTokenContext context)
     {
-        var localDefinitions = _reader.GetDefinitions(context.Token, DefaultLimit, exact: true, pathPatterns: [context.IndexedPath]);
+        var localDefinitions = GetLocalLspDefinitions(context);
         if (localDefinitions.Count > 0)
         {
             var positionDefinitions = FindDefinitionsAtPosition(localDefinitions, context);
@@ -69,10 +69,10 @@ internal sealed partial class LspServer : IDisposable
             if (authoritativeUnresolved)
                 return [];
 
+            using var fileScope = DbReader.BeginExactFilePath(context.IndexedPath);
             return _reader.SearchReferences(
                 context.Token,
                 DefaultLimit,
-                pathPatterns: [context.IndexedPath],
                 exact: true);
         }
 
@@ -93,9 +93,18 @@ internal sealed partial class LspServer : IDisposable
         }
 
         if (workspaceDefinitions.Count == 0 || !HasSingleLspDefinitionTarget(workspaceDefinitions))
-            return _reader.AnalyzeSymbol(context.Token, DefaultLimit, pathPatterns: [context.IndexedPath], exact: true).References;
+        {
+            using var fileScope = DbReader.BeginExactFilePath(context.IndexedPath);
+            return _reader.AnalyzeSymbol(context.Token, DefaultLimit, exact: true).References;
+        }
 
         return _reader.AnalyzeSymbol(context.Token, DefaultLimit, exact: true).References;
+    }
+
+    private List<DefinitionResult> GetLocalLspDefinitions(PositionTokenContext context)
+    {
+        using var fileScope = DbReader.BeginExactFilePath(context.IndexedPath);
+        return _reader.GetDefinitions(context.Token, DefaultLimit, exact: true);
     }
 
     private List<DefinitionResult> ResolveReferenceTargetsAtPosition(PositionTokenContext context)
@@ -354,6 +363,9 @@ internal sealed partial class LspServer : IDisposable
         var sourceLine = context.Line + 1;
         return definitions.Where(definition =>
         {
+            if (!string.Equals(definition.Path, context.IndexedPath, StringComparison.Ordinal))
+                return false;
+
             var identifier = GetSymbolIdentifierPosition(definition, context.ResolvedPath);
             if (identifier.Line != sourceLine)
                 return false;

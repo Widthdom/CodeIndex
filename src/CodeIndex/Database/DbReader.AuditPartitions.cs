@@ -2,17 +2,8 @@ namespace CodeIndex.Database;
 
 public partial class DbReader
 {
-    private static readonly AsyncLocal<string?> AuditPartitionPath = new();
-
     internal static IDisposable BeginAuditPartitionPath(string? path)
-        => new AuditPartitionPathLease(path);
-
-    private sealed class AuditPartitionPathLease : IDisposable
-    {
-        private readonly string? _previous = AuditPartitionPath.Value;
-        internal AuditPartitionPathLease(string? path) => AuditPartitionPath.Value = path;
-        public void Dispose() => AuditPartitionPath.Value = _previous;
-    }
+        => BeginExactFilePath(path);
 
     // The caller shares one row budget across all effective child scopes. No counts,
     // content reads, or unbounded inventory allocation are needed to build the plan.

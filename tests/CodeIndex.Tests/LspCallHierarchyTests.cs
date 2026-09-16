@@ -76,6 +76,103 @@ public sealed class LspCallHierarchyTests
         Assert.NotEmpty(fixture.Notices);
     }
 
+    [Fact]
+    public void FramedNavigation_FiltersBeforeLimitsAndPreservesReferenceFallbacks_Issue5373()
+    {
+        const string source = "class Calls\n{\n void Leaf() {}\n void Caller(B b)\n {\n  Leaf();\n  Missing();\n  b.Remote();\n }\n}\nclass Decoy\n{\n void Remote() {}\n}";
+        const string target = "class B\n{\n public void Remote() {}\n}";
+        // Exactly fill the old local-candidate limit with an earlier-sorting foreign file.
+        var foreign = new StringBuilder();
+        for (var index = 0; index < 50; index++)
+            foreign.AppendLine($"class Foreign{index}\n{{\n void Leaf() {{}}\n void Caller() {{ Leaf(); Missing(); }}\n}}");
+        using var fixture = new Fixture(source, "calls.cs", additionalFiles: new Dictionary<string, string>
+        {
+            ["Foreign.cs"] = foreign.ToString(),
+            ["Target.cs"] = target,
+        });
+        using (var db = new DbContext(DbOpenIntent.WriteIndex, fixture.DbPath))
+        using (var command = db.Connection.CreateCommand())
+        {
+            command.CommandText = """
+                UPDATE files SET path = 'Calls.cs' WHERE path = 'Foreign.cs';
+                DELETE FROM symbol_reference_candidates WHERE reference_id IN
+                    (SELECT id FROM symbol_references WHERE symbol_name IN ('Leaf', 'Missing'));
+                UPDATE symbol_references SET target_symbol_id = NULL, target_symbol_key = NULL,
+                    resolution_state = 'unresolved', resolution_candidate_count = 0
+                    WHERE symbol_name IN ('Leaf', 'Missing');
+                """;
+            command.ExecuteNonQuery();
+        }
+        using (var db = new DbContext(DbOpenIntent.QueryOnly, fixture.DbPath))
+        {
+            var reader = new DbReader(db);
+            var patternCandidates = reader.GetDefinitions("Leaf", 50, exact: true, pathPatterns: ["calls.cs"]);
+            Assert.Equal(50, patternCandidates.Count);
+            Assert.All(patternCandidates, candidate => Assert.Equal("Calls.cs", candidate.Path));
+        }
+        foreach (var line in new[] { 2, 5 })
+        {
+            var column = source.Split('\n')[line].IndexOf("Leaf", StringComparison.Ordinal);
+            var definition = Assert.Single(fixture.Position("textDocument/definition", line, column)["result"]!.AsArray())!;
+            Assert.Equal(fixture.Uri, definition["uri"]!.GetValue<string>());
+            AssertRange(definition["range"]!, 2, 6, 10);
+        }
+        // With identity evidence removed, query the invocation to exercise the legacy
+        // local-name fallback; declarations deliberately require identity-bound references.
+        var reference = Assert.Single(fixture.Position("textDocument/references", 5, 2)["result"]!.AsArray())!;
+        Assert.Equal(fixture.Uri, reference["uri"]!.GetValue<string>());
+        AssertRange(reference["range"]!, 5, 2, 6);
+        var missing = Assert.Single(fixture.Position("textDocument/references", 6, 2)["result"]!.AsArray())!;
+        Assert.Equal(fixture.Uri, missing["uri"]!.GetValue<string>());
+        AssertRange(missing["range"]!, 6, 2, 9);
+
+        // Local same-name candidates must not constrain an authoritative cross-file target.
+        var remote = Assert.Single(fixture.Position("textDocument/definition", 7, 4)["result"]!.AsArray())!;
+        Assert.Equal(LspServer.PathToUri(Path.Combine(Path.GetDirectoryName(fixture.SourcePath)!, "Target.cs")), remote["uri"]!.GetValue<string>());
+        AssertRange(remote["range"]!, 2, 13, 19);
+        var remoteReference = Assert.Single(fixture.Position("textDocument/references", 7, 4)["result"]!.AsArray())!;
+        Assert.Equal(fixture.Uri, remoteReference["uri"]!.GetValue<string>());
+        AssertRange(remoteReference["range"]!, 7, 4, 10);
+    }
+
+    [Fact]
+    public void ExactFileScope_TreatsGlobCharactersLiterallyAndRestoresNestedScopes_Issue5373()
+    {
+        const string source = "class Calls\n{\n void Leaf() {}\n void Caller() { Leaf(); }\n}";
+        const string indexedPath = "[Calls]*?%_#'日本.cs";
+        const string otherPath = "[calls]*?%_#'日本.cs";
+        using var fixture = new Fixture(source, additionalFiles: new Dictionary<string, string> { ["Other.cs"] = source });
+        using var db = new DbContext(DbOpenIntent.WriteIndex, fixture.DbPath);
+        using (var command = db.Connection.CreateCommand())
+        {
+            // These names need not be legal on the host filesystem: only indexed identity matters.
+            command.CommandText = "UPDATE files SET path = CASE WHEN path = 'Calls.cs' THEN @path ELSE @other END";
+            command.Parameters.AddWithValue("@path", indexedPath);
+            command.Parameters.AddWithValue("@other", otherPath);
+            command.ExecuteNonQuery();
+        }
+        var reader = new DbReader(db);
+        using (DbReader.BeginExactFilePath(indexedPath))
+        {
+            AssertPath(indexedPath);
+            Assert.Throws<InvalidOperationException>((Action)(() =>
+            {
+                using var nested = DbReader.BeginAuditPartitionPath(otherPath);
+                AssertPath(otherPath);
+                throw new InvalidOperationException("Scope restoration control");
+            }));
+            AssertPath(indexedPath);
+        }
+        Assert.Equal(2, reader.GetDefinitions("Leaf", exact: true).Count);
+        Assert.Equal(2, reader.SearchReferences("Leaf", exact: true).Count);
+
+        void AssertPath(string path)
+        {
+            Assert.Equal(path, Assert.Single(reader.GetDefinitions("Leaf", 1, exact: true)).Path);
+            Assert.Equal(path, Assert.Single(reader.SearchReferences("Leaf", 1, exact: true)).Path);
+        }
+    }
+
     [Theory]
     [InlineData("cs", "class Café\n{\n    void 終了() { }\n    void 開始() { var s = \"😀\"; 終了(); }\n}\n", 2, "終了", 3)]
     [InlineData("py", "def 終了():\n    pass\ndef 開始():\n    終了()\n", 0, "終了", 3)]
@@ -180,24 +277,42 @@ public sealed class LspCallHierarchyTests
         Assert.Equal(leaf["data"]!.GetValue<string>(), fixture.Prepare(2, "Leaf")["data"]!.GetValue<string>());
     }
 
-    [Fact]
-    public void FramedHierarchy_PreparesWithinExactFileIdentity_Issue5351()
+    [Theory]
+    [InlineData("Calls.cs", "calls.cs")]
+    [InlineData("Calls[0].cs", "Calls0.cs")]
+    [InlineData("Calls%.cs", "CallsX.cs")]
+    [InlineData("Calls_.cs", "CallsX.cs")]
+    [InlineData("Calls.cs", "Calls.cs/Foreign.cs")]
+    public void FramedNavigation_UsesExactFileIdentity_Issue5351_Issue5373(string fileName, string foreignPath)
     {
         const string source = "class B\n{\n public void Leaf() {}\n}\nclass Calls\n{\n void Caller(B b)\n {\n        b.Leaf();\n }\n}";
         const string foreign = "class Foreign\n{\n\n\n\n\n\n\n     void Leaf() {}\n}";
-        using var fixture = new Fixture(source, additionalFiles: new Dictionary<string, string> { ["Foreign.cs"] = foreign });
+        using var fixture = new Fixture(source, fileName, additionalFiles: new Dictionary<string, string> { ["Foreign.cs"] = foreign });
         // Model case-colliding indexed files even on a case-insensitive test filesystem.
         // The foreign file must never be selected or read for this document's position.
         using (var db = new DbContext(DbOpenIntent.WriteIndex, fixture.DbPath))
         using (var command = db.Connection.CreateCommand())
         {
-            command.CommandText = "UPDATE files SET path = 'calls.cs' WHERE path = 'Foreign.cs'";
+            command.CommandText = "UPDATE files SET path = @path WHERE path = 'Foreign.cs'";
+            command.Parameters.AddWithValue("@path", foreignPath);
             command.ExecuteNonQuery();
         }
         var declared = fixture.Prepare(2, "Leaf");
         var atCall = fixture.Prepare(8, "Leaf");
         Assert.Equal(fixture.Uri, atCall["uri"]!.GetValue<string>());
         Assert.Equal(declared["data"]!.GetValue<string>(), atCall["data"]!.GetValue<string>());
+        foreach (var method in new[] { "textDocument/definition", "textDocument/declaration" })
+        {
+            var location = Assert.Single(fixture.Position(method, 8, 10)["result"]!.AsArray())!;
+            Assert.Equal(fixture.Uri, location["uri"]!.GetValue<string>());
+            AssertRange(location["range"]!, 2, 13, 17);
+        }
+        foreach (var position in new[] { (Line: 2, Column: 13), (Line: 8, Column: 10) })
+        {
+            var reference = Assert.Single(fixture.Position("textDocument/references", position.Line, position.Column)["result"]!.AsArray())!;
+            Assert.Equal(fixture.Uri, reference["uri"]!.GetValue<string>());
+            AssertRange(reference["range"]!, 8, 10, 14);
+        }
     }
 
     [Fact]

@@ -7,6 +7,14 @@ Compare ordinary and named rows with `--count`, `--format count`, and named
 `--summary-only` on net8/net9. Keep exact/substring controls, counts above the
 presentation limit, child/parent file totals, count authority, and human output.
 
+Issue #5373 extends `LspCallHierarchyTests` with initialized, framed definition,
+declaration and reference navigation over exact indexed files. Keep case collisions,
+literal path characters, directory-prefix decoys, pre-limit selection, local fallback
+and cross-file authoritative targets alongside overload/negative-evidence controls.
+Rename fixture database paths to model collisions without a case-sensitive filesystem.
+Run the LSP suites and audit partition recovery tests on net8/net9 because both use
+the shared exact-file query scope.
+
 Python reference-coordinate coverage (#5362) checks empty/ASCII/BMP/astral,
 escaped, raw, byte, adjacent, triple-quoted and literal f-strings with repeated
 same-line calls and string/comment decoys. Run `--filter FullyQualifiedName~Issue5362`
@@ -1519,6 +1527,14 @@ Issue #5300 のテストは隣接・入れ子の C# callable、対象行の除�
 コード origin フィルターを確認します。net8/net9 で通常・名前付きの結果行と `--count`、
 `--format count`、名前付きの `--summary-only` を比較してください。`--exact` と
 `--exact-substring` の対照ケース、表示上限を超える件数、子・親のファイル総数、件数の確実性、人間向け出力を維持します。
+
+Issue #5373 は `LspCallHierarchyTests` を拡張し、初期化済みでフレーム形式の LSP を通じて、
+索引内のファイルが完全一致する定義・宣言・参照ナビゲーションを検証します。大小文字の
+衝突、パス内の特殊文字、ディレクトリの接頭辞による偽候補、上限適用前の選択、文書内の
+フォールバック、別ファイルの確定済み参照先を、オーバーロードと否定根拠の対照テストと
+併せて維持してください。大小文字を区別しないファイルシステムでも再現できるよう、
+fixture の DB 内のパスを書き換えます。完全一致スコープを監査の分割検索と共有するため、
+LSP 全体と監査の復旧テストを net8/net9 で実行してください。
 
 Python の参照座標テスト (#5362) は、空・ASCII・BMP・補助平面文字、エスケープ、raw、
 bytes、隣接文字列、三重引用符、式のない f-string を、同一行の複数呼び出しと文字列・

@@ -3636,6 +3636,12 @@ MCP stdio is line protocol: send one compact UTF-8 JSON-RPC object per LF-delimi
 
 ### LSP Server (for LSP-native editors)
 
+Definition/declaration and reference navigation select document-local candidates by
+exact indexed file identity before candidate limits. Case-colliding paths, literal
+glob characters and directory prefixes cannot turn another file's declaration into
+a declaration at the cursor. Authoritative cross-file targets and overload selection
+are preserved. This query fix requires no reindex.
+
 Indexed call hierarchy is available through the standard prepare/incoming/outgoing
 methods. See [supported languages, error behavior and limits](docs/lsp-call-hierarchy.md#english).
 
@@ -7684,6 +7690,11 @@ cdidxには**MCP（Model Context Protocol）サーバー**が組み込まれて�
 MCP stdio は line protocol です。LF 区切りの各行に compact な UTF-8 JSON-RPC object を 1 つ送ってください。LSP の `Content-Length` framing ではありません。stdout は JSON-RPC payload 専用で、startup、shutdown、audit、rate-limit、timeout、parse diagnostic は stderr と persistent log に出力されます。HTTP MCP は POST 上の request / response JSON-RPC を使い、独自の bearer authentication と body-size limit を適用します。
 
 ### LSP サーバー（LSP-native editor 向け）
+
+定義・宣言・参照ナビゲーションでは、候補数の上限を適用する前に、文書内の候補を
+索引内のファイルの完全一致で選びます。大小文字だけが異なるパス、glob の特殊文字、
+ディレクトリの接頭辞によって、別ファイルの宣言をカーソル位置の宣言として誤認しません。
+別ファイルの確定済み参照先とオーバーロードの選択は維持され、再索引は不要です。
 
 `cdidx lsp --db .cdidx/codeindex.db` は read-only の Language Server Protocol
 サーバーを stdio で起動します。既存の CodeIndex database を再利用し、
