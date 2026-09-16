@@ -2,6 +2,15 @@ namespace CodeIndex.Database;
 
 public partial class DbReader
 {
+    // Resolve one persisted file identity before ordering and limiting candidates.
+    // The indexed path is literal, independent of filesystem case policy or globs.
+    internal List<SymbolResult> GetSymbolsInIndexedFile(string indexedPath, int limit)
+        => ExecuteSymbolSearchList(new SymbolSearchQueryPlan
+        {
+            IndexedFilePath = indexedPath,
+            Limit = limit,
+        });
+
     /// <summary>
     /// Search symbols by one or more name patterns (OR-joined). Empty/null list returns all symbols matching other filters.
     /// When <paramref name="exact"/> is true, names are matched case-insensitively for equality instead of substring.
@@ -51,6 +60,8 @@ public partial class DbReader
 
         var sql = BuildSymbolSearchListSql(plan);
         cmd.CommandText = sql;
+        if (plan.IndexedFilePath != null)
+            SqliteCommandPolicy.Add(cmd, "@indexedFilePath", plan.IndexedFilePath);
         SymbolSearchQueryBinder.BindFullQueries(this, cmd, plan);
         SymbolSearchQueryBinder.BindListOrdering(cmd, plan);
         SymbolSearchQueryBinder.BindFilters(this, cmd, plan, includeLineRange: true);

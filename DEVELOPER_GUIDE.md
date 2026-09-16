@@ -1159,6 +1159,11 @@ across live-text eviction and are cleared by `didClose`, so an evicted newer
 version cannot be replaced by a stale change. Other providers return empty
 arrays or null when the database cannot answer safely instead of inventing
 language-server analysis.
+Indexed document-symbol candidates, including the fallback when live extraction
+is unavailable, are selected by the resolved indexed path's exact binary identity
+before ordering or applying the materialization limit and its one-row lookahead.
+Case-colliding paths, directory descendants, and glob-like literal characters
+cannot introduce another file's declarations into the hierarchy or partial results.
 Every inbound message must first be an object whose `jsonrpc` member is exactly
 the string `"2.0"`. Missing, null, non-string, or other-version envelope values
 return `-32600` (`Invalid Request`) with a valid request ID preserved; validation
@@ -5686,7 +5691,11 @@ request token を特定できるよう disk より先に live cache を読む必
 live buffer を通常の language extractor と container pipeline で構造的に再抽出できる。このとき
 path から再判定せず、indexed file の authoritative language を使う。live extraction は
 document-symbol materialization 上限で停止し、その bounded extractor を利用できない場合は
-indexed symbol に fallback する。numeric document-version tombstone は live text の eviction
+indexed symbol に fallback する。通常の索引取得と live extraction が利用できない場合の
+fallback は、解決済み索引パスのバイナリ完全一致で候補を限定してから並べ替えと
+materialization 上限・1 行の先読みを適用する。大小文字だけが異なるパス、配下のパス、
+glob に似たリテラル文字によって別ファイルの宣言が階層や部分結果に混入することはない。
+numeric document-version tombstone は live text の eviction
 後も上限付きで保持し、`didClose` で消去するため、evict 済みの新しい version を stale change が
 置き換えることはない。それ以外の provider は database が安全に答えられない場合、
 language-server analysis を作り上げず、空配列または null を返す。

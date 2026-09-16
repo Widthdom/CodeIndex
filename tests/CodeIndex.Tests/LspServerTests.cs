@@ -2596,8 +2596,10 @@ public class LspServerTests
         }
     }
 
-    [Fact]
-    public void Run_DocumentSymbol_StreamsBoundedPartialResultsAndWorkDoneProgress_Issue4721()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Run_DocumentSymbol_StreamsBoundedPartialResultsAndWorkDoneProgress_Issue4721(bool fallback)
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_document_symbol_progress");
         try
@@ -2610,10 +2612,21 @@ public class LspServerTests
             source.Append("}\n");
             File.WriteAllText(sourcePath, source.ToString());
             TestProjectHelper.InsertIndexedFile(dbPath, "progress.cs", "csharp", source.ToString());
+            var foreignSource = string.Join('\n', Enumerable.Range(0, LspServer.MaxDocumentSymbolMaterialization + 1)
+                .Select(i => $"class AAA{i:D4} {{ }}"));
+            TestProjectHelper.InsertIndexedFile(dbPath, "PROGRESS.cs", "csharp", foreignSource);
 
             using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            if (fallback)
+            {
+                using var command = db.Connection.CreateCommand();
+                command.CommandText = "UPDATE files SET lang = 'unavailable_issue5382' WHERE path = 'progress.cs' COLLATE BINARY";
+                Assert.Equal(1, command.ExecuteNonQuery());
+            }
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
             InitializeSession(server);
+            if (fallback)
+                Assert.Null(server.HandleMessage(CreateDidOpenRequest(sourcePath, source.ToString(), version: 1)));
             var request = JsonSerializer.Serialize(new
             {
                 jsonrpc = "2.0",
@@ -2660,7 +2673,7 @@ public class LspServerTests
             Assert.Equal("begin", workDoneValues[0]["kind"]!.GetValue<string>());
             Assert.Contains(workDoneValues, value => value["kind"]!.GetValue<string>() == "report");
             Assert.Equal("end", workDoneValues[^1]["kind"]!.GetValue<string>());
-            Assert.Contains("Returned 101 symbols", workDoneValues[^1]["message"]!.GetValue<string>(), StringComparison.Ordinal);
+            Assert.Equal("Returned 101 symbols.", workDoneValues[^1]["message"]!.GetValue<string>());
 
             var response = Assert.Single(messages, entry => entry.Message["id"]?.GetValue<int>() == 4721);
             Assert.True(response.Message.ContainsKey("result"));
@@ -3404,6 +3417,106 @@ public class LspServerTests
             var app = Assert.Single(symbols.Where(symbol => symbol?["name"]?.GetValue<string>() == "App"));
             var children = app!["children"]!.AsArray();
             Assert.Contains(children, symbol => symbol?["name"]?.GetValue<string>() == "Needle");
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData("Calls.cs")]
+    [InlineData("Literal%_[1]'日本語.cs")]
+    [InlineData("!Literal.cs")]
+    public void Run_DocumentSymbol_UsesExactIndexedFileIdentity_Issue5382(string indexedPath)
+    {
+        // Windows forbids literal '*' and '?' in filenames; retain the portable
+        // SQL/URI metacharacters there and also exercise globs on POSIX.
+        if (!OperatingSystem.IsWindows() && indexedPath.StartsWith("Literal", StringComparison.Ordinal))
+            indexedPath = indexedPath.Replace("[1]", "[1]*?", StringComparison.Ordinal);
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_document_symbol_identity");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            const string source = "class B\n{\n public void Leaf() {}\n}\nclass Calls\n{\n void Caller(B b)\n {\n        b.Leaf();\n }\n}\n";
+            const string foreignSource = "class Foreign\n{\n\n\n\n\n\n\n     void Leaf() {}\n}\n";
+            var sourcePath = TestProjectHelper.WriteTextFile(projectRoot, indexedPath, source);
+            TestProjectHelper.InsertIndexedFile(dbPath, indexedPath, "csharp", source);
+            // Only the database contains the colliding/descendant paths, so this also
+            // exercises exact identity on case-insensitive filesystems.
+            TestProjectHelper.InsertIndexedFile(dbPath, indexedPath.ToLowerInvariant(), "csharp", foreignSource);
+            TestProjectHelper.InsertIndexedFile(dbPath, indexedPath + "/foreign.cs", "csharp", foreignSource);
+            TestProjectHelper.InsertIndexedFile(dbPath, "prefix/" + indexedPath, "csharp", foreignSource);
+            if (indexedPath.Contains('*'))
+                TestProjectHelper.InsertIndexedFile(dbPath, indexedPath.Replace("*?", "decoy", StringComparison.Ordinal), "csharp", foreignSource);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+
+            foreach (var fallback in new[] { false, true })
+            {
+                if (fallback)
+                {
+                    using var command = db.Connection.CreateCommand();
+                    command.CommandText = "UPDATE files SET lang = 'unavailable_issue5382' WHERE path = @path COLLATE BINARY";
+                    command.Parameters.AddWithValue("@path", indexedPath);
+                    Assert.Equal(1, command.ExecuteNonQuery());
+                }
+                using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+                InitializeSession(server);
+                if (fallback)
+                    Assert.Null(server.HandleMessage(CreateDidOpenRequest(sourcePath, source, version: 1)));
+
+                var partialRequest = JsonSerializer.Serialize(new
+                {
+                    jsonrpc = "2.0",
+                    id = 53821,
+                    method = "textDocument/documentSymbol",
+                    @params = new
+                    {
+                        textDocument = new { uri = new Uri(sourcePath).AbsoluteUri },
+                        partialResultToken = "exact-document",
+                        workDoneToken = 5382,
+                    },
+                });
+                using var input = new MemoryStream(Encoding.UTF8.GetBytes(
+                    Frame(CreateTextDocumentRequest("textDocument/documentSymbol", sourcePath, 53820))
+                    + Frame(partialRequest)));
+                using var output = new MemoryStream();
+                Assert.Equal(CommandExitCodes.Success, server.Run(input, output));
+                var messages = ReadLspMessages(output);
+                var response = Assert.Single(messages, entry => entry.Message["id"]?.GetValue<int>() == 53820).Message;
+                var roots = response["result"]!.AsArray();
+                Assert.Equal(new[] { "B", "Calls" }, roots.Select(symbol => symbol!["name"]!.GetValue<string>()));
+                Assert.Equal("Leaf", Assert.Single(roots[0]!["children"]!.AsArray())!["name"]!.GetValue<string>());
+                Assert.Equal("Caller", Assert.Single(roots[1]!["children"]!.AsArray())!["name"]!.GetValue<string>());
+                var symbols = FlattenDocumentSymbols(roots).ToArray();
+                Assert.Equal(new[] { "B", "Leaf", "Calls", "Caller" }, symbols.Select(symbol => symbol!["name"]!.GetValue<string>()));
+                Assert.Equal(new[] { 0, 2, 4, 6 }, symbols.Select(symbol => symbol!["selectionRange"]!["start"]!["line"]!.GetValue<int>()));
+                var lines = source.Split('\n');
+                foreach (var symbol in symbols)
+                {
+                    var selection = symbol!["selectionRange"]!;
+                    var line = selection["start"]!["line"]!.GetValue<int>();
+                    var start = selection["start"]!["character"]!.GetValue<int>();
+                    var end = selection["end"]!["character"]!.GetValue<int>();
+                    Assert.Equal(line, selection["end"]!["line"]!.GetValue<int>());
+                    Assert.Equal(symbol["name"]!.GetValue<string>(), lines[line][start..end]);
+                    Assert.InRange(line, symbol["range"]!["start"]!["line"]!.GetValue<int>(), symbol["range"]!["end"]!["line"]!.GetValue<int>());
+                }
+
+                var partialMessages = messages.Where(entry => HasProgressToken(entry.Message, "exact-document")).ToArray();
+                var partial = Assert.Single(partialMessages);
+                Assert.InRange(partial.BodyBytes, 1, LspServer.MaxSymbolProgressChunkBytes);
+                var items = partial.Message["params"]!["value"]!.AsArray();
+                Assert.Equal(symbols.Select(symbol => symbol!["name"]!.GetValue<string>()), items.Select(symbol => symbol!["name"]!.GetValue<string>()));
+                for (var i = 0; i < items.Count; i++)
+                {
+                    Assert.Equal(new Uri(sourcePath).AbsoluteUri, items[i]!["location"]!["uri"]!.GetValue<string>());
+                    Assert.True(JsonNode.DeepEquals(symbols[i]!["selectionRange"], items[i]!["location"]!["range"]));
+                }
+                var endProgress = messages.Last(entry => HasProgressToken(entry.Message, 5382)).Message["params"]!["value"]!;
+                Assert.Equal("Returned 4 symbols.", endProgress["message"]!.GetValue<string>());
+                Assert.Null(Assert.Single(messages, entry => entry.Message["id"]?.GetValue<int>() == 53821).Message["result"]);
+            }
         }
         finally
         {

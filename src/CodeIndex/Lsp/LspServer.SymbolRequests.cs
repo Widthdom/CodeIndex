@@ -231,10 +231,9 @@ internal sealed partial class LspServer : IDisposable
     {
         if (!_liveDocumentStore.TryGetText(document.ResolvedPath, out var liveText))
         {
-            return _reader.SearchSymbols(
-                (string?)null,
-                MaxDocumentSymbolMaterialization + 1,
-                pathPatterns: [document.IndexedPath]);
+            return _reader.GetSymbolsInIndexedFile(
+                document.IndexedPath,
+                MaxDocumentSymbolMaterialization + 1);
         }
 
         var language = _reader.GetFileByPath(document.IndexedPath)?.Lang;
@@ -249,10 +248,9 @@ internal sealed partial class LspServer : IDisposable
                 cancellationToken,
                 out var liveSymbols))
         {
-            return _reader.SearchSymbols(
-                (string?)null,
-                MaxDocumentSymbolMaterialization + 1,
-                pathPatterns: [document.IndexedPath]);
+            return _reader.GetSymbolsInIndexedFile(
+                document.IndexedPath,
+                MaxDocumentSymbolMaterialization + 1);
         }
 
         return liveSymbols

@@ -10,6 +10,7 @@ public partial class DbReader
         public string? Lang { get; init; }
         public IReadOnlyList<string>? PathPatterns { get; init; }
         public IReadOnlyList<string>? ExcludePathPatterns { get; init; }
+        public string? IndexedFilePath { get; init; }
         public bool ExcludeTests { get; init; }
         public DateTime? Since { get; init; }
         public bool Exact { get; init; }
