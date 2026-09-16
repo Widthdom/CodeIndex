@@ -2480,6 +2480,14 @@ The CLI normalizes exact-mode aliases and then rejects raw `--fts` combined with
 `--exact`, `--exact-substring`, or `--token-boundary` before database dispatch.
 This keeps query context and replay output on one matching model.
 
+Named-query `search --count`, `--format count`, and `--summary-only` pass the same
+`--token-boundary` mode to the reader as ordinary counts and named result rows.
+For example, `CoverageObserver` matches `CoverageObserver()` but excludes
+`originCoverageObserver` and `CoverageObserverFactory` in boundary mode.
+`--exact` / `--exact-substring` retain literal substring matching. Counts retain
+their existing result-row unit, include all matches independently of `--limit`,
+and preserve origin-filter coverage and count-authority metadata.
+
 Search-result symbol attribution uses the primary match line and column when
 the index provides declaration coordinates. C# positional-record properties
 store the span from the component's first attribute or type token through its
@@ -6980,6 +6988,13 @@ CLI は exact-mode alias を正規化してから、raw `--fts` と `--exact`、
 `--exact-substring`、`--token-boundary` の組み合わせを database dispatch 前に
 拒否します。これにより query context と replay output は 1 つの一致モデルだけを
 保持します。
+
+名前付きクエリの `search --count`、`--format count`、`--summary-only` は、通常の件数取得や
+名前付き検索の結果行と同じ `--token-boundary` を reader に渡します。境界モードでは、
+`CoverageObserver` は `CoverageObserver()` に一致し、`originCoverageObserver` や
+`CoverageObserverFactory` には一致しません。`--exact` / `--exact-substring` はリテラルの
+部分文字列検索を維持します。件数は従来どおり結果行を単位とし、`--limit` に関係なく
+すべての一致を集計します。origin フィルターの判定範囲と件数の確実性を示す情報も維持します。
 
 検索結果の囲みシンボルは、index が宣言座標を持つ場合、主要一致の行と列を使って
 判定します。C# の位置 record property は、component の最初の attribute または型 token から

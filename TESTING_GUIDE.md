@@ -1,5 +1,12 @@
 # Testing Guide
 
+Named search count coverage (#5376) uses one small indexed fixture in
+`RunSearch_NamedCountsHonorTokenBoundary_Issue5376` for isolated/repeated tokens,
+longer identifiers, zero boundary matches, path exclusion, and code-origin filters.
+Compare ordinary and named rows with `--count`, `--format count`, and named
+`--summary-only` on net8/net9. Keep exact/substring controls, counts above the
+presentation limit, child/parent file totals, count authority, and human output.
+
 Python reference-coordinate coverage (#5362) checks empty/ASCII/BMP/astral,
 escaped, raw, byte, adjacent, triple-quoted and literal f-strings with repeated
 same-line calls and string/comment decoys. Run `--filter FullyQualifiedName~Issue5362`
@@ -1506,6 +1513,12 @@ Issue #5300 のテストは隣接・入れ子の C# callable、対象行の除�
 パーサー（#5297）の回帰テストとともに net8.0 / net9.0 で実行します。
 
 # テストガイド
+
+名前付き検索の件数検証 (#5376) は `RunSearch_NamedCountsHonorTokenBoundary_Issue5376` の
+小さな共有索引を使い、独立・反復トークン、長い識別子、境界一致ゼロ件、パス除外、
+コード origin フィルターを確認します。net8/net9 で通常・名前付きの結果行と `--count`、
+`--format count`、名前付きの `--summary-only` を比較してください。`--exact` と
+`--exact-substring` の対照ケース、表示上限を超える件数、子・親のファイル総数、件数の確実性、人間向け出力を維持します。
 
 Python の参照座標テスト (#5362) は、空・ASCII・BMP・補助平面文字、エスケープ、raw、
 bytes、隣接文字列、三重引用符、式のない f-string を、同一行の複数呼び出しと文字列・

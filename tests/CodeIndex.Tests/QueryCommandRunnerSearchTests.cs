@@ -1862,6 +1862,87 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_NamedCountsHonorTokenBoundary_Issue5376()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_named_boundary_5376");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        TestProjectHelper.InsertFreshIndexedFile(project.Root, dbPath, "src/Isolated.cs", "csharp",
+            "CoverageObserver(); CoverageObserver();\n");
+        TestProjectHelper.InsertFreshIndexedFile(project.Root, dbPath, "src/Prefix.cs", "csharp",
+            "originCoverageObserver(); OnlyEmbedded5376Tail();\n");
+        TestProjectHelper.InsertFreshIndexedFile(project.Root, dbPath, "src/Suffix.cs", "csharp",
+            "CoverageObserverFactory(); beforeOnlyEmbedded5376();\n");
+        TestProjectHelper.InsertFreshIndexedFile(project.Root, dbPath, "src/Comment.cs", "csharp",
+            "// CoverageObserver();\n");
+        TestProjectHelper.InsertFreshIndexedFile(project.Root, dbPath, "outside/Excluded.cs", "csharp",
+            "CoverageObserver(); OnlyEmbedded5376();\n");
+
+        foreach (var originFlags in new string[][] { [], ["--origin", "code"] })
+            foreach (var (matchFlags, boundary) in new (string[], bool)[]
+            {
+                (["--token-boundary"], true),
+                (["--exact"], false),
+                (["--exact-substring"], false),
+            })
+            {
+                string[] common = ["--db", dbPath, "--path", "src/", .. matchFlags, .. originFlags];
+                var expected = new[] { (boundary ? 2 : 4) - (originFlags.Length > 0 ? 1 : 0), boundary ? 0 : 2 };
+                string[] queries = ["CoverageObserver", "OnlyEmbedded5376"];
+                string[] named = ["--named-query", $"positive={queries[0]}", "--named-query", $"embedded={queries[1]}"];
+
+                var namedRows = Run([.. named, .. common, "--json", "--limit", "10"]);
+                for (var i = 0; i < queries.Length; i++)
+                {
+                    var rows = Run([queries[i], .. common, "--json=array", "--limit", "10"]);
+                    var child = namedRows.GetProperty("queries")[i];
+                    Assert.Equal(expected[i], rows.GetArrayLength());
+                    Assert.Equal(expected[i], child.GetProperty("count").GetInt32());
+                    Assert.Equal(
+                        rows.EnumerateArray().Select(row => row.GetProperty("path").GetString()).Order().ToArray(),
+                        child.GetProperty("results").EnumerateArray().Select(row => row.GetProperty("path").GetString()).Order().ToArray());
+                    foreach (var countFlags in new string[][] { ["--count"], ["--format", "count"] })
+                    {
+                        var count = Run([queries[i], .. common, .. countFlags, "--json", "--limit", "1"]);
+                        Assert.Equal(expected[i], count.GetProperty("count").GetInt32());
+                    }
+                }
+
+                foreach (var countFlags in new string[][] { ["--count"], ["--format", "count"], ["--summary-only"] })
+                {
+                    var count = Run([.. named, .. common, .. countFlags, "--json", "--limit", "1"]);
+                    Assert.Equal(2, count.GetProperty("query_count").GetInt32());
+                    Assert.Equal(expected.Sum(), count.GetProperty("result_count").GetInt32());
+                    Assert.Equal(expected[0], count.GetProperty("file_count").GetInt32());
+                    Assert.Equal(boundary ? 1 : 0, count.GetProperty("query_freshness").GetProperty("zero_result_query_count").GetInt32());
+                    for (var i = 0; i < queries.Length; i++)
+                    {
+                        var child = count.GetProperty("queries")[i];
+                        Assert.Equal(expected[i], child.GetProperty("count").GetInt32());
+                        Assert.Equal(expected[i], child.GetProperty("file_count").GetInt32());
+                        Assert.False(child.TryGetProperty("results", out _));
+                        if (originFlags.Length > 0)
+                            Assert.True(child.GetProperty("authoritative_count").GetBoolean());
+                    }
+                    if (originFlags.Length > 0)
+                        Assert.True(count.GetProperty("authoritative_count").GetBoolean());
+                }
+
+                var (exit, output, _) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                    [.. named, .. common, "--count", "--limit", "1"], _jsonOptions));
+                Assert.Equal(CommandExitCodes.Success, exit);
+                Assert.Equal(expected.Sum().ToString(CultureInfo.InvariantCulture), output.Trim());
+            }
+
+        JsonElement Run(string[] args)
+        {
+            var (exit, output, error) = CaptureConsole(() => QueryCommandRunner.RunSearch(args, _jsonOptions));
+            Assert.True(exit == CommandExitCodes.Success, $"{string.Join(' ', args)}: {exit}: {error}\n{output}");
+            using var document = ParseJsonOutput(output);
+            return document.RootElement.Clone();
+        }
+    }
+
+    [Fact]
     public void RunSearch_NamedQueriesCountSummaryJsonCountsAllMatches_Issue4308()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_named_queries_count_4308");
