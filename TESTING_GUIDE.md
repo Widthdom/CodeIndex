@@ -1,5 +1,14 @@
 # Testing Guide
 
+LSP document-symbol identity coverage (#5382) shares indexed and unsupported-live-
+extractor fallback requests across case-colliding paths, literal path characters,
+and descendant/suffix decoys. Keep hierarchical roots, identifier ranges and framed
+partial-result parity together in `Run_DocumentSymbol_UsesExactIndexedFileIdentity_Issue5382`.
+The existing partial-progress fixture adds more foreign declarations than the
+materialization limit: they must neither displace local symbols nor mark the
+response truncated. Run all LSP tests on net8/net9, retaining local materialization,
+response-byte, chunk-size, cancellation and live-extraction controls.
+
 Named search count coverage (#5376) uses one small indexed fixture in
 `RunSearch_NamedCountsHonorTokenBoundary_Issue5376` for isolated/repeated tokens,
 longer identifiers, zero boundary matches, path exclusion, and code-origin filters.
@@ -1521,6 +1530,15 @@ Issue #5300 のテストは隣接・入れ子の C# callable、対象行の除�
 パーサー（#5297）の回帰テストとともに net8.0 / net9.0 で実行します。
 
 # テストガイド
+
+LSP 文書シンボルのファイル同一性テスト (#5382) は、通常の索引取得とライブ抽出が
+利用できない場合のフォールバックで、大小文字衝突、リテラルなパス文字、配下・接尾辞の
+別パスを共有します。`Run_DocumentSymbol_UsesExactIndexedFileIdentity_Issue5382` で
+階層のルート、識別子の範囲、フレーム化した部分結果の一致を確認してください。
+既存の部分結果・進捗テストでは materialization 上限を超える別ファイルの宣言を追加し、
+要求文書のシンボルが欠落せず、誤った切り詰め通知も出ないことを検証します。
+文書自身の materialization、応答バイト数、チャンク件数、キャンセル、ライブ抽出の
+既存テストを維持し、LSP テスト全体を net8/net9 で実行してください。
 
 名前付き検索の件数検証 (#5376) は `RunSearch_NamedCountsHonorTokenBoundary_Issue5376` の
 小さな共有索引を使い、独立・反復トークン、長い識別子、境界一致ゼロ件、パス除外、

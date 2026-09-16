@@ -48,6 +48,8 @@ public partial class DbReader
             canonical.LogicalPartialKey,
             includeRankSignals);
         var sql = BuildSymbolSearchSelectSql(columns, ranking, canonical);
+        if (plan.IndexedFilePath != null)
+            sql += " AND f.path = @indexedFilePath COLLATE BINARY";
         sql += SymbolSearchQueryPredicateBuilder.BuildFull(this, plan);
         SymbolSearchQueryPredicateBuilder.AppendFilters(
             this,
