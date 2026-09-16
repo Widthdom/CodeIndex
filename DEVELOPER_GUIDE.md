@@ -1,5 +1,12 @@
 # Developer Guide
 
+LSP definition/declaration and reference position resolution selects local candidates
+by exact indexed path before query limits. `DbReader.BeginExactFilePath` shares the
+binary-equality scope used by audit partitions; keep it limited to local lookups and
+dispose it before following authoritative targets across files. Position matching
+also rejects foreign paths with ordinal equality. Path glob syntax and filesystem
+case policy do not change this indexed identity; no schema migration is needed.
+
 Python string masking preserves UTF-16 reference coordinates for persisted CLI
 columns and LSP ranges. See [Python reference coordinates](docs/python-reference-coordinates.md#english)
 for examples and the normal index refresh required for unchanged files from older
@@ -4629,6 +4636,13 @@ CLI、レシピの再実行・フィンガープリント、MCP スキーマ、`
 API version 1 の互換性を維持し、新しい guard scope は contract version 1 を公開します。
 
 # 開発者ガイド
+
+LSP の定義・宣言・参照の位置解決では、候補数の上限を適用する前に索引内のパスを
+完全一致で絞ります。`DbReader.BeginExactFilePath` は監査の分割検索と同じバイナリ比較の
+スコープを使います。文書内の検索だけに適用し、確定済みの参照先を別ファイルへ辿る前に
+必ず破棄してください。位置照合でも順序比較によるパスの一致を確認し、別ファイルを
+除外します。パスの glob 構文やファイルシステムの大小文字規則は索引内の識別を変えず、
+スキーマの移行も不要です。
 
 Python の文字列マスクは UTF-16 の参照座標を保持し、保存済みの CLI 参照列と LSP の範囲を
 一致させます。具体例と、古い抽出契約で保存した未変更ファイルに必要な通常の索引更新は

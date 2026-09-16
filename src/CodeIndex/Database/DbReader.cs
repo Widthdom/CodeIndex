@@ -2321,8 +2321,8 @@ public partial class DbReader : IDisposable
     internal static void AppendPathFilters(ref string sql, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, bool applyGeneratedFilter = true)
     {
         EnsurePathFilterParameterBudget(pathPatterns, excludePathPatterns);
-        if (AuditPartitionPath.Value != null)
-            sql += " AND f.path = @auditPartitionPath COLLATE BINARY";
+        if (ExactFilePath.Value != null)
+            sql += " AND f.path = @exactFilePath COLLATE BINARY";
 
         if (applyGeneratedFilter && !IncludeGeneratedScope.Value && GeneratedColumnAvailableScope.Value)
             sql += " AND COALESCE(f.generated, 0) = 0";
@@ -2349,8 +2349,8 @@ public partial class DbReader : IDisposable
     internal static void AddPathFilterParameters(SqliteCommand cmd, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns)
     {
         EnsurePathFilterParameterBudget(pathPatterns, excludePathPatterns);
-        if (AuditPartitionPath.Value is { } partitionPath)
-            SqliteCommandPolicy.AddText(cmd, "@auditPartitionPath", partitionPath);
+        if (ExactFilePath.Value is { } exactFilePath)
+            SqliteCommandPolicy.AddText(cmd, "@exactFilePath", exactFilePath);
 
         if (pathPatterns != null)
             AddPathFilterParameterSet(cmd, "pathPattern", pathPatterns);
@@ -2384,8 +2384,8 @@ public partial class DbReader : IDisposable
         EnsurePathFilterParameterBudget(pathPatterns, excludePathPatterns);
 
         var sql = string.Empty;
-        if (AuditPartitionPath.Value != null)
-            sql += $" AND {fileAlias}.path = @auditPartitionPath COLLATE BINARY";
+        if (ExactFilePath.Value != null)
+            sql += $" AND {fileAlias}.path = @exactFilePath COLLATE BINARY";
         if (!IncludeGeneratedScope.Value && GeneratedColumnAvailableScope.Value)
             sql += $" AND COALESCE({fileAlias}.generated, 0) = 0";
 
