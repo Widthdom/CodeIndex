@@ -38,6 +38,20 @@ used 520 callbacks at 1,000 SQLite VM instructions per callback before this
 change; the new budget is at most 32 callbacks on both test runtimes. This measures
 lookup work, not end-to-end speed or worst-case misses across disjoint ranges.
 
+Fresh reference INSERTs also resolve repeated source identities once per statement
+when at least half the batch rows repeat an earlier nonempty source identity.
+The identity includes file, line, original container name and its folded override;
+NULL and empty names stay distinct. A materialized, bounded source map is joined
+back to every original reference in input order. Unique or sparsely repeated
+sources, absent container names and single-row inserts retain direct probes.
+Both SQL and native-statement caches distinguish the two shapes, and no lookup
+survives the statement or file savepoint. The shared
+writer applies this to all languages. A 128-reference fixture over 128 disjoint
+same-name declarations stays within 140 callbacks at 1,000 SQLite VM instructions
+per callback, including source materialization and insertion; the prior path
+used 217 callbacks in the corresponding isolated probe. This is a work budget,
+not a guarantee of faster end-to-end indexing for every reference distribution.
+
 All language-independent folded symbol/reference keys use runtime-vectorized
 ASCII validation and casing. Unicode names still normalize with NFKC and apply
 the same vendored casefold deltas, but append lowered scalar values directly
@@ -114,6 +128,18 @@ DB レイアウト、抽出範囲、トランザクション境界、取消・�
 1,000命令ごとの callback が520回、変更後の回帰テスト上限は両 runtime で32回です。
 これは照会処理量の測定であり、全体の速度や互いに離れた範囲での miss の最悪値を
 保証するものではありません。
+
+初回の参照 INSERT でも、バッチの半数以上の行が先行する空でない参照元と重複する
+場合は、その解決を statement ごとに一度へまとめます。
+識別にはファイル・行・元のコンテナ名・folded override を含め、NULL と空文字列も
+区別します。上限付きの一時的な対応表を元の全参照へ入力順で結合します。1行だけの
+INSERT、重複が少ないバッチ、コンテナ名のないバッチは従来の直接検索を使います。
+SQL と native statement の両キャッシュで形式を区別し、検索結果は statement や
+ファイル savepoint を越えて残りません。全言語共通の writer に適用します。
+離れた同名宣言128件と同じ行の参照
+128件の fixture では、参照元の一時表作成と INSERT を含め、SQLite VM 1,000命令ごとの
+callback 上限を140回としています。対応する単独計測で従来経路は217回でした。
+これは処理量の上限であり、あらゆる参照分布で全体の所要時間が短縮する保証ではありません。
 
 全言語共通のシンボル・参照の folded key は、ランタイムのベクトル化された ASCII
 検査と小文字化を使います。Unicode 名は既存の NFKC 正規化と casefold 差分表を

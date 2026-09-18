@@ -2415,13 +2415,15 @@ public partial class DbWriter
         var cacheKey = (
             Rows: rowsInBatch,
             FreshResolutionDefaults: useFreshReferenceResolutionDefaults,
-            MaterializedFreshSourceLookup: false);
+            MaterializedFreshSourceLookup: false,
+            ShareSourceLookups: false);
         var sql = ReferenceInsertSqlCache.GetOrAdd(
             cacheKey,
             static key => BuildReferenceInsertSql(
                 key.Rows,
                 key.FreshResolutionDefaults,
-                key.MaterializedFreshSourceLookup));
+                key.MaterializedFreshSourceLookup,
+                key.ShareSourceLookups));
         var cmd = RentCommand(sql, c => AddReferenceInsertParameters(c, rowsInBatch));
         try
         {

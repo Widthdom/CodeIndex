@@ -137,6 +137,23 @@ Include `FreshReferenceResolutionTests` in that run: it covers direct and
 materialized source lookup, the shared 14-parameter row shape and separate SQL
 caches. The materialized outer comparison orders by the projected `start_line`;
 each probe applies the nullable-line fallback before selecting its candidate.
+The same raw-writer fixtures verify per-statement source sharing: preserve repeated
+reference rows and input order, distinguish folded overrides on the same original
+name/line, and bound insertion of 128 references over 128 disjoint declarations to
+140 callbacks at 1,000 SQLite VM instructions each. Keep null/empty names, aliases,
+file boundaries, savepoint rollback and cancellation coverage on both runtimes.
+参照元共有は同じ fixture で参照件数・入力順・folded override の分離と処理量を検証し、
+NULL／空名・別名・ファイル境界・savepoint rollback・取消の検証も両 runtime で維持します。
+The same ten languages also cover unique, sparse, threshold and repeated sources
+with alternating equal-sized cached statements. For 32-row INSERTs, keep the
+20,500-instruction budget for named containers and 18,500 for null/empty containers;
+exclude the subsequent hotspot refresh from this measurement. Unique and absent
+sources must not pay for the shared source map. Both SQL cache and native statement
+cache must distinguish shared and direct shapes.
+同じ10言語で重複なし・少数の重複・共有閾値・多数の重複を検証し、同じ行数の形式を
+交互にキャッシュ利用します。32行の INSERT は、名前付きコンテナで20,500命令、
+NULL／空名で18,500命令以内とし、後続の hotspot 更新は測定から除きます。
+重複なし・名前なしでは共有用一時表を作らず、両キャッシュでSQL形式を区別します。
 
 #5339 extends the #5332 fixture to successful `files --format count --json`
 batches with the same three-snapshot/copy-byte budget for 3/12 items, checking

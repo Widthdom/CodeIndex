@@ -170,6 +170,14 @@ public sealed class FreshReferenceResolutionTests : IDisposable
         var standardSql = DbWriter.BuildReferenceInsertSqlForTesting(
             rowCount: 2,
             useFreshReferenceResolutionDefaults: false);
+        var sharedFreshSql = DbWriter.BuildReferenceInsertSqlForTesting(
+            rowCount: 2,
+            useFreshReferenceResolutionDefaults: true,
+            useMaterializedFreshSourceLookup: true,
+            shareSourceLookups: true);
+        Assert.Contains("fresh_sources AS MATERIALIZED", sharedFreshSql, StringComparison.Ordinal);
+        Assert.DoesNotContain("fresh_sources AS MATERIALIZED", materializedFreshSql, StringComparison.Ordinal);
+        Assert.Equal(28, CountOccurrences(sharedFreshSql, "?"));
         Assert.Contains("WITH fresh_reference(", freshSql, StringComparison.Ordinal);
         Assert.Contains("input_ordinal", freshSql, StringComparison.Ordinal);
         Assert.Contains("source_symbol_id", freshSql, StringComparison.Ordinal);

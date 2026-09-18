@@ -180,7 +180,7 @@ public partial class DbWriter
     private static readonly ConcurrentDictionary<int, string> SymbolInsertSqlCache = new();
     private static readonly ConcurrentDictionary<int, string> IssueInsertSqlCache = new();
     private static readonly ConcurrentDictionary<
-        (int Rows, bool FreshResolutionDefaults, bool MaterializedFreshSourceLookup),
+        (int Rows, bool FreshResolutionDefaults, bool MaterializedFreshSourceLookup, bool ShareSourceLookups),
         string>
         ReferenceInsertSqlCache = new();
     private static readonly ConcurrentDictionary<int, string> ReferenceLineUpsertSqlCache = new();

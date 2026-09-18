@@ -25,7 +25,8 @@ public partial class DbWriter
     private static string BuildReferenceInsertSql(
         int rowCount,
         bool useFreshReferenceResolutionDefaults,
-        bool useMaterializedFreshSourceLookup = false)
+        bool useMaterializedFreshSourceLookup = false,
+        bool shareSourceLookups = false)
     {
         if (useMaterializedFreshSourceLookup && !useFreshReferenceResolutionDefaults)
         {
@@ -33,6 +34,8 @@ public partial class DbWriter
                 "The materialized source lookup is only valid for authoritative fresh reference inserts.",
                 nameof(useMaterializedFreshSourceLookup));
         }
+        if (shareSourceLookups && (!useMaterializedFreshSourceLookup || rowCount < 2))
+            throw new ArgumentException("Shared source lookups require a multirow materialized fresh insert.", nameof(shareSourceLookups));
 
         var sql = CreateBatchSqlBuilder(rowCount, estimatedCharsPerRow: 256);
         if (useFreshReferenceResolutionDefaults)
@@ -55,8 +58,23 @@ public partial class DbWriter
                     ref freshParameterIndex,
                     row);
             }
+            sql.Append(')');
+            if (shareSourceLookups)
+            {
+                // Resolve each exact source identity once per bounded statement, then
+                // join it back without collapsing the references or changing their order.
+                // 上限付きstatement内で同じ参照元を一度だけ解決し、参照行自体は維持する。
+                sql.Append($@"
+                , fresh_source_inputs AS MATERIALIZED (
+                    SELECT DISTINCT file_id, line, container_name, container_name_folded
+                    FROM fresh_reference
+                ), fresh_sources AS MATERIALIZED (
+                    SELECT r.file_id, r.line, r.container_name, r.container_name_folded,
+                           {BuildMaterializedFreshReferenceSourceSymbolValueSql("r")} AS source_symbol_id
+                    FROM fresh_source_inputs AS r
+                )");
+            }
             sql.Append($@"
-                )
                 INSERT INTO symbol_references (
                     file_id, symbol_name, reference_kind, line, column_number, span_length,
                     context, reference_line_id, container_kind, container_name,
@@ -78,13 +96,24 @@ public partial class DbWriter
                        r.is_self_reference,
                        r.is_mutual_recursion,
                        r.target_qualifier,
-                       {(useMaterializedFreshSourceLookup
-                           ? BuildMaterializedFreshReferenceSourceSymbolValueSql("r")
-                           : BuildReferenceSourceSymbolValueSql("r"))},
+                       {(shareSourceLookups
+                           ? "source.source_symbol_id"
+                           : useMaterializedFreshSourceLookup
+                               ? BuildMaterializedFreshReferenceSourceSymbolValueSql("r")
+                               : BuildReferenceSourceSymbolValueSql("r"))},
                        'unresolved',
                        0
-                FROM fresh_reference AS r
-                ORDER BY r.input_ordinal");
+                FROM fresh_reference AS r");
+            if (shareSourceLookups)
+            {
+                sql.Append(@"
+                LEFT JOIN fresh_sources AS source
+                  ON source.file_id = r.file_id
+                 AND source.line = r.line
+                 AND source.container_name IS r.container_name
+                 AND source.container_name_folded IS r.container_name_folded");
+            }
+            sql.Append(" ORDER BY r.input_ordinal");
             return sql.ToString();
         }
 
@@ -112,11 +141,13 @@ public partial class DbWriter
     internal static string BuildReferenceInsertSqlForTesting(
         int rowCount,
         bool useFreshReferenceResolutionDefaults,
-        bool useMaterializedFreshSourceLookup = false)
+        bool useMaterializedFreshSourceLookup = false,
+        bool shareSourceLookups = false)
         => BuildReferenceInsertSql(
             rowCount,
             useFreshReferenceResolutionDefaults,
-            useMaterializedFreshSourceLookup);
+            useMaterializedFreshSourceLookup,
+            shareSourceLookups);
 
     private static void AppendReferenceInsertParameterTuple(
         StringBuilder sql,
