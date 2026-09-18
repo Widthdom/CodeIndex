@@ -1,5 +1,14 @@
 # Initial full-index performance
 
+C# declaration confirmation rejects impossible suffixes before attempting the
+member/method regexes, including expression-bodied declarations and accessor
+lookahead. After optional whitespace and one opening brace, methods require `)`;
+members require an identifier ending. Non-ASCII suffixes still reach the member
+regex, preserving its Unicode semantics. C#, Razor, Blazor and CSHTML share the
+check in both workspace pre-extraction and ordinary extraction. No extractor
+contract or persisted output changes. Tests compare every symbol property with
+the gate disabled and verify fewer regex attempts instead of asserting timing.
+
 An ordinary CLI full scan of an empty database uses the authoritative fresh
 bulk writer. Its text bindings use at most 1 KiB of stack scratch space and
 pooled buffers for larger UTF-8 values, instead of allocating a byte array for
@@ -72,6 +81,14 @@ reference rows and updating the corresponding overload-resolution candidates.
 Both runs completed all 1,554 files without warnings or extraction errors.
 
 ## 日本語
+
+C# の宣言確認では、式形式の宣言と accessor の先読みも含め、成立しない末尾を
+メンバー／メソッドの regex 照合前に除外します。空白と任意の開き brace 1個を
+除くと、メソッドには `)`、メンバーには識別子の末尾が必須です。非 ASCII の末尾は
+従来のメンバー regex へ渡し、Unicode の判定を維持します。C#・Razor・Blazor・
+CSHTML の事前抽出と通常抽出で共通です。抽出契約と保存結果は変更しません。
+テストでは gate 無効時と全シンボル項目を比較し、時間ではなく照合回数の減少を
+検証します。
 
 空のデータベースに対する通常の CLI フルスキャンは、初回専用の一括 writer を
 使用します。文字列の bind には最大 1 KiB のスタック作業領域と、大きな UTF-8 値

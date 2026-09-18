@@ -110,6 +110,13 @@ and the full symbol/reference extractor regressions alongside this fixture.
 symbol property with optimizations disabled and requires fewer method-confirmation
 regex attempts for parameter fragments without `(`, while real multiline headers
 still reach the regex. Keep the attempt/skip counters internal to extraction tests.
+The shared C#/Razor/Blazor/CSHTML fixture also verifies confirmation suffix gates
+for expression methods/properties, tuple/generic returns, explicit interfaces,
+escaped/Unicode identifiers and lambda initializers. Compare all symbol fields
+and full confirmation attempt/skip counts; retain the full extractor regression run.
+C#／Razor／Blazor／CSHTML 共通の fixture で宣言確認の末尾 gate も検証し、
+式形式・tuple・generic・明示的 interface・Unicode／escape 名・lambda 初期化子の
+全シンボル項目と照合回数を比較します。全抽出器の回帰テストも実行してください。
 
 Confirmed C# method lookahead coverage in `SymbolExtractorCSharpRegexProbeTests`
 shares multiline methods, empty and nonempty constructor bodies, delayed body

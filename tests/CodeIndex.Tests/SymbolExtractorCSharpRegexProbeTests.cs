@@ -370,8 +370,12 @@ public sealed class SymbolExtractorCSharpRegexProbeTests
         Assert.InRange(allocated, 0L, 512 * 1024L);
     }
 
-    [Fact]
-    public void Extract_CSharpMethodConfirmation_RequiresOpeningParenthesis()
+    [Theory]
+    [InlineData("csharp")]
+    [InlineData("razor")]
+    [InlineData("blazor")]
+    [InlineData("cshtml")]
+    public void Extract_CSharpMethodConfirmation_RequiresOpeningParenthesis(string language)
     {
         const string content = """
             class Example
@@ -383,18 +387,35 @@ public sealed class SymbolExtractorCSharpRegexProbeTests
                     return 1;
                 }
                 public int Value { get; }
+                public (int Left, int Right) Pair => (1, 2);
+                public int Résultat => 1;
+                public int \u0056alue2 => 2;
+                public int Á => 3;
+                public static (int Left, int Right) Compute(int left, int right) => (left, right);
+                public T Identity<T>(T value) => value;
+                int IFoo.Calculate() => 1;
+                int IFoo.Property => 2;
+                private Func<int> factory = () => 1;
             }
             """;
-        var baseline = Extract(content, applyOptimizations: false, out var baselineMetrics);
-        var optimized = Extract(content, applyOptimizations: true, out var optimizedMetrics);
+        var baseline = SymbolExtractor.ExtractForCSharpRegexProbeTesting(
+            1, content, false, out var baselineMetrics, language: language);
+        var optimized = SymbolExtractor.ExtractForCSharpRegexProbeTesting(
+            1, content, true, out var optimizedMetrics, language: language);
 
         AssertSymbolsEqual(baseline, optimized);
         Assert.Contains(optimized, symbol => symbol.Kind == "function" && symbol.Name == "Sum");
         Assert.Contains(optimized, symbol => symbol.Kind == "property" && symbol.Name == "Value");
+        Assert.Contains(optimized, symbol => symbol.Kind == "function" && symbol.Name == "Compute");
+        Assert.Contains(optimized, symbol => symbol.Kind == "function" && symbol.Name == "Identity");
+        Assert.Contains(optimized, symbol => symbol.Kind == "property" && symbol.Name == "Résultat");
         Assert.Equal(0, baselineMetrics.MethodConfirmationLiteralSkipCount);
         Assert.True(optimizedMetrics.MethodConfirmationLiteralSkipCount > 0);
         Assert.True(optimizedMetrics.MethodConfirmationRegexAttemptCount > 0);
         Assert.True(optimizedMetrics.MethodConfirmationRegexAttemptCount < baselineMetrics.MethodConfirmationRegexAttemptCount);
+        Assert.Equal(0, baselineMetrics.ConfirmationSuffixSkipCount);
+        Assert.True(optimizedMetrics.ConfirmationSuffixSkipCount > 0);
+        Assert.True(optimizedMetrics.ConfirmationRegexAttemptCount < baselineMetrics.ConfirmationRegexAttemptCount);
     }
 
     [Theory]
