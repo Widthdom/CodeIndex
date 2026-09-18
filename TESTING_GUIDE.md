@@ -118,6 +118,17 @@ C#／Razor／Blazor／CSHTML 共通の fixture で宣言確認の末尾 gate も
 式形式・tuple・generic・明示的 interface・Unicode／escape 名・lambda 初期化子の
 全シンボル項目と照合回数を比較します。全抽出器の回帰テストも実行してください。
 
+`Extract_CSharpLambdaCapture_ReuseCaptureAndShadowFixture` covers C#, Razor,
+Blazor and CSHTML capture order, first-occurrence columns, repeated identifiers,
+escaped/Unicode names, parameter shadowing and isolation between same-name
+methods and overloads. Pair it with the 128-local, long-class-name fixture
+`Extract_CSharpLambdaCaptures_ShareBodyScanWithinAllocationBudget`, which requires
+all captures within a warmed 1 MB allocation budget on net8/net9. Keep the
+performance fixture in its nonparallel collection and avoid wall-clock assertions.
+同じ4言語で捕捉順・最初の列位置・反復名・escape／Unicode 名・引数の隠蔽・同名
+メソッドと overload の分離を検証します。ローカル128個と長いクラス名の fixture は
+両 runtime で割り当て量を1 MB以内に抑え、時間の閾値には依存しません。
+
 Confirmed C# method lookahead coverage in `SymbolExtractorCSharpRegexProbeTests`
 shares multiline methods, empty and nonempty constructor bodies, delayed body
 tokens, trailing fields and attributed accessors across C#, Razor, Blazor and

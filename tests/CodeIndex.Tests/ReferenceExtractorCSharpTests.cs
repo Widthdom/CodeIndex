@@ -7931,8 +7931,12 @@ public partial class ReferenceExtractorTests
         AssertReferenceDoesNotContain(kotlinReferences, "ex", "type_reference");
     }
 
-    [Fact]
-    public void Extract_CSharpLambdaCapture_ReuseCaptureAndShadowFixture()
+    [Theory]
+    [InlineData("csharp")]
+    [InlineData("razor")]
+    [InlineData("blazor")]
+    [InlineData("cshtml")]
+    public void Extract_CSharpLambdaCapture_ReuseCaptureAndShadowFixture(string language)
     {
         const string content = """
             class CaptureDemo
@@ -7940,7 +7944,7 @@ public partial class ReferenceExtractorTests
                 void Capture()
                 {
                     var seed = 1;
-                    System.Func<int> next = () => seed + 1;
+                    System.Func<int> next = () => seed + seed;
                 }
             }
 
@@ -7968,17 +7972,46 @@ public partial class ReferenceExtractorTests
                     System.Func<int> next = () => seed + 1;
                 }
             }
+
+            class NamedLocals
+            {
+                void Run()
+                {
+                    var @captured = 1;
+                    var café = 2;
+                    var absent = 3;
+                    var @event = 4;
+                    System.Func<int, int> next = absent => café + @captured + café + @captured + absent + @event;
+                }
+
+                void Run(int value)
+                {
+                    System.Func<int> next = () => café + @captured;
+                }
+            }
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+        var symbols = SymbolExtractor.Extract(1, language, content);
+        var references = ReferenceExtractor.Extract(1, language, content, symbols);
+        var captures = references.Where(r => r.ReferenceKind == "capture").ToArray();
+        Assert.Equal(3, captures.Length);
 
-        var capture = Assert.Single(references.Where(r =>
-            r.SymbolName == "seed"
-            && r.ReferenceKind == "capture"));
+        var capture = Assert.Single(captures.Where(r => r.SymbolName == "seed"));
         Assert.Equal(6, capture.Line);
         Assert.Equal("function", capture.ContainerKind);
         Assert.Equal("Capture", capture.ContainerName);
+        var lines = content.Split('\n');
+        Assert.Equal(lines[5].IndexOf("seed", StringComparison.Ordinal) + 1, capture.Column);
+
+        var namedCaptures = captures.Where(r => r.ContainerName == "Run").ToArray();
+        Assert.Equal(["captured", "café"], namedCaptures.Select(r => r.SymbolName));
+        foreach (var named in namedCaptures)
+        {
+            var sourceLine = lines[named.Line - 1];
+            Assert.Contains("absent =>", sourceLine, StringComparison.Ordinal);
+            var spelling = named.SymbolName == "captured" ? "@captured" : "café";
+            Assert.Equal(sourceLine.IndexOf(spelling, StringComparison.Ordinal) + 1, named.Column);
+        }
     }
 
     private static void AssertReferenceContains(

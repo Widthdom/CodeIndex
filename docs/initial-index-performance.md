@@ -9,6 +9,15 @@ check in both workspace pre-extraction and ordinary extraction. No extractor
 contract or persisted output changes. Tests compare every symbol property with
 the gate disabled and verify fewer regex attempts instead of asserting timing.
 
+C# lambda capture extraction scans each body once for eligible local names and
+retains the first occurrence's column, then emits captures in declaration order.
+Parameter shadowing, escaped/Unicode names, and method/overload scope boundaries
+retain their existing behavior. Function-local lookup keys retain all scope
+fields without formatting a new string for every declaration. C#, Razor, Blazor
+and CSHTML share both improvements. A warmed 128-local fixture with a long class
+name allocated 2.51 MB before and 0.34 MB after; the net8/net9 regression ceiling
+is 1 MB. This measures extraction allocations, not whole-index speed.
+
 An ordinary CLI full scan of an empty database uses the authoritative fresh
 bulk writer. Its text bindings use at most 1 KiB of stack scratch space and
 pooled buffers for larger UTF-8 values, instead of allocating a byte array for
@@ -94,6 +103,18 @@ seven missed constructors were recovered, removing seven declaration-site
 reference rows and updating the corresponding overload-resolution candidates.
 Both runs completed all 1,554 files without warnings or extraction errors.
 
+For the suffix gates, per-statement source sharing and lambda capture changes,
+the fixed snapshot is `a33c5a8eb`: 1,577 files, 59,387 symbols and 562,615 references.
+Two fresh Release .NET 8 runs per version on macOS ARM64 with
+`--parallelism 2 --memory-trace` took 71.4/74.4 seconds before and 64.0/60.6 seconds
+after (about 15% lower mean elapsed time). Each run used a new database; heavy
+tests were stopped during measurement. Total managed allocations were
+7.93–7.96 GB before and 8.10 GB after, so this is not an overall allocation
+reduction. All runs completed without warnings, errors or extraction cap hits.
+Logical file, chunk, symbol, reference-line, issue, reference and resolution-candidate
+records match after normalizing generated IDs and indexing timestamps. These
+measurements describe this C#-heavy snapshot, not a general speed guarantee.
+
 ## 日本語
 
 C# の宣言確認では、式形式の宣言と accessor の先読みも含め、成立しない末尾を
@@ -103,6 +124,14 @@ C# の宣言確認では、式形式の宣言と accessor の先読みも含め�
 CSHTML の事前抽出と通常抽出で共通です。抽出契約と保存結果は変更しません。
 テストでは gate 無効時と全シンボル項目を比較し、時間ではなく照合回数の減少を
 検証します。
+
+C# の lambda 捕捉抽出は、本体を1回走査して対象のローカル名と最初の出現位置を
+保持し、宣言順に参照を出力します。引数による隠蔽、escape／Unicode 名、メソッド・
+overload 間のスコープ分離を維持します。ローカル名の検索 key はスコープの全項目を
+保持し、宣言ごとの文字列整形を省きます。C#・Razor・Blazor・CSHTML で共通です。
+長いクラス名とローカル128個の fixture は、ウォームアップ後の割り当て量が変更前の
+2.51 MBから0.34 MBへ減り、net8/net9の回帰上限を1 MBとしています。抽出の割り当て量の
+測定であり、インデックス全体の速度を表すものではありません。
 
 空のデータベースに対する通常の CLI フルスキャンは、初回専用の一括 writer を
 使用します。文字列の bind には最大 1 KiB のスタック作業領域と、大きな UTF-8 値
@@ -176,3 +205,13 @@ Razor・Blazor・CSHTML も共通です。同一行の static method 64件のウ
 欠落していた constructor 7件を回復して、宣言位置の参照7行を除去し、対応する
 overload の解決候補も更新しました。
 両方とも全1,554ファイルを警告・抽出エラーなしで完了しています。
+
+宣言末尾 gate・statement 内の参照元共有・lambda 捕捉の3変更は、`a33c5a8eb` の
+固定ソース（1,577ファイル・59,387シンボル・562,615参照）でも測定しました。
+macOS ARM64・Release .NET 8・`--parallelism 2 --memory-trace` で各版2回ずつ、
+毎回新しいDBを使い、重いテストを止めて計測しています。変更前は71.4／74.4秒、
+変更後は64.0／60.6秒で、平均所要時間は約15%減りました。managed の総割り当て量は
+変更前7.93～7.96 GB、変更後8.10 GBであり、全体の割り当て削減ではありません。
+全実行で警告・エラー・抽出上限到達はありませんでした。生成IDとインデックス時刻を
+正規化すると、ファイル・チャンク・シンボル・参照行・issue・参照・解決候補の全レコードが
+一致します。C#中心のこの固定ソースでの観測値であり、一般的な速度を保証しません。

@@ -70,7 +70,7 @@ public static partial class ReferenceExtractor
         string context,
         int lineNumber,
         SymbolRecord? container,
-        Dictionary<string, HashSet<string>>? localNamesByFunction)
+        Dictionary<CSharpLocalScopeKey, HashSet<string>>? localNamesByFunction)
     {
         if (container?.Kind != "function"
             || localNamesByFunction == null
@@ -87,11 +87,29 @@ public static partial class ReferenceExtractor
                 continue;
 
             var parameterNames = CollectCSharpLambdaParameterNames(lambda.Groups["params"].Value);
+            var candidateCount = localNames.Count;
+            foreach (var parameterName in parameterNames)
+            {
+                if (localNames.Contains(parameterName))
+                    candidateCount--;
+            }
+            if (candidateCount == 0)
+                continue;
+
+            var bodyIdentifiers = new Dictionary<string, int>(StringComparer.Ordinal);
+            foreach (Match match in BoundedRegex.EnumerateMatches(body, CSharpIdentifierPattern))
+            {
+                var name = NormalizeAtPrefixedIdentifier(match.Value);
+                if (localNames.Contains(name) && !parameterNames.Contains(name))
+                    bodyIdentifiers.TryAdd(name, match.Index);
+                if (bodyIdentifiers.Count == candidateCount)
+                    break;
+            }
+
+            // Keep declaration order and the first occurrence's original column.
             foreach (var localName in localNames)
             {
-                if (parameterNames.Contains(localName))
-                    continue;
-                if (!ContainsCSharpIdentifier(body, localName, out var bodyRelativeIndex))
+                if (!bodyIdentifiers.TryGetValue(localName, out var bodyRelativeIndex))
                     continue;
 
                 AddReference(
@@ -122,29 +140,10 @@ public static partial class ReferenceExtractor
         return names;
     }
 
-    private static bool ContainsCSharpIdentifier(string text, string name, out int index)
-    {
-        index = -1;
-        var normalizedName = NormalizeAtPrefixedIdentifier(name);
-        foreach (Match match in BoundedRegex.EnumerateMatches(text, CSharpIdentifierPattern))
-        {
-            if (string.Equals(
-                    NormalizeAtPrefixedIdentifier(match.Value),
-                    normalizedName,
-                    StringComparison.Ordinal))
-            {
-                index = match.Index;
-                return true;
-            }
-        }
-
-        return false;
-    }
-
     private static void TrackCSharpLocalDeclarations(
         string preparedLine,
         SymbolRecord? container,
-        Dictionary<string, HashSet<string>>? localNamesByFunction)
+        Dictionary<CSharpLocalScopeKey, HashSet<string>>? localNamesByFunction)
     {
         if (container?.Kind != "function" || localNamesByFunction == null)
             return;
@@ -168,6 +167,29 @@ public static partial class ReferenceExtractor
         }
     }
 
-    private static string GetCSharpContainerLocalScopeKey(SymbolRecord container)
-        => $"{container.Kind}:{container.ContainerQualifiedName}:{container.ContainerKind}:{container.ContainerName}:{container.Name}:{container.StartLine}:{container.EndLine}:{container.BodyStartLine}:{container.BodyEndLine}:{container.StartColumn}";
+    // Keep every scope discriminator without formatting a new string per declaration.
+    private readonly record struct CSharpLocalScopeKey(
+        string Kind,
+        string ContainerQualifiedName,
+        string ContainerKind,
+        string ContainerName,
+        string Name,
+        int StartLine,
+        int EndLine,
+        int? BodyStartLine,
+        int? BodyEndLine,
+        int? StartColumn);
+
+    private static CSharpLocalScopeKey GetCSharpContainerLocalScopeKey(SymbolRecord container)
+        => new(
+            container.Kind,
+            container.ContainerQualifiedName ?? "",
+            container.ContainerKind ?? "",
+            container.ContainerName ?? "",
+            container.Name,
+            container.StartLine,
+            container.EndLine,
+            container.BodyStartLine,
+            container.BodyEndLine,
+            container.StartColumn);
 }
