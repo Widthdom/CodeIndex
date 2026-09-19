@@ -902,9 +902,13 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
                 var scenario = scenarios[batch];
                 var references = Enumerable.Range(1, 32).Select(index => new ReferenceRecord
                 {
-                    FileId = fileId, SymbolName = $"target_{batch}_{index}", ReferenceKind = "call",
-                    ContainerKind = "function", ContainerName = scenario.Container,
-                    Line = batch * 100 + (index <= scenario.SharedLineCount ? 1 : index), Column = index,
+                    FileId = fileId,
+                    SymbolName = $"target_{batch}_{index}",
+                    ReferenceKind = "call",
+                    ContainerKind = "function",
+                    ContainerName = scenario.Container,
+                    Line = batch * 100 + (index <= scenario.SharedLineCount ? 1 : index),
+                    Column = index,
                     Context = $"batch_{batch}",
                 }).ToArray();
                 observed = null;

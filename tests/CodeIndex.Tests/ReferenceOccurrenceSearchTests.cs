@@ -14,17 +14,17 @@ public sealed class ReferenceOccurrenceSearchTests
         // Regex matches provide an independent non-overlapping oracle, including
         // self-overlapping names where an exact-column shortcut would be unsafe.
         foreach (var text in EnumerateShortTexts())
-        foreach (var name in new[] { "a", "aa", "aba", "ab", "ba", "a.a", "." })
-        {
-            var matches = Regex.Matches(text, Regex.Escape(name))
-                .Select(match => match.Index).ToArray();
-            for (var column = -1; column <= text.Length + 2; column++)
+            foreach (var name in new[] { "a", "aa", "aba", "ab", "ba", "a.a", "." })
             {
-                var expected = matches.OrderBy(index => Math.Abs(index + 1 - column))
-                    .Select(index => (int?)index).FirstOrDefault() ?? -1;
-                Assert.Equal(expected, ReferenceOccurrenceSearch.FindClosest(text, name, column, out _));
+                var matches = Regex.Matches(text, Regex.Escape(name))
+                    .Select(match => match.Index).ToArray();
+                for (var column = -1; column <= text.Length + 2; column++)
+                {
+                    var expected = matches.OrderBy(index => Math.Abs(index + 1 - column))
+                        .Select(index => (int?)index).FirstOrDefault() ?? -1;
+                    Assert.Equal(expected, ReferenceOccurrenceSearch.FindClosest(text, name, column, out _));
+                }
             }
-        }
     }
 
     [Fact]
@@ -105,8 +105,12 @@ public sealed class ReferenceOccurrenceSearchTests
         using var raw = writer.BeginAuthoritativeFreshBulkInsertScope(true, default);
         var fileId = writer.UpsertFile(new FileRecord
         {
-            Path = "source.fixture", Lang = language, Size = 100, Lines = 1,
-            Checksum = "occurrences", Modified = new DateTime(2026, 9, 19, 0, 0, 0, DateTimeKind.Utc),
+            Path = "source.fixture",
+            Lang = language,
+            Size = 100,
+            Lines = 1,
+            Checksum = "occurrences",
+            Modified = new DateTime(2026, 9, 19, 0, 0, 0, DateTimeKind.Utc),
         });
         var context = new StringBuilder();
         var references = new List<ReferenceRecord>();
@@ -115,7 +119,10 @@ public sealed class ReferenceOccurrenceSearchTests
             context.Append($"Receiver{index}.");
             references.Add(new ReferenceRecord
             {
-                FileId = fileId, SymbolName = "Run", ReferenceKind = "call", Line = 1,
+                FileId = fileId,
+                SymbolName = "Run",
+                ReferenceKind = "call",
+                Line = 1,
                 Column = context.Length + 1,
             });
             context.Append("Run(); ");
