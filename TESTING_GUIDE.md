@@ -1,5 +1,17 @@
 # Testing Guide
 
+`ReferenceOccurrenceSearchTests` compares short inputs against independent regex
+non-overlapping matches, retaining self-overlapping needles and earlier ties.
+Its dense 2,048-reference fixture bounds examined occurrences to one per recorded
+hit. Keep C# trimmed/unusable columns, escaped/Unicode names and constructor-only
+fallbacks alongside raw/provider persistence across twelve language keys. These
+fixtures own and dispose their databases without process-global hooks or pool
+resets, so they remain parallel-safe. Run the issue 4825/4850/5159/5189 arity and
+query regressions on net8/net9 with them; timing thresholds are not used.
+参照位置検索は独立した非重複照合との比較・同距離時の選択・候補走査数を検証します。
+C#の列・名前・constructorの境界条件と、12言語キーのraw／provider書込みを両runtimeで
+確認し、全体共有の状態を変更しないfixtureは並列実行可能なまま保ちます。
+
 `SymbolExtractorRequiredLiteralGateTests` verifies independent ASCII-punctuation
 metadata and complete 29-field parity over ten language keys, including merged
 properties, explicit-interface indexers, generics, compact constructors and macros.

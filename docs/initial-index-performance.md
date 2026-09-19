@@ -1,5 +1,17 @@
 # Initial full-index performance
 
+Reference position lookup can use an exact recorded column when a preceding
+character proves that no earlier name match could overlap it. Other inputs keep
+the forward non-overlapping search and stop once later matches cannot be nearer;
+ties still choose the earlier match. All language writers share this qualifier
+lookup. C# type and invocation arity lookups share the shortcut and combine their
+trimmed-column and first-eligible fallback searches into one pass. Escaped/Unicode
+names, identifier boundaries, constructor recognition and unusable columns keep
+their existing behavior. A 2,048-reference dense-line regression examines one
+occurrence per recorded hit instead of rescanning all 2,048 names. A separate
+warmed 4,096-type-reference probe took about 163 ms before and 0.6–1.4 ms after;
+this input-specific observation is not a general latency guarantee.
+
 Exact-input punctuation gates reject 25 audited declaration patterns across C#,
 Java, Kotlin, C/C++, JavaScript and TypeScript before regex evaluation. C# aliases
 share them. Each pattern declares its required characters: explicit-interface
@@ -140,7 +152,30 @@ Logical file, chunk, symbol, reference-line, issue, reference and resolution-can
 records match after normalizing generated IDs and indexing timestamps. These
 measurements describe this C#-heavy snapshot, not a general speed guarantee.
 
+For the additional punctuation gates, scoped candidate seeks and reference-position
+changes, the same `a33c5a8eb` source snapshot was measured against executable
+`8533dff4f`. Two fresh Release .NET 8 runs per version on macOS ARM64, alternating
+before/after with `--parallelism 2 --memory-trace`, took 59.6/60.9 seconds before
+and 43.9/45.4 seconds after: mean 60.2→44.7 seconds, about 26% less elapsed time.
+Total managed allocations fell from 8.09–8.10 GB to 7.48 GB, about 8%.
+Heavy tests were stopped during measurement. All 1,577 files completed without
+warnings, errors or extraction cap hits. The logical records in files, chunks,
+symbols, reference lines, issues, references and candidate triples match after
+normalizing generated IDs and indexing timestamps. These are two observations
+per version on a C#-heavy snapshot; see the unique-name scope-probe tradeoff above.
+
 ## 日本語
+
+参照位置の検索では、直前の文字から先行する名前の一致が記録列をまたがないと
+証明できる場合に、その列を直接使います。他の入力は従来の非重複の順方向検索を
+維持し、後続の一致がより近くなり得ない位置で止めます。同距離なら先行する一致を
+選びます。修飾子の検索は全言語のwriterで共通です。C#の型引数数・呼出し引数数も
+この短縮処理を使い、trim済み列の検索と最初の適格な候補へのfallbackを1回の走査に
+まとめます。escape／Unicode名・識別子境界・constructor判定・利用できない列の
+挙動は維持します。密な1行の参照2,048件を使う回帰テストでは、毎回2,048個の名前を
+走査する代わりに、記録位置の一致ごとに1候補だけを調べます。別の型参照4,096件の
+ウォームアップ後の試験は約163 msから0.6～1.4 msへ短縮しました。この入力での観測値で
+あり、一般的な応答時間を保証するものではありません。
 
 変換済み入力の記号判定により、C#、Java、Kotlin、C/C++、JavaScript、TypeScriptの
 監査済み25宣言パターンで不要な正規表現評価を省略します。C#の別名言語も共通です。
@@ -262,3 +297,13 @@ macOS ARM64・Release .NET 8・`--parallelism 2 --memory-trace` で各版2回ず
 全実行で警告・エラー・抽出上限到達はありませんでした。生成IDとインデックス時刻を
 正規化すると、ファイル・チャンク・シンボル・参照行・issue・参照・解決候補の全レコードが
 一致します。C#中心のこの固定ソースでの観測値であり、一般的な速度を保証しません。
+
+追加の記号判定・スコープ別候補検索・参照位置検索も、同じ `a33c5a8eb` のソースを
+固定し、実行ファイル `8533dff4f` と比較しました。macOS ARM64・Release .NET 8・
+`--parallelism 2 --memory-trace` で変更前後を交互に各2回、毎回空DBから計測した結果、
+変更前59.6／60.9秒、変更後43.9／45.4秒で、平均60.2→44.7秒、約26%の短縮でした。
+managedの総割り当て量は8.09～8.10 GBから7.48 GBへ約8%減りました。
+計測中は重いテストを停止し、全1,577ファイルが警告・エラー・抽出上限到達なしで
+完了しています。生成ID・インデックス時刻を正規化すると、ファイル・チャンク・
+シンボル・参照行・issue・参照・解決候補の全レコードが一致します。各版2回の
+C#中心の固定ソースでの観測値です。一意名に対する索引照会の追加負荷は上記のとおりです。

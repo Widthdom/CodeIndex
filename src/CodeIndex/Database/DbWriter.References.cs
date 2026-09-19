@@ -1,3 +1,4 @@
+using CodeIndex.Indexer;
 using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
 
@@ -3168,21 +3169,11 @@ public partial class DbWriter
             return null;
 
         var context = reference.Context;
-        var occurrence = -1;
-        var bestDistance = int.MaxValue;
-        for (var searchAt = 0; searchAt <= context.Length - reference.SymbolName.Length;)
-        {
-            var found = context.IndexOf(reference.SymbolName, searchAt, StringComparison.Ordinal);
-            if (found < 0)
-                break;
-            var distance = Math.Abs((found + 1) - reference.Column);
-            if (distance < bestDistance)
-            {
-                occurrence = found;
-                bestDistance = distance;
-            }
-            searchAt = found + Math.Max(1, reference.SymbolName.Length);
-        }
+        var occurrence = ReferenceOccurrenceSearch.FindClosest(
+            context,
+            reference.SymbolName,
+            reference.Column,
+            out _);
 
         if (occurrence <= 0)
             return null;

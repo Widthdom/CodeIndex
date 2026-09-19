@@ -372,64 +372,51 @@ internal static class CSharpTypeReferenceArity
         return normalized.ToString();
     }
 
-    private static int FindClosestIdentifierOccurrence(string text, string identifier, long? columnNumber)
+    private static int FindClosestIdentifierOccurrence(
+        string text,
+        string identifier,
+        long? columnNumber,
+        bool objectCreationOnly = false)
     {
         var expectedIndex = columnNumber is > 0 and <= int.MaxValue
             ? (int)columnNumber.Value - 1
             : int.MaxValue;
+        if (ReferenceOccurrenceSearch.IsExactNonOverlappingOccurrence(text, identifier, expectedIndex)
+            && IsIdentifierOccurrence(text, expectedIndex, identifier.Length)
+            && (!objectCreationOnly || IsObjectCreationIdentifier(text, expectedIndex)))
+        {
+            return expectedIndex;
+        }
+
         var bestIndex = -1;
-        var bestDistance = int.MaxValue;
         for (var searchAt = 0; searchAt <= text.Length - identifier.Length;)
         {
             var occurrence = text.IndexOf(identifier, searchAt, StringComparison.Ordinal);
             if (occurrence < 0)
                 break;
-
-            if (IsIdentifierOccurrence(text, occurrence, identifier.Length))
+            searchAt = occurrence + Math.Max(1, identifier.Length);
+            if (!IsIdentifierOccurrence(text, occurrence, identifier.Length)
+                || (objectCreationOnly && !IsObjectCreationIdentifier(text, occurrence)))
             {
-                // Reference columns are measured against the original line while context is
-                // trimmed. Trimming can only move the matching token to the left, so an
-                // occurrence to the right of the original column cannot be the referenced
-                // token. This upper bound prevents a later same-name generic from stealing
-                // the first reference on an indented line.
-                // reference column は元の行基準だが context は trim 済みである。trim により
-                // 対象 token は左へしか動かないため、元 column より右の occurrence は候補外。
-                // これにより indent された同一行の後続同名 generic への誤対応を防ぐ。
-                if (occurrence > expectedIndex)
-                {
-                    searchAt = occurrence + Math.Max(1, identifier.Length);
-                    continue;
-                }
-
-                var distance = expectedIndex == int.MaxValue
-                    ? occurrence
-                    : expectedIndex - occurrence;
-                if (distance < bestDistance)
-                {
-                    bestIndex = occurrence;
-                    bestDistance = distance;
-                }
+                continue;
             }
 
-            searchAt = occurrence + Math.Max(1, identifier.Length);
-        }
-
-        if (bestIndex >= 0)
-            return bestIndex;
-
-        // Legacy/plugin rows can carry a column that is already context-relative or no
-        // usable column at all. In that case retain a deterministic exact-case fallback.
-        for (var searchAt = 0; searchAt <= text.Length - identifier.Length;)
-        {
-            var occurrence = text.IndexOf(identifier, searchAt, StringComparison.Ordinal);
-            if (occurrence < 0)
-                break;
-            if (IsIdentifierOccurrence(text, occurrence, identifier.Length))
+            // With no usable column, retain the first exact-case identifier. Otherwise
+            // trimming can only move a token left of its original column: choose the
+            // last eligible occurrence at or before it, then stop. If none preceded it,
+            // this is also the first eligible occurrence used by the legacy fallback.
+            // column 不明時は最初の識別子を維持する。trim 済み context では元 column
+            // 以前の最後の候補を選び、それがなければ従来どおり最初の候補へ fallback。
+            if (expectedIndex == int.MaxValue)
                 return occurrence;
-            searchAt = occurrence + Math.Max(1, identifier.Length);
+            if (occurrence > expectedIndex)
+                return bestIndex >= 0 ? bestIndex : occurrence;
+            bestIndex = occurrence;
+            if (occurrence == expectedIndex)
+                return occurrence;
         }
 
-        return -1;
+        return bestIndex;
     }
 
     private static int FindInvocationIdentifierOccurrence(
@@ -454,68 +441,17 @@ internal static class CSharpTypeReferenceArity
         if (hasRecordedInvocation)
             return recordedOccurrence;
 
-        var canonicalOccurrence = FindClosestObjectCreationIdentifierOccurrence(
+        var canonicalOccurrence = FindClosestIdentifierOccurrence(
             text,
             canonicalIdentifier,
-            columnNumber);
+            columnNumber,
+            objectCreationOnly: true);
         if (canonicalOccurrence >= 0)
             return canonicalOccurrence;
 
         return spanLength is > 0 and <= int.MaxValue
             ? FindUniqueObjectCreationIdentifierBySpan(text, (int)spanLength.Value)
             : -1;
-    }
-
-    private static int FindClosestObjectCreationIdentifierOccurrence(
-        string text,
-        string identifier,
-        long? columnNumber)
-    {
-        var expectedIndex = columnNumber is > 0 and <= int.MaxValue
-            ? (int)columnNumber.Value - 1
-            : int.MaxValue;
-        var bestIndex = -1;
-        var bestDistance = int.MaxValue;
-        for (var searchAt = 0; searchAt <= text.Length - identifier.Length;)
-        {
-            var occurrence = text.IndexOf(identifier, searchAt, StringComparison.Ordinal);
-            if (occurrence < 0)
-                break;
-            searchAt = occurrence + Math.Max(1, identifier.Length);
-            if (!IsIdentifierOccurrence(text, occurrence, identifier.Length)
-                || occurrence > expectedIndex
-                || !IsObjectCreationIdentifier(text, occurrence))
-            {
-                continue;
-            }
-
-            var distance = expectedIndex == int.MaxValue
-                ? occurrence
-                : expectedIndex - occurrence;
-            if (distance < bestDistance)
-            {
-                bestIndex = occurrence;
-                bestDistance = distance;
-            }
-        }
-
-        if (bestIndex >= 0)
-            return bestIndex;
-
-        for (var searchAt = 0; searchAt <= text.Length - identifier.Length;)
-        {
-            var occurrence = text.IndexOf(identifier, searchAt, StringComparison.Ordinal);
-            if (occurrence < 0)
-                break;
-            if (IsIdentifierOccurrence(text, occurrence, identifier.Length)
-                && IsObjectCreationIdentifier(text, occurrence))
-            {
-                return occurrence;
-            }
-            searchAt = occurrence + Math.Max(1, identifier.Length);
-        }
-
-        return -1;
     }
 
     private static bool TryReadIdentifierAtRecordedSpan(
