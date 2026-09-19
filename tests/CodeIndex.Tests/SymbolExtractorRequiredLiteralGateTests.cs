@@ -249,6 +249,94 @@ public sealed class SymbolExtractorRequiredLiteralGateTests
     };
 
     [Fact]
+    public void RequiredCharacterMetadata_UsesSeparateAuditedAsciiPunctuationSets()
+    {
+        var metadata = SymbolExtractor.GetRequiredCharacterGateMetadataForTesting();
+        Assert.Equal(25, metadata.Count);
+        Assert.Equal(
+            ["c", "cpp", "csharp", "java", "javascript", "kotlin", "typescript"],
+            metadata.Select(entry => entry.Language).Distinct().OrderBy(language => language, StringComparer.Ordinal));
+        Assert.All(metadata, entry => SymbolExtractor.ValidateRequiredCharacterGate(entry.Characters));
+        foreach (var invalid in new[] { "", "((", "a", "１", " ", "\n" })
+            Assert.Throws<InvalidOperationException>(() => SymbolExtractor.ValidateRequiredCharacterGate(invalid));
+        SymbolExtractor.ValidateRequiredCharacterGate(null);
+        SymbolExtractor.ValidateRequiredCharacterGate("([<");
+    }
+
+    [Theory]
+    [InlineData("csharp")]
+    [InlineData("razor")]
+    [InlineData("blazor")]
+    [InlineData("cshtml")]
+    [InlineData("java")]
+    [InlineData("kotlin")]
+    [InlineData("c")]
+    [InlineData("cpp")]
+    [InlineData("javascript")]
+    [InlineData("typescript")]
+    public void Extract_RequiredCharactersPreserveCompleteRecordsAndAvoidImpossibleProbes(string language)
+    {
+        var isCSharp = language is "csharp" or "razor" or "blazor" or "cshtml";
+        var declaration = language switch
+        {
+            "java" => """
+                record Compact(int Value) { Compact { } }
+                class Sample {
+                    @Deprecated public <T> T Run(T value) { return value; }
+                }
+                """,
+            "kotlin" => """
+                class Sample {
+                    constructor(value: Int) { }
+                    @Deprecated("old") fun <T> Run(value: T): T { return value }
+                }
+                """,
+            "c" => "int Run(int value) { return value; }\n#define OBJECT_MACRO value\n",
+            "cpp" => "class Sample { public: int Run(int value) { return value; } };\n",
+            "javascript" => "export function Run(value) { return value; }\nconst Arrow = value => value;\n",
+            "typescript" => "export function Run<T>(value: T): T { return value; }\nconst Arrow = value => value;\n",
+            _ => """
+                class Sample {
+                    public int Run(int value) { return value; }
+                    public Sample() { }
+                    public int Value
+                    { get; init; }
+                    int IThing.Read() => 1;
+                    int IThing.this[int index] => index;
+                    int IThing.Member
+                        => 2;
+                    public (int Left, int Right) Pair { get; set; }
+                    public delegate*<int, int> Pointer;
+                    public int this[int index] => index;
+                    ~Sample() { }
+                }
+                """,
+        };
+        var canonicalLanguage = isCSharp ? "csharp" : language;
+        var words = SymbolExtractor.GetRequiredLiteralGateMetadataForTesting()
+            .Where(entry => entry.Language == canonicalLanguage)
+            .Select(entry => entry.Literal);
+        var noise = "Ω " + string.Join(" ", words);
+        var content = declaration + "\n" + string.Join('\n', Enumerable.Repeat(noise, 32));
+        var baseline = SymbolExtractor.ExtractForRequiredCharacterGateTesting(
+            language, content, false, out var baselineSkips, out var baselineAttempts);
+        var gated = SymbolExtractor.ExtractForRequiredCharacterGateTesting(
+            language, content, true, out var gatedSkips, out var gatedAttempts);
+
+        AssertSymbolsEqual(baseline, gated, language);
+        Assert.Contains(gated, symbol => symbol.Kind == "function" && symbol.Name == "Run");
+        if (isCSharp)
+        {
+            Assert.Contains(gated, symbol => symbol.Name == "Read");
+            Assert.Contains(gated, symbol => symbol.Name == "Item" && symbol.Signature!.Contains("IThing.this", StringComparison.Ordinal));
+            Assert.Contains(gated, symbol => symbol.Name == "Value" && symbol.Kind == "property");
+        }
+        Assert.Equal(0, baselineSkips);
+        Assert.True(gatedSkips >= 32, $"{language}: only {gatedSkips} impossible character probes skipped.");
+        Assert.True(gatedAttempts < baselineAttempts);
+    }
+
+    [Fact]
     public void RequiredLiteralMetadata_UsesOnlyAuditedCaseSensitiveTierAValues()
     {
         var metadata = SymbolExtractor.GetRequiredLiteralGateMetadataForTesting();

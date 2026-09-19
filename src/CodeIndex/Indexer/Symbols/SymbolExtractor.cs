@@ -346,6 +346,7 @@ public static partial class SymbolExtractor
         public int ApplicablePatternCount { get; set; }
         public int RegexAttemptCount { get; set; }
         public int MatchInputLiteralSkipCount { get; set; }
+        public int MatchInputCharacterSkipCount { get; set; }
     }
 
     private sealed class CSharpRegexProbeCounts
@@ -370,6 +371,7 @@ public static partial class SymbolExtractor
         public int DeclarationPatternRegexAttemptCount { get; set; }
         public int PhysicalInputNegativePrefixCacheHitCount { get; set; }
         public int LineStartStateReuseCount { get; set; }
+        public int SameLineDeclarationGateSkipCount { get; set; }
     }
 
     internal readonly record struct CSharpRegexProbeMetrics(
@@ -392,7 +394,8 @@ public static partial class SymbolExtractor
         int WrappedModifierMatchInputMaterializationCount,
         int DeclarationPatternRegexAttemptCount,
         int PhysicalInputNegativePrefixCacheHitCount,
-        int LineStartStateReuseCount);
+        int LineStartStateReuseCount,
+        int SameLineDeclarationGateSkipCount);
 
     internal static List<SymbolRecord> ExtractForRequiredLiteralGateTesting(
         long fileId,
@@ -428,6 +431,25 @@ public static partial class SymbolExtractor
         applicablePatternCount = counts.ApplicablePatternCount;
         regexAttemptCount = counts.RegexAttemptCount;
         matchInputLiteralSkipCount = counts.MatchInputLiteralSkipCount;
+        return symbols;
+    }
+
+    internal static List<SymbolRecord> ExtractForRequiredCharacterGateTesting(
+        string language,
+        string content,
+        bool applyMatchInputGate,
+        out int characterSkipCount,
+        out int regexAttemptCount)
+    {
+        var counts = new RequiredLiteralGateCounts();
+        var symbols = ExtractCore(
+            1, language, content, contentIsNormalized: false,
+            hasOversizeLine: null, conflictMarkerLine: null,
+            applyRequiredLiteralFileGate: false,
+            applyRequiredLiteralMatchInputGate: applyMatchInputGate,
+            requiredLiteralGateCounts: counts);
+        characterSkipCount = counts.MatchInputCharacterSkipCount;
+        regexAttemptCount = counts.RegexAttemptCount;
         return symbols;
     }
 
@@ -479,7 +501,8 @@ public static partial class SymbolExtractor
             counts.WrappedModifierMatchInputMaterializationCount,
             counts.DeclarationPatternRegexAttemptCount,
             counts.PhysicalInputNegativePrefixCacheHitCount,
-            counts.LineStartStateReuseCount);
+            counts.LineStartStateReuseCount,
+            counts.SameLineDeclarationGateSkipCount);
         return symbols;
     }
 

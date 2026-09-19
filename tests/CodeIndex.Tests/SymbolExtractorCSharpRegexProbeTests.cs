@@ -61,6 +61,39 @@ public sealed class SymbolExtractorCSharpRegexProbeTests
             < baselineMetrics.PropertyCandidateBuildCount);
     }
 
+    [Theory]
+    [InlineData("csharp")]
+    [InlineData("razor")]
+    [InlineData("blazor")]
+    [InlineData("cshtml")]
+    public void Extract_CSharpSameLineDeclarationGatesPreserveSiblingsAndSkipImpossibleInputs(string language)
+    {
+        var noise = string.Join('\n', Enumerable.Range(0, 32).Select(index => $"    unrelated_token_{index};"));
+        var content = $$"""
+            class Sample {
+            {{noise}}
+                public int Value { get; init; } public void AfterProperty() { }
+                public int Expression => 1; public void AfterExpression() { }
+                public event Action Changed; public void AfterEvent() { }
+                public delegate void Handler(); public void AfterDelegate() { }
+                public void Generic<
+                    T>(T value) { }
+                public (
+                    int Left, int Right) Tuple() => (1, 2);
+            }
+            """;
+        var baseline = SymbolExtractor.ExtractForCSharpRegexProbeTesting(
+            1, content, false, out var baselineMetrics, language: language);
+        var optimized = SymbolExtractor.ExtractForCSharpRegexProbeTesting(
+            1, content, true, out var optimizedMetrics, language: language);
+        AssertSymbolsEqual(baseline, optimized);
+        foreach (var name in new[] { "AfterProperty", "AfterExpression", "AfterEvent", "AfterDelegate", "Generic", "Tuple" })
+            Assert.Contains(optimized, symbol => symbol.Name == name && symbol.Kind == "function");
+        Assert.Equal(0, baselineMetrics.SameLineDeclarationGateSkipCount);
+        Assert.True(optimizedMetrics.SameLineDeclarationGateSkipCount >= 32,
+            $"Only {optimizedMetrics.SameLineDeclarationGateSkipCount} same-line probes skipped.");
+    }
+
     [Fact]
     public void Extract_CSharpRecoverablePatternNegativePrefix_IsolatesMergedInputs()
     {

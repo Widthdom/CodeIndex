@@ -175,9 +175,9 @@ public static partial class SymbolExtractor
                 && pattern.Kind == "property"
                 && pattern.BodyStyle == BodyStyle.Brace
                 && (lineOffset != patternStartOffset
-                    ? ShouldDeferCSharpBracePropertySameLineAdvance(matchLine, lineOffset)
+                    ? ShouldDeferCSharpBracePropertySameLineAdvance(matchLine, lineOffset, applyCSharpRegexProbeOptimizations, csharpRegexProbeCounts)
                     : patternStartState.DeferCSharpBraceProperty ??=
-                        ShouldDeferCSharpBracePropertySameLineAdvance(matchLine, lineOffset)))
+                        ShouldDeferCSharpBracePropertySameLineAdvance(matchLine, lineOffset, applyCSharpRegexProbeOptimizations, csharpRegexProbeCounts)))
             {
                 return PatternScanResult.NextPattern;
             }
@@ -185,9 +185,9 @@ public static partial class SymbolExtractor
             if (lang == "csharp"
                 && pattern.Kind == "function"
                 && (lineOffset != patternStartOffset
-                    ? ShouldDeferCSharpFunctionSameLineAdvance(matchLine, lineOffset)
+                    ? ShouldDeferCSharpFunctionSameLineAdvance(matchLine, lineOffset, applyCSharpRegexProbeOptimizations, csharpRegexProbeCounts)
                     : patternStartState.DeferCSharpFunction ??=
-                        ShouldDeferCSharpFunctionSameLineAdvance(matchLine, lineOffset)))
+                        ShouldDeferCSharpFunctionSameLineAdvance(matchLine, lineOffset, applyCSharpRegexProbeOptimizations, csharpRegexProbeCounts)))
             {
                 return PatternScanResult.NextPattern;
             }
@@ -196,12 +196,12 @@ public static partial class SymbolExtractor
                 && pattern.Kind is "event" or "delegate"
                 && pattern.BodyStyle == BodyStyle.None
                 && (lineOffset != patternStartOffset
-                    ? ShouldDeferCSharpEventOrDelegateSameLineAdvance(matchLine, lineOffset, pattern.Kind)
+                    ? ShouldDeferCSharpEventOrDelegateSameLineAdvance(matchLine, lineOffset, pattern.Kind, applyCSharpRegexProbeOptimizations, csharpRegexProbeCounts)
                     : pattern.Kind == "event"
                         ? patternStartState.DeferCSharpEvent ??=
-                            ShouldDeferCSharpEventOrDelegateSameLineAdvance(matchLine, lineOffset, pattern.Kind)
+                            ShouldDeferCSharpEventOrDelegateSameLineAdvance(matchLine, lineOffset, pattern.Kind, applyCSharpRegexProbeOptimizations, csharpRegexProbeCounts)
                         : patternStartState.DeferCSharpDelegate ??=
-                            ShouldDeferCSharpEventOrDelegateSameLineAdvance(matchLine, lineOffset, pattern.Kind)))
+                            ShouldDeferCSharpEventOrDelegateSameLineAdvance(matchLine, lineOffset, pattern.Kind, applyCSharpRegexProbeOptimizations, csharpRegexProbeCounts)))
             {
                 return PatternScanResult.NextPattern;
             }

@@ -1,5 +1,16 @@
 # Testing Guide
 
+`SymbolExtractorRequiredLiteralGateTests` verifies independent ASCII-punctuation
+metadata and complete 29-field parity over ten language keys, including merged
+properties, explicit-interface indexers, generics, compact constructors and macros.
+Its negative controls assert skipped punctuation probes and fewer regex attempts.
+`SymbolExtractorCSharpRegexProbeTests` compares same-line property/expression/event/
+delegate siblings and multiline method prefixes on C#/Razor/Blazor/CSHTML with the
+helper gates disabled/enabled. Keep these tests on net8/net9 without timing limits.
+同テストは10言語キーで全29フィールドの一致・必須記号判定の省略数を検証します。
+C#系4言語の同一行メンバーと複数行method prefixも判定を無効・有効にして比較し、
+実時間の閾値に依存せず評価回数の削減を確認します。
+
 Reference scope candidate coverage in `DatabaseTests` checks all three existing
 file/container index probes, minimum ranks, overlapping scopes, tied candidates,
 ASCII case differences, null/empty source containers and foreign-language decoys

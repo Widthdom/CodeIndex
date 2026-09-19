@@ -1,5 +1,15 @@
 # Initial full-index performance
 
+Exact-input punctuation gates reject 25 audited declaration patterns across C#,
+Java, Kotlin, C/C++, JavaScript and TypeScript before regex evaluation. C# aliases
+share them. Each pattern declares its required characters: explicit-interface
+members accept `(` or `[`, applicable generic prefixes accept `(` or `<`, and
+brace properties require `{`. The checks inspect merged and recovery inputs,
+preserve existing word-gate validation, and leave regexes unchanged. Compact Java
+constructors and argument-free arrow parameters retain their existing paths.
+C# same-line member probes also require property body punctuation or event/delegate
+words before attempting the corresponding regexes.
+
 Reference candidate ranks 1–4 probe the existing file/name and container/name
 indexes before evaluating ranking predicates. An ID set combines these three
 eligible scopes without duplicating symbols that match more than one scope.
@@ -131,6 +141,14 @@ records match after normalizing generated IDs and indexing timestamps. These
 measurements describe this C#-heavy snapshot, not a general speed guarantee.
 
 ## 日本語
+
+変換済み入力の記号判定により、C#、Java、Kotlin、C/C++、JavaScript、TypeScriptの
+監査済み25宣言パターンで不要な正規表現評価を省略します。C#の別名言語も共通です。
+明示的interfaceメンバーの `(`/`[`、対象generic prefixの `(`/`<`、brace propertyの
+`{` のように必要な記号はパターンごとに指定します。結合済み宣言・救済入力そのものを
+検査し、正規表現・既存の単語判定・compact constructor・括弧なしarrow引数の挙動は
+維持します。C#の同一行メンバー判定でも、property本体の記号やevent／delegateの
+単語がある場合だけ、対応する正規表現を評価します。
 
 参照候補の順位1～4では、既存のファイル／名前・コンテナ／名前の索引から対象を
 取得して順位条件を評価します。3つの対象スコープをID集合にまとめ、複数スコープに

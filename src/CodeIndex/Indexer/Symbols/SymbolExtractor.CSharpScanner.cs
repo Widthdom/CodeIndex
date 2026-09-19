@@ -1618,7 +1618,10 @@ public static partial class SymbolExtractor
             csharpRegexProbeCounts.PropertyHeaderRegexAttemptCount++;
         var isPropertyHeaderPrefix = CSharpPropertyHeaderPrefixRegex.IsMatch(matchLine);
         var isMethodHeaderPrefix = false;
-        if (!isPropertyHeaderPrefix)
+        // Both method-prefix regexes require '(' or '<', including incomplete generic headers.
+        // 不完全な generic header を含め、method prefix には '(' または '<' が必須。
+        if (!isPropertyHeaderPrefix
+            && (!applyCSharpRegexProbeOptimizations || matchLineSpan.IndexOfAny('(', '<') >= 0))
         {
             if (csharpRegexProbeCounts != null)
                 csharpRegexProbeCounts.MethodHeaderRegexAttemptCount++;
@@ -2030,16 +2033,37 @@ public static partial class SymbolExtractor
         return StartsWithCSharpEventAccessorKeyword(text, cursor);
     }
 
-    private static bool ShouldDeferCSharpFunctionSameLineAdvance(string matchLine, int startColumn)
+    private static bool ShouldDeferCSharpFunctionSameLineAdvance(
+        string matchLine,
+        int startColumn,
+        bool applyCSharpRegexProbeOptimizations,
+        CSharpRegexProbeCounts? counts)
     {
         if (startColumn < 0 || startColumn >= matchLine.Length)
             return false;
 
+        var suffix = matchLine.AsSpan(startColumn);
+        var mayBeProperty = !applyCSharpRegexProbeOptimizations || HasCSharpPropertyStatementPunctuation(suffix);
+        var mayBeEventOrDelegate = !applyCSharpRegexProbeOptimizations
+            || suffix.Contains("event", StringComparison.Ordinal)
+            || suffix.Contains("delegate", StringComparison.Ordinal);
+        if (!mayBeProperty && !mayBeEventOrDelegate)
+        {
+            if (counts != null)
+                counts.SameLineDeclarationGateSkipCount++;
+            return false;
+        }
+
         var remaining = matchLine[startColumn..];
         return !CSharpTypeBodyDeclarationMarker.IsMatch(remaining)
-            && (CSharpSameLinePropertyStatementStartRegex.IsMatch(remaining)
-                || CSharpSameLineEventOrDelegateStatementStartRegex.IsMatch(remaining));
+            && (mayBeProperty && CSharpSameLinePropertyStatementStartRegex.IsMatch(remaining)
+                || mayBeEventOrDelegate && CSharpSameLineEventOrDelegateStatementStartRegex.IsMatch(remaining));
     }
+
+    // These are the two mandatory terminal alternatives of the same-line property regex.
+    // same-line property regex の末尾2分岐が必須とする記号だけを検査する。
+    private static bool HasCSharpPropertyStatementPunctuation(ReadOnlySpan<char> input) =>
+        input.IndexOf('{') >= 0 || input.Contains("=>", StringComparison.Ordinal);
 
     private static bool HasCSharpTokenBeforeIndex(string text, string token, int exclusiveEnd)
     {
@@ -2073,10 +2097,22 @@ public static partial class SymbolExtractor
         return false;
     }
 
-    private static bool ShouldDeferCSharpBracePropertySameLineAdvance(string matchLine, int startColumn)
+    private static bool ShouldDeferCSharpBracePropertySameLineAdvance(
+        string matchLine,
+        int startColumn,
+        bool applyCSharpRegexProbeOptimizations,
+        CSharpRegexProbeCounts? counts)
     {
         if (startColumn < 0 || startColumn >= matchLine.Length)
             return false;
+
+        if (applyCSharpRegexProbeOptimizations
+            && !HasCSharpPropertyStatementPunctuation(matchLine.AsSpan(startColumn)))
+        {
+            if (counts != null)
+                counts.SameLineDeclarationGateSkipCount++;
+            return false;
+        }
 
         var remaining = matchLine[startColumn..];
         return !CSharpTypeBodyDeclarationMarker.IsMatch(remaining)
@@ -2084,10 +2120,24 @@ public static partial class SymbolExtractor
             && CSharpSameLinePropertyStatementStartRegex.IsMatch(remaining);
     }
 
-    private static bool ShouldDeferCSharpEventOrDelegateSameLineAdvance(string matchLine, int startColumn, string kind)
+    private static bool ShouldDeferCSharpEventOrDelegateSameLineAdvance(
+        string matchLine,
+        int startColumn,
+        string kind,
+        bool applyCSharpRegexProbeOptimizations,
+        CSharpRegexProbeCounts? counts)
     {
         if (startColumn < 0 || startColumn >= matchLine.Length)
             return false;
+
+        var requiredKeyword = kind == "event" ? "delegate" : "event";
+        if (applyCSharpRegexProbeOptimizations
+            && !matchLine.AsSpan(startColumn).Contains(requiredKeyword, StringComparison.Ordinal))
+        {
+            if (counts != null)
+                counts.SameLineDeclarationGateSkipCount++;
+            return false;
+        }
 
         var remaining = matchLine[startColumn..];
         if (CSharpTypeBodyDeclarationMarker.IsMatch(remaining))

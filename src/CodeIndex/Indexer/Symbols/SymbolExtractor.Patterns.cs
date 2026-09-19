@@ -383,6 +383,10 @@ public static partial class SymbolExtractor
     // opt-in する Tier A metadata。単一形は全成功経路に Ordinal で必ず現れる substring、any-of
     // 形は全成功経路が集合中の1つ以上を必ず含む alternation に限定する。各要素は2文字以上で、
     // 両形式は併用しない。IgnoreCase、custom/plugin、1文字、optional path の literal には設定しない。
+    // RequiredAnyCharacters independently requires one audited ASCII punctuation character
+    // in the exact transformed regex input. It may combine with a word gate, but is never
+    // inferred from Kind/BodyStyle: indexers, generic prefixes and compact constructors differ.
+    // 必須の ASCII 記号を実際の regex input で検査する。kind から推測せず各 pattern が指定する。
     private sealed record SymbolPattern(
         string Kind,
         Regex Regex,
@@ -390,7 +394,8 @@ public static partial class SymbolExtractor
         string? VisibilityGroup = null,
         string? ReturnTypeGroup = null,
         string? RequiredLiteral = null,
-        IReadOnlyList<string>? RequiredAnyLiterals = null);
+        IReadOnlyList<string>? RequiredAnyLiterals = null,
+        string? RequiredAnyCharacters = null);
 
     // Read-only snapshots keep the audited any-of metadata immutable after PatternCache is built.
     // PatternCache 構築後に監査済み any-of metadata が変化しないよう read-only snapshot にする。
@@ -784,11 +789,11 @@ public static partial class SymbolExtractor
         [
             // Include optional `*` between `function` and name for generator functions (e.g. `function* gen()`, `async function* asyncGen()`)
             // `function` と名前の間に任意の `*` を許容し、ジェネレータ関数 (`function* gen()`, `async function* asyncGen()`) にも対応
-            new("function", new Regex(@"^\s*(?<visibility>export)\s+(?<name>default)\s+(?<async>async\s+)?function(?:\s+|\s*(?<generator>\*)\s*)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "function"),
-            new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+(?:default\s+)?)?(?<async>async\s+)?function(?:\s+|\s*(?<generator>\*)\s*)(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "function"),
+            new("function", new Regex(@"^\s*(?<visibility>export)\s+(?<name>default)\s+(?<async>async\s+)?function(?:\s+|\s*(?<generator>\*)\s*)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "function", RequiredAnyCharacters: "("),
+            new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+(?:default\s+)?)?(?<async>async\s+)?function(?:\s+|\s*(?<generator>\*)\s*)(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "function", RequiredAnyCharacters: "("),
             new("lambda", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>\w+)\s*=\s*(?:async\s+)?(?:\([^)]*\)|[^=])\s*=>", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "=>"),
-            new("lambda", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>\w+)\s*(?::\s*.+?)?\s*=\s*(?<async>async\s+)?function\s*(?<generator>\*)?\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "function"),
-            new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>\w+)\s*(?::\s*.+?)?\s*=\s*(?<async>async\s+)?function(?:\s+|\s*(?<generator>\*)\s*)\w+\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "function"),
+            new("lambda", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>\w+)\s*(?::\s*.+?)?\s*=\s*(?<async>async\s+)?function\s*(?<generator>\*)?\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "function", RequiredAnyCharacters: "("),
+            new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>\w+)\s*(?::\s*.+?)?\s*=\s*(?<async>async\s+)?function(?:\s+|\s*(?<generator>\*)\s*)\w+\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "function", RequiredAnyCharacters: "("),
             // HOC-wrapped / call-result component bindings such as
             // `const Wrapped = React.memo(...)`, `const Box = React.forwardRef(...)`,
             // `const Connected = connect(...)(Component)`, `const Styled = styled.div`...``,
@@ -858,13 +863,13 @@ public static partial class SymbolExtractor
         [
             // Include optional `*` between `function` and name for generator functions (e.g. `function* gen()`, `async function* asyncGen()`)
             // `function` と名前の間に任意の `*` を許容し、ジェネレータ関数 (`function* gen()`, `async function* asyncGen()`) にも対応
-            new("function", new Regex(@"^\s*(?<visibility>export)\s+(?<name>default)\s+(?<async>async\s+)?function(?:\s+|\s*(?<generator>\*)\s*)" + TypeScriptOptionalTypeParameterListPattern + @"\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "function"),
-            new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+(?:default\s+)?)?(?:declare\s+)?(?<async>async\s+)?function(?:\s+|\s*(?<generator>\*)\s*)(?<name>\w+)\s*[\(<]", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "function"),
+            new("function", new Regex(@"^\s*(?<visibility>export)\s+(?<name>default)\s+(?<async>async\s+)?function(?:\s+|\s*(?<generator>\*)\s*)" + TypeScriptOptionalTypeParameterListPattern + @"\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "function", RequiredAnyCharacters: "("),
+            new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+(?:default\s+)?)?(?:declare\s+)?(?<async>async\s+)?function(?:\s+|\s*(?<generator>\*)\s*)(?<name>\w+)\s*[\(<]", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "function", RequiredAnyCharacters: "(<"),
             new("import", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:declare\s+)?type\s+(?<name>\w+)" + TypeScriptOptionalTypeParameterListPattern + @"\s*=", RegexOptions.Compiled), BodyStyle.None, "visibility", RequiredLiteral: "type"),
             new("property", new Regex(@"^\s*(?:(?<visibility>export)\s+)?declare\s+(?:const|let|var)\s+(?<name>\w+)(?::\s*[^;=]+)?\s*;", RegexOptions.Compiled), BodyStyle.None, "visibility", RequiredLiteral: "declare"),
             new("lambda", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>\w+)\s*(?::\s*.+?)?\s*=\s*(?:async\s+)?(?:\([^)]*\)|[^=])\s*=>", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "=>"),
-            new("lambda", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>\w+)\s*(?::\s*.+?)?\s*=\s*(?<async>async\s+)?function\s*(?<generator>\*)?\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "function"),
-            new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>\w+)\s*(?::\s*.+?)?\s*=\s*(?<async>async\s+)?function(?:\s+|\s*(?<generator>\*)\s*)\w+\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "function"),
+            new("lambda", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>\w+)\s*(?::\s*.+?)?\s*=\s*(?<async>async\s+)?function\s*(?<generator>\*)?\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "function", RequiredAnyCharacters: "("),
+            new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>\w+)\s*(?::\s*.+?)?\s*=\s*(?<async>async\s+)?function(?:\s+|\s*(?<generator>\*)\s*)\w+\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "function", RequiredAnyCharacters: "("),
             // HOC-wrapped / call-result component bindings — same narrow HOC-prefix set
             // as the JavaScript row above, extended with an optional TypeScript generic
             // type-argument token between the HOC call name and its `(` via the shared
@@ -1098,8 +1103,8 @@ public static partial class SymbolExtractor
             // コンストラクタ初期化子 (`: base(...)` / `: this(...)`) が phantom `function base` / `function this`
             // として漏れないよう二重化する。Closes #331.
             // 注意: `new` は除外しない。`new void Hidden()` は C# のメンバー隠蔽宣言として有効。
-            new("function",  new Regex($@"^\s*(?!\[\s*(?:assembly|module|type|return|param|field|property|event|method)\s*:)(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|sealed|partial|readonly|unsafe|extern|virtual|override|abstract|new|file|ref(?:\s+readonly)?)\s+)*async\s+(?<returnType>(?=[\w@?.<>\[\],:\s]*IAsync(?:Enumerable|Enumerator)\b){CSharpTypePattern})\s+(?!(?:base|this)\b)(?<name>{CSharpIdentifierPattern})\s*{CSharpMethodTypeParameterListPattern}\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType", RequiredLiteral: "IAsync"),
-            new("function",  new Regex($@"^\s*(?!\[\s*(?:assembly|module|type|return|param|field|property|event|method)\s*:)(?![?:])(?!(?:await|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|using|case|else|when|break|continue|goto|from|where|select|orderby|group|join|let|into|on|equals|ascending|descending|by)\b)(?!\s*(?:(?:{CSharpVisibilityPattern}|static|sealed|partial|readonly|unsafe|extern|virtual|override|abstract|async|new|file|ref(?:\s+readonly)?)\s+)*delegate\b(?!\s*\*))(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|sealed|partial|readonly|unsafe|extern|virtual|override|abstract|async|new|file|ref(?:\s+readonly)?)\s+)*(?!{CSharpNonTypeKeywordPattern})(?<returnType>{CSharpTypePattern})\s+(?!(?:base|this)\b)(?<name>{CSharpIdentifierPattern})\s*{CSharpMethodTypeParameterListPattern}\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
+            new("function",  new Regex($@"^\s*(?!\[\s*(?:assembly|module|type|return|param|field|property|event|method)\s*:)(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|sealed|partial|readonly|unsafe|extern|virtual|override|abstract|new|file|ref(?:\s+readonly)?)\s+)*async\s+(?<returnType>(?=[\w@?.<>\[\],:\s]*IAsync(?:Enumerable|Enumerator)\b){CSharpTypePattern})\s+(?!(?:base|this)\b)(?<name>{CSharpIdentifierPattern})\s*{CSharpMethodTypeParameterListPattern}\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType", RequiredLiteral: "IAsync", RequiredAnyCharacters: "("),
+            new("function",  new Regex($@"^\s*(?!\[\s*(?:assembly|module|type|return|param|field|property|event|method)\s*:)(?![?:])(?!(?:await|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|using|case|else|when|break|continue|goto|from|where|select|orderby|group|join|let|into|on|equals|ascending|descending|by)\b)(?!\s*(?:(?:{CSharpVisibilityPattern}|static|sealed|partial|readonly|unsafe|extern|virtual|override|abstract|async|new|file|ref(?:\s+readonly)?)\s+)*delegate\b(?!\s*\*))(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|sealed|partial|readonly|unsafe|extern|virtual|override|abstract|async|new|file|ref(?:\s+readonly)?)\s+)*(?!{CSharpNonTypeKeywordPattern})(?<returnType>{CSharpTypePattern})\s+(?!(?:base|this)\b)(?<name>{CSharpIdentifierPattern})\s*{CSharpMethodTypeParameterListPattern}\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType", RequiredAnyCharacters: "("),
             new("lambda",    new Regex($@"^\s*(?:var|{CSharpTypePattern})\s+(?<name>{CSharpIdentifierPattern})\s*=\s*(?:async\s+)?(?:\([^)]*\)|{CSharpIdentifierPattern})\s*=>", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "=>"),
             // Constructor (no return type, name followed by parenthesis) — needs visibility.
             // `unsafe` / `extern` can appear before or after visibility, and C# 14 partial
@@ -1152,14 +1157,14 @@ public static partial class SymbolExtractor
             // 現在行に `)` が出ないため lookahead が発動せずそのままマッチする。
             // CSharpTupleSuffixPattern を CSharpTypePattern と共有することで、ctor 否定先読みと上流の
             // property / method / plain-field 行が tuple サフィックス戻り値の受理形について常に一致する。Closes #349.
-            new("function",  new Regex($@"^\s*(?:(?:unsafe|extern)\s+)*(?<visibility>{CSharpVisibilityPattern})\s+(?:(?:unsafe|extern|partial)\s+)*(?<name>{CSharpIdentifierPattern})\s*\((?!.*\){CSharpTupleSuffixPattern}\s*{CSharpIdentifierPattern}\s*(?:[{{(;]|=>|=(?![=>])))", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("function",  new Regex($@"^\s*(?:(?:unsafe|extern)\s+)*(?<visibility>{CSharpVisibilityPattern})\s+(?:(?:unsafe|extern|partial)\s+)*(?<name>{CSharpIdentifierPattern})\s*\((?!.*\){CSharpTupleSuffixPattern}\s*{CSharpIdentifierPattern}\s*(?:[{{(;]|=>|=(?![=>])))", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredAnyCharacters: "("),
             // Partial method declaration with an omitted return type. Older partial-method
             // syntax can omit the accessibility modifier and still mean `void`; keep this
             // after the constructor row so `public partial Widget();` remains a constructor.
             // 戻り値型を省略した partial method 宣言。旧来の partial method 構文では
             // accessibility を省略し、戻り値型は `void` とみなされる。`public partial Widget();`
             // は constructor のまま扱うため、この行は constructor 行の後ろに置く。
-            new("function",  new Regex($@"^\s*(?:(?:static|sealed|readonly|unsafe|extern|virtual|override|abstract|async|new|file|ref(?:\s+readonly)?)\s+)*(?<returnType>partial)\s+(?<name>{CSharpIdentifierPattern})\s*{CSharpMethodTypeParameterListPattern}\(", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType", RequiredLiteral: "partial"),
+            new("function",  new Regex($@"^\s*(?:(?:static|sealed|readonly|unsafe|extern|virtual|override|abstract|async|new|file|ref(?:\s+readonly)?)\s+)*(?<returnType>partial)\s+(?<name>{CSharpIdentifierPattern})\s*{CSharpMethodTypeParameterListPattern}\(", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType", RequiredLiteral: "partial", RequiredAnyCharacters: "("),
             // Static constructor / 静的コンストラクタ
             // Keep this ahead of the property rows so same-line compact bodies such as
             // `class C { static C() { } public int P { get; set; } }` emit the static ctor
@@ -1171,7 +1176,7 @@ public static partial class SymbolExtractor
             // pattern scan を打ち切る前に static ctor を先に拾う必要があるため、property 行より前に置く。
             // この形は「戻り値型なし・引数なし・`static` 前後の任意 `unsafe`」に限定されるため、
             // 通常メソッドとは重ならない。Closes #478.
-            new("function",  new Regex($@"^\s*(?:unsafe\s+)?static\s+(?:unsafe\s+)?(?<name>{CSharpIdentifierPattern})\s*\(\s*\)\s*\{{?", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "static"),
+            new("function",  new Regex($@"^\s*(?:unsafe\s+)?static\s+(?:unsafe\s+)?(?<name>{CSharpIdentifierPattern})\s*\(\s*\)\s*\{{?", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "static", RequiredAnyCharacters: "("),
             // Property with get/set/init — visibility optional
             // Reject statement keywords (return/throw/switch/...) as the return type so that
             // multi-line statement fragments merged by BuildCSharpPropertyMatchLine — e.g.
@@ -1181,7 +1186,7 @@ public static partial class SymbolExtractor
             // `return o switch` のような複数行にまたがる文断片が `BuildCSharpPropertyMatchLine`
             // で結合された結果、property として誤判定されるのを防ぐため、戻り値型として
             // ステートメントキーワードを拒否する。Closes #233.
-            new("property",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|virtual|override|abstract|sealed|new|required|partial|readonly|unsafe|extern|ref(?:\s+readonly)?)\s+)*(?!(?:class|struct|interface|enum|record|namespace|delegate|event|const|using|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await)\b)(?<returnType>{CSharpTypePattern})\s+(?<name>{CSharpIdentifierPattern})\s*\{{", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
+            new("property",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|virtual|override|abstract|sealed|new|required|partial|readonly|unsafe|extern|ref(?:\s+readonly)?)\s+)*(?!(?:class|struct|interface|enum|record|namespace|delegate|event|const|using|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await)\b)(?<returnType>{CSharpTypePattern})\s+(?<name>{CSharpIdentifierPattern})\s*\{{", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType", RequiredAnyCharacters: "{"),
             // Expression-bodied property (public int X => ...) — must come before delegate.
             // Uses BodyStyle.Brace so FindCSharpBraceRange detects '=>' and assigns a body
             // range covering the declaration line through the terminating ';', which
@@ -1253,7 +1258,7 @@ public static partial class SymbolExtractor
             // / `Inner`。正規表現は最初の `(` で止まるので、末尾の `.Append(...)` /
             // `.Consume()` チェーンはキャプチャされない）として
             // 明示的インターフェースメソッドに化けないようにする。
-            new("function",  new Regex($@"^\s*(?![?:])(?!(?:await|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|using|case|else|when|break|continue|goto|new|from|where|select|orderby|group|join|let|into|on|equals|ascending|descending|by)\b)(?!\w+\s*:\s*(?:global::)?[\w@.<>:]+\.\w+\s*{CSharpMethodTypeParameterListPattern}[\(\[])(?:(?<refModifier>ref(?:\s+readonly)?)\s+)?(?<returnType>{CSharpTypePattern})\s+(?<explicitInterface>{CSharpExplicitInterfaceQualifierPattern})\s*\.\s*(?<name>{CSharpIdentifierPattern})\s*(?<explicitTypeParameters>{CSharpMethodTypeParameterListPattern})[\(\[]", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
+            new("function",  new Regex($@"^\s*(?![?:])(?!(?:await|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|using|case|else|when|break|continue|goto|new|from|where|select|orderby|group|join|let|into|on|equals|ascending|descending|by)\b)(?!\w+\s*:\s*(?:global::)?[\w@.<>:]+\.\w+\s*{CSharpMethodTypeParameterListPattern}[\(\[])(?:(?<refModifier>ref(?:\s+readonly)?)\s+)?(?<returnType>{CSharpTypePattern})\s+(?<explicitInterface>{CSharpExplicitInterfaceQualifierPattern})\s*\.\s*(?<name>{CSharpIdentifierPattern})\s*(?<explicitTypeParameters>{CSharpMethodTypeParameterListPattern})[\(\[]", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType", RequiredAnyCharacters: "(["),
             // Explicit interface property implementation (brace body), e.g. int IThing.Value { get; set; }
             // Mirrors the explicit-interface method row above: the qualifier is non-capturing so the
             // short property name (Value) is recorded as name, consistent with how the method row
@@ -1262,7 +1267,7 @@ public static partial class SymbolExtractor
             // 上の明示的インターフェースメソッド行と同じ構造で、修飾子は非キャプチャにしてショート名
             // (Value) のみを name として記録する。メソッド側が Dispose / CompareTo を返すのと揃える。
             // Closes #333.
-            new("property",  new Regex($@"^\s*(?![?:])(?!(?:class|struct|interface|enum|record|namespace|delegate|event|const|using|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await)\b)(?:(?<refModifier>ref(?:\s+readonly)?)\s+)?(?<returnType>{CSharpTypePattern})\s+(?<explicitInterface>{CSharpExplicitInterfaceQualifierPattern})\s*\.\s*(?<name>{CSharpIdentifierPattern})\s*\{{", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
+            new("property",  new Regex($@"^\s*(?![?:])(?!(?:class|struct|interface|enum|record|namespace|delegate|event|const|using|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await)\b)(?:(?<refModifier>ref(?:\s+readonly)?)\s+)?(?<returnType>{CSharpTypePattern})\s+(?<explicitInterface>{CSharpExplicitInterfaceQualifierPattern})\s*\.\s*(?<name>{CSharpIdentifierPattern})\s*\{{", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType", RequiredAnyCharacters: "{"),
             // Explicit interface property implementation (expression body), e.g. string IThing.Name => "x";
             // 明示的インターフェースプロパティ実装（式本体）。例: string IThing.Name => "x";
             new("property",  new Regex($@"^\s*(?![?:])(?!(?:class|struct|interface|enum|record|namespace|delegate|event|const|using|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await)\b)(?:(?<refModifier>ref(?:\s+readonly)?)\s+)?(?<returnType>{CSharpTypePattern})\s+(?<explicitInterface>{CSharpExplicitInterfaceQualifierPattern})\s*\.\s*(?<name>{CSharpIdentifierPattern})\s*=>\s*", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType", RequiredLiteral: "=>"),
@@ -1270,7 +1275,7 @@ public static partial class SymbolExtractor
             // the captured qualifier becomes part of the persisted exact-query identity.
             // 明示的インターフェース indexer 実装。表示名は `Item` のままにし、捕捉した
             // qualifier は永続化する完全一致 query identity に含める。
-            new("function",  new Regex($@"^\s*(?![?:])(?:(?<refModifier>ref(?:\s+readonly)?)\s+)?(?<returnType>{CSharpTypePattern})\s+(?<explicitInterface>{CSharpExplicitInterfaceQualifierPattern})\s*\.\s*(?<name>this)\s*\[", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType", RequiredLiteral: "this"),
+            new("function",  new Regex($@"^\s*(?![?:])(?:(?<refModifier>ref(?:\s+readonly)?)\s+)?(?<returnType>{CSharpTypePattern})\s+(?<explicitInterface>{CSharpExplicitInterfaceQualifierPattern})\s*\.\s*(?<name>this)\s*\[", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType", RequiredLiteral: "this", RequiredAnyCharacters: "["),
             // Indexer (this[...]) — `partial` is legal on indexers since C# 13 (extended partial
             // member support), so accept it alongside the other modifiers. Otherwise every
             // `partial` indexer declaration would be silently dropped from symbols / definition /
@@ -1278,9 +1283,9 @@ public static partial class SymbolExtractor
             // インデクサ (this[...]) — C# 13 で indexer に対しても `partial` が使える (partial
             // member 拡張) ため、他の修飾子と並べて受け付ける。そうしないと `partial` indexer 宣言
             // が symbols / definition / outline から無言で欠落する。Closes #350.
-            new("function",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|virtual|override|abstract|sealed|new|readonly|unsafe|extern|partial|ref(?:\s+readonly)?)\s+)*(?<returnType>{CSharpTypePattern})\s+(?<name>this)\s*\[", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType", RequiredLiteral: "this"),
+            new("function",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|virtual|override|abstract|sealed|new|readonly|unsafe|extern|partial|ref(?:\s+readonly)?)\s+)*(?<returnType>{CSharpTypePattern})\s+(?<name>this)\s*\[", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType", RequiredLiteral: "this", RequiredAnyCharacters: "["),
             // Finalizer (destructor) / ファイナライザ（デストラクタ）
-            new("function",  new Regex($@"^\s*~(?<name>{CSharpIdentifierPattern})\s*\(\s*\)", RegexOptions.Compiled), BodyStyle.Brace),
+            new("function",  new Regex($@"^\s*~(?<name>{CSharpIdentifierPattern})\s*\(\s*\)", RegexOptions.Compiled), BodyStyle.Brace, RequiredAnyCharacters: "("),
             // Enum member (e.g. Red, Green = 1,) — requires 4+ spaces indent, name only,
             // and optional = with numeric/hex/identifier value. Does NOT match string/object assignments.
             // enum メンバー（例: Red, Green = 1,）— 4+スペースインデント必須、名前のみ、
@@ -1396,7 +1401,7 @@ public static partial class SymbolExtractor
             new("function", new Regex($@"^\s*(?:@\w+(?:\([^)]*\))?\s+)*(?<visibility>public|private|protected)?\s*(?=(?:(?:static|final|transient|volatile)\s+)*static\b)(?=(?:(?:static|final|transient|volatile)\s+)*final\b)(?:(?:static|final|transient|volatile)\s+)*(?<returnType>{JavaReturnTypePattern})\s+(?<name>[A-Z_]\w*)\s*=", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, "visibility", "returnType", RequiredLiteral: "static"),
             // Method with return type — expanded modifiers (default, native, synchronized, final)
             // 戻り値型付きメソッド — 拡張修飾子対応（default, native, synchronized, final）
-            new("function", new Regex($@"^\s*(?!(?:return|throw|new|if|for|while|switch|do|case|else|try|catch|finally|synchronized|break|continue|yield|assert)\b)(?:@\w+(?:\([^)]*\))?\s+)*(?<visibility>public|private|protected)?\s*(?:(?:static|abstract|synchronized|final|default|native|strictfp)\s+)*(?!(?:record)\b){JavaMethodTypeParameterPattern}(?<returnType>{JavaReturnTypePattern})\s+(?<name>{JavaIdentifierPattern})\s*\(", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, "visibility", "returnType"),
+            new("function", new Regex($@"^\s*(?!(?:return|throw|new|if|for|while|switch|do|case|else|try|catch|finally|synchronized|break|continue|yield|assert)\b)(?:@\w+(?:\([^)]*\))?\s+)*(?<visibility>public|private|protected)?\s*(?:(?:static|abstract|synchronized|final|default|native|strictfp)\s+)*(?!(?:record)\b){JavaMethodTypeParameterPattern}(?<returnType>{JavaReturnTypePattern})\s+(?<name>{JavaIdentifierPattern})\s*\(", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, "visibility", "returnType", RequiredAnyCharacters: "("),
             // Enum members are extracted by ExtractJavaEnumMembers using a body-scoped scanner,
             // which handles any indent style (tab, 2-space, 4-space) and skips member-like lines
             // outside the enum body (e.g. `\tRED();` method calls inside a class body).
@@ -1419,9 +1424,9 @@ public static partial class SymbolExtractor
             new("class",    new Regex($@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:abstract|data|sealed|open|inner|value|inline|annotation|expect|actual)\s+)*(?:class|object)\s+(?<name>{KotlinIdentifierPattern})", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredAnyLiterals: KotlinClassRequiredAnyLiterals),
             // Function / 関数 (including extension, secondary constructor, override, and abstract forms)
             // 関数 — 拡張・セカンダリコンストラクタ・override・abstract 形を含む
-            new("function", new Regex($@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:suspend|inline|infix|operator|tailrec|external|expect|actual|abstract|override|open|final)\s+)*fun\s+(?:<[^>]+>\s+)?(?:{KotlinIdentifierPattern}(?:<[^>]+>)?\.)?(?<name>{KotlinIdentifierPattern})\s*[\(<](?:.*?\))?(?::\s*(?<returnType>[^ {{=]+))?", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType", RequiredLiteral: "fun"),
+            new("function", new Regex($@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:suspend|inline|infix|operator|tailrec|external|expect|actual|abstract|override|open|final)\s+)*fun\s+(?:<[^>]+>\s+)?(?:{KotlinIdentifierPattern}(?:<[^>]+>)?\.)?(?<name>{KotlinIdentifierPattern})\s*[\(<](?:.*?\))?(?::\s*(?<returnType>[^ {{=]+))?", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType", RequiredLiteral: "fun", RequiredAnyCharacters: "(<"),
             // Secondary constructor / セカンダリコンストラクタ
-            new("function", new Regex(@"^\s*(?<visibility>public|private|protected|internal)?\s*constructor\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "constructor"),
+            new("function", new Regex(@"^\s*(?<visibility>public|private|protected|internal)?\s*constructor\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "constructor", RequiredAnyCharacters: "("),
             // Enum entry / enum エントリ
             new("property", new Regex($@"^\s{{2,}}(?<name>(?:[A-Z][A-Z0-9_]*|`[^`\r\n]+`))\s*(?:\((?<returnType>[^)]*)\))?\s*(?:,|\{{|;)?\s*$", RegexOptions.Compiled), BodyStyle.Brace, "returnType"),
             // Top-level val/var property / トップレベルプロパティ
@@ -1583,7 +1588,7 @@ public static partial class SymbolExtractor
         ],
         ["c"] =
         [
-            new("function", new Regex(CFunctionStartBlacklistPattern + CFunctionReturnTypePattern + CFunctionNameBlacklistPattern + @"(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
+            new("function", new Regex(CFunctionStartBlacklistPattern + CFunctionReturnTypePattern + CFunctionNameBlacklistPattern + @"(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType", RequiredAnyCharacters: "("),
             // #define macros / #define マクロ
             new("function", new Regex(@"^\s*#\s*define\s+(?<name>[A-Za-z_]\w*)\(", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "define"),
             new("function", new Regex(@"^\s*#\s*define\s+(?<name>[A-Za-z_]\w*)(?=\s|$)", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "define"),
@@ -1602,8 +1607,8 @@ public static partial class SymbolExtractor
             new("namespace", new Regex(CppFunctionStartBlacklistPattern + @"inline\s+namespace\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "namespace"),
             new("interface", new Regex(CppFunctionStartBlacklistPattern + CppTemplatePrefixPattern + @"(?:export\s+)?concept\s+(?<name>\w+)\b", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "concept"),
             new("specialization", new Regex(CppFunctionStartBlacklistPattern + @"\s*template\s*<[^>]*>\s*(?:class|struct|union)\s+(?<name>(?:[A-Za-z_]\w*::)*[A-Za-z_]\w*)\s*<[^;{}]+>", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, RequiredLiteral: "template"),
-            new("specialization", new Regex(CppFunctionStartBlacklistPattern + @"\s*template\s*<>\s*" + CppAttributePrefixPattern + @"(?:extern\s+""(?:C|C\+\+)""\s*)?" + CppAttributePrefixPattern + @"(?:(?<returnType>(?:(?:" + CppFunctionReturnTypeAtomPattern + @")[\s*&]+)+))?(?:(?:[\w:<>]+\s*::\s*)+)?" + CFunctionNameBlacklistPattern + @"(?<name>~?\w+|operator(?:\s*\(\)|\s*\[\]|\s*[^\s(]+(?:\s+[^\s(]+)?))\s*<[^>\r\n]+>\s*\(", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, ReturnTypeGroup: "returnType", RequiredLiteral: "template"),
-            new("function", new Regex(CppFunctionStartBlacklistPattern + CppTemplatePrefixPattern + CppAttributePrefixPattern + @"(?:extern\s+""(?:C|C\+\+)""\s*)?" + CppAttributePrefixPattern + @"(?:(?<returnType>(?:(?:" + CppFunctionReturnTypeAtomPattern + @")[\s*&]+)+))?(?:(?:[\w:<>]+\s*::\s*)+)?" + CFunctionNameBlacklistPattern + @"(?<name>~?\w+|operator(?:\s*\(\)|\s*\[\]|\s*[^\s(]+(?:\s+[^\s(]+)?))(?:\s*<[^>]+>)?\s*\(", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
+            new("specialization", new Regex(CppFunctionStartBlacklistPattern + @"\s*template\s*<>\s*" + CppAttributePrefixPattern + @"(?:extern\s+""(?:C|C\+\+)""\s*)?" + CppAttributePrefixPattern + @"(?:(?<returnType>(?:(?:" + CppFunctionReturnTypeAtomPattern + @")[\s*&]+)+))?(?:(?:[\w:<>]+\s*::\s*)+)?" + CFunctionNameBlacklistPattern + @"(?<name>~?\w+|operator(?:\s*\(\)|\s*\[\]|\s*[^\s(]+(?:\s+[^\s(]+)?))\s*<[^>\r\n]+>\s*\(", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, ReturnTypeGroup: "returnType", RequiredLiteral: "template", RequiredAnyCharacters: "("),
+            new("function", new Regex(CppFunctionStartBlacklistPattern + CppTemplatePrefixPattern + CppAttributePrefixPattern + @"(?:extern\s+""(?:C|C\+\+)""\s*)?" + CppAttributePrefixPattern + @"(?:(?<returnType>(?:(?:" + CppFunctionReturnTypeAtomPattern + @")[\s*&]+)+))?(?:(?:[\w:<>]+\s*::\s*)+)?" + CFunctionNameBlacklistPattern + @"(?<name>~?\w+|operator(?:\s*\(\)|\s*\[\]|\s*[^\s(]+(?:\s+[^\s(]+)?))(?:\s*<[^>]+>)?\s*\(", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType", RequiredAnyCharacters: "("),
             // Type alias / 型エイリアス
             new("import", new Regex(CppFunctionStartBlacklistPattern + @"using\s+enum\s+(?<name>(?:[A-Za-z_]\w*::)*[A-Za-z_]\w*)\s*;", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "using"),
             new("import", new Regex(CppFunctionStartBlacklistPattern + @"template\s*<[^>]+>\s*(?:export\s+)?using\s+(?<name>\w+)\s*=", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "using"),
@@ -2305,6 +2310,7 @@ public static partial class SymbolExtractor
                     pattern.Regex.Options,
                     pattern.RequiredLiteral,
                     pattern.RequiredAnyLiterals);
+                ValidateRequiredCharacterGate(pattern.RequiredAnyCharacters);
             }
         }
     }
@@ -2368,6 +2374,30 @@ public static partial class SymbolExtractor
                 $"Required literal gates are not valid for case-insensitive patterns ({language}/{kind}).");
         }
     }
+
+    internal static void ValidateRequiredCharacterGate(string? characters)
+    {
+        if (characters is null)
+            return;
+        if (characters.Length == 0)
+            throw new InvalidOperationException("Required character gates cannot be empty.");
+        for (var index = 0; index < characters.Length; index++)
+        {
+            var character = characters[index];
+            if (character > 127 || !char.IsPunctuation(character) && !char.IsSymbol(character)
+                || characters.AsSpan(0, index).IndexOf(character) >= 0)
+            {
+                throw new InvalidOperationException("Required character gates must use distinct ASCII punctuation.");
+            }
+        }
+    }
+
+    internal static IReadOnlyList<(string Language, string Kind, string Characters)>
+        GetRequiredCharacterGateMetadataForTesting() =>
+        PatternCache.SelectMany(entry => entry.Value
+            .Where(pattern => pattern.RequiredAnyCharacters is not null)
+            .Select(pattern => (entry.Key, pattern.Kind, pattern.RequiredAnyCharacters!)))
+            .ToArray();
 
     internal static void ValidateRequiredLiteralGateForTesting(
         RegexOptions regexOptions,
