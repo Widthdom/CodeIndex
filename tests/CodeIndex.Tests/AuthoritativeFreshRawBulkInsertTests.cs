@@ -555,6 +555,10 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
                 containerName: "Caller"));
             references.Add(SourceReference(firstFileId, "cross_arm_rank_probe", line: 18, containerName: "Caller"));
             references.Add(SourceReference(firstFileId, "outside_all_ranges_probe", line: 101, containerName: "Caller"));
+            references.Add(SourceReference(firstFileId, "canonical_at_alias_line", line: 45, containerName: "Caller"));
+            var foldedOverride = SourceReference(firstFileId, "folded_override", line: 45, containerName: "Caller");
+            foldedOverride.IdentityContainerNameFolded = "displayalias";
+            references.Add(foldedOverride);
 
             _writer.InsertReferencesForNewFilesInAtomicFileScope(
                 references,
@@ -603,6 +607,8 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
         Assert.Equal(secondNestedSourceId, SourceSymbolId("second_file_probe"));
         Assert.Equal(crossArmSourceId, SourceSymbolId("cross_arm_rank_probe"));
         Assert.Null(SourceSymbolId("outside_all_ranges_probe"));
+        Assert.Equal(aliasSourceId, SourceSymbolId("folded_override"));
+        Assert.NotEqual(aliasSourceId, SourceSymbolId("canonical_at_alias_line"));
 
         const string sourceSnapshotSql = """
             SELECT group_concat(COALESCE(source_symbol_id, 'null'), '|')
@@ -780,6 +786,162 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
             SQLitePCL.raw.sqlite3_progress_handler(_db.Connection.Handle, 0, null!, null!);
         }
         Assert.InRange(callbacks, 1, 32);
+
+        // Disjoint overloads require skipping non-containing ranges. Repeated
+        // references on a line must share that work without merging their rows.
+        // 離れた同名宣言での範囲検索を同じ行の参照間で共有し、参照行は全て保持する。
+        var disjointFileId = InsertNewFile("src/disjoint-overloads.cs");
+        _writer.InsertSymbols(Enumerable.Range(1, 128).Select(index => new SymbolRecord
+        {
+            FileId = disjointFileId,
+            Kind = "function",
+            Name = "Caller",
+            Line = index * 2,
+            StartLine = index * 2,
+            EndLine = index * 2,
+        }).ToArray());
+        var references = Enumerable.Range(1, 128).Select(column => new ReferenceRecord
+        {
+            FileId = disjointFileId,
+            SymbolName = "Target",
+            ReferenceKind = "call",
+            ContainerKind = "function",
+            ContainerName = "Caller",
+            Line = 2,
+            Column = column,
+            Context = "Target();",
+        }).ToArray();
+        callbacks = 0;
+        SQLitePCL.raw.sqlite3_progress_handler(_db.Connection.Handle, 1000, progress, null!);
+        try
+        {
+            _writer.InsertReferencesForNewFilesInAtomicFileScope(
+                references, refreshMutualRecursionFlags: false, CancellationToken.None);
+        }
+        finally
+        {
+            SQLitePCL.raw.sqlite3_progress_handler(_db.Connection.Handle, 0, null!, null!);
+        }
+        Assert.InRange(callbacks, 1, 140);
+        Assert.Equal(128, ScalarLong($"""
+            SELECT COUNT(*) FROM symbol_references AS r
+            JOIN symbols AS s ON s.id = r.source_symbol_id
+            WHERE r.file_id = {disjointFileId} AND s.file_id = r.file_id AND s.start_line = 2
+            """));
+        Assert.Equal(
+            string.Join('|', Enumerable.Range(1, 128)),
+            ScalarString($"""
+                SELECT group_concat(column_number, '|')
+                FROM (SELECT column_number FROM symbol_references WHERE file_id = {disjointFileId} ORDER BY id)
+                """));
+        raw.Complete();
+        transaction.Commit();
+    }
+
+    [Theory]
+    [InlineData("csharp")]
+    [InlineData("python")]
+    [InlineData("javascript")]
+    [InlineData("typescript")]
+    [InlineData("java")]
+    [InlineData("go")]
+    [InlineData("rust")]
+    [InlineData("cpp")]
+    [InlineData("kotlin")]
+    [InlineData("vb")]
+    public void ReferenceSourceLookup_UniqueAndAbsentSourcesAvoidSharingAndKeepSeparateCachedShapes(string language)
+    {
+        using var graph = _writer.BeginReferenceGraphRefreshScope(
+            forceFullRefresh: true, useFreshReferenceResolutionDefaults: true);
+        using var transaction = _writer.BeginTransaction();
+        using var raw = _writer.BeginAuthoritativeFreshBulkInsertScope(enabled: true, CancellationToken.None)!;
+        var fileId = InsertNewFile("src/source-distributions", language);
+        _writer.InsertSymbols([new SymbolRecord
+        {
+            FileId = fileId, Kind = "function", Name = "Caller", Line = 1, StartLine = 1, EndLine = 1000,
+        }]);
+        var sourceId = ScalarLong("SELECT id FROM symbols");
+        var previousHook = DbWriter.AuthoritativeFreshRawInsertExecutingForTesting;
+        var previousCheckpoint = DbWriter.BatchProgressCheckpointForTesting;
+        DbWriter.AuthoritativeFreshRawInsertWork? observed = null;
+        var instructions = 0;
+        SQLitePCL.delegate_progress progress = _ => { instructions++; return 0; };
+        try
+        {
+            DbWriter.BatchProgressCheckpointForTesting = checkpoint =>
+            {
+                if (checkpoint.Operation == "insert_references" && checkpoint.RowsProcessed == checkpoint.RowsTotal)
+                    SQLitePCL.raw.sqlite3_progress_handler(_db.Connection.Handle, 0, null!, null!);
+                previousCheckpoint?.Invoke(checkpoint);
+            };
+            DbWriter.AuthoritativeFreshRawInsertExecutingForTesting = work =>
+            {
+                previousHook?.Invoke(work);
+                if (work.Operation != "insert_references")
+                    return;
+                Assert.Null(observed);
+                observed = work;
+                SQLitePCL.raw.sqlite3_progress_handler(_db.Connection.Handle, 1, progress, null!);
+            };
+            // Alternate equal-sized SQL shapes, then reuse both cached native statements.
+            var scenarios = new (string? Container, int SharedLineCount, bool Shared, bool CacheHit)[]
+            {
+                ("Caller", 0, false, false),
+                ("Caller", 32, true, false),
+                ("Caller", 0, false, true),
+                ("Caller", 32, true, true),
+                ("Caller", 2, false, true),
+                ("Caller", 16, false, true),
+                ("Caller", 17, true, true),
+                (null, 0, false, true),
+                (null, 32, false, true),
+                ("", 0, false, true),
+            };
+            for (var batch = 0; batch < scenarios.Length; batch++)
+            {
+                var scenario = scenarios[batch];
+                var references = Enumerable.Range(1, 32).Select(index => new ReferenceRecord
+                {
+                    FileId = fileId,
+                    SymbolName = $"target_{batch}_{index}",
+                    ReferenceKind = "call",
+                    ContainerKind = "function",
+                    ContainerName = scenario.Container,
+                    Line = batch * 100 + (index <= scenario.SharedLineCount ? 1 : index),
+                    Column = index,
+                    Context = $"batch_{batch}",
+                }).ToArray();
+                observed = null;
+                instructions = 0;
+                try
+                {
+                    _writer.InsertReferencesForNewFilesInAtomicFileScope(
+                        references, refreshMutualRecursionFlags: false, CancellationToken.None);
+                }
+                finally
+                {
+                    SQLitePCL.raw.sqlite3_progress_handler(_db.Connection.Handle, 0, null!, null!);
+                }
+                Assert.NotNull(observed);
+                Assert.Equal(scenario.Shared, observed.SharesReferenceSourceLookups);
+                Assert.Equal(scenario.CacheHit, observed.CacheHit);
+                Assert.Equal(32 * 14, observed.BoundParameterCount);
+                // Count only the INSERT, excluding the later hotspot aggregate refresh.
+                // An unconditional source map adds about 1,500 instructions to 32 unique rows.
+                var instructionBudget = string.IsNullOrEmpty(scenario.Container) ? 18_500 : 20_500;
+                Assert.True(instructions is > 0 && instructions <= instructionBudget,
+                    $"Batch {batch} executed {instructions} SQLite VM instructions; budget {instructionBudget}.");
+                foreach (var reference in references)
+                    Assert.Equal(string.IsNullOrEmpty(scenario.Container) ? (long?)null : sourceId,
+                        SourceSymbolId(reference.SymbolName));
+            }
+        }
+        finally
+        {
+            SQLitePCL.raw.sqlite3_progress_handler(_db.Connection.Handle, 0, null!, null!);
+            DbWriter.AuthoritativeFreshRawInsertExecutingForTesting = previousHook;
+            DbWriter.BatchProgressCheckpointForTesting = previousCheckpoint;
+        }
         raw.Complete();
         transaction.Commit();
     }

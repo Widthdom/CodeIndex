@@ -57,7 +57,7 @@ public static partial class ReferenceExtractor
     {
         internal CSharpMultiLineTypePatternState PendingCSharpMultiLineTypePattern;
         internal readonly CSharpWhereConstraintState? PendingCSharpWhereConstraint;
-        internal readonly Dictionary<string, HashSet<string>>? CSharpLocalNamesByFunction;
+        internal readonly Dictionary<CSharpLocalScopeKey, HashSet<string>>? CSharpLocalNamesByFunction;
         internal readonly SqlReferenceExtractor.State? SqlState;
         internal bool XamlInXmlComment;
         internal readonly XamlReferenceExtractor.BindingPropertyElementState? XamlBindingPropertyElementState;
@@ -80,7 +80,7 @@ public static partial class ReferenceExtractor
                 ? new CSharpWhereConstraintState()
                 : null;
             CSharpLocalNamesByFunction = language == "csharp"
-                ? new Dictionary<string, HashSet<string>>(StringComparer.Ordinal)
+                ? new Dictionary<CSharpLocalScopeKey, HashSet<string>>()
                 : null;
             SqlState = language == "sql"
                 ? SqlReferenceExtractor.CreateState()

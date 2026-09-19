@@ -1583,7 +1583,7 @@ public static partial class SymbolExtractor
             return new CSharpPropertyMatchCandidate(matchLine, startLineIndex, startLineIndex);
         }
 
-        if (IsCSharpDeclarationExpressionArrow(matchLine)
+        if (IsCSharpDeclarationExpressionArrow(matchLine, applyCSharpRegexProbeOptimizations, csharpRegexProbeCounts)
             && TryFindCSharpExpressionArrow(lines, startLineIndex, startLineIndex, out var sameLineArrowLineIndex, out var sameLineArrowColumn))
         {
             var expressionEndLineIndex = FindCSharpExpressionBodyEndLine(
@@ -1618,7 +1618,10 @@ public static partial class SymbolExtractor
             csharpRegexProbeCounts.PropertyHeaderRegexAttemptCount++;
         var isPropertyHeaderPrefix = CSharpPropertyHeaderPrefixRegex.IsMatch(matchLine);
         var isMethodHeaderPrefix = false;
-        if (!isPropertyHeaderPrefix)
+        // Both method-prefix regexes require '(' or '<', including incomplete generic headers.
+        // 不完全な generic header を含め、method prefix には '(' または '<' が必須。
+        if (!isPropertyHeaderPrefix
+            && (!applyCSharpRegexProbeOptimizations || matchLineSpan.IndexOfAny('(', '<') >= 0))
         {
             if (csharpRegexProbeCounts != null)
                 csharpRegexProbeCounts.MethodHeaderRegexAttemptCount++;
@@ -1681,7 +1684,9 @@ public static partial class SymbolExtractor
                 startLineIndex,
                 matchLine,
                 openBraceLineIndex,
-                openBraceExclusiveEndColumn);
+                openBraceExclusiveEndColumn,
+                applyCSharpRegexProbeOptimizations,
+                csharpRegexProbeCounts);
         }
 
         var lookaheadLimitExclusive = Math.Min(csharpMatchLines.Length, startLineIndex + CSharpPropertyMatchLookaheadLineLimit + 1);
@@ -1712,7 +1717,7 @@ public static partial class SymbolExtractor
                     openBraceLineIndex >= 0 ? openBraceExclusiveEndColumn : null);
             }
 
-            if (IsCSharpDeclarationExpressionArrow(normalizedCombined)
+            if (IsCSharpDeclarationExpressionArrow(normalizedCombined, applyCSharpRegexProbeOptimizations, csharpRegexProbeCounts)
                 && TryFindCSharpExpressionArrow(lines, startLineIndex, i, out var arrowLineIndex, out var arrowColumn))
             {
                 var expressionEndLineIndex = FindCSharpExpressionBodyEndLine(
@@ -1757,7 +1762,9 @@ public static partial class SymbolExtractor
                     i,
                     normalizedCombined,
                     openBraceLineIndex,
-                    openBraceExclusiveEndColumn);
+                    openBraceExclusiveEndColumn,
+                    applyCSharpRegexProbeOptimizations,
+                    csharpRegexProbeCounts);
             }
 
             if (nextLine.StartsWith(";", StringComparison.Ordinal))
@@ -1809,7 +1816,9 @@ public static partial class SymbolExtractor
         int currentLineIndex,
         string normalizedCombined,
         int openBraceLineIndex,
-        int? openBraceExclusiveEndColumn)
+        int? openBraceExclusiveEndColumn,
+        bool applyCSharpRegexProbeOptimizations,
+        CSharpRegexProbeCounts? csharpRegexProbeCounts)
     {
         var semicolonTracker = new CSharpTopLevelSemicolonTracker();
         semicolonTracker.Scan(normalizedCombined);
@@ -1834,7 +1843,8 @@ public static partial class SymbolExtractor
                     openBraceExclusiveEndColumn);
             }
 
-            if (CSharpConfirmedMethodPrefixRegex.IsMatch(normalizedCombined))
+            if (IsCSharpConfirmedDeclarationPrefix(normalizedCombined, method: true,
+                    applyCSharpRegexProbeOptimizations, csharpRegexProbeCounts))
             {
                 confirmedMethodHeader = new CSharpPropertyMatchCandidate(
                     normalizedCombined, currentLineIndex, currentLineIndex);
@@ -1863,7 +1873,8 @@ public static partial class SymbolExtractor
                     i);
                 accessorProbeStatus = ClassifyCSharpAccessorProbe(accessorProbeBuilder.ToString());
                 var header = CollapseCSharpGenericTypeWhitespace(builder.ToString());
-                if (CSharpConfirmedMethodPrefixRegex.IsMatch(header))
+                if (IsCSharpConfirmedDeclarationPrefix(header, method: true,
+                        applyCSharpRegexProbeOptimizations, csharpRegexProbeCounts))
                 {
                     confirmedMethodHeader = new CSharpPropertyMatchCandidate(header, i, i);
                     if (accessorProbeStatus == CSharpAccessorProbeStatus.Rejected)
@@ -1937,10 +1948,43 @@ public static partial class SymbolExtractor
 
             if (csharpRegexProbeCounts != null)
                 csharpRegexProbeCounts.MethodConfirmationRegexAttemptCount++;
-            return CSharpConfirmedMethodPrefixRegex.IsMatch(line);
+            return IsCSharpConfirmedDeclarationPrefix(line, method: true,
+                applyCSharpRegexProbeOptimizations, csharpRegexProbeCounts);
         }
 
-        return CSharpConfirmedMemberPrefixRegex.IsMatch(line);
+        return IsCSharpConfirmedDeclarationPrefix(line, method: false,
+            applyCSharpRegexProbeOptimizations, csharpRegexProbeCounts);
+    }
+
+    private static bool IsCSharpConfirmedDeclarationPrefix(
+        string line,
+        bool method,
+        bool applyCSharpRegexProbeOptimizations,
+        CSharpRegexProbeCounts? counts)
+    {
+        if (applyCSharpRegexProbeOptimizations)
+        {
+            // Both anchored patterns end with an optional opening brace. Before it,
+            // methods require ')' and members require an identifier. Keep non-ASCII
+            // characters eligible so the regex retains its Unicode word semantics.
+            // 両regex末尾の任意の開きbraceを除き、必須の末尾形だけで不成立を除外する。
+            var suffix = line.AsSpan().TrimEnd();
+            if (!suffix.IsEmpty && suffix[^1] == '{')
+                suffix = suffix[..^1].TrimEnd();
+            if (suffix.IsEmpty
+                || (method
+                    ? suffix[^1] != ')'
+                    : suffix[^1] <= 127 && !char.IsAsciiLetterOrDigit(suffix[^1]) && suffix[^1] != '_'))
+            {
+                if (counts != null)
+                    counts.ConfirmationSuffixSkipCount++;
+                return false;
+            }
+        }
+
+        if (counts != null)
+            counts.ConfirmationRegexAttemptCount++;
+        return (method ? CSharpConfirmedMethodPrefixRegex : CSharpConfirmedMemberPrefixRegex).IsMatch(line);
     }
 
     // Prefer the raw line's `{` column (to preserve original positioning for body slicing),
@@ -1989,16 +2033,37 @@ public static partial class SymbolExtractor
         return StartsWithCSharpEventAccessorKeyword(text, cursor);
     }
 
-    private static bool ShouldDeferCSharpFunctionSameLineAdvance(string matchLine, int startColumn)
+    private static bool ShouldDeferCSharpFunctionSameLineAdvance(
+        string matchLine,
+        int startColumn,
+        bool applyCSharpRegexProbeOptimizations,
+        CSharpRegexProbeCounts? counts)
     {
         if (startColumn < 0 || startColumn >= matchLine.Length)
             return false;
 
+        var suffix = matchLine.AsSpan(startColumn);
+        var mayBeProperty = !applyCSharpRegexProbeOptimizations || HasCSharpPropertyStatementPunctuation(suffix);
+        var mayBeEventOrDelegate = !applyCSharpRegexProbeOptimizations
+            || suffix.Contains("event", StringComparison.Ordinal)
+            || suffix.Contains("delegate", StringComparison.Ordinal);
+        if (!mayBeProperty && !mayBeEventOrDelegate)
+        {
+            if (counts != null)
+                counts.SameLineDeclarationGateSkipCount++;
+            return false;
+        }
+
         var remaining = matchLine[startColumn..];
         return !CSharpTypeBodyDeclarationMarker.IsMatch(remaining)
-            && (CSharpSameLinePropertyStatementStartRegex.IsMatch(remaining)
-                || CSharpSameLineEventOrDelegateStatementStartRegex.IsMatch(remaining));
+            && (mayBeProperty && CSharpSameLinePropertyStatementStartRegex.IsMatch(remaining)
+                || mayBeEventOrDelegate && CSharpSameLineEventOrDelegateStatementStartRegex.IsMatch(remaining));
     }
+
+    // These are the two mandatory terminal alternatives of the same-line property regex.
+    // same-line property regex の末尾2分岐が必須とする記号だけを検査する。
+    private static bool HasCSharpPropertyStatementPunctuation(ReadOnlySpan<char> input) =>
+        input.IndexOf('{') >= 0 || input.Contains("=>", StringComparison.Ordinal);
 
     private static bool HasCSharpTokenBeforeIndex(string text, string token, int exclusiveEnd)
     {
@@ -2032,10 +2097,22 @@ public static partial class SymbolExtractor
         return false;
     }
 
-    private static bool ShouldDeferCSharpBracePropertySameLineAdvance(string matchLine, int startColumn)
+    private static bool ShouldDeferCSharpBracePropertySameLineAdvance(
+        string matchLine,
+        int startColumn,
+        bool applyCSharpRegexProbeOptimizations,
+        CSharpRegexProbeCounts? counts)
     {
         if (startColumn < 0 || startColumn >= matchLine.Length)
             return false;
+
+        if (applyCSharpRegexProbeOptimizations
+            && !HasCSharpPropertyStatementPunctuation(matchLine.AsSpan(startColumn)))
+        {
+            if (counts != null)
+                counts.SameLineDeclarationGateSkipCount++;
+            return false;
+        }
 
         var remaining = matchLine[startColumn..];
         return !CSharpTypeBodyDeclarationMarker.IsMatch(remaining)
@@ -2043,10 +2120,24 @@ public static partial class SymbolExtractor
             && CSharpSameLinePropertyStatementStartRegex.IsMatch(remaining);
     }
 
-    private static bool ShouldDeferCSharpEventOrDelegateSameLineAdvance(string matchLine, int startColumn, string kind)
+    private static bool ShouldDeferCSharpEventOrDelegateSameLineAdvance(
+        string matchLine,
+        int startColumn,
+        string kind,
+        bool applyCSharpRegexProbeOptimizations,
+        CSharpRegexProbeCounts? counts)
     {
         if (startColumn < 0 || startColumn >= matchLine.Length)
             return false;
+
+        var requiredKeyword = kind == "event" ? "delegate" : "event";
+        if (applyCSharpRegexProbeOptimizations
+            && !matchLine.AsSpan(startColumn).Contains(requiredKeyword, StringComparison.Ordinal))
+        {
+            if (counts != null)
+                counts.SameLineDeclarationGateSkipCount++;
+            return false;
+        }
 
         var remaining = matchLine[startColumn..];
         if (CSharpTypeBodyDeclarationMarker.IsMatch(remaining))
@@ -2402,15 +2493,20 @@ public static partial class SymbolExtractor
         return false;
     }
 
-    private static bool IsCSharpDeclarationExpressionArrow(string matchLine)
+    private static bool IsCSharpDeclarationExpressionArrow(
+        string matchLine,
+        bool applyCSharpRegexProbeOptimizations,
+        CSharpRegexProbeCounts? csharpRegexProbeCounts)
     {
         var arrowColumn = matchLine.IndexOf("=>", StringComparison.Ordinal);
         if (arrowColumn < 0)
             return false;
 
         var header = matchLine[..arrowColumn];
-        return CSharpConfirmedMemberPrefixRegex.IsMatch(header)
-            || CSharpConfirmedMethodPrefixRegex.IsMatch(header);
+        return IsCSharpConfirmedDeclarationPrefix(header, method: false,
+                applyCSharpRegexProbeOptimizations, csharpRegexProbeCounts)
+            || IsCSharpConfirmedDeclarationPrefix(header, method: true,
+                applyCSharpRegexProbeOptimizations, csharpRegexProbeCounts);
     }
 
     private static bool IsCSharpFunctionMatchInsideExpressionBody(string matchLine, int nameIndex)

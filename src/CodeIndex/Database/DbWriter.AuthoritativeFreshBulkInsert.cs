@@ -25,7 +25,8 @@ public partial class DbWriter
         int StatementRows,
         int BoundParameterCount,
         bool CacheHit,
-        int CachedStatementCount);
+        int CachedStatementCount,
+        bool SharesReferenceSourceLookups = false);
 
     internal sealed record AuthoritativeFreshRawInsertScopeStats(
         int Capacity,
@@ -136,6 +137,7 @@ public partial class DbWriter
         ReferenceLineIdFloor,
         ReferenceLines,
         References,
+        ReferencesWithSharedSources,
     }
 
     private readonly record struct AuthoritativeFreshRawStatementKey(
@@ -333,18 +335,23 @@ public partial class DbWriter
         {
             EnsureCanExecute();
             var rows = end - start;
+            var shareSourceLookups = ShouldShareReferenceSourceLookups(references, start, end, foldedNameCache);
             using var interrupt = _writer.RegisterSqliteInterrupt(_cancellationToken);
             var sql = ReferenceInsertSqlCache.GetOrAdd(
                 (
                     Rows: rows,
                     FreshResolutionDefaults: true,
-                    MaterializedFreshSourceLookup: true),
+                    MaterializedFreshSourceLookup: true,
+                    ShareSourceLookups: shareSourceLookups),
                 static key => BuildReferenceInsertSql(
                     key.Rows,
                     key.FreshResolutionDefaults,
-                    key.MaterializedFreshSourceLookup));
+                    key.MaterializedFreshSourceLookup,
+                    key.ShareSourceLookups));
             var lease = RentStatementLease(
-                AuthoritativeFreshRawInsertKind.References,
+                shareSourceLookups
+                    ? AuthoritativeFreshRawInsertKind.ReferencesWithSharedSources
+                    : AuthoritativeFreshRawInsertKind.References,
                 rows,
                 sql,
                 expectedParameterCount: rows * ReferenceInsertParameterCountPerRow);
@@ -385,7 +392,7 @@ public partial class DbWriter
                         referenceLineIds.ReferenceCount,
                         referenceLineIds.ReferenceLineCount,
                         UsesFreshResolutionDefaults: true));
-                ReportStatementExecution("insert_references", rows, lease);
+                ReportStatementExecution("insert_references", rows, lease, shareSourceLookups);
                 ReportBatchStatementForTesting("insert_references", rows, rows);
                 lease.ExecuteDone();
             }
@@ -393,6 +400,36 @@ public partial class DbWriter
             {
                 lease.Dispose();
             }
+        }
+
+        private static bool ShouldShareReferenceSourceLookups(
+            IReadOnlyList<CodeIndex.Models.ReferenceRecord> references,
+            int start,
+            int end,
+            Dictionary<string, string?> foldedNameCache)
+        {
+            if (end - start < 2)
+                return false;
+
+            // The map has a per-row cost. Require enough repeated, nonempty sources
+            // to offset it; unique lines and absent containers keep direct probes.
+            HashSet<(long FileId, int Line, string Name, string? FoldedName)>? sources = null;
+            var duplicates = 0;
+            for (var index = start; index < end; index++)
+            {
+                var reference = references[index];
+                if (string.IsNullOrEmpty(reference.ContainerName))
+                    continue;
+                sources ??= [];
+                var key = (
+                    reference.FileId,
+                    reference.Line,
+                    reference.ContainerName,
+                    FoldedNameValue(reference.ContainerName, reference.IdentityContainerNameFolded, foldedNameCache));
+                if (!sources.Add(key) && ++duplicates * 2 >= end - start)
+                    return true;
+            }
+            return false;
         }
 
         internal void MaterializeReferenceSourceSymbols(
@@ -549,7 +586,8 @@ public partial class DbWriter
         private void ReportStatementExecution(
             string operation,
             int rows,
-            StatementLease lease)
+            StatementLease lease,
+            bool sharesReferenceSourceLookups = false)
         {
             _statementExecutionCount++;
             AuthoritativeFreshRawInsertExecutingForTesting?.Invoke(
@@ -558,7 +596,8 @@ public partial class DbWriter
                     rows,
                     lease.ParameterCount,
                     lease.CacheHit,
-                    _statements.Count));
+                    _statements.Count,
+                    sharesReferenceSourceLookups));
         }
 
         private void EnsureCanExecute()

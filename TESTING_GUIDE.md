@@ -1,5 +1,38 @@
 # Testing Guide
 
+`ReferenceOccurrenceSearchTests` compares short inputs against independent regex
+non-overlapping matches, retaining self-overlapping needles and earlier ties.
+Its dense 2,048-reference fixture bounds examined occurrences to one per recorded
+hit. Keep C# trimmed/unusable columns, escaped/Unicode names and constructor-only
+fallbacks alongside raw/provider persistence across twelve language keys. These
+fixtures own and dispose their databases without process-global hooks or pool
+resets, so they remain parallel-safe. Run the issue 4825/4850/5159/5189 arity and
+query regressions on net8/net9 with them; timing thresholds are not used.
+参照位置検索は独立した非重複照合との比較・同距離時の選択・候補走査数を検証します。
+C#の列・名前・constructorの境界条件と、12言語キーのraw／provider書込みを両runtimeで
+確認し、全体共有の状態を変更しないfixtureは並列実行可能なまま保ちます。
+
+`SymbolExtractorRequiredLiteralGateTests` verifies independent ASCII-punctuation
+metadata and complete 29-field parity over ten language keys, including merged
+properties, explicit-interface indexers, generics, compact constructors and macros.
+Its negative controls assert skipped punctuation probes and fewer regex attempts.
+`SymbolExtractorCSharpRegexProbeTests` compares same-line property/expression/event/
+delegate siblings and multiline method prefixes on C#/Razor/Blazor/CSHTML with the
+helper gates disabled/enabled. Keep these tests on net8/net9 without timing limits.
+同テストは10言語キーで全29フィールドの一致・必須記号判定の省略数を検証します。
+C#系4言語の同一行メンバーと複数行method prefixも判定を無効・有効にして比較し、
+実時間の閾値に依存せず評価回数の削減を確認します。
+
+Reference scope candidate coverage in `DatabaseTests` checks all three existing
+file/container index probes, minimum ranks, overlapping scopes, tied candidates,
+ASCII case differences, null/empty source containers and foreign-language decoys
+across ten languages. The 1,280 unrelated same-name declarations must stay within
+the 20,000 SQLite VM instruction budget. Keep generated full/scoped/retained SQL
+and C# attribute/constructor/property graph regressions on net8/net9.
+参照候補は10言語で順位・重複スコープ・同順位・大小文字・NULL／空名・言語境界を
+確認します。無関係な同名宣言1,280件を含めたVM命令上限と、各更新形式のSQL・
+C#固有のグラフ回帰検証を両runtimeで維持します。
+
 LSP document-symbol identity coverage (#5382) shares indexed and unsupported-live-
 extractor fallback requests across case-colliding paths, literal path characters,
 and descendant/suffix decoys. Keep hierarchical roots, identifier ranges and framed
@@ -110,6 +143,24 @@ and the full symbol/reference extractor regressions alongside this fixture.
 symbol property with optimizations disabled and requires fewer method-confirmation
 regex attempts for parameter fragments without `(`, while real multiline headers
 still reach the regex. Keep the attempt/skip counters internal to extraction tests.
+The shared C#/Razor/Blazor/CSHTML fixture also verifies confirmation suffix gates
+for expression methods/properties, tuple/generic returns, explicit interfaces,
+escaped/Unicode identifiers and lambda initializers. Compare all symbol fields
+and full confirmation attempt/skip counts; retain the full extractor regression run.
+C#／Razor／Blazor／CSHTML 共通の fixture で宣言確認の末尾 gate も検証し、
+式形式・tuple・generic・明示的 interface・Unicode／escape 名・lambda 初期化子の
+全シンボル項目と照合回数を比較します。全抽出器の回帰テストも実行してください。
+
+`Extract_CSharpLambdaCapture_ReuseCaptureAndShadowFixture` covers C#, Razor,
+Blazor and CSHTML capture order, first-occurrence columns, repeated identifiers,
+escaped/Unicode names, parameter shadowing and isolation between same-name
+methods and overloads. Pair it with the 128-local, long-class-name fixture
+`Extract_CSharpLambdaCaptures_ShareBodyScanWithinAllocationBudget`, which requires
+all captures within a warmed 1 MB allocation budget on net8/net9. Keep the
+performance fixture in its nonparallel collection and avoid wall-clock assertions.
+同じ4言語で捕捉順・最初の列位置・反復名・escape／Unicode 名・引数の隠蔽・同名
+メソッドと overload の分離を検証します。ローカル128個と長いクラス名の fixture は
+両 runtime で割り当て量を1 MB以内に抑え、時間の閾値には依存しません。
 
 Confirmed C# method lookahead coverage in `SymbolExtractorCSharpRegexProbeTests`
 shares multiline methods, empty and nonempty constructor bodies, delayed body
@@ -130,6 +181,23 @@ Include `FreshReferenceResolutionTests` in that run: it covers direct and
 materialized source lookup, the shared 14-parameter row shape and separate SQL
 caches. The materialized outer comparison orders by the projected `start_line`;
 each probe applies the nullable-line fallback before selecting its candidate.
+The same raw-writer fixtures verify per-statement source sharing: preserve repeated
+reference rows and input order, distinguish folded overrides on the same original
+name/line, and bound insertion of 128 references over 128 disjoint declarations to
+140 callbacks at 1,000 SQLite VM instructions each. Keep null/empty names, aliases,
+file boundaries, savepoint rollback and cancellation coverage on both runtimes.
+参照元共有は同じ fixture で参照件数・入力順・folded override の分離と処理量を検証し、
+NULL／空名・別名・ファイル境界・savepoint rollback・取消の検証も両 runtime で維持します。
+The same ten languages also cover unique, sparse, threshold and repeated sources
+with alternating equal-sized cached statements. For 32-row INSERTs, keep the
+20,500-instruction budget for named containers and 18,500 for null/empty containers;
+exclude the subsequent hotspot refresh from this measurement. Unique and absent
+sources must not pay for the shared source map. Both SQL cache and native statement
+cache must distinguish shared and direct shapes.
+同じ10言語で重複なし・少数の重複・共有閾値・多数の重複を検証し、同じ行数の形式を
+交互にキャッシュ利用します。32行の INSERT は、名前付きコンテナで20,500命令、
+NULL／空名で18,500命令以内とし、後続の hotspot 更新は測定から除きます。
+重複なし・名前なしでは共有用一時表を作らず、両キャッシュでSQL形式を区別します。
 
 #5339 extends the #5332 fixture to successful `files --format count --json`
 batches with the same three-snapshot/copy-byte budget for 3/12 items, checking

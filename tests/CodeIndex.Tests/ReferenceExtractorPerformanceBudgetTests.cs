@@ -270,6 +270,47 @@ public sealed class ReferenceExtractorPerformanceBudgetTests
             $"Large C# method reference extraction took {stopwatch.Elapsed.TotalSeconds:F2}s, expected < {runawayBudget.TotalSeconds:F0}s runaway guard budget.");
     }
 
+    [Theory]
+    [InlineData("csharp")]
+    [InlineData("razor")]
+    [InlineData("blazor")]
+    [InlineData("cshtml")]
+    public void Extract_CSharpLambdaCaptures_ShareBodyScanWithinAllocationBudget(string language)
+    {
+        ReferenceExtractorWarmup.EnsurePerformanceWarmup();
+
+        const int localCount = 128;
+        var localNames = Enumerable.Range(0, localCount).Select(index => $"local{index}").ToArray();
+        var builder = new StringBuilder();
+        builder.Append("class ").AppendLine(new string('C', 256));
+        builder.AppendLine("{").AppendLine("    void Run()").AppendLine("    {");
+        foreach (var name in localNames)
+            builder.Append("        var ").Append(name).AppendLine(" = 1;");
+        var lambdaLine = "        System.Func<int> next = () => " + string.Join(" + ", localNames) + ";";
+        builder.AppendLine(lambdaLine).AppendLine("    }").AppendLine("}");
+        var content = builder.ToString();
+        var symbols = SymbolExtractor.Extract(1, language, content);
+        _ = ReferenceExtractor.Extract(1, language, content, symbols);
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var references = ReferenceExtractor.Extract(1, language, content, symbols);
+        var allocatedBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        var captures = references.Where(reference => reference.ReferenceKind == "capture").ToArray();
+        Assert.Equal(localNames, captures.Select(reference => reference.SymbolName));
+        foreach (var capture in captures)
+        {
+            Assert.Equal("Run", capture.ContainerName);
+            Assert.Equal(localCount + 5, capture.Line);
+            Assert.Equal(lambdaLine.IndexOf(capture.SymbolName, StringComparison.Ordinal) + 1, capture.Column);
+        }
+
+        // Repeated body scans and formatted scope keys previously allocated over 2.5 MB.
+        const long allocationBudget = 1_000_000;
+        Assert.True(allocatedBytes < allocationBudget,
+            $"{language} lambda capture extraction allocated {allocatedBytes:N0} bytes; expected < {allocationBudget:N0}.");
+    }
+
     private sealed class EnumerationCountingReadOnlySet<T> : IReadOnlySet<T>
         where T : notnull
     {

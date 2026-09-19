@@ -138,6 +138,21 @@ public static partial class SymbolExtractor
             return false;
         }
 
+        // Test the precise input, including merged declarations and recovery suffixes.
+        // A missing mandatory punctuation character proves a miss without backtracking.
+        // 結合済み宣言や recovery suffix も含め、実際に渡す input だけで不成立を証明する。
+        if (applyRequiredLiteralMatchInputGate
+            && pattern.RequiredAnyCharacters is { } requiredCharacters
+            && matchInput.IndexOfAny(requiredCharacters.AsSpan()) < 0)
+        {
+            if (requiredLiteralGateCounts != null)
+            {
+                requiredLiteralGateCounts.MatchInputLiteralSkipCount++;
+                requiredLiteralGateCounts.MatchInputCharacterSkipCount++;
+            }
+            return false;
+        }
+
         if (ReferenceEquals(pattern.Regex, CSharpPlainFieldRegex))
         {
             // Every successful plain-field path consumes `=` or `;`. Inspect the exact
