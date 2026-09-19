@@ -1,5 +1,20 @@
 # Initial full-index performance
 
+Reference candidate ranks 1–4 probe the existing file/name and container/name
+indexes before evaluating ranking predicates. An ID set combines these three
+eligible scopes without duplicating symbols that match more than one scope.
+Original language restrictions, C# attribute suffixes, null/empty containers,
+same-file fallback and tied candidates remain unchanged. The shared SQL serves
+initial indexing, scoped refreshes and retained graph rebuilds; no schema change
+is needed. On the fixed 1,577-file snapshot, the isolated candidate statement fell
+from 301.27 million to 49.17 million SQLite VM instructions (about 84% less work),
+with identical candidate triples. This is statement work, not whole-index speed.
+The three probes add overhead when names are unique or every same-name declaration
+is already in an eligible scope: isolated 1,024-reference unique-name fixtures used
+171k→249k VM instructions with local targets and 83k→102k without a source container.
+Their observed statement times increased by 0.5–0.9 ms. The benefit depends on how
+many unrelated same-name declarations the original global probe would visit.
+
 C# declaration confirmation rejects impossible suffixes before attempting the
 member/method regexes, including expression-bodied declarations and accessor
 lookahead. After optional whitespace and one opening brace, methods require `)`;
@@ -116,6 +131,20 @@ records match after normalizing generated IDs and indexing timestamps. These
 measurements describe this C#-heavy snapshot, not a general speed guarantee.
 
 ## 日本語
+
+参照候補の順位1～4では、既存のファイル／名前・コンテナ／名前の索引から対象を
+取得して順位条件を評価します。3つの対象スコープをID集合にまとめ、複数スコープに
+一致するシンボルの重複を除きます。言語制限・C# attribute の接尾辞・NULL／空の
+コンテナ・同一ファイルへの fallback・同順位候補は維持します。初回インデックス・
+差分更新・保持グラフの再構築で共通のSQLを使い、スキーマ変更はありません。
+固定1,577ファイルの候補生成文だけを計測すると、SQLite VM命令は3億127万から
+4,917万へ約84%減り、候補の全項目が一致しました。文単位の処理量であり、
+インデックス全体の速度を示すものではありません。
+名前が一意、または同名宣言がすべて対象スコープ内の場合には、3回の索引照会が
+追加負荷になります。参照1,024件の一意名fixtureでは、同一ファイルの候補ありで
+17.1万→24.9万命令、参照元コンテナなしで8.3万→10.2万命令となり、文の所要時間は
+0.5～0.9 ms増えました。効果は、従来の名前検索で走査していた無関係な同名宣言の
+件数によって変わります。
 
 C# の宣言確認では、式形式の宣言と accessor の先読みも含め、成立しない末尾を
 メンバー／メソッドの regex 照合前に除外します。空白と任意の開き brace 1個を

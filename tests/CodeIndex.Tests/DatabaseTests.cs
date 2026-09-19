@@ -441,6 +441,23 @@ public class DatabaseTests : IDisposable
                 sql,
                 StringComparison.Ordinal);
             Assert.Contains("LEFT JOIN symbols AS source", sql, StringComparison.Ordinal);
+            var scopeStatement = Assert.Single(
+                sql.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                    .Where(static statement => statement.Contains("WITH scope_candidates(", StringComparison.Ordinal)));
+            var scopePlan = ReadQueryPlanDetails(_db.Connection, scopeStatement);
+            foreach (var indexName in new[]
+                     {
+                         "idx_symbols_file_name_folded",
+                         "idx_symbols_name_folded_container_qualified_name_nocase",
+                         "idx_symbols_name_folded_container_name_nocase",
+                     })
+            {
+                Assert.Contains(scopePlan, detail => detail.Contains(
+                    "SEARCH scoped_symbol USING COVERING INDEX " + indexName,
+                    StringComparison.OrdinalIgnoreCase));
+            }
+            Assert.Contains(scopePlan, static detail => detail.Contains(
+                "SEARCH s USING INTEGER PRIMARY KEY", StringComparison.OrdinalIgnoreCase));
             Assert.Contains("temp.csharp_type_identity_facts", sql, StringComparison.Ordinal);
             Assert.Contains("temp.csharp_instantiation_family_facts", sql, StringComparison.Ordinal);
             Assert.DoesNotContain("temp.csharp_constructor_identity_facts", sql, StringComparison.Ordinal);
@@ -607,6 +624,14 @@ public class DatabaseTests : IDisposable
     [Theory]
     [InlineData("csharp", ".cs")]
     [InlineData("python", ".py")]
+    [InlineData("javascript", ".js")]
+    [InlineData("typescript", ".ts")]
+    [InlineData("java", ".java")]
+    [InlineData("go", ".go")]
+    [InlineData("rust", ".rs")]
+    [InlineData("cpp", ".cpp")]
+    [InlineData("kotlin", ".kt")]
+    [InlineData("vb", ".vb")]
     public void ReferenceScopeCandidates_MaterializeMinimumRankAndPreserveTies(
         string language,
         string extension)
@@ -631,16 +656,31 @@ public class DatabaseTests : IDisposable
                 ContainerName = "Outer",
                 ContainerQualifiedName = "Demo.Outer",
             },
-            Target(callerFileId, "TieTarget", 30, "Outer", "Demo.Outer"),
+            Target(callerFileId, "TieTarget", 30, "outer", "DEMO.OUTER"),
             Target(callerFileId, "TieTarget", 31, "Other", "Demo.Outer"),
             Target(targetFileId, "TieTarget", 1, "Other", "Demo.Outer"),
             Target(targetFileId, "QualifiedTarget", 2, "Other", "Demo.Outer"),
             Target(callerFileId, "QualifiedTarget", 32, "Other", "Other.Qualified"),
             Target(callerFileId, "FileTarget", 33, "Other", "Other.File"),
             Target(targetFileId, "FileTarget", 3, "Outer", "Other.Outer"),
-            Target(targetFileId, "ContainerTarget", 4, "Outer", "Other.Outer"),
+            Target(targetFileId, "ContainerTarget", 4, "OUTER", "Other.Outer"),
             Target(targetFileId, "ContainerTarget", 5, "Other", "Other.Container"),
             Target(callerFileId, "NoSourceTarget", 34, "Other", "Other.NoSource"),
+            new SymbolRecord
+            {
+                FileId = callerFileId, Kind = "function", Name = "NullCaller",
+                Line = 40, StartLine = 40, EndLine = 49,
+            },
+            new SymbolRecord
+            {
+                FileId = callerFileId, Kind = "function", Name = "EmptyCaller",
+                Line = 50, StartLine = 50, EndLine = 59,
+                ContainerName = string.Empty, ContainerQualifiedName = string.Empty,
+            },
+            Target(callerFileId, "NullScopeTarget", 60, "Other", "Other.Null"),
+            Target(callerFileId, "EmptyScopeTarget", 61, "Other", "Other.Empty"),
+            Target(targetFileId, "NullScopeTarget", 62, null, null),
+            Target(targetFileId, "EmptyScopeTarget", 63, string.Empty, string.Empty),
         ]);
         _writer.InsertReferences([
             Reference("TieTarget", line: 5, containerName: "Caller"),
@@ -648,10 +688,13 @@ public class DatabaseTests : IDisposable
             Reference("FileTarget", line: 7, containerName: "Caller"),
             Reference("ContainerTarget", line: 8, containerName: "Caller"),
             Reference("NoSourceTarget", line: 25, containerName: null),
+            Reference("NoSourceTarget", line: 26, containerName: string.Empty),
+            Reference("NullScopeTarget", line: 45, containerName: "NullCaller"),
+            Reference("EmptyScopeTarget", line: 55, containerName: "EmptyCaller"),
         ], refreshMutualRecursionFlags: false);
 
         _writer.RefreshMutualRecursionFlags();
-        const string expected = "5:1:30|5:1:31|6:2:2|7:3:33|8:4:4|25:3:34";
+        const string expected = "5:1:30|5:1:31|6:2:2|7:3:33|8:4:4|25:3:34|26:3:34|45:3:60|55:3:61";
         Assert.Equal(expected, ReadCandidates());
 
         using (var scope = _writer.BeginReferenceGraphRefreshScope())
@@ -674,6 +717,24 @@ public class DatabaseTests : IDisposable
                 Target(distractorFileId, "ContainerTarget", 4, "Elsewhere", "Elsewhere.Type"),
                 Target(distractorFileId, "NoSourceTarget", 5, "Elsewhere", "Elsewhere.Type"),
             ]);
+            // Unrelated scopes with common names must not create a global name cross-product.
+            // 同名でも対象外scopeの宣言数に比例してcandidateを走査しない。
+            _writer.InsertSymbols(Enumerable.Range(0, 256)
+                .SelectMany(index => new[]
+                {
+                    Target(distractorFileId, "TieTarget", 100 + index, "Elsewhere", "Elsewhere.Type"),
+                    Target(distractorFileId, "QualifiedTarget", 400 + index, "Elsewhere", "Elsewhere.Type"),
+                    Target(distractorFileId, "FileTarget", 700 + index, "Elsewhere", "Elsewhere.Type"),
+                    Target(distractorFileId, "ContainerTarget", 1000 + index, "Elsewhere", "Elsewhere.Type"),
+                    Target(distractorFileId, "NoSourceTarget", 1300 + index, "Elsewhere", "Elsewhere.Type"),
+                }).ToArray());
+            var foreignLanguage = language == "python" ? "java" : "python";
+            var foreignFileId = UpsertTestFileWithLanguage(
+                $"scope/{language}/Foreign.txt", foreignLanguage, "foreign-scope");
+            _writer.InsertSymbols([
+                Target(foreignFileId, "TieTarget", 1500, "Outer", "Demo.Outer"),
+                Target(foreignFileId, "ContainerTarget", 1501, "Outer", "Other.Outer"),
+            ]);
             transaction.Commit();
             _writer.RefreshMutualRecursionFlags();
         }
@@ -685,6 +746,33 @@ public class DatabaseTests : IDisposable
         Assert.Equal(expected, ReadCandidates());
         var fullSnapshot = ReadReferenceGraphSemanticSnapshot();
         Assert.Equal(scopedSnapshot, fullSnapshot);
+
+        var scopeSql = Assert.Single(DbWriter.CSharpGraphCandidateSqlForTesting,
+                static stage => stage.Scope == "full").Sql
+            .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Single(static statement => statement.Contains("WITH scope_candidates(", StringComparison.Ordinal));
+        using (var transaction = _db.Connection.BeginTransaction())
+        using (var command = _db.Connection.CreateCommand())
+        {
+            command.Transaction = transaction;
+            command.CommandText = "DELETE FROM symbol_reference_candidates WHERE scope_rank BETWEEN 1 AND 4";
+            command.ExecuteNonQuery();
+            var callbacks = 0;
+            SQLitePCL.delegate_progress progress = _ => { callbacks++; return 0; };
+            SQLitePCL.raw.sqlite3_progress_handler(_db.Connection.Handle, 1000, progress, null!);
+            try
+            {
+                command.CommandText = scopeSql;
+                command.ExecuteNonQuery();
+            }
+            finally
+            {
+                SQLitePCL.raw.sqlite3_progress_handler(_db.Connection.Handle, 0, null!, null!);
+            }
+            Assert.True(callbacks <= 20, $"Scope candidate INSERT executed at least {callbacks * 1000} VM instructions.");
+            Assert.Equal(expected, ReadCandidates());
+            transaction.Rollback();
+        }
 
         using (var transaction = _db.Connection.BeginTransaction())
         {
@@ -702,8 +790,8 @@ public class DatabaseTests : IDisposable
             long fileId,
             string name,
             int line,
-            string containerName,
-            string containerQualifiedName)
+            string? containerName,
+            string? containerQualifiedName)
             => new()
             {
                 FileId = fileId,

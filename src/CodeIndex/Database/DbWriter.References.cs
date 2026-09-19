@@ -1529,18 +1529,50 @@ public partial class DbWriter
                    END
             FROM symbol_references AS r
             JOIN files AS source_file ON source_file.id = r.file_id
-            JOIN symbols AS s
-              ON s.name_folded IN (
-                  r.symbol_name_folded,
-                  CASE WHEN source_file.lang = 'csharp' AND r.reference_kind = 'attribute'
-                       THEN r.symbol_name_folded || 'attribute' END
-              )
+            LEFT JOIN symbols AS source ON source.id = r.source_symbol_id
+            JOIN symbols AS s ON s.id IN (
+                -- Probe only the three scopes that can supply ranks 1-4. The IN set
+                -- deduplicates symbols matching multiple scopes before ranking.
+                -- rank 1-4の対象scopeだけをseekし、複数scopeに一致するsymbolはINで重複排除する。
+                SELECT scoped_symbol.id
+                FROM symbols AS scoped_symbol INDEXED BY idx_symbols_file_name_folded
+                WHERE scoped_symbol.file_id = r.file_id
+                  AND scoped_symbol.name_folded IN (
+                      r.symbol_name_folded,
+                      CASE WHEN source_file.lang = 'csharp' AND r.reference_kind = 'attribute'
+                           THEN r.symbol_name_folded || 'attribute' END
+                  )
+                UNION ALL
+                SELECT scoped_symbol.id
+                FROM symbols AS scoped_symbol
+                     INDEXED BY idx_symbols_name_folded_container_qualified_name_nocase
+                WHERE source.container_qualified_name IS NOT NULL
+                  AND source.container_qualified_name <> ''
+                  AND scoped_symbol.container_qualified_name =
+                      source.container_qualified_name COLLATE NOCASE
+                  AND scoped_symbol.name_folded IN (
+                      r.symbol_name_folded,
+                      CASE WHEN source_file.lang = 'csharp' AND r.reference_kind = 'attribute'
+                           THEN r.symbol_name_folded || 'attribute' END
+                  )
+                UNION ALL
+                SELECT scoped_symbol.id
+                FROM symbols AS scoped_symbol
+                     INDEXED BY idx_symbols_name_folded_container_name_nocase
+                WHERE source.container_name IS NOT NULL
+                  AND source.container_name <> ''
+                  AND scoped_symbol.container_name = source.container_name COLLATE NOCASE
+                  AND scoped_symbol.name_folded IN (
+                      r.symbol_name_folded,
+                      CASE WHEN source_file.lang = 'csharp' AND r.reference_kind = 'attribute'
+                           THEN r.symbol_name_folded || 'attribute' END
+                  )
+            )
             JOIN files AS target_file ON target_file.id = s.file_id
             LEFT JOIN temp.csharp_instantiation_family_facts AS instantiation_fact
               ON source_file.lang = 'csharp'
              AND r.reference_kind = 'instantiate'
              AND instantiation_fact.symbol_id = s.id
-            LEFT JOIN symbols AS source ON source.id = r.source_symbol_id
             WHERE (
                   (source_file.lang = target_file.lang
                    AND (source_file.lang <> 'ambiguous_m' OR source_file.id = target_file.id))

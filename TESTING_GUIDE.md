@@ -1,5 +1,15 @@
 # Testing Guide
 
+Reference scope candidate coverage in `DatabaseTests` checks all three existing
+file/container index probes, minimum ranks, overlapping scopes, tied candidates,
+ASCII case differences, null/empty source containers and foreign-language decoys
+across ten languages. The 1,280 unrelated same-name declarations must stay within
+the 20,000 SQLite VM instruction budget. Keep generated full/scoped/retained SQL
+and C# attribute/constructor/property graph regressions on net8/net9.
+参照候補は10言語で順位・重複スコープ・同順位・大小文字・NULL／空名・言語境界を
+確認します。無関係な同名宣言1,280件を含めたVM命令上限と、各更新形式のSQL・
+C#固有のグラフ回帰検証を両runtimeで維持します。
+
 LSP document-symbol identity coverage (#5382) shares indexed and unsupported-live-
 extractor fallback requests across case-colliding paths, literal path characters,
 and descendant/suffix decoys. Keep hierarchical roots, identifier ranges and framed
