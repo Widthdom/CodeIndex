@@ -130,6 +130,17 @@ Recent releases (v1.41.0 onward) remain below. Older releases retain both langua
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.50.1] - 2026-09-19
+
+#### Changed
+
+- Speed up initial C# workspace indexing by rejecting impossible member/method confirmation suffixes before regex matching. Razor, Blazor and CSHTML share the optimization; declaration identities, ranges and Unicode handling are preserved.
+- **Initial indexing avoids impossible declaration regex probes** — C#, Razor/Blazor/CSHTML, Java, Kotlin, C/C++, JavaScript and TypeScript reject audited declaration patterns when their exact transformed input lacks mandatory punctuation. C# same-line member recovery also skips impossible property/event/delegate probes. Existing regexes, declaration ranges, indexers, generic prefixes and compact constructors retain their behavior.
+- Reduce repeated lambda-body scans and function-scope key allocations during C#, Razor, Blazor and CSHTML indexing while preserving capture names, order, scope and source positions.
+- **Reference position lookups avoid repeated scans of dense source lines** — all language writers use recorded columns when an exact non-overlapping name match is proven, and stop searching once later occurrences cannot be nearer. C# type and invocation arity lookups share the shortcut and one-pass fallback, preserving trimmed-context columns, escaped/Unicode names, constructor recognition, ties and legacy/plugin fallback behavior.
+- **Reference graph construction limits common-name candidate searches to eligible scopes** — initial indexing, scoped refreshes and retained-graph rebuilds use the existing file and container indexes before ranking candidates. This reduces work in repositories with many unrelated declarations sharing a name across all supported graph languages, while preserving tied candidates, language boundaries, C# attribute suffixes and references without a known source container.
+- Initial bulk indexing shares heavily repeated reference-source lookups within each bounded INSERT across all languages, retaining direct probes for unique or sparse sources and absent container names. It preserves every reference row, input order, folded-name overrides and transactional rollback while reducing repeated searches through same-name declarations.
+
 ### [1.50.0] - 2026-09-16
 
 #### Added
@@ -839,6 +850,17 @@ v1.41.0 以降はこのファイルに、それ以前の日英の履歴は次の
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.50.1] - 2026-09-19
+
+#### 変更
+
+- C# のメンバー／メソッド宣言確認で成立しない末尾を regex 照合前に除外し、初回ワークスペースインデックスを高速化しました。Razor・Blazor・CSHTML にも共通で適用し、宣言の識別情報・範囲・Unicode の扱いを維持します。
+- **初回インデックスで成立しない宣言正規表現の評価を削減しました** — C#、Razor/Blazor/CSHTML、Java、Kotlin、C/C++、JavaScript、TypeScript は、変換後の実際の入力に必須の記号がない場合、監査済みの宣言パターン評価を省略します。C# の同一行メンバー救済も、成立しない property/event/delegate 判定を省略します。既存の正規表現・宣言範囲・indexer・generic prefix・compact constructor の挙動を維持します。
+- C#・Razor・Blazor・CSHTML のインデックス処理で、lambda 本体の反復走査と関数スコープ key の文字列割り当てを削減し、捕捉名・順序・スコープ・ソース位置を維持しました。
+- **参照位置の検索で密なソース行の反復走査を削減します** — 全言語共通のwriterは、非重複の名前一致を証明できる場合に記録列を使い、後続の出現がより近くなり得ない位置で検索を止めます。C#の型引数数・呼出し引数数の検索も同じ短縮処理と1回の走査によるfallbackを共有し、trim済みcontextの列・escape／Unicode名・constructor判定・同距離時の選択・旧形式／pluginのfallbackを維持します。
+- **参照グラフ構築時の同名候補の検索を対象スコープに限定します** — 初回インデックス・差分更新・保持グラフの再構築で、既存のファイル／コンテナ索引から候補を取得して順位付けします。全対応グラフ言語で、無関係な同名宣言が多いリポジトリの処理量を削減し、同順位候補・言語境界・C# attribute の接尾辞・参照元コンテナが不明な参照の挙動を維持します。
+- 全言語共通の初回一括インデックスで、上限付き INSERT 内で多数重複する参照元検索を共有するようにしました。重複が少ない場合やコンテナ名がない場合は直接検索を使い、全参照行・入力順・folded 名の override・トランザクションの rollback を維持しつつ、同名宣言への検索の繰り返しを減らします。
+
 ### [1.50.0] - 2026-09-16
 
 #### 追加
@@ -1422,7 +1444,8 @@ v1.41.0 以降はこのファイルに、それ以前の日英の履歴は次の
 - **読取不能な marker fixture が target framework 間の並列テストへ干渉しないようになりました (#5019)** — MCP の marker-fingerprint fixture を repository の build output 外にある独立した一時 workspace へ移し、別 target framework の source-policy scan が意図的に unreadable にした directory へ再帰進入しないようにしました。
 - **parallel detached-snapshot fixture が thread-pool timing や広範な status diagnostics に依存しなくなりました (#5033)** — interactive batch loop を専用 test thread で実行し、非同期 completion signal と軽量な file-count query で generation refresh を確認するため、suite 負荷下でも net8 test が安定して完了します。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.50.0...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.50.1...HEAD
+[1.50.1]: https://github.com/Widthdom/CodeIndex/compare/v1.50.0...v1.50.1
 [1.50.0]: https://github.com/Widthdom/CodeIndex/compare/v1.49.0...v1.50.0
 [1.49.0]: https://github.com/Widthdom/CodeIndex/compare/v1.48.0...v1.49.0
 [1.48.0]: https://github.com/Widthdom/CodeIndex/compare/v1.47.0...v1.48.0
