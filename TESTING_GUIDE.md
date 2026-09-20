@@ -1,5 +1,15 @@
 # Testing Guide
 
+`ReferenceExtractorReceiverScopeTests` checks that impossible enum qualifiers, calls
+and assignment targets never construct receiver lookups, while genuine candidates,
+aliases, global qualification and value shadows keep their reference behavior.
+The declaration/conditional/lambda/switch scope fixtures in `ReferenceExtractorCSharpTests`
+cover C#/Razor/Blazor/CSHTML with LF/CRLF and Unicode preceding patterns. Keep the
+128-pattern, warmed 4 MB allocation ceiling in `ReferenceExtractorPerformanceBudgetTests`
+alongside these fixtures and the full reference extractor suites on net8/net9.
+receiver lookupの遅延生成と既存の隠蔽規則を4言語・LF/CRLF・Unicodeで検証し、
+pattern128個のウォームアップ後4 MB上限と全参照抽出回帰を両runtimeで維持してください。
+
 Fresh-source canonical-only coverage extends `AuthoritativeFreshRawBulkInsertTests`
 and `FreshReferenceResolutionTests`. Keep ten-language name/range parity, alternating
 canonical/display/legacy statement shapes, repeated-source batches, file rollback

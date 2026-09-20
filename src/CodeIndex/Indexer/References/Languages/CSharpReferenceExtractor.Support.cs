@@ -384,6 +384,7 @@ public static partial class ReferenceExtractor
                 var bodyText = LineRangeText.Join(structuralLines, start, end);
                 if (symbol.Kind == "function")
                     AddCSharpParameterNames(names, symbol.Signature, symbol.BodyStartLine.Value, 0, symbol.BodyEndLine.Value, int.MaxValue, seenNames);
+                var bodyLineOffset = 0;
                 for (var i = start; i <= end; i++)
                 {
                     foreach (Match match in BoundedRegex.EnumerateMatches(CSharpLocalValueNameRegex, structuralLines[i]))
@@ -428,7 +429,9 @@ public static partial class ReferenceExtractor
                     }
                     foreach (Match match in BoundedRegex.EnumerateMatches(CSharpDeclarationPatternValueNameRegex, structuralLines[i]))
                     {
-                        if (!TryFindCSharpDeclarationPatternScopeEndPosition(structuralLines, start, end, i, match.Index, out var scopeEnd))
+                        if (!TryFindCSharpDeclarationPatternScopeEndPosition(
+                                structuralLines, start, end, i, match.Index,
+                                bodyText, bodyLineOffset + match.Index, out var scopeEnd))
                             continue;
 
                         AddCSharpFunctionValueReceiverName(
@@ -492,6 +495,8 @@ public static partial class ReferenceExtractor
                             scopeEnd.Column,
                             seenNames);
                     }
+
+                    bodyLineOffset += structuralLines[i].Length + 1;
                 }
 
                 AddCSharpRecursivePatternValueReceiverNames(names, bodyText, structuralLines, start, end, seenNames);

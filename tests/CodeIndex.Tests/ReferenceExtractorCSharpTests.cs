@@ -3801,10 +3801,19 @@ public partial class ReferenceExtractorTests
         Assert.Equal(1, readyRefs["AfterBlock"]);
     }
 
-    [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_WithDeclarationPatternStatements_KeepOnlyOuterEnumReferences()
+    public static TheoryData<string, string> ReceiverScopeLanguageLineEndings => new()
     {
-        const string content = """
+        { "csharp", "\n" }, { "csharp", "\r\n" },
+        { "razor", "\n" }, { "razor", "\r\n" },
+        { "blazor", "\n" }, { "blazor", "\r\n" },
+        { "cshtml", "\n" }, { "cshtml", "\r\n" },
+    };
+
+    [Theory]
+    [MemberData(nameof(ReceiverScopeLanguageLineEndings))]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithDeclarationPatternStatements_KeepOnlyOuterEnumReferences(string language, string newline)
+    {
+        const string template = """
             namespace Demo;
 
             public enum Status
@@ -3821,6 +3830,7 @@ public partial class ReferenceExtractorTests
             {
                 public Demo.Status ReadIf(object value)
                 {
+                    var café = "😀";
                     if (value is Holder Status)
                     {
                         _ = Status.Ready;
@@ -3854,8 +3864,9 @@ public partial class ReferenceExtractorTests
             }
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+        var content = template.Replace("\n", newline, StringComparison.Ordinal);
+        var symbols = SymbolExtractor.Extract(1, language, content);
+        var references = ReferenceExtractor.Extract(1, language, content, symbols);
 
         var readyRefs = references
             .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "member_read")
@@ -3866,10 +3877,11 @@ public partial class ReferenceExtractorTests
         Assert.Equal(["ReadIf", "ReadMultiLineIf", "ReadMultiLineWhile"], readyRefs);
     }
 
-    [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_WithLambdaScopedPatternVariables_DoNotLeakIntoOuterIfBodies()
+    [Theory]
+    [MemberData(nameof(ReceiverScopeLanguageLineEndings))]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithLambdaScopedPatternVariables_DoNotLeakIntoOuterIfBodies(string language, string newline)
     {
-        const string content = """
+        const string template = """
             namespace RealNs;
 
             public enum Status
@@ -3886,6 +3898,7 @@ public partial class ReferenceExtractorTests
             {
                 public RealNs.Status ReadLambda(object[] values)
                 {
+                    var café = "😀";
                     if (values.Any(value => value is Holder RealNs))
                     {
                         return RealNs.Status.Ready;
@@ -3916,8 +3929,9 @@ public partial class ReferenceExtractorTests
             }
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+        var content = template.Replace("\n", newline, StringComparison.Ordinal);
+        var symbols = SymbolExtractor.Extract(1, language, content);
+        var references = ReferenceExtractor.Extract(1, language, content, symbols);
 
         var readyRefs = references
             .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "member_read")
@@ -3929,10 +3943,11 @@ public partial class ReferenceExtractorTests
         Assert.Equal(2, readyRefs["ReadStatic"]);
     }
 
-    [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_WithStatementPatternVariables_KeepOnlyOuterEnumReferences()
+    [Theory]
+    [MemberData(nameof(ReceiverScopeLanguageLineEndings))]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithStatementPatternVariables_KeepOnlyOuterEnumReferences(string language, string newline)
     {
-        const string content = """
+        const string template = """
             namespace Demo;
 
             public enum Status
@@ -3961,6 +3976,7 @@ public partial class ReferenceExtractorTests
 
                 public Demo.Status ReadConditional(object value)
                 {
+                    var café = "😀";
                     return value is Holder Status
                         ? (Demo.Status)Status.Ready
                         : Demo.Status.Ready;
@@ -4003,8 +4019,9 @@ public partial class ReferenceExtractorTests
             }
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+        var content = template.Replace("\n", newline, StringComparison.Ordinal);
+        var symbols = SymbolExtractor.Extract(1, language, content);
+        var references = ReferenceExtractor.Extract(1, language, content, symbols);
 
         var readyRefs = references
             .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "member_read")

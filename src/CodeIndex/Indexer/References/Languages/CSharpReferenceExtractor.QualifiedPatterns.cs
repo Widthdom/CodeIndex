@@ -42,23 +42,10 @@ public static partial class ReferenceExtractor
             if (!enumMemberLookup.TryGetValue(memberName, out var targets))
                 continue;
 
-            var callContainer = resolveContainerForCall(member.Start);
             var qualifier = TrimLeadingCSharpGlobalQualifier(NormalizeCSharpQualifiedSegments(preparedLine, parsed.Segments, parsed.Segments.Count - 1));
             var resolvedQualifier = parsed.HasLeadingGlobalQualifier
                 ? qualifier
                 : ResolveCSharpQualifiedAliasTarget(qualifier, lineNumber, usingAliases);
-            if (!parsed.HasLeadingGlobalQualifier
-                && HasCSharpValueReceiverConflict(
-                    qualifier,
-                    resolvedQualifier,
-                    lineNumber,
-                    member.Start,
-                    callContainer,
-                    getValueReceiverNamesByContainingType(),
-                    getValueReceiverNamesByFunctionStartLine()))
-            {
-                continue;
-            }
             if (!MatchesQualifiedConstantContainer(
                     resolvedQualifier,
                     targets,
@@ -72,6 +59,23 @@ public static partial class ReferenceExtractor
             if (IsCSharpSimpleAssignmentTarget(preparedLine, nextTokenIndex))
                 continue;
 
+            // Receiver lookup scans callable bodies. Only construct it after the qualifier
+            // and usage can produce an enum read; unrelated same-name members need no scopes.
+            // receiver lookup は callable 本体を走査するため、修飾子と用途が enum read の
+            // 候補であると確認してから作る。無関係な同名 member には scope は不要。
+            var callContainer = resolveContainerForCall(member.Start);
+            if (!parsed.HasLeadingGlobalQualifier
+                && HasCSharpValueReceiverConflict(
+                    qualifier,
+                    resolvedQualifier,
+                    lineNumber,
+                    member.Start,
+                    callContainer,
+                    getValueReceiverNamesByContainingType(),
+                    getValueReceiverNamesByFunctionStartLine()))
+            {
+                continue;
+            }
             var insideCSharpAttributeRange = csharpAttrRangesOnLine != null
                 && IsInsideCSharpAttributeRange(csharpAttrRangesOnLine, member.Start);
             var referenceKind = TryClassifyMetadataReference("csharp", preparedLine, member.Start, insideCSharpAttributeRange) ?? "member_read";

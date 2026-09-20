@@ -1,5 +1,14 @@
 # Initial full-index performance
 
+C# enum-member extraction rejects impossible qualifiers, calls and simple assignment
+targets before constructing receiver-shadow scopes. Ordinary and recursive declaration
+patterns reuse each callable's body text and the offsets already available to their
+scans, avoiding a new full-body string and a preceding-line scan per pattern. C#,
+Razor, Blazor and CSHTML share this behavior. Reference coordinates, shadowing rules,
+alias/global qualification and extraction limits are unchanged; no cache survives
+the extraction. Regression coverage compares all symbol/reference fields and bounds
+allocations for 128 scoped patterns instead of asserting elapsed time.
+
 Fresh reference-source lookup now checks the materialized file set once through
 partial indexes for display aliases and legacy NULL canonical keys. When neither exists, references use only
 the existing canonical-name range probe, without the three-way union and final
@@ -174,6 +183,13 @@ normalizing generated IDs and indexing timestamps. These are two observations
 per version on a C#-heavy snapshot; see the unique-name scope-probe tradeoff above.
 
 ## 日本語
+
+C#のenum member抽出は、成立しない修飾子・呼出し・単純代入先をreceiverの隠蔽scope
+作成前に除外します。通常／recursive declaration patternはcallableごとの本文と
+走査で既知のoffsetを再利用し、patternごとの本文再生成と先行行の再走査を避けます。
+C#・Razor・Blazor・CSHTMLで共通です。参照位置・隠蔽規則・alias／global修飾・抽出上限
+は変わらず、抽出終了後に残るcacheもありません。全シンボル／参照項目の比較と、
+scope付きpattern128個の割り当て上限で回帰を検証し、時間の閾値は使いません。
 
 初回の参照元検索では、ファイル群の一時表を構築するたびに、部分indexでdisplay aliasと
 旧形式のNULL canonical keyの有無を一度確認します。どちらもなければ既存のcanonical名の
