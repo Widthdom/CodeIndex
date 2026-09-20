@@ -376,6 +376,10 @@ public static partial class SymbolExtractor
         public int HeaderPrefixShapeSkipCount { get; set; }
         public int PropertyHeaderTupleSkipCount { get; set; }
         public int MethodHeaderSuffixSkipCount { get; set; }
+        public int PropertyLookaheadDeferredCount { get; set; }
+        public int PropertyLookaheadMaterializationCount { get; set; }
+        public long PropertyLookaheadMaterializedCharacters { get; set; }
+        public long PropertyLookaheadSemicolonInputCharacters { get; set; }
     }
 
     internal readonly record struct CSharpRegexProbeMetrics(
@@ -403,7 +407,11 @@ public static partial class SymbolExtractor
         int ConfirmationPrefixSkipCount,
         int HeaderPrefixShapeSkipCount,
         int PropertyHeaderTupleSkipCount,
-        int MethodHeaderSuffixSkipCount);
+        int MethodHeaderSuffixSkipCount,
+        int PropertyLookaheadDeferredCount,
+        int PropertyLookaheadMaterializationCount,
+        long PropertyLookaheadMaterializedCharacters,
+        long PropertyLookaheadSemicolonInputCharacters);
 
     internal static List<SymbolRecord> ExtractForRequiredLiteralGateTesting(
         long fileId,
@@ -514,7 +522,11 @@ public static partial class SymbolExtractor
             counts.ConfirmationPrefixSkipCount,
             counts.HeaderPrefixShapeSkipCount,
             counts.PropertyHeaderTupleSkipCount,
-            counts.MethodHeaderSuffixSkipCount);
+            counts.MethodHeaderSuffixSkipCount,
+            counts.PropertyLookaheadDeferredCount,
+            counts.PropertyLookaheadMaterializationCount,
+            counts.PropertyLookaheadMaterializedCharacters,
+            counts.PropertyLookaheadSemicolonInputCharacters);
         return symbols;
     }
 

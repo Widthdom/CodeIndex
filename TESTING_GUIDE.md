@@ -1,5 +1,14 @@
 # Testing Guide
 
+The same C# multiline-header fixture also compares deferred lookahead copies and
+append-only semicolon scans across all four language keys. Require fewer combined
+strings, copied characters and semicolon input characters while comparing all symbol
+fields. Keep default parameters, nested generic/tuple properties, accessor attributes,
+object initializers and the original 16-line / 4096-character lookahead limits.
+C#系4言語で先読み文字列の生成回数・コピー文字数・semicolon走査の入力文字数の削減と
+全symbol項目の一致を検証します。既定引数・generic／tuple・accessor属性・初期化子と、
+元の16行／4096文字の先読み上限を維持してください。
+
 The shared fixture in `SymbolExtractorCSharpRegexProbeTests` also checks multiline
 header gates over zero/one-argument methods, wrapped tuple returns and malformed
 generic prefixes. Compare every symbol field with the gates disabled/enabled and

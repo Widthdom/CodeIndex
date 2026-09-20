@@ -1729,6 +1729,15 @@ public static partial class SymbolExtractor
                 csharpRegexProbeCounts);
         }
 
+        var semicolonTracker = new CSharpTopLevelSemicolonTracker();
+        if (applyCSharpRegexProbeOptimizations)
+        {
+            semicolonTracker.Scan(matchLine);
+            if (csharpRegexProbeCounts != null)
+                csharpRegexProbeCounts.PropertyLookaheadSemicolonInputCharacters += matchLine.Length;
+        }
+        var hasDecisionPunctuation = !applyCSharpRegexProbeOptimizations
+            || matchLineSpan.IndexOfAny('{', '=', ';') >= 0;
         var lookaheadLimitExclusive = Math.Min(csharpMatchLines.Length, startLineIndex + CSharpPropertyMatchLookaheadLineLimit + 1);
         for (int i = startLineIndex + 1; i < lookaheadLimitExclusive; i++)
         {
@@ -1740,6 +1749,34 @@ public static partial class SymbolExtractor
                 break;
 
             builder.Append(' ').Append(nextLine);
+            if (applyCSharpRegexProbeOptimizations)
+            {
+                // Generic whitespace normalization does not change punctuation or
+                // delimiter depth. Keep the semicolon scan append-only, including
+                // the header lines whose combined string is not needed yet.
+                // generic空白の正規化は記号・深さを変えないため、追加行だけを走査する。
+                semicolonTracker.Scan(nextLine);
+                if (csharpRegexProbeCounts != null)
+                    csharpRegexProbeCounts.PropertyLookaheadSemicolonInputCharacters += nextLine.Length;
+
+                // Every decision below requires '{', '=' or ';'. Until one appears,
+                // appending and enforcing the original budgets is sufficient; defer
+                // cumulative string copies and normalization without ending lookahead.
+                // 後段の全判定に必要な記号が現れるまで、元のbudgetを維持して連結だけ行う。
+                hasDecisionPunctuation = hasDecisionPunctuation
+                    || nextLine.AsSpan().IndexOfAny('{', '=', ';') >= 0;
+                if (!hasDecisionPunctuation)
+                {
+                    if (csharpRegexProbeCounts != null)
+                        csharpRegexProbeCounts.PropertyLookaheadDeferredCount++;
+                    continue;
+                }
+            }
+            if (csharpRegexProbeCounts != null)
+            {
+                csharpRegexProbeCounts.PropertyLookaheadMaterializationCount++;
+                csharpRegexProbeCounts.PropertyLookaheadMaterializedCharacters += builder.Length;
+            }
             var normalizedCombined = CollapseCSharpGenericTypeWhitespace(builder.ToString());
 
             if (openBraceLineIndex < 0 && csharpMatchLines[i].IndexOf('{') >= 0)
@@ -1785,7 +1822,11 @@ public static partial class SymbolExtractor
             // `HasCSharpTopLevelSemicolon` は真の終端 `;` のみで発火し、先行行に `{` があっても
             // 問題ない。上の `HasCSharpPropertyAccessorStart` が真の property 本体を先に拾うため、
             // ここに到達する `{` は初期化子側のものと確定している。
-            if (HasCSharpTopLevelSemicolon(normalizedCombined))
+            if (!applyCSharpRegexProbeOptimizations && csharpRegexProbeCounts != null)
+                csharpRegexProbeCounts.PropertyLookaheadSemicolonInputCharacters += normalizedCombined.Length;
+            if (applyCSharpRegexProbeOptimizations
+                ? semicolonTracker.HasTopLevelSemicolon
+                : HasCSharpTopLevelSemicolon(normalizedCombined))
             {
                 return new CSharpPropertyMatchCandidate(normalizedCombined, i, i);
             }
@@ -2293,6 +2334,9 @@ public static partial class SymbolExtractor
 
     private static bool HasCSharpTopLevelFieldInitializer(string text)
     {
+        if (!text.Contains('='))
+            return false;
+
         int paren = 0, bracket = 0, brace = 0;
         for (int i = 0; i < text.Length; i++)
         {

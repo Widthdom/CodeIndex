@@ -1,5 +1,13 @@
 # Initial full-index performance
 
+C# declaration lookahead defers cumulative string copies and generic whitespace
+normalization until `{`, `=` or `;` makes a declaration decision possible. Top-level
+semicolon tracking scans each appended part once, and initializer probes skip text
+without `=`. Physical-line and character budgets still apply before deferral. C#,
+Razor, Blazor and CSHTML share the change; declaration records and malformed generic
+recovery remain unchanged. Tests compare complete records and count copied/scanned
+characters, without asserting wall-clock time.
+
 C# multiline-header probes reject impossible prefixes before regex evaluation.
 The property-header grammar requires a comma whenever it consumes `(`; the
 incomplete method-header branch cannot end in `)` without a generic prefix.
@@ -250,6 +258,12 @@ integrity checks. FTS posting payloads were not compared. These are two observat
 per version on a C#-heavy snapshot, not a general speed guarantee.
 
 ## 日本語
+
+C#の宣言先読みは、判定に必要な `{`・`=`・`;` が現れるまで累積文字列のコピーと
+generic空白の正規化を保留します。top-level semicolonは追加部分だけを走査し、
+`=` のない初期化子判定も省略します。保留前に元の物理行数・文字数の上限を適用し、
+C#・Razor・Blazor・CSHTMLで宣言レコードと不正なgenericの復旧を維持します。
+テストは全レコードとコピー／走査文字数を比較し、経過時間の閾値には依存しません。
 
 C#の複数行header判定は、不可能なprefixを正規表現の評価前に除外します。propertyの
 header文法が `(` を消費するにはcommaが必須で、未完method headerはgeneric prefixが
