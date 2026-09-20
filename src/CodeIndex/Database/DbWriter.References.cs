@@ -2014,23 +2014,38 @@ public partial class DbWriter
            + RefreshReferenceResolutionSymbolFactsFullSql + "\n"
            + RefreshReferenceResolutionFreshSparseSql;
 
+    private const string MutualRecursionRefreshEligibleSql = """
+        (
+            r.is_mutual_recursion IS NOT 0
+            OR (
+                r.reference_kind IN ('call', 'instantiate', 'subscribe', 'unsubscribe', 'razor_event_binding')
+                AND (
+                    (r.source_symbol_id IS NOT NULL
+                     AND r.target_symbol_id IS NOT NULL
+                     AND r.source_symbol_id <> r.target_symbol_id)
+                    OR (r.source_symbol_id IS NULL
+                        AND r.target_symbol_id IS NULL
+                        AND r.is_self_reference = 0
+                        AND r.container_name IS NOT NULL
+                        AND r.container_name <> ''
+                        AND r.symbol_name IS NOT NULL
+                        AND r.symbol_name <> '')
+                )
+            )
+        )
+        """;
+
     private static readonly string RefreshMutualRecursionFlagsSql = $"""
         WITH desired_mutual_recursion(id, desired_value) AS MATERIALIZED (
             SELECT r.id,
                    {MutualRecursionValueSql}
             FROM symbol_references AS r
-            -- Ordinary non-call rows are already persisted with the canonical zero value.
-            -- Keep them out of the materialized working set while still repairing legacy or
-            -- externally modified non-boolean values.
-            -- 通常の非call rowはcanonicalな0で永続化済みなのでwork setから除外しつつ、
-            -- legacyまたは外部変更による非boolean値は引き続き修復する。
-            WHERE r.reference_kind IN (
-                      'call',
-                      'instantiate',
-                      'subscribe',
-                      'unsubscribe',
-                      'razor_event_binding')
-               OR r.is_mutual_recursion IS NOT 0
+            -- A reverse edge can only match two distinct resolved identities or two
+            -- unresolved names. Keep known-zero rows out of the working set, but always
+            -- revisit nonzero/NULL flags so stale and legacy values are repaired.
+            -- distinctな解決済みidentity対／未解決名対だけを処理し、既知の0を省く。
+            -- 非0／NULLのflagは常に再評価して旧値・不正値を修復する。
+            WHERE {MutualRecursionRefreshEligibleSql}
         )
         UPDATE symbol_references AS r
         SET is_mutual_recursion = desired.desired_value
@@ -2224,14 +2239,19 @@ public partial class DbWriter
         {
             _authoritativeFreshBulkInsertScope!.MaterializeReferenceSourceSymbols(references);
         }
+        var parametersPerReference = _referenceGraphRefreshScope is
+        {
+            IsDisposed: false,
+            FreshReferenceResolutionDefaultsPending: true,
+        } ? FreshReferenceInsertParameterCountPerRow : ReferenceInsertParameterCountPerRow;
         int rowsPerStatement = useAuthoritativeFreshRawInsert
             ? GetRowsPerAuthoritativeFreshRawInsertStatement(
-                columnCount: ReferenceInsertParameterCountPerRow)
+                columnCount: parametersPerReference)
             : batchesAreAtomicInCaller
                 ? GetRowsPerCallerTransactionInsertStatement(
-                    columnCount: ReferenceInsertParameterCountPerRow)
+                    columnCount: parametersPerReference)
                 : GetRowsPerInsertStatement(
-                    columnCount: ReferenceInsertParameterCountPerRow);
+                    columnCount: parametersPerReference);
         var foldedNameCache = CreateFoldedNameCache(
             Math.Min(references.Count, rowsPerStatement),
             namesPerRow: 2);
@@ -2459,7 +2479,7 @@ public partial class DbWriter
                 key.MaterializedFreshSourceLookup,
                 key.ShareSourceLookups,
                 key.CanonicalFreshSourceNamesOnly));
-        var cmd = RentCommand(sql, c => AddReferenceInsertParameters(c, rowsInBatch));
+        var cmd = RentCommand(sql, c => AddReferenceInsertParameters(c, rowsInBatch, useFreshReferenceResolutionDefaults));
         try
         {
             var parameterIndex = 0;
@@ -2488,10 +2508,11 @@ public partial class DbWriter
                     reference.ContainerName,
                     reference.IdentityContainerNameFolded,
                     foldedNameCache);
-                cmd.Parameters[parameterIndex++].Value =
-                    !useFreshReferenceResolutionDefaults && reference.IsSelfReference ? 1 : 0;
-                cmd.Parameters[parameterIndex++].Value =
-                    !useFreshReferenceResolutionDefaults && reference.IsMutualRecursion ? 1 : 0;
+                if (!useFreshReferenceResolutionDefaults)
+                {
+                    cmd.Parameters[parameterIndex++].Value = reference.IsSelfReference ? 1 : 0;
+                    cmd.Parameters[parameterIndex++].Value = reference.IsMutualRecursion ? 1 : 0;
+                }
                 cmd.Parameters[parameterIndex++].Value = (object?)ExtractTargetQualifier(reference) ?? DBNull.Value;
             }
 

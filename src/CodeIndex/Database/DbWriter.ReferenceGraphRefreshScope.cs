@@ -180,6 +180,9 @@ public partial class DbWriter
           AND r.is_mutual_recursion IS NOT ({MutualRecursionValueSql});
         """;
 
+    internal static IReadOnlyList<(string Scope, string Sql)> MutualRecursionRefreshSqlForTesting
+        => [("full", RefreshMutualRecursionFlagsSql), ("scoped", RefreshScopedMutualRecursionFlagsSql)];
+
     internal static string RefreshScopedReferenceCandidatesSqlForTesting
         => RefreshScopedReferenceCandidatesSql;
 

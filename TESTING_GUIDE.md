@@ -1,5 +1,17 @@
 # Testing Guide
 
+Fresh-reference flag coverage in `ReferencePersistenceBindingTests`,
+`FreshReferenceResolutionTests` and `AuthoritativeFreshRawBulkInsertTests` checks
+12 fresh/14 ordinary bindings, parameter types, normalized Unicode contexts,
+ten-language parity, source-lookup shapes and the native 42-row batch boundary.
+`DatabaseTests.MutualRecursionRefresh_PrunesKnownZeroRowsAndRepairsLegacyFlags`
+covers full/scoped refreshes, resolved/folded/legacy reverse pairs, stale and NULL
+flags, scope isolation and edge removal with a bundled SQLite VM-work budget.
+Run these with the existing graph rollback/cancellation regressions on net8/net9.
+初回12個／通常14個のbind・型と順序・Unicode文脈・10言語・native42行の境界を検証します。
+相互再帰は全体／限定更新、解決済み／fold済み／旧形式の対、古い値・NULL・範囲外・
+辺の削除を両runtimeで確認し、既存のrollback／取消テストとSQLite処理量上限を維持します。
+
 The shared confirmation fixture in `SymbolExtractorCSharpRegexProbeTests` includes
 multiline parameter continuations followed by body calls: a later `(` must not
 force an impossible declaration prefix through the regex. Compare all symbol fields

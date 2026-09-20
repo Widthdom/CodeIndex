@@ -364,7 +364,7 @@ public partial class DbWriter
                 },
                 rows,
                 sql,
-                expectedParameterCount: rows * ReferenceInsertParameterCountPerRow);
+                expectedParameterCount: rows * FreshReferenceInsertParameterCountPerRow);
             try
             {
                 for (var index = start; index < end; index++)
@@ -390,8 +390,6 @@ public partial class DbWriter
                         reference.ContainerName,
                         reference.IdentityContainerNameFolded,
                         foldedNameCache));
-                    lease.BindInt64(0);
-                    lease.BindInt64(0);
                     lease.BindNullableText(ExtractTargetQualifier(reference));
                 }
 

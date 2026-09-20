@@ -1,5 +1,15 @@
 # Initial full-index performance
 
+Fresh reference writes encode the pending self-reference and mutual-recursion flags
+as SQL zero literals. Both the native and provider writers bind 12 values per row
+instead of 14; the native writer can fit 42 rows within its existing 512-parameter
+budget instead of 36. Ordinary writes retain their supplied flags and 14 bindings.
+Full mutual-recursion refreshes skip known-zero rows that cannot match a
+reverse edge: only distinct resolved identities or fully unresolved name pairs need
+evaluation. Nonzero and NULL flags are always revisited, including non-call rows,
+so stale and legacy values are repaired. All language writers share these changes;
+name folding, reverse-edge matching, transaction boundaries and rollback stay unchanged.
+
 C# declaration confirmation also rejects impossible prefixes before regex evaluation.
 Before the first `(`, an unmatched `)` or statement punctuation outside generic
 arguments cannot match either anchored declaration pattern. Generic argument text
@@ -209,6 +219,15 @@ integrity checks. FTS posting payloads were not compared. These are two observat
 per version on a C#-heavy snapshot, not a general speed guarantee.
 
 ## 日本語
+
+初回の参照書込みでは、グラフ確定前の自己参照・相互再帰flagをSQLの定数0として扱い、
+native／providerの両writerで1行あたりのbindを14個から12個へ減らします。native writerは
+既存の512パラメーター上限内で36行ではなく42行を処理できます。通常書込みは入力flagと
+14個のbindを維持します。全体の相互再帰更新では、逆向きの参照が成立しない
+既知の0の行を除外し、異なる解決済みidentityの対、または双方未解決の名前の対を評価します。
+非0／NULLのflagは非call行も含め必ず再評価し、古い値や旧形式の値を修復します。
+全言語のwriterで共通です。名前のfold・逆向き参照の照合・transaction境界・rollbackは
+変更しません。
 
 C#の宣言確認では、不可能なprefixも正規表現の評価前に除外します。最初の `(` より
 前では、generic引数の外側の余分な `)` やstatement記号は、どちらの先頭固定の宣言

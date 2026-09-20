@@ -341,7 +341,7 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
         Assert.Equal([(85, 510), (85, 510), (1, 6)], RowsAndParameters("insert_issues"));
         Assert.Equal([(1, 0)], RowsAndParameters("read_reference_line_id_floor"));
         Assert.Equal([(73, 220)], RowsAndParameters("insert_reference_lines"));
-        Assert.Equal([(36, 504), (36, 504), (1, 14)], RowsAndParameters("insert_references"));
+        Assert.Equal([(42, 504), (31, 372)], RowsAndParameters("insert_references"));
         Assert.Contains(
             batchWork,
             work => work.Operation == "insert_reference_lines" && work.StatementRows == 73);
@@ -353,9 +353,9 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
         Assert.True(observedStats.Completed);
         Assert.Equal(32, observedStats.Capacity);
         Assert.Equal(11, observedStats.PeakCachedStatementCount);
-        Assert.Equal(15, observedStats.StatementExecutionCount);
+        Assert.Equal(14, observedStats.StatementExecutionCount);
         Assert.Equal(11, observedStats.PrepareCount);
-        Assert.Equal(4, observedStats.CacheHitCount);
+        Assert.Equal(3, observedStats.CacheHitCount);
         Assert.Equal(0, observedStats.EvictionCount);
         Assert.Equal(0, observedStats.DiscardCount);
         Assert.Equal(11, observedStats.FinalizeCount);
@@ -990,6 +990,8 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
                     Line = batch * 100 + (index <= scenario.SharedLineCount ? 1 : index),
                     Column = index,
                     Context = $"batch_{batch}",
+                    IsSelfReference = true,
+                    IsMutualRecursion = true,
                 }).ToArray();
                 observed = null;
                 instructions = 0;
@@ -1006,7 +1008,7 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
                 Assert.Equal(scenario.Shared, observed.SharesReferenceSourceLookups);
                 Assert.Equal(scenario.SourceMode == "canonical", observed.UsesCanonicalFreshSourceNamesOnly);
                 Assert.Equal(scenario.CacheHit, observed.CacheHit);
-                Assert.Equal(32 * 14, observed.BoundParameterCount);
+                Assert.Equal(32 * 12, observed.BoundParameterCount);
                 // Count only the INSERT, excluding the later hotspot aggregate refresh.
                 // An unconditional source map adds about 1,500 instructions to 32 unique rows.
                 var instructionBudget = string.IsNullOrEmpty(scenario.Container) ? 18_500 : 20_500;
@@ -1016,6 +1018,7 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
                     Assert.Equal(string.IsNullOrEmpty(scenario.Container) ? (long?)null : sourceId,
                         SourceSymbolId(reference.SymbolName));
             }
+            Assert.Equal(0, ScalarLong("SELECT COUNT(*) FROM symbol_references WHERE is_self_reference IS NOT 0 OR is_mutual_recursion IS NOT 0"));
         }
         finally
         {

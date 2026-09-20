@@ -6,6 +6,7 @@ namespace CodeIndex.Database;
 public partial class DbWriter
 {
     private const int ReferenceInsertParameterCountPerRow = 14;
+    private const int FreshReferenceInsertParameterCountPerRow = 12;
     private static readonly AsyncLocal<Action<ReferenceInsertBindingWork>?>
         ScopedReferenceInsertBindingWorkForTesting = new();
 
@@ -168,13 +169,21 @@ public partial class DbWriter
                 sql.Append(", ");
             if (column == 6)
                 sql.Append("NULL");
+            else if (inputOrdinal.HasValue && column is 12 or 13)
+                // Fresh rows are unresolved: both flags are known zero until graph
+                // finalization, so neither the native nor provider path needs a bind.
+                // fresh rowのflagはgraph確定まで0なので、両writerでbindを省略する。
+                sql.Append('0');
             else
                 AppendBatchParameter(sql, ref parameterIndex);
         }
         sql.Append(')');
     }
 
-    private static void AddReferenceInsertParameters(SqliteCommand cmd, int rowCount)
+    private static void AddReferenceInsertParameters(
+        SqliteCommand cmd,
+        int rowCount,
+        bool useFreshReferenceResolutionDefaults)
     {
         var parameterIndex = 0;
         for (var row = 0; row < rowCount; row++)
@@ -190,8 +199,11 @@ public partial class DbWriter
             AddBatchParameter(cmd, ref parameterIndex, SqliteType.Text);
             AddBatchParameter(cmd, ref parameterIndex, SqliteType.Text);
             AddBatchParameter(cmd, ref parameterIndex, SqliteType.Text);
-            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Integer);
-            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Integer);
+            if (!useFreshReferenceResolutionDefaults)
+            {
+                AddBatchParameter(cmd, ref parameterIndex, SqliteType.Integer);
+                AddBatchParameter(cmd, ref parameterIndex, SqliteType.Integer);
+            }
             AddBatchParameter(cmd, ref parameterIndex, SqliteType.Text);
         }
     }
