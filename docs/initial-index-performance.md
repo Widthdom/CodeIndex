@@ -96,8 +96,9 @@ This does not change database layout, extraction coverage, transaction
 boundaries, or cancellation and rollback behavior. Ordinary updates, rebuilds,
 and MCP writes keep their existing writer selection.
 
-Fresh reference-source lookup probes the canonical, display, and legacy ASCII
-name indexes with `UNION ALL`. Matching the same physical symbol through more
+When display aliases or legacy keys require all name forms, fresh reference-source
+lookup probes the canonical, display, and legacy ASCII name indexes with `UNION ALL`.
+Matching the same physical symbol through more
 than one name does not change its containment rank or ID, and only the first
 ranked ID is consumed. Avoiding duplicate elimination removes a temporary
 B-tree per reference while preserving same-file scoping, nested range selection,
@@ -192,6 +193,21 @@ symbols, reference lines, issues, references and candidate triples match after
 normalizing generated IDs and indexing timestamps. These are two observations
 per version on a C#-heavy snapshot; see the unique-name scope-probe tradeoff above.
 
+For canonical-only source probes, receiver-scope reuse and declaration-prefix
+pruning, the same `a33c5a8eb` snapshot was measured against executable `d374746ed`.
+Two fresh Release .NET 8 runs per version on macOS ARM64, alternating before/after
+with `--parallelism 2 --memory-trace`, took 44.1/43.1 seconds before and 37.4/37.9
+seconds after: mean 43.6→37.7 seconds, about 13.6% less elapsed time. Total managed
+allocations were 7.47 GB before and 7.51 GB after (about 0.5% higher). Each run used
+a new database, with no heavy tests or builds running. All 1,577 files, 59,387 symbols
+and 562,615 references completed without warnings, errors or extraction cap hits.
+Both before/after pairs have identical logical file, chunk, symbol, reference-line,
+issue, reference, candidate and hotspot records after generated-ID and indexing-time
+normalization, including each reference's complete candidate set. Schema, user_version
+and stable contract/readiness metadata also match; all four databases pass SQLite
+integrity checks. FTS posting payloads were not compared. These are two observations
+per version on a C#-heavy snapshot, not a general speed guarantee.
+
 ## 日本語
 
 C#の宣言確認では、不可能なprefixも正規表現の評価前に除外します。最初の `(` より
@@ -277,8 +293,9 @@ overload 間のスコープ分離を維持します。ローカル名の検索 k
 DB レイアウト、抽出範囲、トランザクション境界、取消・ロールバックの挙動は
 変わりません。通常の更新、rebuild、MCP の writer 選択も既存のままです。
 
-初回の参照元検索は canonical 名・display 名・旧 ASCII 名の index を `UNION ALL`
-で照会します。同じ実体シンボルが複数の名前から見つかっても包含範囲の順位と ID は
+display aliasや旧形式keyのために全経路が必要な場合、初回の参照元検索は canonical 名・
+display 名・旧 ASCII 名の index を `UNION ALL` で照会します。
+同じ実体シンボルが複数の名前から見つかっても包含範囲の順位と ID は
 同じであり、消費するのは順位先頭の ID だけです。参照ごとの重複除去用の一時 B-tree
 を省きつつ、同一ファイルへの限定、入れ子の選択、同順位の決定、旧形式への fallback
 を維持します。通常の参照元修復処理は変更しません。
@@ -358,3 +375,17 @@ managedの総割り当て量は8.09～8.10 GBから7.48 GBへ約8%減りまし�
 完了しています。生成ID・インデックス時刻を正規化すると、ファイル・チャンク・
 シンボル・参照行・issue・参照・解決候補の全レコードが一致します。各版2回の
 C#中心の固定ソースでの観測値です。一意名に対する索引照会の追加負荷は上記のとおりです。
+
+canonical名だけの参照元検索・receiver scopeの再利用・宣言prefixの除外も、同じ
+`a33c5a8eb` の固定ソースを使い、実行ファイル `d374746ed` と比較しました。
+macOS ARM64・Release .NET 8・`--parallelism 2 --memory-trace` で変更前後を交互に
+各2回測定し、変更前44.1／43.1秒、変更後37.4／37.9秒、平均43.6→37.7秒で
+約13.6%短縮しました。managedの総割り当て量は変更前7.47 GB、変更後7.51 GBで
+約0.5%増えています。毎回新しいDBを使い、重いテストやビルドを実行せずに計測しました。
+全1,577ファイル・59,387シンボル・562,615参照が警告・エラー・抽出上限到達なしで
+完了しています。両方の変更前後ペアで、生成ID・インデックス時刻を正規化すると、
+ファイル・チャンク・シンボル・参照行・issue・参照・解決候補・hotspot集計の全レコードが
+一致し、参照ごとの候補集合も一致しました。schema・user_version・実行時刻等に依存しない
+契約／readiness metadataも一致し、4つのDBすべてがSQLiteの整合性検査を通過しています。
+FTSのposting payloadは比較対象外です。C#中心の固定ソースで各版2回の観測値であり、
+一般的な速度を保証するものではありません。
