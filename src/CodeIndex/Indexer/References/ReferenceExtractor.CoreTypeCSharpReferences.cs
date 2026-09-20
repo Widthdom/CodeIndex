@@ -5,6 +5,56 @@ namespace CodeIndex.Indexer;
 
 public static partial class ReferenceExtractor
 {
+    private sealed class CSharpLocalCaptureState(string[] preparedLines, CancellationToken cancellationToken)
+    {
+        internal readonly Dictionary<CSharpLocalScopeKey, HashSet<string>> Names = [];
+        private readonly Dictionary<SymbolRecord, bool> eligibility = new(ReferenceEqualityComparer.Instance);
+        private List<int>? arrowLines;
+        private SymbolRecord? lastContainer;
+        private bool lastEligible;
+
+        internal bool MayContainCapture(SymbolRecord container)
+        {
+            if (ReferenceEquals(container, lastContainer))
+                return lastEligible;
+            if (!eligibility.TryGetValue(container, out var eligible))
+            {
+                if (arrowLines == null)
+                {
+                    arrowLines = [];
+                    for (var index = 0; index < preparedLines.Length; index++)
+                    {
+                        if ((index & 0x3f) == 0)
+                            cancellationToken.ThrowIfCancellationRequested();
+                        if (preparedLines[index].Contains("=>", StringComparison.Ordinal))
+                            arrowLines.Add(index + 1);
+                    }
+                }
+
+                // The same prepared lines feed capture emission. A body range without an
+                // arrow cannot capture; nested/overlapping ranges remain conservatively eligible.
+                // capture 出力と同じ prepared 行を使い、arrow のない本体だけ追跡を省く。
+                // 入れ子／重複範囲は保守的に候補へ残す。
+                if (container.BodyStartLine is not { } start || container.BodyEndLine is not { } end)
+                {
+                    eligible = true;
+                }
+                else
+                {
+                    var index = arrowLines.BinarySearch(start);
+                    if (index < 0)
+                        index = ~index;
+                    eligible = index < arrowLines.Count && arrowLines[index] <= end;
+                }
+                eligibility.Add(container, eligible);
+            }
+
+            lastContainer = container;
+            lastEligible = eligible;
+            return eligible;
+        }
+    }
+
     private static void EmitCoreCSharpTypeReferences(
         in CoreTypeReferenceContext type,
         ref CSharpMultiLineTypePatternState pendingCSharpMultiLineTypePattern)
@@ -70,11 +120,11 @@ public static partial class ReferenceExtractor
         string context,
         int lineNumber,
         SymbolRecord? container,
-        Dictionary<CSharpLocalScopeKey, HashSet<string>>? localNamesByFunction)
+        CSharpLocalCaptureState? localNamesByFunction)
     {
         if (container?.Kind != "function"
             || localNamesByFunction == null
-            || !localNamesByFunction.TryGetValue(GetCSharpContainerLocalScopeKey(container), out var localNames)
+            || !localNamesByFunction.Names.TryGetValue(GetCSharpContainerLocalScopeKey(container), out var localNames)
             || localNames.Count == 0)
         {
             return;
@@ -143,11 +193,13 @@ public static partial class ReferenceExtractor
     private static void TrackCSharpLocalDeclarations(
         string preparedLine,
         SymbolRecord? container,
-        Dictionary<CSharpLocalScopeKey, HashSet<string>>? localNamesByFunction)
+        CSharpLocalCaptureState? localNamesByFunction)
     {
         if (container?.Kind != "function" || localNamesByFunction == null)
             return;
         if (preparedLine.Contains("=>", StringComparison.Ordinal))
+            return;
+        if (!localNamesByFunction.MayContainCapture(container))
             return;
 
         foreach (Match match in BoundedRegex.EnumerateMatches(CSharpLocalDeclarationRegex, preparedLine))
@@ -157,10 +209,10 @@ public static partial class ReferenceExtractor
                 continue;
 
             var scopeKey = GetCSharpContainerLocalScopeKey(container);
-            if (!localNamesByFunction.TryGetValue(scopeKey, out var localNames))
+            if (!localNamesByFunction.Names.TryGetValue(scopeKey, out var localNames))
             {
                 localNames = new HashSet<string>(StringComparer.Ordinal);
-                localNamesByFunction[scopeKey] = localNames;
+                localNamesByFunction.Names[scopeKey] = localNames;
             }
 
             localNames.Add(name);

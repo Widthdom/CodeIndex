@@ -361,6 +361,43 @@ public sealed class ReferenceExtractorPerformanceBudgetTests
             $"{language} pattern receiver extraction allocated {allocatedBytes:N0} bytes; expected < {allocationBudget:N0}.");
     }
 
+    [Fact]
+    public void CSharpEnumCandidateScan_SkipsUnqualifiedStorageAndEmptyCatalogs()
+    {
+        var targets = new Dictionary<string, List<(string, string?, bool)>>(StringComparer.Ordinal)
+        {
+            ["Ready"] = [("Status", "Demo.Status", true)],
+        };
+        var empty = new Dictionary<string, List<(string, string?, bool)>>(StringComparer.Ordinal);
+        var typeNames = new Dictionary<string, ReferenceExtractor.CSharpContainingTypeValueReceiverNames>();
+        var functionNames = new Dictionary<int, List<ReferenceExtractor.CSharpFunctionValueReceiverNameRecord>>();
+        Func<IReadOnlyDictionary<string, ReferenceExtractor.CSharpContainingTypeValueReceiverNames>> getTypes = () => typeNames;
+        Func<IReadOnlyDictionary<int, List<ReferenceExtractor.CSharpFunctionValueReceiverNameRecord>>> getFunctions = () => functionNames;
+        Func<int, SymbolRecord?> getContainer = _ => null;
+        var references = new List<ReferenceRecord>();
+        var seen = new ReferenceDedupeSet();
+        var line = string.Join(' ', Enumerable.Repeat("ordinary", 64)) + " other.Member";
+        foreach (var lookup in new[] { targets, empty })
+        {
+            for (var warmup = 0; warmup < 16; warmup++)
+                Scan(lookup);
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            for (var index = 0; index < 128; index++)
+                Scan(lookup);
+            var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+            Assert.Empty(references);
+            if (lookup.Count == 0)
+                Assert.Equal(0, allocated);
+            else
+                Assert.True(allocated < 65_536,
+                    $"Unqualified enum candidates allocated {allocated:N0} bytes; expected storage only for qualified chains.");
+        }
+
+        void Scan(IReadOnlyDictionary<string, List<(string, string?, bool)>> lookup) =>
+            ReferenceExtractor.EmitCSharpQualifiedEnumMemberReferences(
+                line, lookup, null, [], getTypes, getFunctions, references, seen, 1, line, 1, getContainer);
+    }
+
     private sealed class EnumerationCountingReadOnlySet<T> : IReadOnlySet<T>
         where T : notnull
     {

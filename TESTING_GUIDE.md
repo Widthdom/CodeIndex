@@ -1,5 +1,16 @@
 # Testing Guide
 
+`ReferenceExtractorReceiverScopeTests` bounds local-tracking allocations in arrow-free
+bodies despite sibling lambdas, retains eligible locals, and checks malformed/global
+qualified names. `CSharpEnumCandidateScan_SkipsUnqualifiedStorageAndEmptyCatalogs` in
+`ReferenceExtractorPerformanceBudgetTests` bounds unqualified-word allocations and
+requires zero allocation for an empty catalog. Keep the C#/Razor/Blazor/CSHTML capture
+fixture's masked-arrow and overload controls on net8/net9. These C# capture and enum
+paths have no equivalent Java path to gate.
+arrowのない本体と隣接lambdaの分離・対象本体のlocal・不正／global修飾名を検証します。
+非修飾語の割り当て上限と空catalogの割り当てゼロを維持し、C#系4言語のマスクされた
+arrow・overloadも両runtimeで確認します。Javaには同等のC#処理経路がありません。
+
 Fresh-reference flag coverage in `ReferencePersistenceBindingTests`,
 `FreshReferenceResolutionTests` and `AuthoritativeFreshRawBulkInsertTests` checks
 12 fresh/14 ordinary bindings, parameter types, normalized Unicode contexts,

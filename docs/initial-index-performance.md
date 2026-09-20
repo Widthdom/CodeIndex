@@ -1,5 +1,13 @@
 # Initial full-index performance
 
+C# reference extraction tracks local declarations only for callable bodies whose
+prepared lines may contain `=>`. Arrow positions are collected lazily once per file;
+eligibility is cached per callable, and missing body bounds remain conservative.
+Empty enum catalogs skip qualified-member scanning, and ordinary unqualified words
+do not allocate segment lists during that scan. C#, Razor, Blazor and CSHTML share
+these paths. Capture order, overload isolation, masked strings/comments, qualified
+enum reads and name normalization retain their existing behavior.
+
 Fresh reference writes encode the pending self-reference and mutual-recursion flags
 as SQL zero literals. Both the native and provider writers bind 12 values per row
 instead of 14; the native writer can fit 42 rows within its existing 512-parameter
@@ -219,6 +227,13 @@ integrity checks. FTS posting payloads were not compared. These are two observat
 per version on a C#-heavy snapshot, not a general speed guarantee.
 
 ## 日本語
+
+C#の参照抽出は、前処理済みの本体に `=>` を含む可能性がある関数だけでローカル宣言を
+追跡します。矢印の位置はファイルごとに必要になってから1回収集し、関数ごとの判定を
+再利用します。本体の範囲が不明な場合は保守的に追跡を続けます。列挙型の候補が空なら
+修飾メンバーの走査を省き、走査中の非修飾の単語にはsegment listを確保しません。
+C#・Razor・Blazor・CSHTMLで共通です。captureの順序・overloadの分離・文字列／commentの
+マスク・修飾された列挙型の読取り・名前の正規化は既存の動作を維持します。
 
 初回の参照書込みでは、グラフ確定前の自己参照・相互再帰flagをSQLの定数0として扱い、
 native／providerの両writerで1行あたりのbindを14個から12個へ減らします。native writerは

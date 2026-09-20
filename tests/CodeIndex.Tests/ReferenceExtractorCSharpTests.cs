@@ -8006,6 +8006,22 @@ public partial class ReferenceExtractorTests
                     System.Func<int> next = () => café + @captured;
                 }
             }
+
+            class ArrowDecoys
+            {
+                void Run()
+                {
+                    var seed = 1;
+                    var ordinary = "=>";
+                    var verbatim = @"=>";
+                    // () => seed
+                }
+
+                void Run(int value)
+                {
+                    System.Func<int> next = () => seed;
+                }
+            }
             """;
 
         var symbols = SymbolExtractor.Extract(1, language, content);
