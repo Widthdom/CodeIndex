@@ -410,9 +410,25 @@ public sealed class SymbolExtractorCSharpRegexProbeTests
     [InlineData("cshtml")]
     public void Extract_CSharpMethodConfirmation_RequiresOpeningParenthesis(string language)
     {
-        const string content = """
+        var continuations = string.Join('\n', Enumerable.Range(0, 16).Select(index => $$"""
+                public int Continued{{index}}(
+                    IReadOnlyDictionary<string, List<int>> values,
+                    LongDeclarationParameterType left,
+                    LongDeclarationParameterType right)
+                {
+                    if (values.ContainsKey("value"))
+                        return Calculate(() => 1);
+                    return 0;
+                }
+            """));
+        var content = $$"""
             class Example
             {
+            {{continuations}}
+                public Example()
+                    : this(0) { }
+                public Example(int value) { }
+
                 public int Sum(
                     LongDeclarationParameterType left,
                     LongDeclarationParameterType right)
@@ -426,7 +442,10 @@ public sealed class SymbolExtractorCSharpRegexProbeTests
                 public int Á => 3;
                 public static (int Left, int Right) Compute(int left, int right) => (left, right);
                 public T Identity<T>(T value) => value;
+                public List<(int Left, int Right)> Tuples<T>([Parameter("value)")] T value) => null;
+                public delegate*<int, int> Pointer() => null;
                 int IFoo.Calculate() => 1;
+                List<(int Left, int Right)> IFoo<List<int>>.Transform<T>(T value) => null;
                 int IFoo.Property => 2;
                 private Func<int> factory = () => 1;
             }
@@ -442,6 +461,10 @@ public sealed class SymbolExtractorCSharpRegexProbeTests
         Assert.Contains(optimized, symbol => symbol.Kind == "function" && symbol.Name == "Compute");
         Assert.Contains(optimized, symbol => symbol.Kind == "function" && symbol.Name == "Identity");
         Assert.Contains(optimized, symbol => symbol.Kind == "property" && symbol.Name == "Résultat");
+        Assert.Equal(16, optimized.Count(symbol => symbol.Name.StartsWith("Continued", StringComparison.Ordinal)));
+        foreach (var name in new[] { "Tuples", "Pointer", "Transform" })
+            Assert.Contains(optimized, symbol => symbol.Kind == "function" && symbol.Name == name);
+        Assert.Equal(2, optimized.Count(symbol => symbol.Kind == "function" && symbol.Name == "Example"));
         Assert.Equal(0, baselineMetrics.MethodConfirmationLiteralSkipCount);
         Assert.True(optimizedMetrics.MethodConfirmationLiteralSkipCount > 0);
         Assert.True(optimizedMetrics.MethodConfirmationRegexAttemptCount > 0);
@@ -449,6 +472,8 @@ public sealed class SymbolExtractorCSharpRegexProbeTests
         Assert.Equal(0, baselineMetrics.ConfirmationSuffixSkipCount);
         Assert.True(optimizedMetrics.ConfirmationSuffixSkipCount > 0);
         Assert.True(optimizedMetrics.ConfirmationRegexAttemptCount < baselineMetrics.ConfirmationRegexAttemptCount);
+        Assert.Equal(0, baselineMetrics.ConfirmationPrefixSkipCount);
+        Assert.True(optimizedMetrics.ConfirmationPrefixSkipCount >= 16);
     }
 
     [Theory]

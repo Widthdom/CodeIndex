@@ -372,6 +372,7 @@ public static partial class SymbolExtractor
         public int PhysicalInputNegativePrefixCacheHitCount { get; set; }
         public int LineStartStateReuseCount { get; set; }
         public int SameLineDeclarationGateSkipCount { get; set; }
+        public int ConfirmationPrefixSkipCount { get; set; }
     }
 
     internal readonly record struct CSharpRegexProbeMetrics(
@@ -395,7 +396,8 @@ public static partial class SymbolExtractor
         int DeclarationPatternRegexAttemptCount,
         int PhysicalInputNegativePrefixCacheHitCount,
         int LineStartStateReuseCount,
-        int SameLineDeclarationGateSkipCount);
+        int SameLineDeclarationGateSkipCount,
+        int ConfirmationPrefixSkipCount);
 
     internal static List<SymbolRecord> ExtractForRequiredLiteralGateTesting(
         long fileId,
@@ -502,7 +504,8 @@ public static partial class SymbolExtractor
             counts.DeclarationPatternRegexAttemptCount,
             counts.PhysicalInputNegativePrefixCacheHitCount,
             counts.LineStartStateReuseCount,
-            counts.SameLineDeclarationGateSkipCount);
+            counts.SameLineDeclarationGateSkipCount,
+            counts.ConfirmationPrefixSkipCount);
         return symbols;
     }
 

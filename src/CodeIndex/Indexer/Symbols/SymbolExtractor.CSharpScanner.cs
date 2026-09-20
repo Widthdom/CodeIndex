@@ -1980,11 +1980,45 @@ public static partial class SymbolExtractor
                     counts.ConfirmationSuffixSkipCount++;
                 return false;
             }
+
+            if (HasImpossibleCSharpDeclarationPrefix(suffix))
+            {
+                if (counts != null)
+                    counts.ConfirmationPrefixSkipCount++;
+                return false;
+            }
         }
 
         if (counts != null)
             counts.ConfirmationRegexAttemptCount++;
         return (method ? CSharpConfirmedMethodPrefixRegex : CSharpConfirmedMemberPrefixRegex).IsMatch(line);
+    }
+
+    private static bool HasImpossibleCSharpDeclarationPrefix(ReadOnlySpan<char> prefix)
+    {
+        // Parameter continuations can acquire an opening parenthesis from later body
+        // text. Before the first '(', neither anchored declaration regex can consume a
+        // closing parenthesis or statement punctuation outside a generic argument list.
+        // Generic method lists deliberately remain opaque: their regex permits arbitrary
+        // non-angle characters. A '(' likewise hands control back to the tuple/parameter
+        // regex instead of duplicating its permissive grammar here.
+        // 引数の継続断片は後続bodyから '(' を取り込み得る。最初の '(' より前では、
+        // generic外の ')' やstatement記号はどちらの宣言regexにも一致しない。
+        // generic内と '(' 以降は既存regexの寛容な文法へ委ねる。
+        var angleDepth = 0;
+        foreach (var character in prefix)
+        {
+            if (character == '(')
+                return false;
+            if (character == '<')
+                angleDepth++;
+            else if (character == '>' && angleDepth > 0)
+                angleDepth--;
+            else if (angleDepth == 0 && character is ')' or '{' or '}' or ';' or '=')
+                return true;
+        }
+
+        return false;
     }
 
     // Prefer the raw line's `{` column (to preserve original positioning for body slicing),

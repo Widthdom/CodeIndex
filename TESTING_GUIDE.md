@@ -1,5 +1,14 @@
 # Testing Guide
 
+The shared confirmation fixture in `SymbolExtractorCSharpRegexProbeTests` includes
+multiline parameter continuations followed by body calls: a later `(` must not
+force an impossible declaration prefix through the regex. Compare all symbol fields
+with optimizations disabled and require prefix skips across C#/Razor/Blazor/CSHTML,
+retaining constructor, tuple, generic, explicit-interface, function-pointer and
+parameter-attribute controls. Run the full symbol extractor suites on net8/net9.
+C#系4言語で複数行引数の継続断片を省略できることと全項目の一致を検証し、
+constructor・tuple・generic・interface・関数pointer・引数属性の対照を維持します。
+
 `ReferenceExtractorReceiverScopeTests` checks that impossible enum qualifiers, calls
 and assignment targets never construct receiver lookups, while genuine candidates,
 aliases, global qualification and value shadows keep their reference behavior.

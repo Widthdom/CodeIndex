@@ -1,5 +1,15 @@
 # Initial full-index performance
 
+C# declaration confirmation also rejects impossible prefixes before regex evaluation.
+Before the first `(`, an unmatched `)` or statement punctuation outside generic
+arguments cannot match either anchored declaration pattern. Generic argument text
+stays opaque, and encountering `(` returns control to the existing tuple/parameter
+regex grammar. This avoids expensive confirmation of multiline parameter fragments
+that acquire an opening parenthesis from later method-body text. C#, Razor, Blazor
+and CSHTML share the gate in both pre-extraction and normal symbol extraction.
+No extractor contract or output changes; differential tests retain full symbol
+records, constructors, tuple/generic returns, explicit interfaces and function pointers.
+
 C# enum-member extraction rejects impossible qualifiers, calls and simple assignment
 targets before constructing receiver-shadow scopes. Ordinary and recursive declaration
 patterns reuse each callable's body text and the offsets already available to their
@@ -183,6 +193,14 @@ normalizing generated IDs and indexing timestamps. These are two observations
 per version on a C#-heavy snapshot; see the unique-name scope-probe tradeoff above.
 
 ## 日本語
+
+C#の宣言確認では、不可能なprefixも正規表現の評価前に除外します。最初の `(` より
+前では、generic引数の外側の余分な `)` やstatement記号は、どちらの先頭固定の宣言
+パターンにも一致しません。generic引数の内部は検査せず、`(` に達したら既存の
+tuple／引数のregex文法へ委ねます。複数行引数の続きが後続メソッド本体から `(` を
+取り込んでしまう場合の高価な宣言確認を避けます。C#・Razor・Blazor・CSHTMLの
+事前抽出と通常抽出で共通です。抽出契約・出力は変えず、全シンボル項目とconstructor・
+tuple／generic戻り値・明示的interface・関数pointerを最適化無効時と比較します。
 
 C#のenum member抽出は、成立しない修飾子・呼出し・単純代入先をreceiverの隠蔽scope
 作成前に除外します。通常／recursive declaration patternはcallableごとの本文と
