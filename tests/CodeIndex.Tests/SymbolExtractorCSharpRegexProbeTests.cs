@@ -429,6 +429,16 @@ public sealed class SymbolExtractorCSharpRegexProbeTests
                     : this(0) { }
                 public Example(int value) { }
 
+                public void Empty()
+                {
+                }
+                public int Single(int value)
+                {
+                    return value;
+                }
+                public (
+                    int Left, int Right) WrappedTuple() => (1, 2);
+
                 public int Sum(
                     LongDeclarationParameterType left,
                     LongDeclarationParameterType right)
@@ -462,7 +472,7 @@ public sealed class SymbolExtractorCSharpRegexProbeTests
         Assert.Contains(optimized, symbol => symbol.Kind == "function" && symbol.Name == "Identity");
         Assert.Contains(optimized, symbol => symbol.Kind == "property" && symbol.Name == "Résultat");
         Assert.Equal(16, optimized.Count(symbol => symbol.Name.StartsWith("Continued", StringComparison.Ordinal)));
-        foreach (var name in new[] { "Tuples", "Pointer", "Transform" })
+        foreach (var name in new[] { "Tuples", "Pointer", "Transform", "Empty", "Single", "WrappedTuple" })
             Assert.Contains(optimized, symbol => symbol.Kind == "function" && symbol.Name == name);
         Assert.Equal(2, optimized.Count(symbol => symbol.Kind == "function" && symbol.Name == "Example"));
         Assert.Equal(0, baselineMetrics.MethodConfirmationLiteralSkipCount);
@@ -474,6 +484,27 @@ public sealed class SymbolExtractorCSharpRegexProbeTests
         Assert.True(optimizedMetrics.ConfirmationRegexAttemptCount < baselineMetrics.ConfirmationRegexAttemptCount);
         Assert.Equal(0, baselineMetrics.ConfirmationPrefixSkipCount);
         Assert.True(optimizedMetrics.ConfirmationPrefixSkipCount >= 16);
+        Assert.Equal(0, baselineMetrics.HeaderPrefixShapeSkipCount);
+        Assert.True(optimizedMetrics.HeaderPrefixShapeSkipCount > 0);
+        Assert.Equal(0, baselineMetrics.PropertyHeaderTupleSkipCount);
+        Assert.True(optimizedMetrics.PropertyHeaderTupleSkipCount >= 16);
+        Assert.Equal(0, baselineMetrics.MethodHeaderSuffixSkipCount);
+        Assert.True(optimizedMetrics.MethodHeaderSuffixSkipCount > 0);
+        Assert.True(optimizedMetrics.PropertyHeaderRegexAttemptCount < baselineMetrics.PropertyHeaderRegexAttemptCount);
+        Assert.True(optimizedMetrics.MethodHeaderRegexAttemptCount < baselineMetrics.MethodHeaderRegexAttemptCount);
+
+        // Generic prefix regexes intentionally accept characters that are not valid
+        // C# type syntax. Keep their existing recovery behavior, including '(' without
+        // a comma, and compare every extracted field rather than enforcing C# grammar.
+        foreach (var prefix in new[] { "int Generic<T)", "int Generic<T(", "int Generic<T;", "int Generic<T>", "List<(int X, int Y)> Generic<T)" })
+        {
+            var malformed = "class Recovery\n{\n    " + prefix + "\n    (int value) { }\n    public int Kept { get; }\n}";
+            var malformedBaseline = SymbolExtractor.ExtractForCSharpRegexProbeTesting(
+                1, malformed, false, out _, language: language);
+            var malformedOptimized = SymbolExtractor.ExtractForCSharpRegexProbeTesting(
+                1, malformed, true, out _, language: language);
+            AssertSymbolsEqual(malformedBaseline, malformedOptimized);
+        }
     }
 
     [Theory]

@@ -1,5 +1,13 @@
 # Initial full-index performance
 
+C# multiline-header probes reject impossible prefixes before regex evaluation.
+The property-header grammar requires a comma whenever it consumes `(`; the
+incomplete method-header branch cannot end in `)` without a generic prefix.
+The wrapped tuple-return probe requires a terminal `(`. Generic content keeps
+the existing permissive regex grammar, and declaration lookahead and normalization
+remain unchanged. C#, Razor, Blazor and CSHTML share these gates; Java's separate
+header/annotation grammar has no equivalent probe to gate.
+
 C# reference extraction tracks local declarations only for callable bodies whose
 prepared lines may contain `=>`. Arrow positions are collected lazily once per file;
 eligibility is cached per callable, and missing body bounds remain conservative.
@@ -226,7 +234,29 @@ and stable contract/readiness metadata also match; all four databases pass SQLit
 integrity checks. FTS posting payloads were not compared. These are two observations
 per version on a C#-heavy snapshot, not a general speed guarantee.
 
+For zero-flag writes, capture/enum probe pruning and multiline-header gates, the
+same `a33c5a8eb` source snapshot was compared against executable `501a4d6ba`.
+Two fresh Release .NET 8 runs per version on macOS ARM64, alternating before/after
+with `--parallelism 2 --memory-trace`, took 37.730/37.079 seconds before and
+34.702/34.316 seconds after: mean 37.40→34.51 seconds, about 7.7% less elapsed time.
+Total managed allocations fell from 7.50–7.51 GB to 7.46–7.47 GB, about 0.6%.
+Each run used a new database with heavy tests and builds stopped. All 1,577 files,
+59,387 symbols and 562,615 references completed without warnings, errors or cap hits.
+Both pairs have identical logical file, chunk, symbol, reference-line, issue,
+reference, candidate and hotspot records after generated-ID and indexing-time
+normalization, including each reference's complete candidate set. Schema, user_version
+and stable contract/readiness metadata match; all four databases pass SQLite
+integrity checks. FTS posting payloads were not compared. These are two observations
+per version on a C#-heavy snapshot, not a general speed guarantee.
+
 ## 日本語
+
+C#の複数行header判定は、不可能なprefixを正規表現の評価前に除外します。propertyの
+header文法が `(` を消費するにはcommaが必須で、未完method headerはgeneric prefixが
+なければ `)` で終われません。折り返されたtuple戻り値の判定には末尾の `(` が必須です。
+genericの内部は既存regexの寛容な文法を維持し、宣言の先読みと正規化も変更しません。
+C#・Razor・Blazor・CSHTMLで共通です。Javaのheader／annotationは別の文法であり、
+同等の判定経路はありません。
 
 C#の参照抽出は、前処理済みの本体に `=>` を含む可能性がある関数だけでローカル宣言を
 追跡します。矢印の位置はファイルごとに必要になってから1回収集し、関数ごとの判定を
@@ -423,3 +453,16 @@ macOS ARM64・Release .NET 8・`--parallelism 2 --memory-trace` で変更前後�
 契約／readiness metadataも一致し、4つのDBすべてがSQLiteの整合性検査を通過しています。
 FTSのposting payloadは比較対象外です。C#中心の固定ソースで各版2回の観測値であり、
 一般的な速度を保証するものではありません。
+
+初回の0 flag書込み・capture／enum判定の削減・複数行header判定も、同じ `a33c5a8eb`
+の固定ソースを使い、実行ファイル `501a4d6ba` と比較しました。macOS ARM64・Release
+.NET 8・`--parallelism 2 --memory-trace` で変更前後を交互に各2回測定し、変更前
+37.730／37.079秒、変更後34.702／34.316秒、平均37.40→34.51秒で約7.7%短縮しました。
+managedの総割り当て量は7.50～7.51 GBから7.46～7.47 GBへ約0.6%減りました。
+毎回新しいDBを使い、重いテストやビルドを止めて計測しています。全1,577ファイル・
+59,387シンボル・562,615参照が警告・エラー・抽出上限到達なしで完了しました。
+両方の変更前後ペアで、生成ID・インデックス時刻を正規化したファイル・チャンク・
+シンボル・参照行・issue・参照・解決候補・hotspot集計と、参照ごとの候補集合が一致します。
+schema・user_version・実行時刻等に依存しない契約／readiness metadataも一致し、
+4つのDBすべてがSQLiteの整合性検査を通過しています。FTSのposting payloadは比較対象外です。
+C#中心の固定ソースで各版2回の観測値であり、一般的な速度を保証するものではありません。

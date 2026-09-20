@@ -1614,23 +1614,63 @@ public static partial class SymbolExtractor
             return new CSharpPropertyMatchCandidate(matchLine, startLineIndex, startLineIndex);
         }
 
-        if (csharpRegexProbeCounts != null)
-            csharpRegexProbeCounts.PropertyHeaderRegexAttemptCount++;
-        var isPropertyHeaderPrefix = CSharpPropertyHeaderPrefixRegex.IsMatch(matchLine);
+        var headerSuffix = trimmedMatchLine;
+        if (!headerSuffix.IsEmpty && headerSuffix[^1] == '{')
+            headerSuffix = headerSuffix[..^1].TrimEnd();
+        if (applyCSharpRegexProbeOptimizations && HasImpossibleCSharpDeclarationPrefix(headerSuffix))
+        {
+            if (csharpRegexProbeCounts != null)
+                csharpRegexProbeCounts.HeaderPrefixShapeSkipCount++;
+            return new CSharpPropertyMatchCandidate(matchLine, startLineIndex, startLineIndex);
+        }
+
+        // In the property-header regex, '(' occurs only in a tuple type and that
+        // grammar requires a comma. Ordinary zero/one-argument method headers do
+        // not need its expensive unsuccessful type scan.
+        // property header regex の '(' は comma 必須の tuple 型だけに現れる。
+        var isPropertyHeaderPrefix = false;
+        if (!applyCSharpRegexProbeOptimizations || !matchLineSpan.Contains('(') || matchLineSpan.Contains(','))
+        {
+            if (csharpRegexProbeCounts != null)
+                csharpRegexProbeCounts.PropertyHeaderRegexAttemptCount++;
+            isPropertyHeaderPrefix = CSharpPropertyHeaderPrefixRegex.IsMatch(matchLine);
+        }
+        else if (csharpRegexProbeCounts != null)
+        {
+            csharpRegexProbeCounts.PropertyHeaderTupleSkipCount++;
+        }
         var isMethodHeaderPrefix = false;
         // Both method-prefix regexes require '(' or '<', including incomplete generic headers.
         // 不完全な generic header を含め、method prefix には '(' または '<' が必須。
         if (!isPropertyHeaderPrefix
             && (!applyCSharpRegexProbeOptimizations || matchLineSpan.IndexOfAny('(', '<') >= 0))
         {
-            if (csharpRegexProbeCounts != null)
-                csharpRegexProbeCounts.MethodHeaderRegexAttemptCount++;
-            isMethodHeaderPrefix = CSharpMethodHeaderPrefixRegex.IsMatch(matchLine);
-            if (!isMethodHeaderPrefix)
+            // Without a generic prefix, the incomplete method-header branch ends
+            // inside its parameter list and cannot consume a closing ')'. Generic
+            // prefixes remain eligible because their permissive grammar can do so.
+            // generic prefix が無い incomplete method header は ')' を消費できない。
+            if (!applyCSharpRegexProbeOptimizations || matchLineSpan.Contains('<') || headerSuffix.IsEmpty || headerSuffix[^1] != ')')
             {
                 if (csharpRegexProbeCounts != null)
                     csharpRegexProbeCounts.MethodHeaderRegexAttemptCount++;
-                isMethodHeaderPrefix = CSharpMultilineTupleReturnPrefixRegex.IsMatch(matchLine);
+                isMethodHeaderPrefix = CSharpMethodHeaderPrefixRegex.IsMatch(matchLine);
+            }
+            else if (csharpRegexProbeCounts != null)
+            {
+                csharpRegexProbeCounts.MethodHeaderSuffixSkipCount++;
+            }
+            if (!isMethodHeaderPrefix)
+            {
+                if (!applyCSharpRegexProbeOptimizations || !trimmedMatchLine.IsEmpty && trimmedMatchLine[^1] == '(')
+                {
+                    if (csharpRegexProbeCounts != null)
+                        csharpRegexProbeCounts.MethodHeaderRegexAttemptCount++;
+                    isMethodHeaderPrefix = CSharpMultilineTupleReturnPrefixRegex.IsMatch(matchLine);
+                }
+                else if (csharpRegexProbeCounts != null)
+                {
+                    csharpRegexProbeCounts.MethodHeaderSuffixSkipCount++;
+                }
             }
         }
         if (!isPropertyHeaderPrefix

@@ -1,5 +1,15 @@
 # Testing Guide
 
+The shared fixture in `SymbolExtractorCSharpRegexProbeTests` also checks multiline
+header gates over zero/one-argument methods, wrapped tuple returns and malformed
+generic prefixes. Compare every symbol field with the gates disabled/enabled and
+require fewer property/method header regex attempts across C#/Razor/Blazor/CSHTML.
+Keep permissive generic recovery controls and the full symbol suites on net8/net9;
+do not use elapsed-time thresholds for these grammar-based skips.
+C#系4言語で引数0／1個・折返しtuple戻り値・不正なgeneric prefixの全symbol項目を
+比較し、header regexの実行回数削減を検証します。generic復旧と全symbol回帰を
+両runtimeで維持し、時間の閾値には依存しません。
+
 `ReferenceExtractorReceiverScopeTests` bounds local-tracking allocations in arrow-free
 bodies despite sibling lambdas, retains eligible locals, and checks malformed/global
 qualified names. `CSharpEnumCandidateScan_SkipsUnqualifiedStorageAndEmptyCatalogs` in
