@@ -372,7 +372,7 @@ public sealed class ReferenceExtractorPerformanceBudgetTests
         var typeNames = new Dictionary<string, ReferenceExtractor.CSharpContainingTypeValueReceiverNames>();
         var functionNames = new Dictionary<int, List<ReferenceExtractor.CSharpFunctionValueReceiverNameRecord>>();
         Func<IReadOnlyDictionary<string, ReferenceExtractor.CSharpContainingTypeValueReceiverNames>> getTypes = () => typeNames;
-        Func<IReadOnlyDictionary<int, List<ReferenceExtractor.CSharpFunctionValueReceiverNameRecord>>> getFunctions = () => functionNames;
+        Func<SymbolRecord?, IReadOnlyDictionary<int, List<ReferenceExtractor.CSharpFunctionValueReceiverNameRecord>>> getFunctions = _ => functionNames;
         Func<int, SymbolRecord?> getContainer = _ => null;
         var references = new List<ReferenceRecord>();
         var seen = new ReferenceDedupeSet();

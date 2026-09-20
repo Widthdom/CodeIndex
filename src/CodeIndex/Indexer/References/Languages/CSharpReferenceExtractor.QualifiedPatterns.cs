@@ -13,7 +13,7 @@ public static partial class ReferenceExtractor
         IReadOnlyList<(int start, int end)>? csharpAttrRangesOnLine,
         IReadOnlyList<CSharpUsingAliasRecord> usingAliases,
         Func<IReadOnlyDictionary<string, CSharpContainingTypeValueReceiverNames>> getValueReceiverNamesByContainingType,
-        Func<IReadOnlyDictionary<int, List<CSharpFunctionValueReceiverNameRecord>>> getValueReceiverNamesByFunctionStartLine,
+        Func<SymbolRecord?, IReadOnlyDictionary<int, List<CSharpFunctionValueReceiverNameRecord>>> getValueReceiverNamesByFunctionStartLine,
         List<ReferenceRecord> references,
         ReferenceDedupeSet seen,
         long fileId,
@@ -72,7 +72,7 @@ public static partial class ReferenceExtractor
                     member.Start,
                     callContainer,
                     getValueReceiverNamesByContainingType(),
-                    getValueReceiverNamesByFunctionStartLine()))
+                    getValueReceiverNamesByFunctionStartLine(callContainer)))
             {
                 continue;
             }

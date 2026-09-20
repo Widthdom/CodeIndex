@@ -1,5 +1,16 @@
 # Testing Guide
 
+`ReferenceExtractorReceiverScopeTests` counts structural-line reads to prove sparse
+receiver checks avoid unrelated callable bodies and cache empty scopes. Preserve
+last-nonempty winners for colliding start lines, scoped-to-full lookup completion,
+and zero body reads for null/type/test-method containers. The shared four-language
+fixture compares all reference fields, completed lookup records and local-function
+target qualifiers. Run it with receiver allocation budgets and the full reference
+suites on net8/net9. Java has no equivalent C# receiver-shadow lookup.
+receiverの限定解析が無関係な本体を読まず、空のscopeも再利用することを読取り回数で
+検証します。同じ開始行の最後の空でない結果、限定解析後の全体解析、C#系4言語の
+参照全項目・lookup・local functionのtarget qualifierを両runtimeで維持してください。
+
 The same C# multiline-header fixture also compares deferred lookahead copies and
 append-only semicolon scans across all four language keys. Require fewer combined
 strings, copied characters and semicolon input characters while comparing all symbol

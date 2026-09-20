@@ -1,5 +1,13 @@
 # Initial full-index performance
 
+C# receiver-shadow lookups build type-member names separately and analyze callable
+bodies only when a receiver check requests their start line. Empty results are cached,
+and same-line declarations retain their original last-nonempty winner. Local-function
+finalization still completes the full lookup, reusing already analyzed scopes. C#,
+Razor, Blazor and CSHTML share this extraction-local cache; reference records and
+shadowing behavior stay unchanged. Sparse-use tests measure structural-line reads
+and compare every reference field instead of setting a timing threshold.
+
 C# declaration lookahead defers cumulative string copies and generic whitespace
 normalization until `{`, `=` or `;` makes a declaration decision possible. Top-level
 semicolon tracking scans each appended part once, and initializer probes skip text
@@ -258,6 +266,13 @@ integrity checks. FTS posting payloads were not compared. These are two observat
 per version on a C#-heavy snapshot, not a general speed guarantee.
 
 ## 日本語
+
+C#のreceiver隠蔽lookupは型メンバー名を別に構築し、判定対象の開始行が必要に
+なった時だけ関数本体を解析します。空の結果も再利用し、同じ開始行の宣言は元の
+順序で最後の空でない結果を維持します。local functionの最終解決では全体のlookupを
+完成させ、解析済みscopeを再利用します。C#・Razor・Blazor・CSHTMLで共通の抽出内
+cacheで、参照レコードと隠蔽規則は変更しません。限定的な利用のテストは構造行の
+読取り回数と参照の全項目を比較し、経過時間の閾値には依存しません。
 
 C#の宣言先読みは、判定に必要な `{`・`=`・`;` が現れるまで累積文字列のコピーと
 generic空白の正規化を保留します。top-level semicolonは追加部分だけを走査し、

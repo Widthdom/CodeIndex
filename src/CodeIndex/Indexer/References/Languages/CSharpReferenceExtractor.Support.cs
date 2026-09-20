@@ -351,173 +351,230 @@ public static partial class ReferenceExtractor
         return normalized.ToString();
     }
 
-    private static (
-        IReadOnlyDictionary<string, CSharpContainingTypeValueReceiverNames> ByContainingType,
-        IReadOnlyDictionary<int, List<CSharpFunctionValueReceiverNameRecord>> ByFunctionStartLine) BuildCSharpValueReceiverNameLookups(
-        string language,
+    internal sealed class CSharpValueReceiverLookupCache(
         IReadOnlyList<SymbolRecord> symbols,
         IReadOnlyList<string> structuralLines,
         IReadOnlySet<string> csharpKnownTypeNames,
         IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases)
     {
-        if (language != "csharp")
-            return (EmptyCSharpValueReceiverNamesByContainingType, EmptyCSharpValueReceiverNamesByFunctionStartLine);
+        private IReadOnlyDictionary<string, CSharpContainingTypeValueReceiverNames>? containingTypeNames;
+        private Dictionary<int, List<SymbolRecord>>? callablesByStartLine;
+        private readonly Dictionary<int, List<CSharpFunctionValueReceiverNameRecord>> functionNames = [];
+        private readonly HashSet<int> resolvedStartLines = [];
+        private bool allFunctionsResolved;
 
-        Dictionary<string, CSharpContainingTypeValueReceiverNames>? byContainingType = null;
-        Dictionary<int, List<CSharpFunctionValueReceiverNameRecord>>? byFunctionStartLine = null;
-
-        foreach (var symbol in symbols)
+        internal IReadOnlyDictionary<string, CSharpContainingTypeValueReceiverNames> GetContainingTypeNames()
         {
-            AddCSharpContainingTypeValueReceiverName(ref byContainingType, symbol);
-
-            if (symbol.Kind is not ("function" or "property") || symbol.StartLine <= 0)
-                continue;
-
-            List<CSharpFunctionValueReceiverNameRecord>? names = null;
-            if (symbol.BodyStartLine != null && symbol.BodyEndLine != null)
+            if (containingTypeNames == null)
             {
-                names = [];
-                var seenNames = new HashSet<CSharpFunctionValueReceiverNameRecord>();
-                var start = Math.Max(symbol.BodyStartLine.Value - 1, 0);
-                var end = Math.Min(symbol.BodyEndLine.Value - 1, structuralLines.Count - 1);
-                var blockScopes = BuildCSharpBlockScopes(structuralLines, start, end);
-                var bodyText = LineRangeText.Join(structuralLines, start, end);
-                if (symbol.Kind == "function")
-                    AddCSharpParameterNames(names, symbol.Signature, symbol.BodyStartLine.Value, 0, symbol.BodyEndLine.Value, int.MaxValue, seenNames);
-                var bodyLineOffset = 0;
-                for (var i = start; i <= end; i++)
-                {
-                    foreach (Match match in BoundedRegex.EnumerateMatches(CSharpLocalValueNameRegex, structuralLines[i]))
-                        AddCSharpFunctionValueReceiverName(
-                            names,
-                            NormalizeCSharpIdentifier(match.Groups["name"].Value),
-                            i + 1,
-                            match.Index,
-                            FindInnermostCSharpBlockEndLine(blockScopes, end + 1, i, match.Index),
-                            int.MaxValue,
-                            seenNames);
-                    foreach (Match match in BoundedRegex.EnumerateMatches(CSharpForeachValueNameRegex, structuralLines[i]))
-                    {
-                        var scopeEnd = FindFollowingCSharpEmbeddedStatementEndPosition(structuralLines, end, i, match.Index);
-                        AddCSharpFunctionValueReceiverName(
-                            names,
-                            NormalizeCSharpIdentifier(match.Groups["name"].Value),
-                            i + 1,
-                            match.Index,
-                            scopeEnd.Line,
-                            scopeEnd.Column,
-                            seenNames);
-                    }
-                    foreach (Match match in BoundedRegex.EnumerateMatches(CSharpQueryRangeValueNameRegex, structuralLines[i]))
-                    {
-                        var scopeEnd = FindCSharpQueryExpressionEndPosition(
-                            structuralLines,
-                            end,
-                            i,
-                            match.Index,
-                            csharpKnownTypeNames,
-                            csharpUsingAliases,
-                            names);
-                        AddCSharpFunctionValueReceiverName(
-                            names,
-                            NormalizeCSharpIdentifier(match.Groups["name"].Value),
-                            i + 1,
-                            match.Index,
-                            scopeEnd.Line,
-                            scopeEnd.Column,
-                            seenNames);
-                    }
-                    foreach (Match match in BoundedRegex.EnumerateMatches(CSharpDeclarationPatternValueNameRegex, structuralLines[i]))
-                    {
-                        if (!TryFindCSharpDeclarationPatternScopeEndPosition(
-                                structuralLines, start, end, i, match.Index,
-                                bodyText, bodyLineOffset + match.Index, out var scopeEnd))
-                            continue;
-
-                        AddCSharpFunctionValueReceiverName(
-                            names,
-                            NormalizeCSharpIdentifier(match.Groups["name"].Value),
-                            i + 1,
-                            match.Index,
-                            scopeEnd.Line,
-                            scopeEnd.Column,
-                            seenNames);
-                    }
-                    foreach (Match match in BoundedRegex.EnumerateMatches(CSharpCaseDeclarationPatternValueNameRegex, structuralLines[i]))
-                    {
-                        if (!TryFindCSharpSwitchCaseScopeEndPosition(structuralLines, end, i, match.Index, out var scopeEnd))
-                            continue;
-
-                        AddCSharpFunctionValueReceiverName(
-                            names,
-                            NormalizeCSharpIdentifier(match.Groups["name"].Value),
-                            i + 1,
-                            match.Index,
-                            scopeEnd.Line,
-                            scopeEnd.Column,
-                            seenNames);
-                    }
-                    foreach (Match match in BoundedRegex.EnumerateMatches(CSharpOutValueNameRegex, structuralLines[i]))
-                        AddCSharpFunctionValueReceiverName(names, NormalizeCSharpIdentifier(match.Groups["name"].Value), i + 1, match.Index, symbol.BodyEndLine.Value, int.MaxValue, seenNames);
-                    foreach (Match match in BoundedRegex.EnumerateMatches(CSharpCatchValueNameRegex, structuralLines[i]))
-                    {
-                        var scopeEnd = FindFollowingCSharpEmbeddedStatementEndPosition(structuralLines, end, i, match.Index);
-                        AddCSharpFunctionValueReceiverName(
-                            names,
-                            NormalizeCSharpIdentifier(match.Groups["name"].Value),
-                            i + 1,
-                            match.Index,
-                            scopeEnd.Line,
-                            scopeEnd.Column,
-                            seenNames);
-                    }
-                    foreach (Match match in BoundedRegex.EnumerateMatches(CSharpUsingStatementValueNameRegex, structuralLines[i]))
-                    {
-                        var scopeEnd = FindFollowingCSharpEmbeddedStatementEndPosition(structuralLines, end, i, match.Index);
-                        AddCSharpFunctionValueReceiverName(
-                            names,
-                            NormalizeCSharpIdentifier(match.Groups["name"].Value),
-                            i + 1,
-                            match.Index,
-                            scopeEnd.Line,
-                            scopeEnd.Column,
-                            seenNames);
-                    }
-                    foreach (Match match in BoundedRegex.EnumerateMatches(CSharpFixedValueNameRegex, structuralLines[i]))
-                    {
-                        var scopeEnd = FindFollowingCSharpEmbeddedStatementEndPosition(structuralLines, end, i, match.Index);
-                        AddCSharpFunctionValueReceiverName(
-                            names,
-                            NormalizeCSharpIdentifier(match.Groups["name"].Value),
-                            i + 1,
-                            match.Index,
-                            scopeEnd.Line,
-                            scopeEnd.Column,
-                            seenNames);
-                    }
-
-                    bodyLineOffset += structuralLines[i].Length + 1;
-                }
-
-                AddCSharpRecursivePatternValueReceiverNames(names, bodyText, structuralLines, start, end, seenNames);
-                AddCSharpLambdaParameterNames(
-                    names,
-                    bodyText,
-                    start + 1,
-                    symbol.BodyEndLine.Value,
-                    seenNames);
+                Dictionary<string, CSharpContainingTypeValueReceiverNames>? names = null;
+                foreach (var symbol in symbols)
+                    AddCSharpContainingTypeValueReceiverName(ref names, symbol);
+                containingTypeNames = names ?? EmptyCSharpValueReceiverNamesByContainingType;
             }
 
-            if (names is { Count: > 0 })
-            {
-                byFunctionStartLine ??= new Dictionary<int, List<CSharpFunctionValueReceiverNameRecord>>();
-                byFunctionStartLine[symbol.StartLine] = names;
-            }
+            return containingTypeNames;
         }
 
-        return (
-            byContainingType ?? EmptyCSharpValueReceiverNamesByContainingType,
-            byFunctionStartLine ?? EmptyCSharpValueReceiverNamesByFunctionStartLine);
+        internal IReadOnlyDictionary<int, List<CSharpFunctionValueReceiverNameRecord>> GetFunctionNames(SymbolRecord? container)
+        {
+            if (container is { Kind: "function" or "property", StartLine: > 0 })
+                ResolveStartLine(container.StartLine);
+            return functionNames;
+        }
+
+        internal IReadOnlyDictionary<int, List<CSharpFunctionValueReceiverNameRecord>> GetAllFunctionNames()
+        {
+            if (!allFunctionsResolved)
+            {
+                foreach (var symbol in symbols)
+                {
+                    if (symbol.Kind is "function" or "property" && symbol.StartLine > 0)
+                        ResolveStartLine(symbol.StartLine);
+                }
+                allFunctionsResolved = true;
+            }
+
+            return functionNames;
+        }
+
+        private void ResolveStartLine(int startLine)
+        {
+            if (resolvedStartLines.Contains(startLine))
+                return;
+
+            if (callablesByStartLine == null)
+            {
+                callablesByStartLine = [];
+                foreach (var symbol in symbols)
+                {
+                    if (symbol.Kind is not ("function" or "property") || symbol.StartLine <= 0)
+                        continue;
+                    if (!callablesByStartLine.TryGetValue(symbol.StartLine, out var sameLine))
+                        callablesByStartLine.Add(symbol.StartLine, sameLine = []);
+                    sameLine.Add(symbol);
+                }
+            }
+
+            // Receiver conflicts inspect only the current callable's start line. Preserve
+            // the former whole-file loop's last nonempty result for same-line symbols.
+            // receiver の衝突判定は現在の callable の開始行だけを参照する。同一行の
+            // symbol は元の全体走査と同じ順序で処理し、最後の空でない結果を維持する。
+            if (callablesByStartLine.TryGetValue(startLine, out var candidates))
+            {
+                foreach (var symbol in candidates)
+                {
+                    var names = BuildCSharpFunctionValueReceiverNames(
+                        symbol, structuralLines, csharpKnownTypeNames, csharpUsingAliases);
+                    if (names is { Count: > 0 })
+                        functionNames[startLine] = names;
+                }
+            }
+            resolvedStartLines.Add(startLine);
+        }
+    }
+
+    private static List<CSharpFunctionValueReceiverNameRecord>? BuildCSharpFunctionValueReceiverNames(
+        SymbolRecord symbol,
+        IReadOnlyList<string> structuralLines,
+        IReadOnlySet<string> csharpKnownTypeNames,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases)
+    {
+        List<CSharpFunctionValueReceiverNameRecord>? names = null;
+        if (symbol.BodyStartLine != null && symbol.BodyEndLine != null)
+        {
+            names = [];
+            var seenNames = new HashSet<CSharpFunctionValueReceiverNameRecord>();
+            var start = Math.Max(symbol.BodyStartLine.Value - 1, 0);
+            var end = Math.Min(symbol.BodyEndLine.Value - 1, structuralLines.Count - 1);
+            var blockScopes = BuildCSharpBlockScopes(structuralLines, start, end);
+            var bodyText = LineRangeText.Join(structuralLines, start, end);
+            if (symbol.Kind == "function")
+                AddCSharpParameterNames(names, symbol.Signature, symbol.BodyStartLine.Value, 0, symbol.BodyEndLine.Value, int.MaxValue, seenNames);
+            var bodyLineOffset = 0;
+            for (var i = start; i <= end; i++)
+            {
+                foreach (Match match in BoundedRegex.EnumerateMatches(CSharpLocalValueNameRegex, structuralLines[i]))
+                    AddCSharpFunctionValueReceiverName(
+                        names,
+                        NormalizeCSharpIdentifier(match.Groups["name"].Value),
+                        i + 1,
+                        match.Index,
+                        FindInnermostCSharpBlockEndLine(blockScopes, end + 1, i, match.Index),
+                        int.MaxValue,
+                        seenNames);
+                foreach (Match match in BoundedRegex.EnumerateMatches(CSharpForeachValueNameRegex, structuralLines[i]))
+                {
+                    var scopeEnd = FindFollowingCSharpEmbeddedStatementEndPosition(structuralLines, end, i, match.Index);
+                    AddCSharpFunctionValueReceiverName(
+                        names,
+                        NormalizeCSharpIdentifier(match.Groups["name"].Value),
+                        i + 1,
+                        match.Index,
+                        scopeEnd.Line,
+                        scopeEnd.Column,
+                        seenNames);
+                }
+                foreach (Match match in BoundedRegex.EnumerateMatches(CSharpQueryRangeValueNameRegex, structuralLines[i]))
+                {
+                    var scopeEnd = FindCSharpQueryExpressionEndPosition(
+                        structuralLines,
+                        end,
+                        i,
+                        match.Index,
+                        csharpKnownTypeNames,
+                        csharpUsingAliases,
+                        names);
+                    AddCSharpFunctionValueReceiverName(
+                        names,
+                        NormalizeCSharpIdentifier(match.Groups["name"].Value),
+                        i + 1,
+                        match.Index,
+                        scopeEnd.Line,
+                        scopeEnd.Column,
+                        seenNames);
+                }
+                foreach (Match match in BoundedRegex.EnumerateMatches(CSharpDeclarationPatternValueNameRegex, structuralLines[i]))
+                {
+                    if (!TryFindCSharpDeclarationPatternScopeEndPosition(
+                            structuralLines, start, end, i, match.Index,
+                            bodyText, bodyLineOffset + match.Index, out var scopeEnd))
+                        continue;
+
+                    AddCSharpFunctionValueReceiverName(
+                        names,
+                        NormalizeCSharpIdentifier(match.Groups["name"].Value),
+                        i + 1,
+                        match.Index,
+                        scopeEnd.Line,
+                        scopeEnd.Column,
+                        seenNames);
+                }
+                foreach (Match match in BoundedRegex.EnumerateMatches(CSharpCaseDeclarationPatternValueNameRegex, structuralLines[i]))
+                {
+                    if (!TryFindCSharpSwitchCaseScopeEndPosition(structuralLines, end, i, match.Index, out var scopeEnd))
+                        continue;
+
+                    AddCSharpFunctionValueReceiverName(
+                        names,
+                        NormalizeCSharpIdentifier(match.Groups["name"].Value),
+                        i + 1,
+                        match.Index,
+                        scopeEnd.Line,
+                        scopeEnd.Column,
+                        seenNames);
+                }
+                foreach (Match match in BoundedRegex.EnumerateMatches(CSharpOutValueNameRegex, structuralLines[i]))
+                    AddCSharpFunctionValueReceiverName(names, NormalizeCSharpIdentifier(match.Groups["name"].Value), i + 1, match.Index, symbol.BodyEndLine.Value, int.MaxValue, seenNames);
+                foreach (Match match in BoundedRegex.EnumerateMatches(CSharpCatchValueNameRegex, structuralLines[i]))
+                {
+                    var scopeEnd = FindFollowingCSharpEmbeddedStatementEndPosition(structuralLines, end, i, match.Index);
+                    AddCSharpFunctionValueReceiverName(
+                        names,
+                        NormalizeCSharpIdentifier(match.Groups["name"].Value),
+                        i + 1,
+                        match.Index,
+                        scopeEnd.Line,
+                        scopeEnd.Column,
+                        seenNames);
+                }
+                foreach (Match match in BoundedRegex.EnumerateMatches(CSharpUsingStatementValueNameRegex, structuralLines[i]))
+                {
+                    var scopeEnd = FindFollowingCSharpEmbeddedStatementEndPosition(structuralLines, end, i, match.Index);
+                    AddCSharpFunctionValueReceiverName(
+                        names,
+                        NormalizeCSharpIdentifier(match.Groups["name"].Value),
+                        i + 1,
+                        match.Index,
+                        scopeEnd.Line,
+                        scopeEnd.Column,
+                        seenNames);
+                }
+                foreach (Match match in BoundedRegex.EnumerateMatches(CSharpFixedValueNameRegex, structuralLines[i]))
+                {
+                    var scopeEnd = FindFollowingCSharpEmbeddedStatementEndPosition(structuralLines, end, i, match.Index);
+                    AddCSharpFunctionValueReceiverName(
+                        names,
+                        NormalizeCSharpIdentifier(match.Groups["name"].Value),
+                        i + 1,
+                        match.Index,
+                        scopeEnd.Line,
+                        scopeEnd.Column,
+                        seenNames);
+                }
+
+                bodyLineOffset += structuralLines[i].Length + 1;
+            }
+
+            AddCSharpRecursivePatternValueReceiverNames(names, bodyText, structuralLines, start, end, seenNames);
+            AddCSharpLambdaParameterNames(
+                names,
+                bodyText,
+                start + 1,
+                symbol.BodyEndLine.Value,
+                seenNames);
+        }
+        return names;
     }
 
     private static void AddCSharpContainingTypeValueReceiverName(
