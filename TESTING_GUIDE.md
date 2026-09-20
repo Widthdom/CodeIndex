@@ -1,5 +1,14 @@
 # Testing Guide
 
+Fresh-source canonical-only coverage extends `AuthoritativeFreshRawBulkInsertTests`
+and `FreshReferenceResolutionTests`. Keep ten-language name/range parity, alternating
+canonical/display/legacy statement shapes, repeated-source batches, file rollback
+and cancellation on net8/net9. Bound bundled SQLite VM work for the canonical-only
+probe; do not assert elapsed time or remove the conservative alternate-name path.
+初回参照元の通常名だけの検索は、10言語の名前・範囲・形式切替・共有バッチ・rollback・
+取消を両runtimeで検証します。時間の閾値ではなく同梱SQLiteの命令数を制限し、
+別名／旧形式の保守的な経路も維持してください。
+
 `ReferenceOccurrenceSearchTests` compares short inputs against independent regex
 non-overlapping matches, retaining self-overlapping needles and earlier ties.
 Its dense 2,048-reference fixture bounds examined occurrences to one per recorded

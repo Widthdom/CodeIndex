@@ -1,5 +1,14 @@
 # Initial full-index performance
 
+Fresh reference-source lookup now checks the materialized file set once through
+partial indexes for display aliases and legacy NULL canonical keys. When neither exists, references use only
+the existing canonical-name range probe, without the three-way union and final
+comparison sort. Files with either form retain all three probes. The SQL and native
+statement caches distinguish both shapes, including repeated-source batches, and
+the proof is reset and recomputed on each materialization, including after file rollback.
+This is shared by every language using the fresh writer; names, containment ranks,
+tie-breaking, database layout and transaction boundaries are unchanged.
+
 Reference position lookup can use an exact recorded column when a preceding
 character proves that no earlier name match could overlap it. Other inputs keep
 the forward non-overlapping search and stop once later matches cannot be nearer;
@@ -165,6 +174,14 @@ normalizing generated IDs and indexing timestamps. These are two observations
 per version on a C#-heavy snapshot; see the unique-name scope-probe tradeoff above.
 
 ## 日本語
+
+初回の参照元検索では、ファイル群の一時表を構築するたびに、部分indexでdisplay aliasと
+旧形式のNULL canonical keyの有無を一度確認します。どちらもなければ既存のcanonical名の
+範囲検索だけを使い、3経路の union と最終順位比較を省略します。いずれかがある場合は
+従来の3経路を維持します。SQL／native statement の両キャッシュで、参照元共有バッチも
+含めて形式を区別し、rollback後も含めて一時表の構築ごとに判定を破棄・再計算します。
+初回 writer を使う全言語で共通です。名前・包含順位・同順位の選択・DB構造・transaction
+境界は変わりません。
 
 参照位置の検索では、直前の文字から先行する名前の一致が記録列をまたがないと
 証明できる場合に、その列を直接使います。他の入力は従来の非重複の順方向検索を

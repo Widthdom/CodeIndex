@@ -26,7 +26,8 @@ public partial class DbWriter
         int rowCount,
         bool useFreshReferenceResolutionDefaults,
         bool useMaterializedFreshSourceLookup = false,
-        bool shareSourceLookups = false)
+        bool shareSourceLookups = false,
+        bool canonicalFreshSourceNamesOnly = false)
     {
         if (useMaterializedFreshSourceLookup && !useFreshReferenceResolutionDefaults)
         {
@@ -36,6 +37,8 @@ public partial class DbWriter
         }
         if (shareSourceLookups && (!useMaterializedFreshSourceLookup || rowCount < 2))
             throw new ArgumentException("Shared source lookups require a multirow materialized fresh insert.", nameof(shareSourceLookups));
+        if (canonicalFreshSourceNamesOnly && !useMaterializedFreshSourceLookup)
+            throw new ArgumentException("Canonical-only source lookup requires a materialized fresh insert.", nameof(canonicalFreshSourceNamesOnly));
 
         var sql = CreateBatchSqlBuilder(rowCount, estimatedCharsPerRow: 256);
         if (useFreshReferenceResolutionDefaults)
@@ -70,7 +73,7 @@ public partial class DbWriter
                     FROM fresh_reference
                 ), fresh_sources AS MATERIALIZED (
                     SELECT r.file_id, r.line, r.container_name, r.container_name_folded,
-                           {BuildMaterializedFreshReferenceSourceSymbolValueSql("r")} AS source_symbol_id
+                           {BuildMaterializedFreshReferenceSourceSymbolValueSql("r", canonicalFreshSourceNamesOnly)} AS source_symbol_id
                     FROM fresh_source_inputs AS r
                 )");
             }
@@ -99,7 +102,7 @@ public partial class DbWriter
                        {(shareSourceLookups
                            ? "source.source_symbol_id"
                            : useMaterializedFreshSourceLookup
-                               ? BuildMaterializedFreshReferenceSourceSymbolValueSql("r")
+                               ? BuildMaterializedFreshReferenceSourceSymbolValueSql("r", canonicalFreshSourceNamesOnly)
                                : BuildReferenceSourceSymbolValueSql("r"))},
                        'unresolved',
                        0
@@ -142,12 +145,14 @@ public partial class DbWriter
         int rowCount,
         bool useFreshReferenceResolutionDefaults,
         bool useMaterializedFreshSourceLookup = false,
-        bool shareSourceLookups = false)
+        bool shareSourceLookups = false,
+        bool canonicalFreshSourceNamesOnly = false)
         => BuildReferenceInsertSql(
             rowCount,
             useFreshReferenceResolutionDefaults,
             useMaterializedFreshSourceLookup,
-            shareSourceLookups);
+            shareSourceLookups,
+            canonicalFreshSourceNamesOnly);
 
     private static void AppendReferenceInsertParameterTuple(
         StringBuilder sql,

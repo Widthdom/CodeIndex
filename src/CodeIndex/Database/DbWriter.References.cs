@@ -2449,14 +2449,16 @@ public partial class DbWriter
             Rows: rowsInBatch,
             FreshResolutionDefaults: useFreshReferenceResolutionDefaults,
             MaterializedFreshSourceLookup: false,
-            ShareSourceLookups: false);
+            ShareSourceLookups: false,
+            CanonicalFreshSourceNamesOnly: false);
         var sql = ReferenceInsertSqlCache.GetOrAdd(
             cacheKey,
             static key => BuildReferenceInsertSql(
                 key.Rows,
                 key.FreshResolutionDefaults,
                 key.MaterializedFreshSourceLookup,
-                key.ShareSourceLookups));
+                key.ShareSourceLookups,
+                key.CanonicalFreshSourceNamesOnly));
         var cmd = RentCommand(sql, c => AddReferenceInsertParameters(c, rowsInBatch));
         try
         {

@@ -48,6 +48,20 @@ public partial class DbWriter
         DELETE FROM temp.{AuthoritativeFreshReferenceSourceSymbolsTableName}
         """;
 
+    // Empty partial indexes prove these channels absent without scanning all symbols.
+    // 部分indexの空判定で全symbolの走査を避ける。
+    private static readonly string HasOnlyCanonicalFreshReferenceSourcesSql = $"""
+        SELECT NOT EXISTS (
+            SELECT 1 FROM temp.{AuthoritativeFreshReferenceSourceSymbolsTableName}
+                INDEXED BY idx_authoritative_fresh_source_display_name_folded
+            WHERE display_name_folded IS NOT NULL
+        ) AND NOT EXISTS (
+            SELECT 1 FROM temp.{AuthoritativeFreshReferenceSourceSymbolsTableName}
+                INDEXED BY idx_authoritative_fresh_source_name_nocase
+            WHERE name_folded IS NULL
+        )
+        """;
+
     private static readonly string PopulateAuthoritativeFreshReferenceSourceLookupSql = $"""
         INSERT INTO temp.{AuthoritativeFreshReferenceSourceSymbolsTableName} (
             symbol_id,
@@ -74,17 +88,27 @@ public partial class DbWriter
         => PopulateAuthoritativeFreshReferenceSourceLookupSql;
 
     private static string BuildMaterializedFreshReferenceSourceSymbolValueSql(
-        string referenceAlias)
+        string referenceAlias,
+        bool canonicalNamesOnly = false)
+    {
+        var canonicalProbe = BuildRankedFreshReferenceSourceProbeSql(
+            referenceAlias,
+            $"source.name_folded = {referenceAlias}.container_name_folded");
+        // Most freshly written files have neither display aliases nor legacy NULL
+        // keys. Their sole ranked probe needs no union or final comparison sort.
+        // display alias/旧NULL keyがないfileは、単一の順位付きprobeだけで解決する。
+        if (canonicalNamesOnly)
+            return $"(SELECT symbol_id FROM ({canonicalProbe}))";
+
         // Each name index supplies its best containing symbol in rank order. The
         // final sort compares at most three rows, even for a large overload family.
         // Duplicate matches retain the same rank and ID and cannot change the winner.
         // 各名前indexから包含順位の先頭だけを取り、最後のsortを最大3行に制限する。
-        => $"""
+        return $"""
         (
             SELECT candidate.symbol_id
             FROM (
-                {BuildRankedFreshReferenceSourceProbeSql(referenceAlias,
-                    $"source.name_folded = {referenceAlias}.container_name_folded")}
+                {canonicalProbe}
 
                 UNION ALL
 
@@ -102,6 +126,7 @@ public partial class DbWriter
             LIMIT 1
         )
         """;
+    }
 
     private static string BuildRankedFreshReferenceSourceProbeSql(
         string referenceAlias,
@@ -127,8 +152,9 @@ public partial class DbWriter
         """;
 
     internal static string BuildMaterializedFreshReferenceSourceSymbolValueSqlForTesting(
-        string referenceAlias)
-        => BuildMaterializedFreshReferenceSourceSymbolValueSql(referenceAlias);
+        string referenceAlias,
+        bool canonicalNamesOnly = false)
+        => BuildMaterializedFreshReferenceSourceSymbolValueSql(referenceAlias, canonicalNamesOnly);
 
     private void InitializeAuthoritativeFreshReferenceSourceLookup(
         CancellationToken cancellationToken)
@@ -152,7 +178,7 @@ public partial class DbWriter
         cancellationToken.ThrowIfCancellationRequested();
     }
 
-    private void MaterializeAuthoritativeFreshReferenceSourceLookup(
+    private bool MaterializeAuthoritativeFreshReferenceSourceLookup(
         IReadOnlyList<ReferenceRecord> references,
         CancellationToken cancellationToken)
     {
@@ -174,6 +200,7 @@ public partial class DbWriter
         }
 
         using var cancellationRegistration = RegisterSqliteInterrupt(cancellationToken);
+        bool canonicalNamesOnly;
         try
         {
             using (var clear = _conn.CreateCommand())
@@ -196,6 +223,12 @@ public partial class DbWriter
                     populate.ExecuteNonQuery();
                 }
             }
+
+            using var shape = _conn.CreateCommand();
+            shape.Transaction = _activeTransaction;
+            shape.CommandText = HasOnlyCanonicalFreshReferenceSourcesSql;
+            canonicalNamesOnly = Convert.ToInt64(shape.ExecuteScalar(),
+                System.Globalization.CultureInfo.InvariantCulture) == 1;
         }
         catch (SqliteException exception) when (
             IsSqliteInterruptCancellation(exception, cancellationToken))
@@ -206,5 +239,6 @@ public partial class DbWriter
                 cancellationToken);
         }
         cancellationToken.ThrowIfCancellationRequested();
+        return canonicalNamesOnly;
     }
 }

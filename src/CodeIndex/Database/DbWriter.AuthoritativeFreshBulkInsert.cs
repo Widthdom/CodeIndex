@@ -26,7 +26,8 @@ public partial class DbWriter
         int BoundParameterCount,
         bool CacheHit,
         int CachedStatementCount,
-        bool SharesReferenceSourceLookups = false);
+        bool SharesReferenceSourceLookups = false,
+        bool UsesCanonicalFreshSourceNamesOnly = false);
 
     internal sealed record AuthoritativeFreshRawInsertScopeStats(
         int Capacity,
@@ -138,6 +139,8 @@ public partial class DbWriter
         ReferenceLines,
         References,
         ReferencesWithSharedSources,
+        ReferencesWithCanonicalSources,
+        ReferencesWithSharedCanonicalSources,
     }
 
     private readonly record struct AuthoritativeFreshRawStatementKey(
@@ -164,6 +167,7 @@ public partial class DbWriter
         private long _finalizeCount;
         private bool _completed;
         private bool _disposed;
+        private bool _canonicalFreshSourceNamesOnly;
 
         internal AuthoritativeFreshBulkInsertScope(
             DbWriter writer,
@@ -342,16 +346,22 @@ public partial class DbWriter
                     Rows: rows,
                     FreshResolutionDefaults: true,
                     MaterializedFreshSourceLookup: true,
-                    ShareSourceLookups: shareSourceLookups),
+                    ShareSourceLookups: shareSourceLookups,
+                    CanonicalFreshSourceNamesOnly: _canonicalFreshSourceNamesOnly),
                 static key => BuildReferenceInsertSql(
                     key.Rows,
                     key.FreshResolutionDefaults,
                     key.MaterializedFreshSourceLookup,
-                    key.ShareSourceLookups));
+                    key.ShareSourceLookups,
+                    key.CanonicalFreshSourceNamesOnly));
             var lease = RentStatementLease(
-                shareSourceLookups
-                    ? AuthoritativeFreshRawInsertKind.ReferencesWithSharedSources
-                    : AuthoritativeFreshRawInsertKind.References,
+                (_canonicalFreshSourceNamesOnly, shareSourceLookups) switch
+                {
+                    (true, true) => AuthoritativeFreshRawInsertKind.ReferencesWithSharedCanonicalSources,
+                    (true, false) => AuthoritativeFreshRawInsertKind.ReferencesWithCanonicalSources,
+                    (false, true) => AuthoritativeFreshRawInsertKind.ReferencesWithSharedSources,
+                    _ => AuthoritativeFreshRawInsertKind.References,
+                },
                 rows,
                 sql,
                 expectedParameterCount: rows * ReferenceInsertParameterCountPerRow);
@@ -392,7 +402,8 @@ public partial class DbWriter
                         referenceLineIds.ReferenceCount,
                         referenceLineIds.ReferenceLineCount,
                         UsesFreshResolutionDefaults: true));
-                ReportStatementExecution("insert_references", rows, lease, shareSourceLookups);
+                ReportStatementExecution("insert_references", rows, lease, shareSourceLookups,
+                    _canonicalFreshSourceNamesOnly);
                 ReportBatchStatementForTesting("insert_references", rows, rows);
                 lease.ExecuteDone();
             }
@@ -436,7 +447,10 @@ public partial class DbWriter
             IReadOnlyList<CodeIndex.Models.ReferenceRecord> references)
         {
             EnsureCanExecute();
-            _writer.MaterializeAuthoritativeFreshReferenceSourceLookup(
+            // Never retain a previous file's proof if population or cancellation fails.
+            // materialization失敗時に直前fileの証明を残さない。
+            _canonicalFreshSourceNamesOnly = false;
+            _canonicalFreshSourceNamesOnly = _writer.MaterializeAuthoritativeFreshReferenceSourceLookup(
                 references,
                 _cancellationToken);
         }
@@ -587,7 +601,8 @@ public partial class DbWriter
             string operation,
             int rows,
             StatementLease lease,
-            bool sharesReferenceSourceLookups = false)
+            bool sharesReferenceSourceLookups = false,
+            bool canonicalFreshSourceNamesOnly = false)
         {
             _statementExecutionCount++;
             AuthoritativeFreshRawInsertExecutingForTesting?.Invoke(
@@ -597,7 +612,8 @@ public partial class DbWriter
                     lease.ParameterCount,
                     lease.CacheHit,
                     _statements.Count,
-                    sharesReferenceSourceLookups));
+                    sharesReferenceSourceLookups,
+                    canonicalFreshSourceNamesOnly));
         }
 
         private void EnsureCanExecute()

@@ -176,6 +176,21 @@ public sealed class FreshReferenceResolutionTests : IDisposable
             useMaterializedFreshSourceLookup: true,
             shareSourceLookups: true);
         Assert.Contains("fresh_sources AS MATERIALIZED", sharedFreshSql, StringComparison.Ordinal);
+        foreach (var shareSources in new[] { false, true })
+        {
+            var canonicalSql = DbWriter.BuildReferenceInsertSqlForTesting(
+                rowCount: 2,
+                useFreshReferenceResolutionDefaults: true,
+                useMaterializedFreshSourceLookup: true,
+                shareSourceLookups: shareSources,
+                canonicalFreshSourceNamesOnly: true);
+            Assert.Contains("source.name_folded = r.container_name_folded", canonicalSql, StringComparison.Ordinal);
+            Assert.DoesNotContain("source.display_name_folded", canonicalSql, StringComparison.Ordinal);
+            Assert.DoesNotContain("UNION", canonicalSql, StringComparison.Ordinal);
+            Assert.Equal(28, CountOccurrences(canonicalSql, "?"));
+        }
+        Assert.Throws<ArgumentException>(() => DbWriter.BuildReferenceInsertSqlForTesting(
+            rowCount: 2, useFreshReferenceResolutionDefaults: true, canonicalFreshSourceNamesOnly: true));
         Assert.DoesNotContain("fresh_sources AS MATERIALIZED", materializedFreshSql, StringComparison.Ordinal);
         Assert.Equal(28, CountOccurrences(sharedFreshSql, "?"));
         Assert.Contains("WITH fresh_reference(", freshSql, StringComparison.Ordinal);
