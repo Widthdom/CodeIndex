@@ -34,7 +34,8 @@ existing bounded notification queue and disconnect cancellation.
 
 Incomplete delivery never returns a successful truncated array. Resource/deadline
 exhaustion returns LSP `RequestFailed` (`-32803`) with `error.data.reason`,
-`deliveredLocationCount` and `recovery`. Reasons are `reference_row_limit`,
+`deliveredLocationCount`, `recoveryKind` and `recovery`. `recoveryKind` distinguishes
+`selected_definition`, `file_name_fallback` and `position_not_resolved`. Reasons are `reference_row_limit`,
 `reference_delivery_limit`, `response_byte_limit`, `progress_byte_limit` and
 `query_deadline_exceeded`. A detected index-generation change returns
 `ContentModified` (`-32801`, `index_generation_changed`). `$/cancelRequest` uses the
@@ -43,7 +44,7 @@ partial locations on any error; they are not a complete reference set.
 
 For `response_byte_limit`, retry the same request with `partialResultToken`.
 For generation changes, wait for indexing to finish and restart. For other limits,
-use CLI pagination against the same database:
+use CLI pagination against the same database. For `selected_definition`:
 
 1. Run `cdidx inspect <symbol> --exact-name --json --limit 50 --db <db>` and identify
    the matching path, declaration line and signature in `candidate_bundles`.
@@ -56,6 +57,21 @@ use CLI pagination against the same database:
    until the references section has no continuation. Keep the database, selector
    and options unchanged; restart after an index-generation change. For a lexical
    overload family, repeat for each selected definition and deduplicate URI/ranges.
+
+For `file_name_fallback`, there is no definition selector. Run
+`cdidx references <symbol> --exact-name --format compact --limit 50 --path <indexed-file> --db <db>`.
+Follow `metadata.next_cursor` using `--cursor <cursor>` with the same arguments.
+On every page, retain only rows whose `file` equals the original indexed path with
+ordinal, case-sensitive equality; CLI `line`/`column` are one-based. The `--path`
+option is only a LIKE/glob prefilter and can include case-colliding or descendant
+paths. If the original path contains wildcard characters, omit that prefilter and
+apply the exact equality check to every page. This uses name-reference retrieval
+without substituting a same-name definition. Check `metadata.pagination_window_exhausted`
+and `total_count_authoritative`: a CLI cap or incomplete index is not complete
+recovery. If the CLI window is exhausted, use a narrower prefilter where possible
+or a separately prepared, smaller index; do not treat missing continuation as proof
+of completeness. When position resolution itself hit the deadline, identify whether
+the original lookup selects a definition or needs this file-scoped fallback first.
 
 ## 日本語
 
@@ -86,7 +102,9 @@ use CLI pagination against the same database:
 
 不完全な配送を切り詰め済み成功配列として返すことはありません。リソース・期限の上限に
 達すると LSP `RequestFailed` (`-32803`) と `error.data.reason`、
-`deliveredLocationCount`、`recovery` を返します。理由は `reference_row_limit`、
+`deliveredLocationCount`、`recoveryKind`、`recovery` を返します。`recoveryKind` は
+`selected_definition`、`file_name_fallback`、`position_not_resolved` を区別します。
+理由は `reference_row_limit`、
 `reference_delivery_limit`、`response_byte_limit`、`progress_byte_limit`、
 `query_deadline_exceeded` です。インデックス世代の変更を検出すると
 `ContentModified` (`-32801`、`index_generation_changed`) を返します。
@@ -95,7 +113,7 @@ use CLI pagination against the same database:
 
 `response_byte_limit` では同じ要求に `partialResultToken` を付けて再試行します。
 世代変更時はインデックス作成の終了を待ち、要求をやり直します。その他の上限では、
-同じ DB に対する CLI のページ取得を使います。
+同じ DB に対する CLI のページ取得を使います。`selected_definition` の手順は次のとおりです。
 
 1. `cdidx inspect <symbol> --exact-name --json --limit 50 --db <db>` を実行し、
    `candidate_bundles` のパス・宣言行・シグネチャで対象を確認します。必要なら
@@ -107,3 +125,16 @@ use CLI pagination against the same database:
    `--cursor <cursor>` として同じ selector コマンドに加え、継続がなくなるまで繰り返します。
    DB・selector・オプションは変えず、世代変更時は最初から取得します。字句スコープ内の
    オーバーロード群では各選択定義について取得し、URI・範囲を重複除去します。
+
+`file_name_fallback` では定義の selector はありません。
+`cdidx references <symbol> --exact-name --format compact --limit 50 --path <indexed-file> --db <db>`
+を実行し、同じ引数に `--cursor <cursor>` を加えて `metadata.next_cursor` を追います。
+各ページで `file` が元のインデックス内パスと大小文字を区別して完全一致する行だけを
+採用してください。CLI の `line`・`column` は 1 始まりです。`--path` は LIKE／glob による
+事前絞り込みにすぎず、大小文字違いや配下のパスも含み得ます。元のパスにワイルドカード文字が
+含まれる場合は事前絞り込みを省略し、全ページで完全一致を確認します。この方法は同名の別定義に
+置き換えず、名前による参照取得を行います。`metadata.pagination_window_exhausted` と
+`total_count_authoritative` も確認してください。CLI の上限到達や不完全な索引は完全復旧では
+ありません。CLI の取得範囲上限に達した場合は、可能なら事前絞り込みを狭めるか、別途準備した
+小規模な索引を使用し、継続カーソルがないことだけで完全と判断しないでください。位置解決自体が
+期限に達した場合は、元の要求が定義を選ぶものか、このファイル範囲のフォールバックかを先に確認します。

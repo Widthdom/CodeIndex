@@ -98,6 +98,49 @@ public sealed class LspCallHierarchyTests
             Assert.Equal(count, ReferenceLocations(fixture, RequestReferences(fixture, partial, false), partial).Length);
         var highlights = fixture.Position("textDocument/documentHighlight", 2, 20)["result"]!.AsArray();
         Assert.InRange(highlights.Count, 1, 51);
+        fixture.Server.ReferenceRowsForTesting = 50;
+        foreach (var partial in new[] { false, true })
+        {
+            var exhausted = RequestReferences(fixture, partial, false, line: count + 6, character: 2);
+            AssertError(exhausted, -32803, "reference_row_limit");
+            Assert.Equal("file_name_fallback", exhausted["error"]!["data"]!["recoveryKind"]!.GetValue<string>());
+            Assert.Contains("CLI references", exhausted["error"]!["data"]!["recovery"]!.GetValue<string>());
+            Assert.Contains("case-sensitive", exhausted["error"]!["data"]!["recovery"]!.GetValue<string>());
+            AssertReferenceProgressEnded(fixture);
+        }
+        // A LIKE path prefilter is not an exact identity boundary. Replay the documented
+        // recovery and discard a case-colliding foreign row after each CLI page.
+        using (var db = new DbContext(DbOpenIntent.WriteIndex, fixture.DbPath))
+        using (var command = db.Connection.CreateCommand())
+        {
+            command.CommandText = "UPDATE files SET path = @path WHERE path = 'Other.cs'";
+            command.Parameters.AddWithValue("@path", "日本 #calls.cs");
+            Assert.Equal(1, command.ExecuteNonQuery());
+        }
+        var recovered = new List<int>();
+        var foreignRows = 0;
+        string? cursor = null;
+        do
+        {
+            var args = new List<string> { "references", "Missing", "--exact-name", "--format", "compact", "--limit", "50",
+                "--path", "日本 #Calls.cs", "--db", fixture.DbPath };
+            if (cursor != null)
+                args.AddRange(["--cursor", cursor]);
+            var (exitCode, stdout, stderr) = QueryCommandTestSupport.CaptureConsole(() =>
+                ProgramRunner.Run(args.ToArray(), ProgramRunner.CreateDefaultJsonOptions(), "test"));
+            Assert.True(exitCode == 0, stdout + stderr);
+            using var page = JsonDocument.Parse(stdout);
+            foreach (var row in page.RootElement.GetProperty("results").EnumerateArray())
+            {
+                if (string.Equals(row.GetProperty("file").GetString(), "日本 #Calls.cs", StringComparison.Ordinal))
+                    recovered.Add(row.GetProperty("line").GetInt32());
+                else
+                    foreignRows++;
+            }
+            cursor = page.RootElement.GetProperty("metadata").GetProperty("next_cursor").GetString();
+        } while (cursor != null);
+        Assert.Equal(1, foreignRows);
+        Assert.Equal(Enumerable.Range(count + 7, 51), recovered.Order());
     }
 
     [Theory]

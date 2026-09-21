@@ -32,6 +32,7 @@ internal sealed partial class LspServer
         deadline.CancelAfter(ReferenceTimeoutForTesting);
         using var cancellationScope = _reader.BeginCancellationScope(deadline.Token);
         var delivered = 0;
+        string? recoveryKind = null;
         var summary = "Reference request failed; discard any partial locations.";
         if (workToken != null)
             outbound!(CreateProgressNotification(workToken, CreateWorkDoneBegin("CodeIndex references")));
@@ -55,6 +56,8 @@ internal sealed partial class LspServer
                 if (TryExtractPositionToken(root, out var context, out var failureReason))
                 {
                     var sources = ResolveLspReferenceSources(context);
+                    recoveryKind = sources.Any(source => source.Definition == null && source.IndexedPath != null)
+                        ? "file_name_fallback" : "selected_definition";
                     if (GetBool(root, "params", "context", "includeDeclaration") == true)
                     {
                         foreach (var definition in ResolveLspDefinitions(context))
@@ -186,10 +189,12 @@ internal sealed partial class LspServer
             {
                 ["reason"] = reason,
                 ["deliveredLocationCount"] = delivered,
+                ["recoveryKind"] = recoveryKind ?? "position_not_resolved",
                 ["recovery"] = reason switch
                 {
                     "response_byte_limit" => "Retry this reference request with a partialResultToken.",
                     "index_generation_changed" => "Wait for indexing to finish, then restart the reference request.",
+                    _ when recoveryKind == "file_name_fallback" => "Use CLI references <symbol> --exact-name --format compact --limit 50 --path <indexed-file> --db <db>; follow metadata.next_cursor with --cursor and retain only results whose file exactly equals the original indexed path (case-sensitive). The path option is only a prefilter; no definition selector is required. See docs/lsp-references.md for path and pagination limits.",
                     _ => "Use CLI inspect <symbol> --exact-name --json --db <db>; select the matching definition and follow its references graph-section cursor. See the LSP references documentation for identity-preserving pagination.",
                 },
             };

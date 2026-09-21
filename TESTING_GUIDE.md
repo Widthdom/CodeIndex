@@ -6,6 +6,8 @@ declaration inclusion, same-name/overload targets, duplicate sites, cross-file U
 and UTF-16 ranges. Keep explicit row/byte failures, token routing, progress end,
 between-chunk cancellation and generation-change checks on net8/net9 alongside
 the existing exact-file, lexical-scope and unresolved-navigation regressions.
+Definitionless exhaustion also replays CLI reference cursors and applies ordinal
+file equality after each page to exclude a case-colliding foreign path.
 
 `StructuralLineMasker_MaskLines_PreservesCodeSpansAroundNestedLiterals` compares exact
 masked text and unchanged-line identity in C#, Kotlin and Scala, with code spans up to
@@ -1718,7 +1720,8 @@ LSP 参照配送 (#5392) は `LspCallHierarchyTests` の分離 DB とフレー�
 別ファイルの URI、UTF-16 範囲についてトークン有無の結果を比較します。明示的な件数・
 バイト上限エラー、トークンの宛先、進捗終了、チャンク間の取消、世代変更の検証を、
 既存の完全一致ファイル・字句スコープ・未解決ナビゲーション回帰とともに net8/net9 で
-維持してください。
+維持してください。定義を持たない参照の上限到達では CLI の参照カーソルも実行し、
+各ページでパスの完全一致を確認して大小文字違いの別ファイルを除外します。
 
 LSP 文書シンボルのファイル同一性テスト (#5382) は、通常の索引取得とライブ抽出が
 利用できない場合のフォールバックで、大小文字衝突、リテラルなパス文字、配下・接尾辞の
