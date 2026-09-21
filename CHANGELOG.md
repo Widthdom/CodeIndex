@@ -130,6 +130,12 @@ Recent releases (v1.41.0 onward) remain below. Older releases retain both langua
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.50.3] - 2026-09-21
+
+#### Internal
+
+- **Stabilized the source-line splitting allocation test in release CI** — removed the allocation comparison with `string.Split`, whose separator arrays can be reused from a shared pool. The test retains the existing 610,000-byte allocation ceiling and now compares every output line from the custom splitter with the generic split result. Production behavior is unchanged.
+
 ### [1.50.2] - 2026-09-21
 
 #### Changed
@@ -864,6 +870,12 @@ v1.41.0 以降はこのファイルに、それ以前の日英の履歴は次の
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.50.3] - 2026-09-21
+
+#### 内部変更
+
+- **リリースCIの行分割メモリ割り当てテストを安定化しました** — 区切り位置の配列を共有プールから再利用できる `string.Split` との割り当て量比較を削除しました。既存の610,000バイト未満という上限を維持し、専用の行分割処理の出力を汎用処理の結果と全行比較するようにしました。製品の動作は変わりません。
+
 ### [1.50.2] - 2026-09-21
 
 #### 変更
@@ -1472,7 +1484,8 @@ v1.41.0 以降はこのファイルに、それ以前の日英の履歴は次の
 - **読取不能な marker fixture が target framework 間の並列テストへ干渉しないようになりました (#5019)** — MCP の marker-fingerprint fixture を repository の build output 外にある独立した一時 workspace へ移し、別 target framework の source-policy scan が意図的に unreadable にした directory へ再帰進入しないようにしました。
 - **parallel detached-snapshot fixture が thread-pool timing や広範な status diagnostics に依存しなくなりました (#5033)** — interactive batch loop を専用 test thread で実行し、非同期 completion signal と軽量な file-count query で generation refresh を確認するため、suite 負荷下でも net8 test が安定して完了します。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.50.2...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.50.3...HEAD
+[1.50.3]: https://github.com/Widthdom/CodeIndex/compare/v1.50.2...v1.50.3
 [1.50.2]: https://github.com/Widthdom/CodeIndex/compare/v1.50.1...v1.50.2
 [1.50.1]: https://github.com/Widthdom/CodeIndex/compare/v1.50.0...v1.50.1
 [1.50.0]: https://github.com/Widthdom/CodeIndex/compare/v1.49.0...v1.50.0
