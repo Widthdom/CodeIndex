@@ -130,6 +130,20 @@ Recent releases (v1.41.0 onward) remain below. Older releases retain both langua
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.50.2] - 2026-09-21
+
+#### Changed
+
+- **C# receiver checks analyze only the callable scopes they need** — Initial full indexing of C#, Razor, Blazor, and CSHTML avoids scanning unrelated method and property bodies for enum reads and value-receiver calls. Scope results, including empty scopes, are cached; local-function resolution still completes the full lookup, preserving same-line declaration precedence and shadowing behavior.
+- **Initial C# indexing skips impossible declaration-prefix probes** — symbol extraction rejects multiline parameter fragments with impossible leading punctuation before expensive declaration-confirmation regexes. C#, Razor, Blazor and CSHTML share the optimization, preserving the existing tuple, generic, constructor and member extraction behavior without requiring an index rebuild.
+- **Initial C# indexing avoids impossible multiline-header probes** — symbol extraction checks the exact prefix, tuple punctuation and incomplete-header suffix required by the existing regexes before evaluating them. C#, Razor, Blazor and CSHTML share the optimization; tuple and generic recovery, constructors, member identities and source ranges remain unchanged.
+- **Initial C# indexing avoids repeated declaration-lookahead copies and scans** — multiline symbol extraction defers combined strings until a declaration decision is possible, scans appended text once for top-level semicolons, and skips initializer scans without `=`. C#, Razor, Blazor and CSHTML share the optimization while preserving declaration text, source ranges, generic recovery and existing lookahead limits.
+- **C# reference extraction avoids redundant receiver-scope work** — impossible enum-member candidates are rejected before building shadow scopes, and ordinary/recursive patterns reuse their callable's body text and known offsets. C#, Razor, Blazor and CSHTML retain their reference coordinates and shadowing behavior while reducing repeated scans and allocations during initial indexing.
+- **C# reference extraction skips unnecessary capture and enum analysis during full indexing** — C#, Razor, Blazor, and CSHTML avoid local-declaration matching in callable bodies without a prepared lambda arrow, skip enum scans when no enum members are available, and defer qualified-name storage until a separator is found. Capture scope isolation, qualified enum reads, and name normalization remain unchanged.
+- **Initial indexing skips unused reference-source name probes** — the fresh bulk writer uses a single ranked canonical-name lookup when the materialized files have no display aliases or legacy NULL keys. All indexed languages share the optimization while alternate names, source identities, transaction rollback and cancellation retain their existing behavior.
+- **Initial full indexing does less reference flag work across languages** — fresh reference inserts encode the two provisional zero flags directly in SQL, reducing parameter binding and fitting more rows into the same native batch limit. Full mutual-recursion refreshes skip known-zero rows that cannot have a reverse edge while preserving resolved, unresolved, legacy-name, and stale-flag repair behavior.
+- Reduce initial indexing work by scanning ordinary code spans in bulk during C#, Kotlin, and Scala structural masking, while preserving nested string, interpolation, and comment boundaries.
+
 ### [1.50.1] - 2026-09-19
 
 #### Changed
@@ -850,6 +864,20 @@ v1.41.0 以降はこのファイルに、それ以前の日英の履歴は次の
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.50.2] - 2026-09-21
+
+#### 変更
+
+- **C# の receiver 判定で必要な関数スコープだけを解析** — C#、Razor、Blazor、CSHTML の初回フルインデックスで、列挙型メンバーの読み取りと値 receiver の呼び出しを判定する際、無関係なメソッドやプロパティの本体を走査しなくなりました。空のスコープを含めて結果を再利用し、ローカル関数の解決では全体の lookup を完成させることで、同一行の宣言の優先順位と名前の隠蔽規則を維持します。
+- **初回C#インデックスで不可能な宣言prefixの照合を省略** — 複数行引数の継続断片など、先頭部分の記号から成立しないと分かる候補を、高価な宣言確認regexの前に除外します。C#・Razor・Blazor・CSHTMLで共通の最適化で、tuple・generic・constructor・memberの既存抽出を維持し、強制rebuildは不要です。
+- **初回C#インデックスで成立しない複数行headerの照合を省略** — 既存regexが必須とするprefix・tupleの記号・未完headerの末尾を照合前に確認します。C#・Razor・Blazor・CSHTMLで共通の最適化で、tuple／genericの復旧・constructor・memberの識別情報・ソース範囲は維持します。
+- **初回C#インデックスで宣言lookaheadの文字列コピー・再走査を削減** — 複数行のシンボル抽出は、宣言を判定できる記号が現れるまで連結文字列の生成を保留し、追加部分だけでtop-level semicolonを追跡し、`=` のない初期化子走査を省略します。C#・Razor・Blazor・CSHTMLで共通の最適化で、宣言テキスト・ソース範囲・genericの復旧・既存のlookahead上限を維持します。
+- **C#参照抽出でreceiver scopeの重複処理を削減** — 成立しないenum member候補を隠蔽scopeの作成前に除外し、通常／recursive patternはcallableの本文と既知のoffsetを再利用します。C#・Razor・Blazor・CSHTMLの参照位置と隠蔽の挙動を保ち、初回インデックスでの反復走査と割り当てを減らします。
+- **フルインデックス時の C# 参照抽出で不要なキャプチャ・列挙型解析を省略** — C#、Razor、Blazor、CSHTML では、前処理済みの本体にラムダ矢印がない関数のローカル宣言照合と、列挙型メンバーが存在しない場合の列挙型走査を省略し、修飾名の保存領域も区切り文字が現れるまで確保しなくなりました。キャプチャのスコープ分離、修飾された列挙型メンバーの読み取り参照、名前の正規化は維持します。
+- **初回インデックスで未使用の参照元名の検索を省略** — 初回一括writerは、一時表のファイルにdisplay aliasや旧形式のNULL keyがない場合、canonical名の順位付き検索だけを使います。全対応言語で共通の最適化で、別名・参照元の識別・transaction rollback・取消の挙動を維持します。
+- **各言語の初回フルインデックスで参照フラグの処理を削減しました** — 新規参照の暫定的な 2 つのゼロフラグを SQL に直接記述し、パラメーターのバインドを減らして同じネイティブバッチ上限に収まる行数を増やします。全体の相互再帰更新では、逆向きの参照が成立しない既知のゼロ行を省略し、解決済み・未解決・旧形式の名前照合と古いフラグの修復動作を維持します。
+- C#・Kotlin・Scala の構造マスクで通常コードの区間をまとめて走査し、入れ子の文字列・補間・コメントの境界を維持しながら初回インデックスの処理量を削減しました。
+
 ### [1.50.1] - 2026-09-19
 
 #### 変更
@@ -1444,7 +1472,8 @@ v1.41.0 以降はこのファイルに、それ以前の日英の履歴は次の
 - **読取不能な marker fixture が target framework 間の並列テストへ干渉しないようになりました (#5019)** — MCP の marker-fingerprint fixture を repository の build output 外にある独立した一時 workspace へ移し、別 target framework の source-policy scan が意図的に unreadable にした directory へ再帰進入しないようにしました。
 - **parallel detached-snapshot fixture が thread-pool timing や広範な status diagnostics に依存しなくなりました (#5033)** — interactive batch loop を専用 test thread で実行し、非同期 completion signal と軽量な file-count query で generation refresh を確認するため、suite 負荷下でも net8 test が安定して完了します。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.50.1...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.50.2...HEAD
+[1.50.2]: https://github.com/Widthdom/CodeIndex/compare/v1.50.1...v1.50.2
 [1.50.1]: https://github.com/Widthdom/CodeIndex/compare/v1.50.0...v1.50.1
 [1.50.0]: https://github.com/Widthdom/CodeIndex/compare/v1.49.0...v1.50.0
 [1.49.0]: https://github.com/Widthdom/CodeIndex/compare/v1.48.0...v1.49.0
