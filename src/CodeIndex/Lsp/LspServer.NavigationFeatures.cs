@@ -31,37 +31,6 @@ internal sealed partial class LspServer : IDisposable
         return array;
     }
 
-    private JsonArray References(JsonElement root, string method)
-    {
-        if (!TryExtractPositionToken(root, out var context, out var failureReason))
-        {
-            RecordLookupFailure(method, failureReason);
-            return [];
-        }
-
-        var includeDeclaration = GetBool(root, "params", "context", "includeDeclaration") == true;
-        var references = ResolveLspReferences(context);
-        var array = new JsonArray();
-        var seenLocations = new HashSet<string>(StringComparer.Ordinal);
-        if (includeDeclaration)
-        {
-            foreach (var definition in ResolveLspDefinitions(context))
-                AddSymbolLocation(array, seenLocations, definition, context);
-        }
-
-        foreach (var reference in references)
-            AddLocation(
-                array,
-                seenLocations,
-                reference.Path,
-                reference.Line,
-                Math.Max(reference.Column, 1),
-                reference.Line,
-                Math.Max(reference.Column, 1) + Math.Max(context.Token.Length, 1),
-                context);
-        return array;
-    }
-
     private JsonNode? Hover(JsonElement root, string method)
     {
         if (!TryExtractPositionToken(root, out var context, out var failureReason))

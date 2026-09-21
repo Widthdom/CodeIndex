@@ -49,31 +49,41 @@ internal sealed partial class LspServer : IDisposable
 
     private IReadOnlyList<ReferenceResult> ResolveLspReferences(PositionTokenContext context)
     {
+        var sources = ResolveLspReferenceSources(context);
+        var references = sources.SelectMany(source => ReadLspReferencePage(source, DefaultLimit, 0));
+        return sources.Count <= 1 ? references.ToList() : references
+            .DistinctBy(reference => (reference.Path, reference.Line, reference.Column, reference.ReferenceKind))
+            .OrderBy(reference => reference.Path, StringComparer.Ordinal)
+            .ThenBy(reference => reference.Line)
+            .ThenBy(reference => reference.Column)
+            .Take(DefaultLimit).ToList();
+    }
+
+    private sealed record LspReferenceSource(string Query, DefinitionResult? Definition = null, string? IndexedPath = null);
+
+    private IReadOnlyList<LspReferenceSource> ResolveLspReferenceSources(PositionTokenContext context)
+    {
         var localDefinitions = GetLocalLspDefinitions(context);
         if (localDefinitions.Count > 0)
         {
             var positionDefinitions = FindDefinitionsAtPosition(localDefinitions, context);
             if (positionDefinitions.Count == 1)
-                return _reader.GetReferencesForDefinition(positionDefinitions[0], DefaultLimit);
+                return [new(context.Token, positionDefinitions[0])];
 
             var localReferenceTargets = ResolveReferenceTargetsAtPosition(
                 context,
                 out var authoritativeUnresolved);
             if (localReferenceTargets.Count == 1)
-                return _reader.GetReferencesForDefinition(localReferenceTargets[0], DefaultLimit);
+                return [new(context.Token, localReferenceTargets[0])];
             if (localReferenceTargets.Count > 1
                 && localReferenceTargets.All(IsCSharpLexicalLocalFunctionCandidate))
             {
-                return GetReferencesForCSharpLexicalLocalFunctionTargets(localReferenceTargets);
+                return localReferenceTargets.Select(target => new LspReferenceSource(context.Token, target)).ToList();
             }
             if (authoritativeUnresolved)
                 return [];
 
-            using var fileScope = DbReader.BeginExactFilePath(context.IndexedPath);
-            return _reader.SearchReferences(
-                context.Token,
-                DefaultLimit,
-                exact: true);
+            return [new(context.Token, IndexedPath: context.IndexedPath)];
         }
 
         var workspaceDefinitions = _reader.GetDefinitions(context.Token, DefaultLimit, exact: true);
@@ -82,11 +92,11 @@ internal sealed partial class LspServer : IDisposable
         {
             var referenceTargets = ResolveReferenceTargetsAtPosition(context);
             if (referenceTargets.Count == 1)
-                return _reader.GetReferencesForDefinition(referenceTargets[0], DefaultLimit);
+                return [new(context.Token, referenceTargets[0])];
             if (referenceTargets.Count > 1
                 && referenceTargets.All(IsCSharpLexicalLocalFunctionCandidate))
             {
-                return GetReferencesForCSharpLexicalLocalFunctionTargets(referenceTargets);
+                return referenceTargets.Select(target => new LspReferenceSource(context.Token, target)).ToList();
             }
             if (workspaceDefinitions.All(IsCSharpLexicalLocalFunctionCandidate))
                 return [];
@@ -95,10 +105,18 @@ internal sealed partial class LspServer : IDisposable
         if (workspaceDefinitions.Count == 0 || !HasSingleLspDefinitionTarget(workspaceDefinitions))
         {
             using var fileScope = DbReader.BeginExactFilePath(context.IndexedPath);
-            return _reader.AnalyzeSymbol(context.Token, DefaultLimit, exact: true).References;
+            return [new(context.Token, _reader.GetPrimaryReferenceDefinition(context.Token), context.IndexedPath)];
         }
 
-        return _reader.AnalyzeSymbol(context.Token, DefaultLimit, exact: true).References;
+        return [new(context.Token, _reader.GetPrimaryReferenceDefinition(context.Token))];
+    }
+
+    private IReadOnlyList<ReferenceResult> ReadLspReferencePage(LspReferenceSource source, int limit, int offset)
+    {
+        using var fileScope = source.IndexedPath == null ? null : DbReader.BeginExactFilePath(source.IndexedPath);
+        return source.Definition is { } definition
+            ? _reader.GetReferencesForDefinition(definition, limit, offset, boundedMaterialization: true)
+            : _reader.SearchReferencesForLsp(source.Query, limit, offset);
     }
 
     private List<DefinitionResult> GetLocalLspDefinitions(PositionTokenContext context)
@@ -214,23 +232,6 @@ internal sealed partial class LspServer : IDisposable
             || (definition.ContainerKind == null
                 && definition.ContainerName == null
                 && definition.ContainerQualifiedName == null));
-
-    private IReadOnlyList<ReferenceResult> GetReferencesForCSharpLexicalLocalFunctionTargets(
-        IReadOnlyList<DefinitionResult> definitions) =>
-        definitions
-            .SelectMany(definition =>
-                _reader.GetReferencesForDefinition(definition, DefaultLimit))
-            .GroupBy(reference => (
-                reference.Path,
-                reference.Line,
-                reference.Column,
-                reference.ReferenceKind))
-            .Select(group => group.First())
-            .OrderBy(reference => reference.Path, StringComparer.Ordinal)
-            .ThenBy(reference => reference.Line)
-            .ThenBy(reference => reference.Column)
-            .Take(DefaultLimit)
-            .ToList();
 
     private bool TryGetCSharpInvocationArgumentCount(PositionTokenContext context, out int argumentCount)
     {

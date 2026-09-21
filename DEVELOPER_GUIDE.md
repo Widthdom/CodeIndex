@@ -1292,6 +1292,12 @@ Kotlin, PHP, and Swift while keeping a nested enum as an enum declaration. The c
 catalog has no standalone `parameter` kind; the conservative fallback keeps
 legacy or plugin-provided parameter-like symbols compatible.
 
+Reference requests use identity-preserving bounded pages and explicit delivery
+failures, with token/no-token contracts and recovery documented in
+[LSP reference delivery](docs/lsp-references.md#english). Keep reference row,
+response-byte, chunk, deduplication and cancellation bounds separate from document
+highlights and symbol-provider truncation.
+
 Document/workspace symbol providers advertise work-done support and honor
 bounded string/integer `partialResultToken` and `workDoneToken` values. Partial
 results preserve the provider's deterministic order and use `$/progress`
@@ -5840,6 +5846,11 @@ C# の逐語識別子を含む escape 済み、indirect、comma-grouped の保�
 enum は enum declaration のままにする。現在の永続化 catalog には独立した
 `parameter` kind がないため、legacy または plugin が提供する parameter 相当の symbol は保守的な
 fallback で互換性を維持する。
+
+参照要求は対象識別を維持した上限付きページ取得と明示的な配送失敗を使用します。
+トークン有無による契約と復旧手順は [LSP 参照配送](docs/lsp-references.md#日本語) を
+参照してください。参照行・応答バイト・チャンク・重複除去・取消の上限は、
+ドキュメントハイライトやシンボルプロバイダーの切り詰めとは独立して維持します。
 
 document/workspace symbol provider は work-done 対応を advertise し、上限付きの string /
 integer `partialResultToken` と `workDoneToken` を処理する。partial result は provider の

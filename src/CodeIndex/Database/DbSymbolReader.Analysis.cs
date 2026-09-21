@@ -556,7 +556,7 @@ public partial class DbReader
     /// 選択済みの単一定義について、<see cref="AnalyzeSymbol"/> と同じ identity-scoped
     /// candidate 経路で参照を解決する。
     /// </summary>
-    internal IReadOnlyList<ReferenceResult> GetReferencesForDefinition(DefinitionResult definition, int limit)
+    internal IReadOnlyList<ReferenceResult> GetReferencesForDefinition(DefinitionResult definition, int limit, int offset = 0, bool boundedMaterialization = false)
     {
         using var txn = _conn.BeginTransaction(deferred: true);
         var references = CanScopeCandidateByIdentity(definition)
@@ -566,7 +566,10 @@ public partial class DbReader
                 pathPatterns: null,
                 excludePathPatterns: null,
                 excludeTests: false,
-                LineWidthFormatter.DefaultMaxLineWidth)
+                LineWidthFormatter.DefaultMaxLineWidth,
+                offset)
+            : boundedMaterialization
+            ? SearchReferencesForLsp(definition.Name, limit, offset, definition.Lang)
             : SearchReferences(
                 definition.Name,
                 limit,
@@ -576,9 +579,22 @@ public partial class DbReader
                 excludePathPatterns: null,
                 excludeTests: false,
                 exact: true,
-                LineWidthFormatter.DefaultMaxLineWidth);
+                LineWidthFormatter.DefaultMaxLineWidth,
+                offset: offset);
         txn.Commit();
         return references;
+    }
+
+    // Select the same primary definition as AnalyzeSymbol without counting/materializing
+    // unrelated graph sections. LSP pins this result before enumerating reference pages.
+    internal DefinitionResult? GetPrimaryReferenceDefinition(string query)
+    {
+        var normalized = NormalizeSymbolSearchQueryForSymbolSearch(query, null, exact: true) ?? query;
+        var definitions = PrioritizeSourceDefinitions(GetDefinitions(normalized, 5, exact: true));
+        return definitions.FirstOrDefault(definition =>
+                SupportsReferenceLanguage(definition.Lang) && !IsCSharpEnumMemberDefinition(definition))
+            ?? definitions.FirstOrDefault(definition => SupportsReferenceLanguage(definition.Lang))
+            ?? definitions.FirstOrDefault();
     }
 
     private SymbolCandidateBundle BuildSymbolCandidateBundle(
