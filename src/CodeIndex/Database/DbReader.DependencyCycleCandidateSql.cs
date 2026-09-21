@@ -23,7 +23,7 @@ public partial class DbReader
         {
             AppendCandidateEdgeQuery();
             AppendCandidateScope();
-            _sql.Append(_reader.BuildDependencyEvidenceFilter(_request.EvidenceFilter, "cycleCandidateEvidence"));
+            _sql.Append(_reader.BuildDependencyEvidenceFilter(_request.EvidenceFilter, "cycleCandidateEvidence", _expressions.ResolutionState));
             AppendCandidateFilters();
             return _sql.Build();
         }
@@ -38,9 +38,9 @@ public partial class DbReader
                        dst.path AS target_path,
                        MAX(CASE WHEN " + _expressions.SuppressedEvidenceScope + @" THEN 0 ELSE 1 END) AS retained_evidence
             FROM symbol_references r
-            JOIN files src ON r.file_id = src.id
+            JOIN files src ON r.file_id = src.id" + _expressions.ReferenceLineJoin + @"
             LEFT JOIN cycle_sql_matches sql_match ON src.lang = 'sql' AND sql_match.reference_id = r.id
-            CROSS JOIN symbols s ON " + _expressions.SymbolNameMatch + @"
+            CROSS JOIN symbols s ON " + _expressions.TargetMatch + @"
             CROSS JOIN files dst ON s.file_id = dst.id
             WHERE " + (_request.GroupPartialTypes ? "1 = 1" : "src.path != dst.path") + @"
               AND src.lang = dst.lang");

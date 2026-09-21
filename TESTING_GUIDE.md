@@ -364,6 +364,16 @@ Issue #5307 tests pair multiline comments, verbatim/raw strings and closing deli
 
 Keep allocation regressions for shared prefixes and many distinct matched literals, cancellation during label lookup, builder-argument labels and ordinary/verbatim/raw interpolation-opener parity. Generic sampling tests may use another language to keep their row-cardinality contract independent of C# lexical budgets. Preserve the existing 4 Mi-character trust-source cache regression.
 
+## Dependency-cycle identity regression coverage
+
+Issue #5391 in `QueryCommandRunnerIssue5391Tests.cs` covers persisted cycle target
+identity with real Python, JavaScript, Java and C# same-name entrypoints, Python
+cross-file cycles, and ambiguous/legacy candidate fixtures. Compare candidate and
+evidence counts, ordinary Python dependencies, CLI/MCP completeness, filters,
+budgets, cancellation and cursor invalidation on net8/net9. Retain the SQL #5312,
+typed C# #5301/#5326, evidence #5280 and raw-file #5197 regressions. Rejected
+same-name decoys are no longer counted as edges removed by noise suppression.
+
 ## SQL dependency-cycle regression coverage
 
 Issue #5312 uses a real-index fixture shared across CLI and MCP to compare ordinary dependencies with raw-file SCCs. Keep qualified and quoted view cycles in separate schemas, unrelated same-leaf controls, exact edge/reference evidence counts, path/reverse/exclusion/symbol/resolution filters, noise suppression, graph-budget incompleteness and cursor replay on net8/net9.
@@ -1643,6 +1653,13 @@ Check the following:
 ---
 
 <a id="テストガイド"></a>
+
+Issue #5391 の `QueryCommandRunnerIssue5391Tests.cs` は、Python・JavaScript・Java・
+C# の同名エントリーポイント、Python のファイル間循環、曖昧・旧形式の候補を使い、
+保存済み参照先の識別を検証します。候補と証拠の件数、通常の Python 依存、CLI/MCP
+の完全性、フィルター、解析上限、取消、カーソルの無効化を net8/net9 で比較します。
+SQL #5312、C# 型 #5301/#5326、証拠 #5280、ファイル単位 #5197 の回帰も維持して
+ください。同名だけでは採用されない候補は、ノイズ抑制で除去した辺数には含めません。
 
 `McpServerStatusExplanationTests.cs`（#5352）は未作成 DB の共通フィクスチャで、CLI/MCP の
 通常・compact・バイト上限付き出力、serializer のキー、ネストしたパス、別名、不正入力、

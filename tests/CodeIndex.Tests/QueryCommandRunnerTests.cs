@@ -8279,6 +8279,8 @@ public partial class QueryCommandRunnerTests
         var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
         InsertFileWithSymbolsAndReferences(dbPath, "src/BoundedLineReader.cs", ["append"], ["append"]);
         InsertFileWithSymbolsAndReferences(dbPath, "src/BoundedTextWriter.cs", ["append"], ["append"]);
+        SetCycleReferenceResolution(dbPath, "src/BoundedLineReader.cs", "src/BoundedTextWriter.cs", "resolved");
+        SetCycleReferenceResolution(dbPath, "src/BoundedTextWriter.cs", "src/BoundedLineReader.cs", "resolved");
         MarkDependencyGraphReady(dbPath);
 
         var (defaultExitCode, defaultStdout, defaultStderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(

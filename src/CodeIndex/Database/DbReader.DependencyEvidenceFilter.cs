@@ -13,12 +13,13 @@ public partial class DbReader
 
     private DependencySqlFragment BuildDependencyEvidenceFilter(
         DependencyEvidenceFilter? filter,
-        string parameterPrefix)
+        string parameterPrefix,
+        string? resolutionStateSql = null)
     {
         if (filter == null || !filter.IsActive)
             return DependencySqlFragment.Empty;
         var builder = new DependencySqlFragmentBuilder();
-        AppendValues(filter.Resolutions, DependencyResolutionStateSql(), "Resolution");
+        AppendValues(filter.Resolutions, resolutionStateSql ?? DependencyResolutionStateSql(), "Resolution");
         if (filter.Kinds.Count > 0)
         {
             var predicates = new List<string>();

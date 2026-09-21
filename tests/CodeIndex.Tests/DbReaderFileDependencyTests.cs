@@ -542,15 +542,19 @@ public partial class DbReaderTests
     {
         var firstFileId = InsertSyntheticDependencyFile("src/FirstMixedCycle.cs");
         var secondFileId = InsertSyntheticDependencyFile("src/SecondMixedCycle.cs");
-        foreach (var fileId in new[] { firstFileId, secondFileId })
+        foreach (var (fileId, suffix) in new[] { (firstFileId, "First"), (secondFileId, "Second") })
         {
             _writer.InsertSymbols([
-                new SymbolRecord { FileId = fileId, Kind = "class", Name = "Wanted", Line = 1, StartLine = 1, EndLine = 1 },
-                new SymbolRecord { FileId = fileId, Kind = "class", Name = "Other", Line = 2, StartLine = 2, EndLine = 2 },
+                new SymbolRecord { FileId = fileId, Kind = "class", Name = "Wanted" + suffix, Line = 1, StartLine = 1, EndLine = 1 },
+                new SymbolRecord { FileId = fileId, Kind = "class", Name = "Other" + suffix, Line = 2, StartLine = 2, EndLine = 2 },
             ]);
+        }
+        // Seed real cross-file targets; same-name own-file calls cannot form a cycle.
+        foreach (var (fileId, targetSuffix) in new[] { (firstFileId, "Second"), (secondFileId, "First") })
+        {
             _writer.InsertReferences([
-                new ReferenceRecord { FileId = fileId, SymbolName = "Wanted", ReferenceKind = "call", Line = 1, Column = 1, Context = "Wanted()" },
-                new ReferenceRecord { FileId = fileId, SymbolName = "Other", ReferenceKind = "call", Line = 2, Column = 1, Context = "Other()" },
+                new ReferenceRecord { FileId = fileId, SymbolName = "Wanted" + targetSuffix, ReferenceKind = "call", Line = 1, Column = 1, Context = "Wanted" + targetSuffix + "()" },
+                new ReferenceRecord { FileId = fileId, SymbolName = "Other" + targetSuffix, ReferenceKind = "call", Line = 2, Column = 1, Context = "Other" + targetSuffix + "()" },
             ]);
         }
 
@@ -558,7 +562,7 @@ public partial class DbReaderTests
             limit: 10,
             out var candidateRowCount,
             lang: "csharp",
-            dependencySymbols: ["Wanted"]);
+            dependencySymbols: ["WantedFirst", "WantedSecond"]);
 
         Assert.Equal(2, candidateRowCount);
         Assert.Equal(2, cycleCandidates.Count);
@@ -566,7 +570,7 @@ public partial class DbReaderTests
         {
             Assert.Equal(1, candidate.ReferenceCount);
             Assert.Equal(1, candidate.RankingScore);
-            Assert.Equal("Wanted", candidate.Symbols);
+            Assert.Equal(candidate.TargetPath == "src/FirstMixedCycle.cs" ? "WantedFirst" : "WantedSecond", candidate.Symbols);
         });
     }
 

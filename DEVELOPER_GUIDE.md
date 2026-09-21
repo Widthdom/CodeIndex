@@ -103,6 +103,24 @@ Issue #5321 resumes ordinary/verbatim/raw interpolation with at most 64 active i
 
 Build `CSharpOriginContext` once per file prefix with cancellation and share its origin spans across rows and occurrences. Track schema argument positions during that same lexical pass, with at most 64 active builder invocations and a 64-line lookback; overflow leaves affected labels unknown. Cache regex/help classification per opening line, with cancellation at label lookup. Do not rescan preceding lines or reconstruct schema context per match or per literal.
 
+## Dependency-cycle target identity
+
+For non-SQL `deps --cycles` (MCP: `deps` with `cycles=true`), current reference
+identity metadata selects a resolved reference's exact `target_symbol_id`, or the
+persisted candidates of a `resolved_group` or `ambiguous` reference. Candidate
+selection and evidence aggregation share these pairs before graph budgets and SCC
+analysis. Independent same-name entrypoints cannot form a resolved file cycle.
+Python import bindings follow ordinary dependencies' module/alias matcher; the
+imported definition uses `unavailable` evidence when the confirmed ID identifies
+only the source-local binding. Resolution filters use this effective evidence state
+in both stages, and symbol filters use the imported definition's name.
+Ambiguous candidates retain `ambiguous` evidence; unresolved references retain the
+existing name fallback with `unresolved` evidence. Missing, stale or unknown identity
+metadata retains name fallback labeled `unavailable`, never `resolved`. Completeness
+and count authority describe the selected graph, not compiler-proven dependencies.
+SQL qualified-name matching, C# type grouping, filters and cursor binding are
+unchanged. Existing current indexes need no migration or reindex for this query fix.
+
 ## SQL dependency cycles
 
 `deps --cycles` (MCP: `deps` with `cycles=true`) uses the same SQL qualified-name matching as ordinary dependencies. Candidate selection and reference evidence both resolve the source occurrence and its container, preserve schema identity, and apply the same scoped leaf fallback. Qualified views such as `dbo.LeftView` and `dbo.RightView` therefore form a file cycle without merging unrelated same-leaf objects in other schemas. Path/reverse, symbol and evidence filters, graph budgets, and cursor completeness retain their existing meanings; no reindex is required for this query fix.
@@ -4726,6 +4744,23 @@ Issue #5321 は、同時に開いている補間フレームを最大 64、式�
 `DbSearchReader.AttachCSharpOriginLines` は共有のインデックス済みファイル先頭部分を snippet 分類器へ渡します。ファイル・パスごとの 4,096 行、8 Mi 文字、128 チャンクの読み取り上限と重複分の計上を維持し、query のページングで上限を変えないでください。文字数上限は既存の 4 Mi 文字の意味解析ウィンドウより大きく設定しています。欠落行を補わず、字句分類器がコードと推測せず `unknown` を返すようにします。通常／token-boundary の行・件数経路と MCP で同じ origin 判定と元の UTF-16 座標を維持してください。永続スキーマの変更はありません。
 
 `CSharpOriginContext` はキャンセルに対応してファイル先頭部分ごとに一度だけ構築し、origin の区間を行・一致間で共有します。同じ字句走査で schema の引数位置を追跡し、同時に開いている builder 呼び出しは最大 64、遡及範囲は 64 行とし、超過時は対象ラベルを不明にします。regex/help 分類は開始行ごとにキャッシュし、ラベル照会時にもキャンセルを確認してください。一致やリテラルごとに先行行を再走査したり schema コンテキストを再構築したりしないでください。
+
+## 依存循環の参照先識別
+
+非 SQL の `deps --cycles`（MCP: `deps` の `cycles=true`）は、参照の識別情報が
+現行の場合、解決済み参照の正確な `target_symbol_id`、または `resolved_group`・
+`ambiguous` 参照の保存済み候補を選択します。候補選択と証拠集計は、グラフ上限と
+SCC 解析の前に同じ参照・定義の組を共有します。独立した同名のエントリーポイントが
+解決済みのファイル循環を作ることはありません。Python の import は通常の依存検索と
+同じモジュール・別名照合を使います。確定 ID が参照元の import 定義だけを識別する
+場合、import 先の定義の証拠は `unavailable` とします。両段階の解決状態フィルターは
+この証拠状態を使い、シンボルフィルターは import 先の定義名を使います。
+曖昧な候補は `ambiguous`、未解決
+参照の既存の名前照合は `unresolved` として残します。識別メタデータが未保存・
+旧形式・未知の場合は、名前照合を `unavailable` と表示し、`resolved` としません。
+完全性と件数の確実性は選択したグラフの性質であり、コンパイラによる依存の証明では
+ありません。SQL 修飾名照合、C# 型のグループ化、フィルター、カーソルの束縛は
+変わりません。このクエリ修正のための移行や現行索引の再作成は不要です。
 
 ## SQL の依存循環
 

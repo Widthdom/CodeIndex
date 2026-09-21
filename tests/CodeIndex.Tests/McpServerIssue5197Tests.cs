@@ -148,7 +148,7 @@ public partial class McpServerTests
 
         Assert.Equal(["src/McpResolvedA.cs", "src/McpResolvedB.cs"], nodes);
         Assert.Equal("csharp_non_authoritative_qualified_call", reason["reason"]!.GetValue<string>());
-        Assert.Equal(2, reason["references_removed"]!.GetValue<long>());
+        Assert.Equal(1, reason["references_removed"]!.GetValue<long>());
         Assert.True(cycle["retained_evidence"]!["classification_complete"]!.GetValue<bool>());
         Assert.True(payload["analysis_complete"]!.GetValue<bool>());
     }
