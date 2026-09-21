@@ -2157,6 +2157,89 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void MutualRecursionRefresh_PrunesKnownZeroRowsAndRepairsLegacyFlags()
+    {
+        // A nullable scratch flag models readable legacy rows without weakening the
+        // production NOT NULL schema. Keep the three real reverse-lookup index shapes.
+        ExecuteNonQuery(_db.Connection, """
+            CREATE TEMP TABLE symbol_references (
+                id INTEGER PRIMARY KEY, reference_kind TEXT,
+                source_symbol_id INTEGER, target_symbol_id INTEGER,
+                is_self_reference INTEGER, container_name TEXT, symbol_name TEXT,
+                container_name_folded TEXT, symbol_name_folded TEXT, is_mutual_recursion INTEGER);
+            CREATE INDEX temp.idx_symbol_refs_resolved_source_target_kind
+                ON symbol_references(source_symbol_id, target_symbol_id, reference_kind)
+                WHERE source_symbol_id IS NOT NULL AND target_symbol_id IS NOT NULL;
+            CREATE INDEX temp.idx_symbol_refs_unresolved_mutual_folded
+                ON symbol_references(container_name_folded, symbol_name_folded)
+                WHERE source_symbol_id IS NULL AND target_symbol_id IS NULL AND is_self_reference = 0
+                  AND container_name_folded IS NOT NULL AND container_name_folded <> ''
+                  AND symbol_name_folded IS NOT NULL AND symbol_name_folded <> ''
+                  AND reference_kind IN ('call', 'instantiate', 'subscribe', 'unsubscribe', 'razor_event_binding');
+            CREATE INDEX temp.idx_symbol_refs_container_nocase_kind
+                ON symbol_references(container_name COLLATE NOCASE, reference_kind);
+            CREATE TEMP TABLE reference_graph_dirty_references(reference_id INTEGER PRIMARY KEY);
+            """);
+
+        foreach (var (scope, sql) in DbWriter.MutualRecursionRefreshSqlForTesting)
+        {
+            ExecuteNonQuery(_db.Connection, """
+                DELETE FROM symbol_references;
+                DELETE FROM reference_graph_dirty_references;
+                INSERT INTO symbol_references VALUES
+                    (1, 'call', 10, 20, 0, 'A', 'B', 'a', 'b', 0),
+                    (2, 'instantiate', 20, 10, 0, 'B', 'A', 'b', 'a', 0),
+                    (3, 'subscribe', NULL, NULL, 0, 'FoldA', 'FoldB', 'folda', 'foldb', 0),
+                    (4, 'unsubscribe', NULL, NULL, 0, 'FoldB', 'FoldA', 'foldb', 'folda', 0),
+                    (5, 'razor_event_binding', NULL, NULL, 0, 'LegacyA', 'LegacyB', NULL, NULL, 0),
+                    (6, 'call', NULL, NULL, 0, 'legacyb', 'LEGACYA', NULL, NULL, 0),
+                    (7, 'call', 10, NULL, 0, 'A', 'Missing', 'a', 'missing', 2),
+                    (8, 'type_reference', 10, 20, 0, 'A', 'B', 'a', 'b', NULL),
+                    (9, 'call', 10, 10, 1, 'A', 'A', 'a', 'a', 1),
+                    (10, 'call', NULL, NULL, 0, '', 'A', '', 'a', NULL),
+                    (11, 'call', NULL, 20, 0, 'A', 'B', 'a', 'b', -1),
+                    (12, 'call', NULL, NULL, 1, 'FoldA', 'FoldB', 'folda', 'foldb', 2),
+                    (13, 'call', NULL, NULL, 0, 'FoldA', 'FoldB', '', '', 0),
+                    (99, 'type_reference', NULL, NULL, 0, NULL, NULL, NULL, NULL, 7);
+                WITH RECURSIVE rows(n) AS (VALUES(1) UNION ALL SELECT n + 1 FROM rows WHERE n < 256)
+                INSERT INTO symbol_references
+                SELECT 100 + n, 'call', 1000 + n, NULL, 0, 'KnownSource', 'Missing', 'knownsource', 'missing', 0
+                FROM rows;
+                INSERT INTO reference_graph_dirty_references SELECT id FROM symbol_references WHERE id <> 99;
+                """);
+
+            var instructions = 0;
+            SQLitePCL.delegate_progress progress = _ => { instructions++; return 0; };
+            SQLitePCL.raw.sqlite3_progress_handler(_db.Connection.Handle, 1, progress, null!);
+            try
+            {
+                ExecuteNonQuery(_db.Connection, sql);
+            }
+            finally
+            {
+                SQLitePCL.raw.sqlite3_progress_handler(_db.Connection.Handle, 0, null!, null!);
+            }
+            // The former full working set uses over 9,500 instructions here; scoped
+            // refresh remains the unchanged behavioral control for dirty references.
+            // 旧full work setは9,500命令超。scopedはdirty参照の既存動作を確認する。
+            var budget = scope == "full" ? 7_000 : 12_000;
+            Assert.True(instructions is > 0 && instructions <= budget,
+                $"{scope} mutual refresh used {instructions} SQLite VM instructions; budget {budget}.");
+            Assert.Equal(scope == "full" ? 13 : 12, ExecuteScalarLong("SELECT changes()"));
+            Assert.Equal(6, ExecuteScalarLong("SELECT COUNT(*) FROM symbol_references WHERE id BETWEEN 1 AND 6 AND is_mutual_recursion = 1"));
+            Assert.Equal(0, ExecuteScalarLong("SELECT COUNT(*) FROM symbol_references WHERE id <> 99 AND id NOT BETWEEN 1 AND 6 AND is_mutual_recursion IS NOT 0"));
+            Assert.Equal(scope == "full" ? 0 : 7, ExecuteScalarLong("SELECT is_mutual_recursion FROM symbol_references WHERE id = 99"));
+            ExecuteNonQuery(_db.Connection, sql);
+            Assert.Equal(0, ExecuteScalarLong("SELECT changes()"));
+
+            ExecuteNonQuery(_db.Connection, "DELETE FROM symbol_references WHERE id IN (2, 4, 6)");
+            ExecuteNonQuery(_db.Connection, sql);
+            Assert.Equal(3, ExecuteScalarLong("SELECT changes()"));
+            Assert.Equal(0, ExecuteScalarLong("SELECT COUNT(*) FROM symbol_references WHERE id IN (1, 3, 5) AND is_mutual_recursion IS NOT 0"));
+        }
+    }
+
+    [Fact]
     public void RefreshReferenceIdentities_UpdatesOnlyChangedRowsAndRollsBackEarlierPhases()
     {
         var fileId = UpsertTestFile(
@@ -10411,20 +10494,20 @@ public class DatabaseTests : IDisposable
             DbWriter.BuildReferenceInsertSqlForTesting(
                 rowCount: 2,
                 useFreshReferenceResolutionDefaults: true),
-            expectedParameterCount: 28);
+            expectedParameterCount: 24);
         AssertNumericParameterOrdinals(
             DbWriter.BuildReferenceInsertSqlForTesting(
                 rowCount: 2,
                 useFreshReferenceResolutionDefaults: true,
                 useMaterializedFreshSourceLookup: true),
-            expectedParameterCount: 28);
+            expectedParameterCount: 24);
         AssertNumericParameterOrdinals(
             DbWriter.BuildReferenceInsertSqlForTesting(
                 rowCount: 2,
                 useFreshReferenceResolutionDefaults: true,
                 useMaterializedFreshSourceLookup: true,
                 shareSourceLookups: true),
-            expectedParameterCount: 28);
+            expectedParameterCount: 24);
 
         static void AssertNumericParameterOrdinals(string sql, int expectedParameterCount)
         {

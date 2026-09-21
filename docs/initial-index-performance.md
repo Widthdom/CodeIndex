@@ -1,5 +1,84 @@
 # Initial full-index performance
 
+C#, Kotlin and Scala structural masking skip ordinary code spans with vectorized
+delimiter searches. Only code and interpolation-hole states use this shortcut;
+string, character and comment states keep their existing transitions. Hole searches
+also stop at braces, and Scala interpolation prefixes still read the original text.
+C# string-opening checks reject other initial characters and reuse the quote-run
+count. The C# path also serves Razor, Blazor and CSHTML. Exact masked text, line and
+column positions, and unchanged-line reuse remain the same. JavaScript/TypeScript's
+identifier-dependent lexical state does not use this shortcut.
+
+C# receiver-shadow lookups build type-member names separately and analyze callable
+bodies only when a receiver check requests their start line. Empty results are cached,
+and same-line declarations retain their original last-nonempty winner. Local-function
+finalization still completes the full lookup, reusing already analyzed scopes. C#,
+Razor, Blazor and CSHTML share this extraction-local cache; reference records and
+shadowing behavior stay unchanged. Sparse-use tests measure structural-line reads
+and compare every reference field instead of setting a timing threshold.
+
+C# declaration lookahead defers cumulative string copies and generic whitespace
+normalization until `{`, `=` or `;` makes a declaration decision possible. Top-level
+semicolon tracking scans each appended part once, and initializer probes skip text
+without `=`. Physical-line and character budgets still apply before deferral. C#,
+Razor, Blazor and CSHTML share the change; declaration records and malformed generic
+recovery remain unchanged. Tests compare complete records and count copied/scanned
+characters, without asserting wall-clock time.
+
+C# multiline-header probes reject impossible prefixes before regex evaluation.
+The property-header grammar requires a comma whenever it consumes `(`; the
+incomplete method-header branch cannot end in `)` without a generic prefix.
+The wrapped tuple-return probe requires a terminal `(`. Generic content keeps
+the existing permissive regex grammar, and declaration lookahead and normalization
+remain unchanged. C#, Razor, Blazor and CSHTML share these gates; Java's separate
+header/annotation grammar has no equivalent probe to gate.
+
+C# reference extraction tracks local declarations only for callable bodies whose
+prepared lines may contain `=>`. Arrow positions are collected lazily once per file;
+eligibility is cached per callable, and missing body bounds remain conservative.
+Empty enum catalogs skip qualified-member scanning, and ordinary unqualified words
+do not allocate segment lists during that scan. C#, Razor, Blazor and CSHTML share
+these paths. Capture order, overload isolation, masked strings/comments, qualified
+enum reads and name normalization retain their existing behavior.
+
+Fresh reference writes encode the pending self-reference and mutual-recursion flags
+as SQL zero literals. Both the native and provider writers bind 12 values per row
+instead of 14; the native writer can fit 42 rows within its existing 512-parameter
+budget instead of 36. Ordinary writes retain their supplied flags and 14 bindings.
+Full mutual-recursion refreshes skip known-zero rows that cannot match a
+reverse edge: only distinct resolved identities or fully unresolved name pairs need
+evaluation. Nonzero and NULL flags are always revisited, including non-call rows,
+so stale and legacy values are repaired. All language writers share these changes;
+name folding, reverse-edge matching, transaction boundaries and rollback stay unchanged.
+
+C# declaration confirmation also rejects impossible prefixes before regex evaluation.
+Before the first `(`, an unmatched `)` or statement punctuation outside generic
+arguments cannot match either anchored declaration pattern. Generic argument text
+stays opaque, and encountering `(` returns control to the existing tuple/parameter
+regex grammar. This avoids expensive confirmation of multiline parameter fragments
+that acquire an opening parenthesis from later method-body text. C#, Razor, Blazor
+and CSHTML share the gate in both pre-extraction and normal symbol extraction.
+No extractor contract or output changes; differential tests retain full symbol
+records, constructors, tuple/generic returns, explicit interfaces and function pointers.
+
+C# enum-member extraction rejects impossible qualifiers, calls and simple assignment
+targets before constructing receiver-shadow scopes. Ordinary and recursive declaration
+patterns reuse each callable's body text and the offsets already available to their
+scans, avoiding a new full-body string and a preceding-line scan per pattern. C#,
+Razor, Blazor and CSHTML share this behavior. Reference coordinates, shadowing rules,
+alias/global qualification and extraction limits are unchanged; no cache survives
+the extraction. Regression coverage compares all symbol/reference fields and bounds
+allocations for 128 scoped patterns instead of asserting elapsed time.
+
+Fresh reference-source lookup now checks the materialized file set once through
+partial indexes for display aliases and legacy NULL canonical keys. When neither exists, references use only
+the existing canonical-name range probe, without the three-way union and final
+comparison sort. Files with either form retain all three probes. The SQL and native
+statement caches distinguish both shapes, including repeated-source batches, and
+the proof is reset and recomputed on each materialization, including after file rollback.
+This is shared by every language using the fresh writer; names, containment ranks,
+tie-breaking, database layout and transaction boundaries are unchanged.
+
 Reference position lookup can use an exact recorded column when a preceding
 character proves that no earlier name match could overlap it. Other inputs keep
 the forward non-overlapping search and stop once later matches cannot be nearer;
@@ -68,8 +147,9 @@ This does not change database layout, extraction coverage, transaction
 boundaries, or cancellation and rollback behavior. Ordinary updates, rebuilds,
 and MCP writes keep their existing writer selection.
 
-Fresh reference-source lookup probes the canonical, display, and legacy ASCII
-name indexes with `UNION ALL`. Matching the same physical symbol through more
+When display aliases or legacy keys require all name forms, fresh reference-source
+lookup probes the canonical, display, and legacy ASCII name indexes with `UNION ALL`.
+Matching the same physical symbol through more
 than one name does not change its containment rank or ID, and only the first
 ranked ID is consumed. Avoiding duplicate elimination removes a temporary
 B-tree per reference while preserving same-file scoping, nested range selection,
@@ -164,7 +244,117 @@ symbols, reference lines, issues, references and candidate triples match after
 normalizing generated IDs and indexing timestamps. These are two observations
 per version on a C#-heavy snapshot; see the unique-name scope-probe tradeoff above.
 
+For canonical-only source probes, receiver-scope reuse and declaration-prefix
+pruning, the same `a33c5a8eb` snapshot was measured against executable `d374746ed`.
+Two fresh Release .NET 8 runs per version on macOS ARM64, alternating before/after
+with `--parallelism 2 --memory-trace`, took 44.1/43.1 seconds before and 37.4/37.9
+seconds after: mean 43.6→37.7 seconds, about 13.6% less elapsed time. Total managed
+allocations were 7.47 GB before and 7.51 GB after (about 0.5% higher). Each run used
+a new database, with no heavy tests or builds running. All 1,577 files, 59,387 symbols
+and 562,615 references completed without warnings, errors or extraction cap hits.
+Both before/after pairs have identical logical file, chunk, symbol, reference-line,
+issue, reference, candidate and hotspot records after generated-ID and indexing-time
+normalization, including each reference's complete candidate set. Schema, user_version
+and stable contract/readiness metadata also match; all four databases pass SQLite
+integrity checks. FTS posting payloads were not compared. These are two observations
+per version on a C#-heavy snapshot, not a general speed guarantee.
+
+For zero-flag writes, capture/enum probe pruning and multiline-header gates, the
+same `a33c5a8eb` source snapshot was compared against executable `501a4d6ba`.
+Two fresh Release .NET 8 runs per version on macOS ARM64, alternating before/after
+with `--parallelism 2 --memory-trace`, took 37.730/37.079 seconds before and
+34.702/34.316 seconds after: mean 37.40→34.51 seconds, about 7.7% less elapsed time.
+Total managed allocations fell from 7.50–7.51 GB to 7.46–7.47 GB, about 0.6%.
+Each run used a new database with heavy tests and builds stopped. All 1,577 files,
+59,387 symbols and 562,615 references completed without warnings, errors or cap hits.
+Both pairs have identical logical file, chunk, symbol, reference-line, issue,
+reference, candidate and hotspot records after generated-ID and indexing-time
+normalization, including each reference's complete candidate set. Schema, user_version
+and stable contract/readiness metadata match; all four databases pass SQLite
+integrity checks. FTS posting payloads were not compared. These are two observations
+per version on a C#-heavy snapshot, not a general speed guarantee.
+
+For deferred lookahead copies, callable receiver caches and code-span masking,
+two fresh Debug .NET 8 runs on the same `a33c5a8eb` source snapshot on macOS ARM64
+with `--parallelism 2 --memory-trace` took 39.014/40.010 seconds and allocated
+7.30–7.31 GB. Heavy tests and builds were stopped during these runs. These are
+standalone Debug observations: a matched Release before/after timing was not
+collected for this batch, so no end-to-end percentage improvement is claimed.
+Both databases match the saved pre-change `b7c8a0b9a` output in all logical file,
+chunk, symbol, reference-line, issue, reference, candidate and hotspot records,
+including each reference's complete candidate set, after generated-ID and indexing-time
+normalization. Schema, user_version and stable contract/readiness metadata also match;
+all three databases pass SQLite integrity checks. All 1,577 files, 59,387 symbols
+and 562,615 references completed without warnings, errors or extraction cap hits.
+FTS posting payloads were not compared.
+
 ## 日本語
+
+C#・Kotlin・Scalaの構造マスクは、通常コードの区間をvector化された区切り記号の
+検索でまとめて進めます。コードと補間式の状態だけに適用し、文字列・文字literal・
+commentの状態遷移は維持します。補間では波括弧も検索対象に含め、Scalaの補間接頭辞は
+原文を参照します。C#の文字列開始判定も先頭文字で除外し、quote連続数を再利用します。
+C#の経路はRazor・Blazor・CSHTMLも共通で、マスク結果・行列位置・未変更行の再利用は
+変わりません。識別子で字句状態が変わるJavaScript／TypeScriptには適用しません。
+
+C#のreceiver隠蔽lookupは型メンバー名を別に構築し、判定対象の開始行が必要に
+なった時だけ関数本体を解析します。空の結果も再利用し、同じ開始行の宣言は元の
+順序で最後の空でない結果を維持します。local functionの最終解決では全体のlookupを
+完成させ、解析済みscopeを再利用します。C#・Razor・Blazor・CSHTMLで共通の抽出内
+cacheで、参照レコードと隠蔽規則は変更しません。限定的な利用のテストは構造行の
+読取り回数と参照の全項目を比較し、経過時間の閾値には依存しません。
+
+C#の宣言先読みは、判定に必要な `{`・`=`・`;` が現れるまで累積文字列のコピーと
+generic空白の正規化を保留します。top-level semicolonは追加部分だけを走査し、
+`=` のない初期化子判定も省略します。保留前に元の物理行数・文字数の上限を適用し、
+C#・Razor・Blazor・CSHTMLで宣言レコードと不正なgenericの復旧を維持します。
+テストは全レコードとコピー／走査文字数を比較し、経過時間の閾値には依存しません。
+
+C#の複数行header判定は、不可能なprefixを正規表現の評価前に除外します。propertyの
+header文法が `(` を消費するにはcommaが必須で、未完method headerはgeneric prefixが
+なければ `)` で終われません。折り返されたtuple戻り値の判定には末尾の `(` が必須です。
+genericの内部は既存regexの寛容な文法を維持し、宣言の先読みと正規化も変更しません。
+C#・Razor・Blazor・CSHTMLで共通です。Javaのheader／annotationは別の文法であり、
+同等の判定経路はありません。
+
+C#の参照抽出は、前処理済みの本体に `=>` を含む可能性がある関数だけでローカル宣言を
+追跡します。矢印の位置はファイルごとに必要になってから1回収集し、関数ごとの判定を
+再利用します。本体の範囲が不明な場合は保守的に追跡を続けます。列挙型の候補が空なら
+修飾メンバーの走査を省き、走査中の非修飾の単語にはsegment listを確保しません。
+C#・Razor・Blazor・CSHTMLで共通です。captureの順序・overloadの分離・文字列／commentの
+マスク・修飾された列挙型の読取り・名前の正規化は既存の動作を維持します。
+
+初回の参照書込みでは、グラフ確定前の自己参照・相互再帰flagをSQLの定数0として扱い、
+native／providerの両writerで1行あたりのbindを14個から12個へ減らします。native writerは
+既存の512パラメーター上限内で36行ではなく42行を処理できます。通常書込みは入力flagと
+14個のbindを維持します。全体の相互再帰更新では、逆向きの参照が成立しない
+既知の0の行を除外し、異なる解決済みidentityの対、または双方未解決の名前の対を評価します。
+非0／NULLのflagは非call行も含め必ず再評価し、古い値や旧形式の値を修復します。
+全言語のwriterで共通です。名前のfold・逆向き参照の照合・transaction境界・rollbackは
+変更しません。
+
+C#の宣言確認では、不可能なprefixも正規表現の評価前に除外します。最初の `(` より
+前では、generic引数の外側の余分な `)` やstatement記号は、どちらの先頭固定の宣言
+パターンにも一致しません。generic引数の内部は検査せず、`(` に達したら既存の
+tuple／引数のregex文法へ委ねます。複数行引数の続きが後続メソッド本体から `(` を
+取り込んでしまう場合の高価な宣言確認を避けます。C#・Razor・Blazor・CSHTMLの
+事前抽出と通常抽出で共通です。抽出契約・出力は変えず、全シンボル項目とconstructor・
+tuple／generic戻り値・明示的interface・関数pointerを最適化無効時と比較します。
+
+C#のenum member抽出は、成立しない修飾子・呼出し・単純代入先をreceiverの隠蔽scope
+作成前に除外します。通常／recursive declaration patternはcallableごとの本文と
+走査で既知のoffsetを再利用し、patternごとの本文再生成と先行行の再走査を避けます。
+C#・Razor・Blazor・CSHTMLで共通です。参照位置・隠蔽規則・alias／global修飾・抽出上限
+は変わらず、抽出終了後に残るcacheもありません。全シンボル／参照項目の比較と、
+scope付きpattern128個の割り当て上限で回帰を検証し、時間の閾値は使いません。
+
+初回の参照元検索では、ファイル群の一時表を構築するたびに、部分indexでdisplay aliasと
+旧形式のNULL canonical keyの有無を一度確認します。どちらもなければ既存のcanonical名の
+範囲検索だけを使い、3経路の union と最終順位比較を省略します。いずれかがある場合は
+従来の3経路を維持します。SQL／native statement の両キャッシュで、参照元共有バッチも
+含めて形式を区別し、rollback後も含めて一時表の構築ごとに判定を破棄・再計算します。
+初回 writer を使う全言語で共通です。名前・包含順位・同順位の選択・DB構造・transaction
+境界は変わりません。
 
 参照位置の検索では、直前の文字から先行する名前の一致が記録列をまたがないと
 証明できる場合に、その列を直接使います。他の入力は従来の非重複の順方向検索を
@@ -226,8 +416,9 @@ overload 間のスコープ分離を維持します。ローカル名の検索 k
 DB レイアウト、抽出範囲、トランザクション境界、取消・ロールバックの挙動は
 変わりません。通常の更新、rebuild、MCP の writer 選択も既存のままです。
 
-初回の参照元検索は canonical 名・display 名・旧 ASCII 名の index を `UNION ALL`
-で照会します。同じ実体シンボルが複数の名前から見つかっても包含範囲の順位と ID は
+display aliasや旧形式keyのために全経路が必要な場合、初回の参照元検索は canonical 名・
+display 名・旧 ASCII 名の index を `UNION ALL` で照会します。
+同じ実体シンボルが複数の名前から見つかっても包含範囲の順位と ID は
 同じであり、消費するのは順位先頭の ID だけです。参照ごとの重複除去用の一時 B-tree
 を省きつつ、同一ファイルへの限定、入れ子の選択、同順位の決定、旧形式への fallback
 を維持します。通常の参照元修復処理は変更しません。
@@ -307,3 +498,42 @@ managedの総割り当て量は8.09～8.10 GBから7.48 GBへ約8%減りまし�
 完了しています。生成ID・インデックス時刻を正規化すると、ファイル・チャンク・
 シンボル・参照行・issue・参照・解決候補の全レコードが一致します。各版2回の
 C#中心の固定ソースでの観測値です。一意名に対する索引照会の追加負荷は上記のとおりです。
+
+canonical名だけの参照元検索・receiver scopeの再利用・宣言prefixの除外も、同じ
+`a33c5a8eb` の固定ソースを使い、実行ファイル `d374746ed` と比較しました。
+macOS ARM64・Release .NET 8・`--parallelism 2 --memory-trace` で変更前後を交互に
+各2回測定し、変更前44.1／43.1秒、変更後37.4／37.9秒、平均43.6→37.7秒で
+約13.6%短縮しました。managedの総割り当て量は変更前7.47 GB、変更後7.51 GBで
+約0.5%増えています。毎回新しいDBを使い、重いテストやビルドを実行せずに計測しました。
+全1,577ファイル・59,387シンボル・562,615参照が警告・エラー・抽出上限到達なしで
+完了しています。両方の変更前後ペアで、生成ID・インデックス時刻を正規化すると、
+ファイル・チャンク・シンボル・参照行・issue・参照・解決候補・hotspot集計の全レコードが
+一致し、参照ごとの候補集合も一致しました。schema・user_version・実行時刻等に依存しない
+契約／readiness metadataも一致し、4つのDBすべてがSQLiteの整合性検査を通過しています。
+FTSのposting payloadは比較対象外です。C#中心の固定ソースで各版2回の観測値であり、
+一般的な速度を保証するものではありません。
+
+初回の0 flag書込み・capture／enum判定の削減・複数行header判定も、同じ `a33c5a8eb`
+の固定ソースを使い、実行ファイル `501a4d6ba` と比較しました。macOS ARM64・Release
+.NET 8・`--parallelism 2 --memory-trace` で変更前後を交互に各2回測定し、変更前
+37.730／37.079秒、変更後34.702／34.316秒、平均37.40→34.51秒で約7.7%短縮しました。
+managedの総割り当て量は7.50～7.51 GBから7.46～7.47 GBへ約0.6%減りました。
+毎回新しいDBを使い、重いテストやビルドを止めて計測しています。全1,577ファイル・
+59,387シンボル・562,615参照が警告・エラー・抽出上限到達なしで完了しました。
+両方の変更前後ペアで、生成ID・インデックス時刻を正規化したファイル・チャンク・
+シンボル・参照行・issue・参照・解決候補・hotspot集計と、参照ごとの候補集合が一致します。
+schema・user_version・実行時刻等に依存しない契約／readiness metadataも一致し、
+4つのDBすべてがSQLiteの整合性検査を通過しています。FTSのposting payloadは比較対象外です。
+C#中心の固定ソースで各版2回の観測値であり、一般的な速度を保証するものではありません。
+
+先読みコピーの保留・関数単位のreceiver cache・コード区間のマスクでは、同じ
+`a33c5a8eb` の固定ソースをmacOS ARM64・Debug .NET 8・`--parallelism 2 --memory-trace`
+で新しいDBに2回実行し、39.014／40.010秒、managedの総割り当て量7.30～7.31 GBでした。
+計測中は重いテストとビルドを止めています。今回は条件を揃えたReleaseの変更前後比較を
+採取していないため、Debugの単独観測値であり、全体の短縮率は主張しません。
+両方のDBは保存済みの変更前 `b7c8a0b9a` の出力と、生成ID・インデックス時刻を
+正規化したファイル・チャンク・シンボル・参照行・issue・参照・解決候補・hotspot集計が
+一致し、参照ごとの候補集合も一致します。schema・user_version・実行時刻等に依存しない
+契約／readiness metadataも一致し、3つのDBすべてがSQLiteの整合性検査を通過しました。
+全1,577ファイル・59,387シンボル・562,615参照が警告・エラー・抽出上限到達なしで
+完了しています。FTSのposting payloadは比較対象外です。

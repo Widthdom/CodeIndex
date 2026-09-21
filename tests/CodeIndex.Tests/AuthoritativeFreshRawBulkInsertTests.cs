@@ -341,7 +341,7 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
         Assert.Equal([(85, 510), (85, 510), (1, 6)], RowsAndParameters("insert_issues"));
         Assert.Equal([(1, 0)], RowsAndParameters("read_reference_line_id_floor"));
         Assert.Equal([(73, 220)], RowsAndParameters("insert_reference_lines"));
-        Assert.Equal([(36, 504), (36, 504), (1, 14)], RowsAndParameters("insert_references"));
+        Assert.Equal([(42, 504), (31, 372)], RowsAndParameters("insert_references"));
         Assert.Contains(
             batchWork,
             work => work.Operation == "insert_reference_lines" && work.StatementRows == 73);
@@ -353,9 +353,9 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
         Assert.True(observedStats.Completed);
         Assert.Equal(32, observedStats.Capacity);
         Assert.Equal(11, observedStats.PeakCachedStatementCount);
-        Assert.Equal(15, observedStats.StatementExecutionCount);
+        Assert.Equal(14, observedStats.StatementExecutionCount);
         Assert.Equal(11, observedStats.PrepareCount);
-        Assert.Equal(4, observedStats.CacheHitCount);
+        Assert.Equal(3, observedStats.CacheHitCount);
         Assert.Equal(0, observedStats.EvictionCount);
         Assert.Equal(0, observedStats.DiscardCount);
         Assert.Equal(11, observedStats.FinalizeCount);
@@ -708,6 +708,23 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
         Assert.Single(sourceLookupPlan.Where(detail => detail.Contains(
             "USE TEMP B-TREE FOR ORDER BY", StringComparison.OrdinalIgnoreCase)));
 
+        var canonicalSourceValueSql =
+            DbWriter.BuildMaterializedFreshReferenceSourceSymbolValueSqlForTesting("r", canonicalNamesOnly: true);
+        var canonicalLookupPlan = ExplainQueryPlan($"""
+            WITH reference_row(file_id, line, container_name, container_name_folded) AS (
+                VALUES (1, 15, 'Caller', 'caller')
+            )
+            SELECT {canonicalSourceValueSql}
+            FROM reference_row AS r
+            """);
+        Assert.Contains(canonicalLookupPlan,
+            detail => detail.Contains("idx_authoritative_fresh_source_name_folded", StringComparison.Ordinal));
+        Assert.DoesNotContain(canonicalLookupPlan,
+            detail => detail.Contains("SCAN source", StringComparison.OrdinalIgnoreCase)
+                || detail.Contains("TEMP B-TREE", StringComparison.OrdinalIgnoreCase)
+                || detail.Contains("display_name_folded", StringComparison.Ordinal)
+                || detail.Contains("name_nocase", StringComparison.Ordinal));
+
         raw.Complete();
         transaction.Commit();
 
@@ -787,6 +804,20 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
         }
         Assert.InRange(callbacks, 1, 32);
 
+        // With no alternate or legacy names, compare both SQL shapes over the same
+        // nested/tied declarations and measure bundled SQLite work, not wall time.
+        Execute("UPDATE symbols SET display_name_folded = NULL");
+        raw.MaterializeReferenceSourceSymbols([new ReferenceRecord
+        {
+            FileId = fileId, SymbolName = "Target", ReferenceKind = "call",
+            ContainerName = "Caller", Line = 128,
+        }]);
+        var generalInstructions = MeasureLookup(canonicalNamesOnly: false);
+        var canonicalInstructions = MeasureLookup(canonicalNamesOnly: true);
+        Assert.InRange(canonicalInstructions, 1, 6_000);
+        Assert.True(canonicalInstructions * 3 < generalInstructions * 2,
+            $"Canonical lookup used {canonicalInstructions} instructions versus {generalInstructions} for all names.");
+
         // Disjoint overloads require skipping non-containing ranges. Repeated
         // references on a line must share that work without merging their rows.
         // 離れた同名宣言での範囲検索を同じ行の参照間で共有し、参照行は全て保持する。
@@ -836,6 +867,41 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
                 """));
         raw.Complete();
         transaction.Commit();
+
+        int MeasureLookup(bool canonicalNamesOnly)
+        {
+            var instructions = 0;
+            SQLitePCL.delegate_progress countInstruction = _ => { instructions++; return 0; };
+            using var lookupCommand = _db.Connection.CreateCommand();
+            var sourceLookup = DbWriter.BuildMaterializedFreshReferenceSourceSymbolValueSqlForTesting(
+                "r", canonicalNamesOnly);
+            lookupCommand.CommandText = $"""
+                WITH RECURSIVE reference_row(ordinal, file_id, line, container_name, container_name_folded) AS (
+                    SELECT 1, {fileId}, 128, 'Caller', 'caller'
+                    UNION ALL
+                    SELECT ordinal + 1, file_id, line, container_name, container_name_folded
+                    FROM reference_row WHERE ordinal < 64
+                )
+                SELECT {sourceLookup} FROM reference_row AS r
+                """;
+            SQLitePCL.raw.sqlite3_progress_handler(_db.Connection.Handle, 1, countInstruction, null!);
+            try
+            {
+                using var reader = lookupCommand.ExecuteReader();
+                var rows = 0;
+                while (reader.Read())
+                {
+                    Assert.Equal(expected, reader.GetInt64(0));
+                    rows++;
+                }
+                Assert.Equal(64, rows);
+            }
+            finally
+            {
+                SQLitePCL.raw.sqlite3_progress_handler(_db.Connection.Handle, 0, null!, null!);
+            }
+            return instructions;
+        }
     }
 
     [Theory]
@@ -858,7 +924,7 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
         var fileId = InsertNewFile("src/source-distributions", language);
         _writer.InsertSymbols([new SymbolRecord
         {
-            FileId = fileId, Kind = "function", Name = "Caller", Line = 1, StartLine = 1, EndLine = 1000,
+            FileId = fileId, Kind = "function", Name = "Caller", Line = 1, StartLine = 1, EndLine = 2000,
         }]);
         var sourceId = ScalarLong("SELECT id FROM symbols");
         var previousHook = DbWriter.AuthoritativeFreshRawInsertExecutingForTesting;
@@ -883,23 +949,37 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
                 observed = work;
                 SQLitePCL.raw.sqlite3_progress_handler(_db.Connection.Handle, 1, progress, null!);
             };
-            // Alternate equal-sized SQL shapes, then reuse both cached native statements.
-            var scenarios = new (string? Container, int SharedLineCount, bool Shared, bool CacheHit)[]
+            // Alternate shared/direct and canonical/general SQL shapes. Alias and legacy
+            // inputs must reselect the general cache entry after a canonical-only file.
+            var scenarios = new (string? Container, int SharedLineCount, bool Shared, bool CacheHit, string SourceMode)[]
             {
-                ("Caller", 0, false, false),
-                ("Caller", 32, true, false),
-                ("Caller", 0, false, true),
-                ("Caller", 32, true, true),
-                ("Caller", 2, false, true),
-                ("Caller", 16, false, true),
-                ("Caller", 17, true, true),
-                (null, 0, false, true),
-                (null, 32, false, true),
-                ("", 0, false, true),
+                ("Caller", 0, false, false, "canonical"),
+                ("Caller", 32, true, false, "canonical"),
+                ("Caller", 0, false, true, "canonical"),
+                ("Caller", 32, true, true, "canonical"),
+                ("Caller", 2, false, true, "canonical"),
+                ("Caller", 16, false, true, "canonical"),
+                ("Caller", 17, true, true, "canonical"),
+                (null, 0, false, true, "canonical"),
+                (null, 32, false, true, "canonical"),
+                ("", 0, false, true, "canonical"),
+                ("Alias", 0, false, false, "alias"),
+                ("Alias", 32, true, false, "alias"),
+                ("Caller", 0, false, true, "legacy"),
+                ("Caller", 32, true, true, "legacy"),
+                ("Caller", 0, false, true, "canonical"),
+                ("Alias", 0, false, true, "alias"),
+                ("Caller", 32, true, true, "canonical"),
             };
             for (var batch = 0; batch < scenarios.Length; batch++)
             {
                 var scenario = scenarios[batch];
+                Execute(scenario.SourceMode switch
+                {
+                    "alias" => "UPDATE symbols SET name_folded = 'caller', display_name_folded = 'alias'",
+                    "legacy" => "UPDATE symbols SET name_folded = NULL, display_name_folded = NULL",
+                    _ => "UPDATE symbols SET name_folded = 'caller', display_name_folded = NULL",
+                });
                 var references = Enumerable.Range(1, 32).Select(index => new ReferenceRecord
                 {
                     FileId = fileId,
@@ -910,6 +990,8 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
                     Line = batch * 100 + (index <= scenario.SharedLineCount ? 1 : index),
                     Column = index,
                     Context = $"batch_{batch}",
+                    IsSelfReference = true,
+                    IsMutualRecursion = true,
                 }).ToArray();
                 observed = null;
                 instructions = 0;
@@ -924,8 +1006,9 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
                 }
                 Assert.NotNull(observed);
                 Assert.Equal(scenario.Shared, observed.SharesReferenceSourceLookups);
+                Assert.Equal(scenario.SourceMode == "canonical", observed.UsesCanonicalFreshSourceNamesOnly);
                 Assert.Equal(scenario.CacheHit, observed.CacheHit);
-                Assert.Equal(32 * 14, observed.BoundParameterCount);
+                Assert.Equal(32 * 12, observed.BoundParameterCount);
                 // Count only the INSERT, excluding the later hotspot aggregate refresh.
                 // An unconditional source map adds about 1,500 instructions to 32 unique rows.
                 var instructionBudget = string.IsNullOrEmpty(scenario.Container) ? 18_500 : 20_500;
@@ -935,6 +1018,7 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
                     Assert.Equal(string.IsNullOrEmpty(scenario.Container) ? (long?)null : sourceId,
                         SourceSymbolId(reference.SymbolName));
             }
+            Assert.Equal(0, ScalarLong("SELECT COUNT(*) FROM symbol_references WHERE is_self_reference IS NOT 0 OR is_mutual_recursion IS NOT 0"));
         }
         finally
         {
@@ -963,7 +1047,7 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
             {
                 firstFileId = InsertNewFile("src/source-savepoint-a.cs");
                 _writer.InsertSymbols([
-                    CreateSourceSymbol(firstFileId, "CallerA"),
+                    CreateSourceSymbol(firstFileId, "CanonicalA", displayNameFolded: "callera"),
                 ]);
                 _writer.InsertReferencesForNewFilesInAtomicFileScope(
                     [CreateSourceReference(firstFileId, "first_probe", "CallerA")],
@@ -1024,6 +1108,7 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
                 _writer.InsertSymbols([
                     CreateSourceSymbol(thirdFileId, "CallerC"),
                 ]);
+                Execute($"UPDATE symbols SET name_folded = NULL WHERE file_id = {thirdFileId}");
                 _writer.InsertReferencesForNewFilesInAtomicFileScope(
                     [CreateSourceReference(thirdFileId, "third_probe", "CallerC")],
                     refreshMutualRecursionFlags: false,
@@ -1044,12 +1129,13 @@ public sealed class AuthoritativeFreshRawBulkInsertTests : IDisposable
                 WHERE symbol_name = 'failed_probe'
                 """));
 
-        static SymbolRecord CreateSourceSymbol(long fileId, string name)
+        static SymbolRecord CreateSourceSymbol(long fileId, string name, string? displayNameFolded = null)
             => new()
             {
                 FileId = fileId,
                 Kind = "function",
                 Name = name,
+                DisplayNameFolded = displayNameFolded,
                 Line = 1,
                 StartLine = 1,
                 EndLine = 10,

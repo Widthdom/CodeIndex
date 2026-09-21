@@ -1614,23 +1614,63 @@ public static partial class SymbolExtractor
             return new CSharpPropertyMatchCandidate(matchLine, startLineIndex, startLineIndex);
         }
 
-        if (csharpRegexProbeCounts != null)
-            csharpRegexProbeCounts.PropertyHeaderRegexAttemptCount++;
-        var isPropertyHeaderPrefix = CSharpPropertyHeaderPrefixRegex.IsMatch(matchLine);
+        var headerSuffix = trimmedMatchLine;
+        if (!headerSuffix.IsEmpty && headerSuffix[^1] == '{')
+            headerSuffix = headerSuffix[..^1].TrimEnd();
+        if (applyCSharpRegexProbeOptimizations && HasImpossibleCSharpDeclarationPrefix(headerSuffix))
+        {
+            if (csharpRegexProbeCounts != null)
+                csharpRegexProbeCounts.HeaderPrefixShapeSkipCount++;
+            return new CSharpPropertyMatchCandidate(matchLine, startLineIndex, startLineIndex);
+        }
+
+        // In the property-header regex, '(' occurs only in a tuple type and that
+        // grammar requires a comma. Ordinary zero/one-argument method headers do
+        // not need its expensive unsuccessful type scan.
+        // property header regex の '(' は comma 必須の tuple 型だけに現れる。
+        var isPropertyHeaderPrefix = false;
+        if (!applyCSharpRegexProbeOptimizations || !matchLineSpan.Contains('(') || matchLineSpan.Contains(','))
+        {
+            if (csharpRegexProbeCounts != null)
+                csharpRegexProbeCounts.PropertyHeaderRegexAttemptCount++;
+            isPropertyHeaderPrefix = CSharpPropertyHeaderPrefixRegex.IsMatch(matchLine);
+        }
+        else if (csharpRegexProbeCounts != null)
+        {
+            csharpRegexProbeCounts.PropertyHeaderTupleSkipCount++;
+        }
         var isMethodHeaderPrefix = false;
         // Both method-prefix regexes require '(' or '<', including incomplete generic headers.
         // 不完全な generic header を含め、method prefix には '(' または '<' が必須。
         if (!isPropertyHeaderPrefix
             && (!applyCSharpRegexProbeOptimizations || matchLineSpan.IndexOfAny('(', '<') >= 0))
         {
-            if (csharpRegexProbeCounts != null)
-                csharpRegexProbeCounts.MethodHeaderRegexAttemptCount++;
-            isMethodHeaderPrefix = CSharpMethodHeaderPrefixRegex.IsMatch(matchLine);
-            if (!isMethodHeaderPrefix)
+            // Without a generic prefix, the incomplete method-header branch ends
+            // inside its parameter list and cannot consume a closing ')'. Generic
+            // prefixes remain eligible because their permissive grammar can do so.
+            // generic prefix が無い incomplete method header は ')' を消費できない。
+            if (!applyCSharpRegexProbeOptimizations || matchLineSpan.Contains('<') || headerSuffix.IsEmpty || headerSuffix[^1] != ')')
             {
                 if (csharpRegexProbeCounts != null)
                     csharpRegexProbeCounts.MethodHeaderRegexAttemptCount++;
-                isMethodHeaderPrefix = CSharpMultilineTupleReturnPrefixRegex.IsMatch(matchLine);
+                isMethodHeaderPrefix = CSharpMethodHeaderPrefixRegex.IsMatch(matchLine);
+            }
+            else if (csharpRegexProbeCounts != null)
+            {
+                csharpRegexProbeCounts.MethodHeaderSuffixSkipCount++;
+            }
+            if (!isMethodHeaderPrefix)
+            {
+                if (!applyCSharpRegexProbeOptimizations || !trimmedMatchLine.IsEmpty && trimmedMatchLine[^1] == '(')
+                {
+                    if (csharpRegexProbeCounts != null)
+                        csharpRegexProbeCounts.MethodHeaderRegexAttemptCount++;
+                    isMethodHeaderPrefix = CSharpMultilineTupleReturnPrefixRegex.IsMatch(matchLine);
+                }
+                else if (csharpRegexProbeCounts != null)
+                {
+                    csharpRegexProbeCounts.MethodHeaderSuffixSkipCount++;
+                }
             }
         }
         if (!isPropertyHeaderPrefix
@@ -1689,6 +1729,15 @@ public static partial class SymbolExtractor
                 csharpRegexProbeCounts);
         }
 
+        var semicolonTracker = new CSharpTopLevelSemicolonTracker();
+        if (applyCSharpRegexProbeOptimizations)
+        {
+            semicolonTracker.Scan(matchLine);
+            if (csharpRegexProbeCounts != null)
+                csharpRegexProbeCounts.PropertyLookaheadSemicolonInputCharacters += matchLine.Length;
+        }
+        var hasDecisionPunctuation = !applyCSharpRegexProbeOptimizations
+            || matchLineSpan.IndexOfAny('{', '=', ';') >= 0;
         var lookaheadLimitExclusive = Math.Min(csharpMatchLines.Length, startLineIndex + CSharpPropertyMatchLookaheadLineLimit + 1);
         for (int i = startLineIndex + 1; i < lookaheadLimitExclusive; i++)
         {
@@ -1700,6 +1749,34 @@ public static partial class SymbolExtractor
                 break;
 
             builder.Append(' ').Append(nextLine);
+            if (applyCSharpRegexProbeOptimizations)
+            {
+                // Generic whitespace normalization does not change punctuation or
+                // delimiter depth. Keep the semicolon scan append-only, including
+                // the header lines whose combined string is not needed yet.
+                // generic空白の正規化は記号・深さを変えないため、追加行だけを走査する。
+                semicolonTracker.Scan(nextLine);
+                if (csharpRegexProbeCounts != null)
+                    csharpRegexProbeCounts.PropertyLookaheadSemicolonInputCharacters += nextLine.Length;
+
+                // Every decision below requires '{', '=' or ';'. Until one appears,
+                // appending and enforcing the original budgets is sufficient; defer
+                // cumulative string copies and normalization without ending lookahead.
+                // 後段の全判定に必要な記号が現れるまで、元のbudgetを維持して連結だけ行う。
+                hasDecisionPunctuation = hasDecisionPunctuation
+                    || nextLine.AsSpan().IndexOfAny('{', '=', ';') >= 0;
+                if (!hasDecisionPunctuation)
+                {
+                    if (csharpRegexProbeCounts != null)
+                        csharpRegexProbeCounts.PropertyLookaheadDeferredCount++;
+                    continue;
+                }
+            }
+            if (csharpRegexProbeCounts != null)
+            {
+                csharpRegexProbeCounts.PropertyLookaheadMaterializationCount++;
+                csharpRegexProbeCounts.PropertyLookaheadMaterializedCharacters += builder.Length;
+            }
             var normalizedCombined = CollapseCSharpGenericTypeWhitespace(builder.ToString());
 
             if (openBraceLineIndex < 0 && csharpMatchLines[i].IndexOf('{') >= 0)
@@ -1745,7 +1822,11 @@ public static partial class SymbolExtractor
             // `HasCSharpTopLevelSemicolon` は真の終端 `;` のみで発火し、先行行に `{` があっても
             // 問題ない。上の `HasCSharpPropertyAccessorStart` が真の property 本体を先に拾うため、
             // ここに到達する `{` は初期化子側のものと確定している。
-            if (HasCSharpTopLevelSemicolon(normalizedCombined))
+            if (!applyCSharpRegexProbeOptimizations && csharpRegexProbeCounts != null)
+                csharpRegexProbeCounts.PropertyLookaheadSemicolonInputCharacters += normalizedCombined.Length;
+            if (applyCSharpRegexProbeOptimizations
+                ? semicolonTracker.HasTopLevelSemicolon
+                : HasCSharpTopLevelSemicolon(normalizedCombined))
             {
                 return new CSharpPropertyMatchCandidate(normalizedCombined, i, i);
             }
@@ -1980,11 +2061,45 @@ public static partial class SymbolExtractor
                     counts.ConfirmationSuffixSkipCount++;
                 return false;
             }
+
+            if (HasImpossibleCSharpDeclarationPrefix(suffix))
+            {
+                if (counts != null)
+                    counts.ConfirmationPrefixSkipCount++;
+                return false;
+            }
         }
 
         if (counts != null)
             counts.ConfirmationRegexAttemptCount++;
         return (method ? CSharpConfirmedMethodPrefixRegex : CSharpConfirmedMemberPrefixRegex).IsMatch(line);
+    }
+
+    private static bool HasImpossibleCSharpDeclarationPrefix(ReadOnlySpan<char> prefix)
+    {
+        // Parameter continuations can acquire an opening parenthesis from later body
+        // text. Before the first '(', neither anchored declaration regex can consume a
+        // closing parenthesis or statement punctuation outside a generic argument list.
+        // Generic method lists deliberately remain opaque: their regex permits arbitrary
+        // non-angle characters. A '(' likewise hands control back to the tuple/parameter
+        // regex instead of duplicating its permissive grammar here.
+        // 引数の継続断片は後続bodyから '(' を取り込み得る。最初の '(' より前では、
+        // generic外の ')' やstatement記号はどちらの宣言regexにも一致しない。
+        // generic内と '(' 以降は既存regexの寛容な文法へ委ねる。
+        var angleDepth = 0;
+        foreach (var character in prefix)
+        {
+            if (character == '(')
+                return false;
+            if (character == '<')
+                angleDepth++;
+            else if (character == '>' && angleDepth > 0)
+                angleDepth--;
+            else if (angleDepth == 0 && character is ')' or '{' or '}' or ';' or '=')
+                return true;
+        }
+
+        return false;
     }
 
     // Prefer the raw line's `{` column (to preserve original positioning for body slicing),
@@ -2219,6 +2334,9 @@ public static partial class SymbolExtractor
 
     private static bool HasCSharpTopLevelFieldInitializer(string text)
     {
+        if (!text.Contains('='))
+            return false;
+
         int paren = 0, bracket = 0, brace = 0;
         for (int i = 0; i < text.Length; i++)
         {

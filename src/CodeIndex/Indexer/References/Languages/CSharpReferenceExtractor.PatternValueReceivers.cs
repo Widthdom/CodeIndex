@@ -324,7 +324,9 @@ public static partial class ReferenceExtractor
                 continue;
             }
 
-            if (!TryFindCSharpDeclarationPatternScopeEndPosition(structuralLines, bodyStartIndex, bodyEndIndex, declarationLineIndex, position.Column, out var declarationScopeEnd))
+            if (!TryFindCSharpDeclarationPatternScopeEndPosition(
+                    structuralLines, bodyStartIndex, bodyEndIndex, declarationLineIndex, position.Column,
+                    bodyText, pattern.Offset, out var declarationScopeEnd))
                 continue;
 
             AddCSharpFunctionValueReceiverName(names, pattern.Name, position.Line, position.Column, declarationScopeEnd.Line, declarationScopeEnd.Column, seenNames);

@@ -20,13 +20,18 @@ public sealed class ReferencePersistenceBindingTests : IDisposable
     }
 
     [Theory]
-    [InlineData(false, false)]
-    [InlineData(false, true)]
-    [InlineData(true, false)]
-    [InlineData(true, true)]
+    [InlineData(false, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, false, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, false, true)]
+    [InlineData(true, true, true)]
     public void InsertReferences_AllPersistenceModesBindNormalizedContextByOrdinal(
         bool atomicFileScope,
-        bool referenceLinesAreNew)
+        bool referenceLinesAreNew,
+        bool freshDefaults)
     {
         var longUnicodeContext = string.Concat(
             Enumerable.Repeat("長い文脈😀e\u0301();", 512));
@@ -47,6 +52,9 @@ public sealed class ReferencePersistenceBindingTests : IDisposable
             CreateReference(fileId, "Fourth", line: 10, context: "同じ行の別文脈();"),
         };
         var observedWork = new List<DbWriter.ReferenceInsertBindingWork>();
+        using var graph = freshDefaults
+            ? _writer.BeginReferenceGraphRefreshScope(forceFullRefresh: true, useFreshReferenceResolutionDefaults: true)
+            : null;
         var previousWorkHook = DbWriter.ReferenceInsertBindingWorkForTesting;
         try
         {
@@ -98,24 +106,28 @@ public sealed class ReferencePersistenceBindingTests : IDisposable
         if (atomicFileScope)
         {
             Assert.Equal([2, 2], observedWork.Select(work => work.StatementRows));
-            Assert.Equal([2 * 14, 2 * 14], observedWork.Select(work => work.BoundParameterCount));
+            var expectedParameters = 2 * (freshDefaults ? 12 : 14);
+            Assert.Equal([expectedParameters, expectedParameters], observedWork.Select(work => work.BoundParameterCount));
         }
         else
         {
             var work = Assert.Single(observedWork);
             Assert.Equal(4, work.StatementRows);
-            Assert.Equal(4 * 14, work.BoundParameterCount);
+            Assert.Equal(4 * (freshDefaults ? 12 : 14), work.BoundParameterCount);
         }
         Assert.All(observedWork, work =>
         {
             Assert.Equal(4, work.MaterializedReferenceCount);
             Assert.Equal(3, work.MaterializedReferenceLineCount);
+            Assert.Equal(freshDefaults, work.UsesFreshResolutionDefaults);
         });
 
         using var command = _db.Connection.CreateCommand();
         command.Parameters.AddWithValue("@fileId", fileId);
         command.CommandText = """
-            SELECT sr.symbol_name, sr.context, sr.reference_line_id, rl.context
+            SELECT sr.symbol_name, sr.context, sr.reference_line_id, rl.context,
+                   sr.span_length, sr.symbol_name_folded, sr.container_name_folded,
+                   sr.is_self_reference, sr.is_mutual_recursion
             FROM symbol_references AS sr
             JOIN reference_lines AS rl ON rl.id = sr.reference_line_id
             WHERE sr.file_id = @fileId
@@ -137,6 +149,11 @@ public sealed class ReferencePersistenceBindingTests : IDisposable
                 Assert.True(reader.IsDBNull(1));
                 Assert.True(reader.GetInt64(2) > 0);
                 Assert.Equal(row.Context, reader.GetString(3));
+                Assert.Equal(5, reader.GetInt32(4));
+                Assert.Equal(row.Symbol.ToLowerInvariant(), reader.GetString(5));
+                Assert.Equal("caller", reader.GetString(6));
+                Assert.Equal(!freshDefaults, reader.GetBoolean(7));
+                Assert.Equal(!freshDefaults, reader.GetBoolean(8));
             }
             Assert.False(reader.Read());
         }
@@ -184,8 +201,11 @@ public sealed class ReferencePersistenceBindingTests : IDisposable
             ReferenceKind = "call",
             Line = line,
             Column = 1,
+            SpanLength = 5,
             Context = context,
             ContainerKind = "function",
             ContainerName = "Caller",
+            IsSelfReference = true,
+            IsMutualRecursion = true,
         };
 }

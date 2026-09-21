@@ -42,10 +42,7 @@ public static partial class ReferenceExtractor
         private bool recordPrimaryCtorRangesResolved;
         private Dictionary<SymbolRecord, (int EndLine, int EndColumn, bool IsRecordDeclaration)>?
             csharpRecordHeaderBoundaries;
-        private (
-            IReadOnlyDictionary<string, CSharpContainingTypeValueReceiverNames> ByContainingType,
-            IReadOnlyDictionary<int, List<CSharpFunctionValueReceiverNameRecord>> ByFunctionStartLine)? csharpValueReceiverLookups;
-        private bool csharpValueReceiverLookupsResolved;
+        private CSharpValueReceiverLookupCache? csharpValueReceiverLookups;
         private IReadOnlyDictionary<string, List<PowerShellReferenceExtractor.SplatAssignment>>? powershellSplatAssignments;
         private bool powershellSplatAssignmentsResolved;
 
@@ -308,29 +305,24 @@ public static partial class ReferenceExtractor
             return boundary;
         }
 
-        internal (
-            IReadOnlyDictionary<string, CSharpContainingTypeValueReceiverNames> ByContainingType,
-            IReadOnlyDictionary<int, List<CSharpFunctionValueReceiverNameRecord>> ByFunctionStartLine) GetCSharpValueReceiverLookups()
-        {
-            if (!csharpValueReceiverLookupsResolved)
-            {
-                csharpValueReceiverLookups = BuildCSharpValueReceiverNameLookups(
-                    language,
-                    symbols,
-                    structuralLines,
-                    csharpKnownTypeNames,
-                    csharpUsingAliases);
-                csharpValueReceiverLookupsResolved = true;
-            }
-
-            return csharpValueReceiverLookups!.Value;
-        }
+        private CSharpValueReceiverLookupCache GetCSharpValueReceiverLookupCache() =>
+            csharpValueReceiverLookups ??= new(
+                symbols, structuralLines, csharpKnownTypeNames, csharpUsingAliases);
 
         internal IReadOnlyDictionary<string, CSharpContainingTypeValueReceiverNames> GetCSharpValueReceiverNames() =>
-            GetCSharpValueReceiverLookups().ByContainingType;
+            language == "csharp"
+                ? GetCSharpValueReceiverLookupCache().GetContainingTypeNames()
+                : EmptyCSharpValueReceiverNamesByContainingType;
 
         internal IReadOnlyDictionary<int, List<CSharpFunctionValueReceiverNameRecord>> GetCSharpFunctionValueReceiverNames() =>
-            GetCSharpValueReceiverLookups().ByFunctionStartLine;
+            language == "csharp"
+                ? GetCSharpValueReceiverLookupCache().GetAllFunctionNames()
+                : EmptyCSharpValueReceiverNamesByFunctionStartLine;
+
+        internal IReadOnlyDictionary<int, List<CSharpFunctionValueReceiverNameRecord>> GetCSharpFunctionValueReceiverNames(SymbolRecord? container) =>
+            language == "csharp"
+                ? GetCSharpValueReceiverLookupCache().GetFunctionNames(container)
+                : EmptyCSharpValueReceiverNamesByFunctionStartLine;
 
         internal string ResolveCSharpUsingAliasReferenceName(string referenceName, int lineNumber)
         {

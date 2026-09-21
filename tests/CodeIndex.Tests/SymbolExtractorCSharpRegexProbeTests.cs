@@ -410,9 +410,35 @@ public sealed class SymbolExtractorCSharpRegexProbeTests
     [InlineData("cshtml")]
     public void Extract_CSharpMethodConfirmation_RequiresOpeningParenthesis(string language)
     {
-        const string content = """
+        var continuations = string.Join('\n', Enumerable.Range(0, 16).Select(index => $$"""
+                public int Continued{{index}}(
+                    IReadOnlyDictionary<string, List<int>> values,
+                    LongDeclarationParameterType left,
+                    LongDeclarationParameterType right)
+                {
+                    if (values.ContainsKey("value"))
+                        return Calculate(() => 1);
+                    return 0;
+                }
+            """));
+        var content = $$"""
             class Example
             {
+            {{continuations}}
+                public Example()
+                    : this(0) { }
+                public Example(int value) { }
+
+                public void Empty()
+                {
+                }
+                public int Single(int value)
+                {
+                    return value;
+                }
+                public (
+                    int Left, int Right) WrappedTuple() => (1, 2);
+
                 public int Sum(
                     LongDeclarationParameterType left,
                     LongDeclarationParameterType right)
@@ -426,9 +452,32 @@ public sealed class SymbolExtractorCSharpRegexProbeTests
                 public int Á => 3;
                 public static (int Left, int Right) Compute(int left, int right) => (left, right);
                 public T Identity<T>(T value) => value;
+                public List<(int Left, int Right)> Tuples<T>([Parameter("value)")] T value) => null;
+                public delegate*<int, int> Pointer() => null;
                 int IFoo.Calculate() => 1;
+                List<(int Left, int Right)> IFoo<List<int>>.Transform<T>(T value) => null;
                 int IFoo.Property => 2;
                 private Func<int> factory = () => 1;
+                private Dictionary<string, List<int>> initialized =
+                    new()
+                    {
+                        ["value"] = new List<int> { 1, 2 }
+                    };
+                public int WithDefault(
+                    Func<int> source = null,
+                    int seed = 1)
+                {
+                    return seed;
+                }
+                public Dictionary<
+                    string,
+                    List<(int Left, int Right)>> DeferredGeneric
+                {
+                    [Accessor("{;=")]
+                    get;
+                }
+                public int DeferredExpression
+                    => 1;
             }
             """;
         var baseline = SymbolExtractor.ExtractForCSharpRegexProbeTesting(
@@ -442,6 +491,13 @@ public sealed class SymbolExtractorCSharpRegexProbeTests
         Assert.Contains(optimized, symbol => symbol.Kind == "function" && symbol.Name == "Compute");
         Assert.Contains(optimized, symbol => symbol.Kind == "function" && symbol.Name == "Identity");
         Assert.Contains(optimized, symbol => symbol.Kind == "property" && symbol.Name == "Résultat");
+        Assert.Equal(16, optimized.Count(symbol => symbol.Name.StartsWith("Continued", StringComparison.Ordinal)));
+        foreach (var name in new[] { "Tuples", "Pointer", "Transform", "Empty", "Single", "WrappedTuple", "WithDefault" })
+            Assert.Contains(optimized, symbol => symbol.Kind == "function" && symbol.Name == name);
+        Assert.Contains(optimized, symbol => symbol.Kind == "field" && symbol.Name == "initialized");
+        foreach (var name in new[] { "DeferredGeneric", "DeferredExpression" })
+            Assert.Contains(optimized, symbol => symbol.Kind == "property" && symbol.Name == name);
+        Assert.Equal(2, optimized.Count(symbol => symbol.Kind == "function" && symbol.Name == "Example"));
         Assert.Equal(0, baselineMetrics.MethodConfirmationLiteralSkipCount);
         Assert.True(optimizedMetrics.MethodConfirmationLiteralSkipCount > 0);
         Assert.True(optimizedMetrics.MethodConfirmationRegexAttemptCount > 0);
@@ -449,6 +505,51 @@ public sealed class SymbolExtractorCSharpRegexProbeTests
         Assert.Equal(0, baselineMetrics.ConfirmationSuffixSkipCount);
         Assert.True(optimizedMetrics.ConfirmationSuffixSkipCount > 0);
         Assert.True(optimizedMetrics.ConfirmationRegexAttemptCount < baselineMetrics.ConfirmationRegexAttemptCount);
+        Assert.Equal(0, baselineMetrics.ConfirmationPrefixSkipCount);
+        Assert.True(optimizedMetrics.ConfirmationPrefixSkipCount >= 16);
+        Assert.Equal(0, baselineMetrics.HeaderPrefixShapeSkipCount);
+        Assert.True(optimizedMetrics.HeaderPrefixShapeSkipCount > 0);
+        Assert.Equal(0, baselineMetrics.PropertyHeaderTupleSkipCount);
+        Assert.True(optimizedMetrics.PropertyHeaderTupleSkipCount >= 16);
+        Assert.Equal(0, baselineMetrics.MethodHeaderSuffixSkipCount);
+        Assert.True(optimizedMetrics.MethodHeaderSuffixSkipCount > 0);
+        Assert.True(optimizedMetrics.PropertyHeaderRegexAttemptCount < baselineMetrics.PropertyHeaderRegexAttemptCount);
+        Assert.True(optimizedMetrics.MethodHeaderRegexAttemptCount < baselineMetrics.MethodHeaderRegexAttemptCount);
+        Assert.Equal(0, baselineMetrics.PropertyLookaheadDeferredCount);
+        Assert.True(optimizedMetrics.PropertyLookaheadDeferredCount >= 32);
+        Assert.True(optimizedMetrics.PropertyLookaheadMaterializationCount < baselineMetrics.PropertyLookaheadMaterializationCount);
+        Assert.True(optimizedMetrics.PropertyLookaheadMaterializedCharacters < baselineMetrics.PropertyLookaheadMaterializedCharacters);
+        Assert.True(optimizedMetrics.PropertyLookaheadSemicolonInputCharacters < baselineMetrics.PropertyLookaheadSemicolonInputCharacters);
+
+        // Generic prefix regexes intentionally accept characters that are not valid
+        // C# type syntax. Keep their existing recovery behavior, including '(' without
+        // a comma, and compare every extracted field rather than enforcing C# grammar.
+        foreach (var prefix in new[] { "int Generic<T)", "int Generic<T(", "int Generic<T;", "int Generic<T>", "List<(int X, int Y)> Generic<T)" })
+        {
+            var malformed = "class Recovery\n{\n    " + prefix + "\n    (int value) { }\n    public int Kept { get; }\n}";
+            var malformedBaseline = SymbolExtractor.ExtractForCSharpRegexProbeTesting(
+                1, malformed, false, out _, language: language);
+            var malformedOptimized = SymbolExtractor.ExtractForCSharpRegexProbeTesting(
+                1, malformed, true, out _, language: language);
+            AssertSymbolsEqual(malformedBaseline, malformedOptimized);
+        }
+
+        // Deferred copies must still honor the original physical-line and cumulative
+        // character limits, including malformed headers that never become declarations.
+        foreach (var parameters in new[]
+        {
+            string.Join('\n', Enumerable.Range(0, 20).Select(index => $"int item{index},")),
+            string.Join('\n', Enumerable.Range(0, 4).Select(index => $"{new string('T', 1100)} item{index},")),
+        })
+        {
+            var bounded = "class Bounded\n{\n    public int Limited(\n" + parameters
+                + "int last) { return 0; }\n    public int Kept { get; }\n}";
+            var boundedBaseline = SymbolExtractor.ExtractForCSharpRegexProbeTesting(
+                1, bounded, false, out _, language: language);
+            var boundedOptimized = SymbolExtractor.ExtractForCSharpRegexProbeTesting(
+                1, bounded, true, out _, language: language);
+            AssertSymbolsEqual(boundedBaseline, boundedOptimized);
+        }
     }
 
     [Theory]

@@ -98,22 +98,23 @@ public static partial class ReferenceExtractor
             return false;
         }
 
-        var receiverLookups = call.Lookups.GetCSharpValueReceiverLookups();
+        var typeReceiverNames = call.Lookups.GetCSharpValueReceiverNames();
+        var functionReceiverNames = call.Lookups.GetCSharpFunctionValueReceiverNames(callContainer);
         if (!HasCSharpValueReceiverConflict(
                 normalizedName,
                 normalizedName,
                 line.LineNumber,
                 callIndex,
                 callContainer,
-                receiverLookups.ByContainingType,
-                receiverLookups.ByFunctionStartLine))
+                typeReceiverNames,
+                functionReceiverNames))
         {
             return false;
         }
 
         var containingType = GetContainingTypeQualifiedName(callContainer);
         if (containingType != null
-            && receiverLookups.ByContainingType.TryGetValue(
+            && typeReceiverNames.TryGetValue(
                 containingType,
                 out var receiverNames)
             && (receiverNames.InstanceNames.Contains(normalizedName)

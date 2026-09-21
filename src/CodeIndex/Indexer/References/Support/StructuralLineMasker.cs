@@ -1,3 +1,5 @@
+using System.Buffers;
+
 namespace CodeIndex.Indexer;
 
 /// <summary>
@@ -13,6 +15,20 @@ internal readonly record struct JsTaggedTemplateHit(int Line, int Column, string
 /// </summary>
 internal static partial class StructuralLineMasker
 {
+    private static readonly SearchValues<char> CSharpCodeDelimiters = SearchValues.Create("/\'\"$@");
+    private static readonly SearchValues<char> CSharpHoleDelimiters = SearchValues.Create("/\'\"$@{}");
+    private static readonly SearchValues<char> JvmCodeDelimiters = SearchValues.Create("/\'\"");
+    private static readonly SearchValues<char> JvmHoleDelimiters = SearchValues.Create("/\'\"{}");
+
+    // Only use in scanner states where ordinary code cannot change lexical state.
+    // Keep original text intact: prefix-sensitive interpolation reads behind the delimiter.
+    // 通常コードで状態が変わらない箇所だけで使用し、接頭辞判定用の原文も保持する。
+    private static int FindNextCodeDelimiter(string line, int start, SearchValues<char> delimiters)
+    {
+        var offset = line.AsSpan(start).IndexOfAny(delimiters);
+        return offset < 0 ? line.Length : start + offset;
+    }
+
     private enum StringKind
     {
         Regular,
@@ -386,6 +402,13 @@ internal static partial class StructuralLineMasker
 
     private static bool TryStartString(string line, int startIndex, out int openingLength, out StringFrame frame)
     {
+        if (line[startIndex] is not ('"' or '$' or '@'))
+        {
+            openingLength = 0;
+            frame = null!;
+            return false;
+        }
+
         if (IsInterpolatedVerbatimStringStart(line, startIndex))
         {
             openingLength = 3;
@@ -424,7 +447,7 @@ internal static partial class StructuralLineMasker
             return true;
         }
 
-        var rawOpenLength = CountQuoteRun(line, startIndex);
+        var rawOpenLength = dollarCount == 0 ? rawDelimiterLength : 0;
         if (rawOpenLength >= 3)
         {
             openingLength = rawOpenLength;

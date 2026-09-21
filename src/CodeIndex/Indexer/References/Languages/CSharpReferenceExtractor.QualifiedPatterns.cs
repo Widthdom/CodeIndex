@@ -13,7 +13,7 @@ public static partial class ReferenceExtractor
         IReadOnlyList<(int start, int end)>? csharpAttrRangesOnLine,
         IReadOnlyList<CSharpUsingAliasRecord> usingAliases,
         Func<IReadOnlyDictionary<string, CSharpContainingTypeValueReceiverNames>> getValueReceiverNamesByContainingType,
-        Func<IReadOnlyDictionary<int, List<CSharpFunctionValueReceiverNameRecord>>> getValueReceiverNamesByFunctionStartLine,
+        Func<SymbolRecord?, IReadOnlyDictionary<int, List<CSharpFunctionValueReceiverNameRecord>>> getValueReceiverNamesByFunctionStartLine,
         List<ReferenceRecord> references,
         ReferenceDedupeSet seen,
         long fileId,
@@ -21,13 +21,13 @@ public static partial class ReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForCall)
     {
-        if (preparedLine.IndexOf('.') < 0)
+        if (enumMemberLookup.Count == 0 || preparedLine.IndexOf('.') < 0)
             return;
 
         var scan = 0;
         while (scan < preparedLine.Length)
         {
-            if (!TryReadCSharpQualifiedAccess(preparedLine, scan, out var parsed))
+            if (!TryReadCSharpQualifiedAccess(preparedLine, scan, out var parsed, discardUnqualified: true))
             {
                 scan++;
                 continue;
@@ -42,23 +42,10 @@ public static partial class ReferenceExtractor
             if (!enumMemberLookup.TryGetValue(memberName, out var targets))
                 continue;
 
-            var callContainer = resolveContainerForCall(member.Start);
             var qualifier = TrimLeadingCSharpGlobalQualifier(NormalizeCSharpQualifiedSegments(preparedLine, parsed.Segments, parsed.Segments.Count - 1));
             var resolvedQualifier = parsed.HasLeadingGlobalQualifier
                 ? qualifier
                 : ResolveCSharpQualifiedAliasTarget(qualifier, lineNumber, usingAliases);
-            if (!parsed.HasLeadingGlobalQualifier
-                && HasCSharpValueReceiverConflict(
-                    qualifier,
-                    resolvedQualifier,
-                    lineNumber,
-                    member.Start,
-                    callContainer,
-                    getValueReceiverNamesByContainingType(),
-                    getValueReceiverNamesByFunctionStartLine()))
-            {
-                continue;
-            }
             if (!MatchesQualifiedConstantContainer(
                     resolvedQualifier,
                     targets,
@@ -72,6 +59,23 @@ public static partial class ReferenceExtractor
             if (IsCSharpSimpleAssignmentTarget(preparedLine, nextTokenIndex))
                 continue;
 
+            // Receiver lookup scans callable bodies. Only construct it after the qualifier
+            // and usage can produce an enum read; unrelated same-name members need no scopes.
+            // receiver lookup は callable 本体を走査するため、修飾子と用途が enum read の
+            // 候補であると確認してから作る。無関係な同名 member には scope は不要。
+            var callContainer = resolveContainerForCall(member.Start);
+            if (!parsed.HasLeadingGlobalQualifier
+                && HasCSharpValueReceiverConflict(
+                    qualifier,
+                    resolvedQualifier,
+                    lineNumber,
+                    member.Start,
+                    callContainer,
+                    getValueReceiverNamesByContainingType(),
+                    getValueReceiverNamesByFunctionStartLine(callContainer)))
+            {
+                continue;
+            }
             var insideCSharpAttributeRange = csharpAttrRangesOnLine != null
                 && IsInsideCSharpAttributeRange(csharpAttrRangesOnLine, member.Start);
             var referenceKind = TryClassifyMetadataReference("csharp", preparedLine, member.Start, insideCSharpAttributeRange) ?? "member_read";
@@ -444,7 +448,8 @@ public static partial class ReferenceExtractor
     private static bool TryReadCSharpQualifiedAccess(
         string preparedLine,
         int start,
-        out (IReadOnlyList<(int Start, int End)> Segments, int NextIndex, bool LastSeparatorWasDot, bool HasLeadingGlobalQualifier) parsed)
+        out (IReadOnlyList<(int Start, int End)> Segments, int NextIndex, bool LastSeparatorWasDot, bool HasLeadingGlobalQualifier) parsed,
+        bool discardUnqualified = false)
     {
         parsed = (Array.Empty<(int Start, int End)>(), start, false, false);
 
@@ -453,7 +458,10 @@ public static partial class ReferenceExtractor
         if (start >= preparedLine.Length || !IsCSharpIdentifierStart(preparedLine[start]))
             return false;
 
-        var segments = new List<(int Start, int End)>();
+        // Most words on a dotted line are unqualified. Keep only cursor progress for
+        // enum scanning until a separator proves that segment storage is needed.
+        // dot を含む行でも多くの単語は非修飾なので、区切りを確認するまで list を作らない。
+        List<(int Start, int End)>? segments = null;
         var cursor = start;
         var lastSeparatorWasDot = false;
         var hasLeadingGlobalQualifier = false;
@@ -462,20 +470,21 @@ public static partial class ReferenceExtractor
             if (!TryConsumeCSharpIdentifier(preparedLine, ref cursor, out var segmentStart, out var segmentEnd))
                 return false;
 
-            segments.Add((segmentStart, segmentEnd));
+            segments?.Add((segmentStart, segmentEnd));
 
             var separatorStart = SkipWhitespace(preparedLine, cursor);
             if (separatorStart + 1 < preparedLine.Length
                 && preparedLine[separatorStart] == ':'
                 && preparedLine[separatorStart + 1] == ':')
             {
-                if (segments.Count == 1
+                if (segments == null
                     && segmentEnd - segmentStart == "global".Length
                     && string.CompareOrdinal(preparedLine, segmentStart, "global", 0, "global".Length) == 0)
                 {
                     hasLeadingGlobalQualifier = true;
                 }
 
+                segments ??= [(segmentStart, segmentEnd)];
                 cursor = SkipWhitespace(preparedLine, separatorStart + 2);
                 lastSeparatorWasDot = false;
                 continue;
@@ -483,12 +492,16 @@ public static partial class ReferenceExtractor
 
             if (separatorStart < preparedLine.Length && preparedLine[separatorStart] == '.')
             {
+                segments ??= [(segmentStart, segmentEnd)];
                 cursor = SkipWhitespace(preparedLine, separatorStart + 1);
                 lastSeparatorWasDot = true;
                 continue;
             }
 
-            parsed = (segments, cursor, lastSeparatorWasDot, hasLeadingGlobalQualifier);
+            IReadOnlyList<(int Start, int End)> resultSegments = segments is not null
+                ? segments
+                : discardUnqualified ? Array.Empty<(int, int)>() : [(segmentStart, segmentEnd)];
+            parsed = (resultSegments, cursor, lastSeparatorWasDot, hasLeadingGlobalQualifier);
             return true;
         }
     }

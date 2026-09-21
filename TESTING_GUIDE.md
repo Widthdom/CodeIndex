@@ -1,5 +1,95 @@
 # Testing Guide
 
+`StructuralLineMasker_MaskLines_PreservesCodeSpansAroundNestedLiterals` compares exact
+masked text and unchanged-line identity in C#, Kotlin and Scala, with code spans up to
+4096 characters, nested interpolations, multiline comments and delimiter-free hole
+lines. Keep the C# and JVM nested/deep-triple suites in the full extractor run on both
+runtimes; Scala interpolator prefixes must still inspect the original text.
+C#・Kotlin・Scalaで最大4096文字のコード区間、補間の入れ子、複数行comment、
+記号のない補間行のマスク結果と未変更行の同一性を確認します。Scalaの接頭辞判定と
+深いtriple stringの既存回帰も両runtimeで維持してください。
+
+`ReferenceExtractorReceiverScopeTests` counts structural-line reads to prove sparse
+receiver checks avoid unrelated callable bodies and cache empty scopes. Preserve
+last-nonempty winners for colliding start lines, scoped-to-full lookup completion,
+and zero body reads for null/type/test-method containers. The shared four-language
+fixture compares all reference fields, completed lookup records and local-function
+target qualifiers. Run it with receiver allocation budgets and the full reference
+suites on net8/net9. Java has no equivalent C# receiver-shadow lookup.
+receiverの限定解析が無関係な本体を読まず、空のscopeも再利用することを読取り回数で
+検証します。同じ開始行の最後の空でない結果、限定解析後の全体解析、C#系4言語の
+参照全項目・lookup・local functionのtarget qualifierを両runtimeで維持してください。
+
+The same C# multiline-header fixture also compares deferred lookahead copies and
+append-only semicolon scans across all four language keys. Require fewer combined
+strings, copied characters and semicolon input characters while comparing all symbol
+fields. Keep default parameters, nested generic/tuple properties, accessor attributes,
+object initializers and the original 16-line / 4096-character lookahead limits.
+C#系4言語で先読み文字列の生成回数・コピー文字数・semicolon走査の入力文字数の削減と
+全symbol項目の一致を検証します。既定引数・generic／tuple・accessor属性・初期化子と、
+元の16行／4096文字の先読み上限を維持してください。
+
+The shared fixture in `SymbolExtractorCSharpRegexProbeTests` also checks multiline
+header gates over zero/one-argument methods, wrapped tuple returns and malformed
+generic prefixes. Compare every symbol field with the gates disabled/enabled and
+require fewer property/method header regex attempts across C#/Razor/Blazor/CSHTML.
+Keep permissive generic recovery controls and the full symbol suites on net8/net9;
+do not use elapsed-time thresholds for these grammar-based skips.
+C#系4言語で引数0／1個・折返しtuple戻り値・不正なgeneric prefixの全symbol項目を
+比較し、header regexの実行回数削減を検証します。generic復旧と全symbol回帰を
+両runtimeで維持し、時間の閾値には依存しません。
+
+`ReferenceExtractorReceiverScopeTests` bounds local-tracking allocations in arrow-free
+bodies despite sibling lambdas, retains eligible locals, and checks malformed/global
+qualified names. `CSharpEnumCandidateScan_SkipsUnqualifiedStorageAndEmptyCatalogs` in
+`ReferenceExtractorPerformanceBudgetTests` bounds unqualified-word allocations and
+requires zero allocation for an empty catalog. Keep the C#/Razor/Blazor/CSHTML capture
+fixture's masked-arrow and overload controls on net8/net9. These C# capture and enum
+paths have no equivalent Java path to gate.
+arrowのない本体と隣接lambdaの分離・対象本体のlocal・不正／global修飾名を検証します。
+非修飾語の割り当て上限と空catalogの割り当てゼロを維持し、C#系4言語のマスクされた
+arrow・overloadも両runtimeで確認します。Javaには同等のC#処理経路がありません。
+
+Fresh-reference flag coverage in `ReferencePersistenceBindingTests`,
+`FreshReferenceResolutionTests` and `AuthoritativeFreshRawBulkInsertTests` checks
+12 fresh/14 ordinary bindings, parameter types, normalized Unicode contexts,
+ten-language parity, source-lookup shapes and the native 42-row batch boundary.
+`DatabaseTests.MutualRecursionRefresh_PrunesKnownZeroRowsAndRepairsLegacyFlags`
+covers full/scoped refreshes, resolved/folded/legacy reverse pairs, stale and NULL
+flags, scope isolation and edge removal with a bundled SQLite VM-work budget.
+Run these with the existing graph rollback/cancellation regressions on net8/net9.
+初回12個／通常14個のbind・型と順序・Unicode文脈・10言語・native42行の境界を検証します。
+相互再帰は全体／限定更新、解決済み／fold済み／旧形式の対、古い値・NULL・範囲外・
+辺の削除を両runtimeで確認し、既存のrollback／取消テストとSQLite処理量上限を維持します。
+
+The shared confirmation fixture in `SymbolExtractorCSharpRegexProbeTests` includes
+multiline parameter continuations followed by body calls: a later `(` must not
+force an impossible declaration prefix through the regex. Compare all symbol fields
+with optimizations disabled and require prefix skips across C#/Razor/Blazor/CSHTML,
+retaining constructor, tuple, generic, explicit-interface, function-pointer and
+parameter-attribute controls. Run the full symbol extractor suites on net8/net9.
+C#系4言語で複数行引数の継続断片を省略できることと全項目の一致を検証し、
+constructor・tuple・generic・interface・関数pointer・引数属性の対照を維持します。
+
+`ReferenceExtractorReceiverScopeTests` checks that impossible enum qualifiers, calls
+and assignment targets never construct receiver lookups, while genuine candidates,
+aliases, global qualification and value shadows keep their reference behavior.
+The declaration/conditional/lambda/switch scope fixtures in `ReferenceExtractorCSharpTests`
+cover C#/Razor/Blazor/CSHTML with LF/CRLF and Unicode preceding patterns. Keep the
+128-pattern, warmed 4 MB allocation ceiling in `ReferenceExtractorPerformanceBudgetTests`
+alongside these fixtures and the full reference extractor suites on net8/net9.
+receiver lookupの遅延生成と既存の隠蔽規則を4言語・LF/CRLF・Unicodeで検証し、
+pattern128個のウォームアップ後4 MB上限と全参照抽出回帰を両runtimeで維持してください。
+
+Fresh-source canonical-only coverage extends `AuthoritativeFreshRawBulkInsertTests`
+and `FreshReferenceResolutionTests`. Keep ten-language name/range parity, alternating
+canonical/display/legacy statement shapes, repeated-source batches, file rollback
+and cancellation on net8/net9. Bound bundled SQLite VM work for the canonical-only
+probe; do not assert elapsed time or remove the conservative alternate-name path.
+初回参照元の通常名だけの検索は、10言語の名前・範囲・形式切替・共有バッチ・rollback・
+取消を両runtimeで検証します。時間の閾値ではなく同梱SQLiteの命令数を制限し、
+別名／旧形式の保守的な経路も維持してください。
+
 `ReferenceOccurrenceSearchTests` compares short inputs against independent regex
 non-overlapping matches, retaining self-overlapping needles and earlier ties.
 Its dense 2,048-reference fixture bounds examined occurrences to one per recorded

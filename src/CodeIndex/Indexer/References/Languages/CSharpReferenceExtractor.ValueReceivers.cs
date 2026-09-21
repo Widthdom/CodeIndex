@@ -209,6 +209,8 @@ public static partial class ReferenceExtractor
         int bodyEndIndex,
         int lineIndex,
         int declarationColumn,
+        string bodyText,
+        int targetOffset,
         out CSharpLineColumn scopeEnd)
     {
         scopeEnd = new CSharpLineColumn(0, 0);
@@ -218,11 +220,13 @@ public static partial class ReferenceExtractor
             || bodyEndIndex < bodyStartIndex)
             return false;
 
-        var bodyText = LineRangeText.Join(structuralLines, bodyStartIndex, bodyEndIndex);
         if (string.IsNullOrEmpty(bodyText))
             return false;
 
-        var targetOffset = GetBodyTextOffset(structuralLines, bodyStartIndex, bodyEndIndex, lineIndex, declarationColumn);
+        // Both ordinary and recursive pattern scans already know this offset in the
+        // callable's shared text. Do not rebuild the whole body for each declaration.
+        // 通常／recursive pattern の走査で既知の offset と callable の共有本文を使い、
+        // 宣言ごとの本文再生成と先行行の再走査を避ける。
         var startLineNumber = bodyStartIndex + 1;
         if (TryFindCSharpConditionalExpressionScopeEndPosition(bodyText, startLineNumber, targetOffset, out scopeEnd))
             return true;
@@ -543,25 +547,6 @@ public static partial class ReferenceExtractor
             current++;
 
         return current;
-    }
-
-    private static int GetBodyTextOffset(
-        IReadOnlyList<string> structuralLines,
-        int bodyStartIndex,
-        int bodyEndIndex,
-        int lineIndex,
-        int column)
-    {
-        if (bodyEndIndex < bodyStartIndex)
-            return 0;
-
-        var clampedLineIndex = Math.Max(bodyStartIndex, Math.Min(lineIndex, bodyEndIndex));
-        var offset = 0;
-        for (var scanLine = bodyStartIndex; scanLine < clampedLineIndex; scanLine++)
-            offset += structuralLines[scanLine].Length + 1;
-
-        var line = structuralLines[clampedLineIndex];
-        return offset + Math.Max(0, Math.Min(column, line.Length));
     }
 
     private static CSharpLineColumn FindCSharpStatementEndPosition(

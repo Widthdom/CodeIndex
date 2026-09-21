@@ -71,10 +71,20 @@ public sealed class FreshReferenceResolutionTests : IDisposable
         Assert.False(_writer.CanUseFreshReferenceResolutionDefaultsInCurrentTransaction());
     }
 
-    [Fact]
-    public void InsertReferences_FreshDefaultsKeepParameterShapeAndUseSeparateCachedSql()
+    [Theory]
+    [InlineData("csharp")]
+    [InlineData("python")]
+    [InlineData("javascript")]
+    [InlineData("typescript")]
+    [InlineData("java")]
+    [InlineData("go")]
+    [InlineData("rust")]
+    [InlineData("cpp")]
+    [InlineData("kotlin")]
+    [InlineData("vb")]
+    public void InsertReferences_FreshDefaultsKeepParameterShapeAndUseSeparateCachedSql(string language)
     {
-        var fileId = InsertFile("src/provisional.py", "python");
+        var fileId = InsertFile("src/provisional", language);
         _writer.InsertSymbols([CreateSymbol(fileId, "Caller", line: 1)]);
         Assert.Equal(
             0L,
@@ -121,7 +131,7 @@ public sealed class FreshReferenceResolutionTests : IDisposable
             {
                 Assert.True(fresh.UsesFreshResolutionDefaults);
                 Assert.Equal(1, fresh.StatementRows);
-                Assert.Equal(14, fresh.BoundParameterCount);
+                Assert.Equal(12, fresh.BoundParameterCount);
             },
             standard =>
             {
@@ -176,15 +186,30 @@ public sealed class FreshReferenceResolutionTests : IDisposable
             useMaterializedFreshSourceLookup: true,
             shareSourceLookups: true);
         Assert.Contains("fresh_sources AS MATERIALIZED", sharedFreshSql, StringComparison.Ordinal);
+        foreach (var shareSources in new[] { false, true })
+        {
+            var canonicalSql = DbWriter.BuildReferenceInsertSqlForTesting(
+                rowCount: 2,
+                useFreshReferenceResolutionDefaults: true,
+                useMaterializedFreshSourceLookup: true,
+                shareSourceLookups: shareSources,
+                canonicalFreshSourceNamesOnly: true);
+            Assert.Contains("source.name_folded = r.container_name_folded", canonicalSql, StringComparison.Ordinal);
+            Assert.DoesNotContain("source.display_name_folded", canonicalSql, StringComparison.Ordinal);
+            Assert.DoesNotContain("UNION", canonicalSql, StringComparison.Ordinal);
+            Assert.Equal(24, CountOccurrences(canonicalSql, "?"));
+        }
+        Assert.Throws<ArgumentException>(() => DbWriter.BuildReferenceInsertSqlForTesting(
+            rowCount: 2, useFreshReferenceResolutionDefaults: true, canonicalFreshSourceNamesOnly: true));
         Assert.DoesNotContain("fresh_sources AS MATERIALIZED", materializedFreshSql, StringComparison.Ordinal);
-        Assert.Equal(28, CountOccurrences(sharedFreshSql, "?"));
+        Assert.Equal(24, CountOccurrences(sharedFreshSql, "?"));
         Assert.Contains("WITH fresh_reference(", freshSql, StringComparison.Ordinal);
         Assert.Contains("input_ordinal", freshSql, StringComparison.Ordinal);
         Assert.Contains("source_symbol_id", freshSql, StringComparison.Ordinal);
         Assert.Contains("FROM fresh_reference AS r", freshSql, StringComparison.Ordinal);
         Assert.Contains("ORDER BY r.input_ordinal", freshSql, StringComparison.Ordinal);
         Assert.Contains("ORDER BY (COALESCE(s.end_line", freshSql, StringComparison.Ordinal);
-        Assert.Equal(28, CountOccurrences(freshSql, "?"));
+        Assert.Equal(24, CountOccurrences(freshSql, "?"));
         Assert.DoesNotContain("?0", freshSql, StringComparison.Ordinal);
         Assert.Contains("FROM symbols AS s", freshSql, StringComparison.Ordinal);
         Assert.DoesNotContain(
@@ -202,7 +227,7 @@ public sealed class FreshReferenceResolutionTests : IDisposable
             "candidate.start_line DESC",
             materializedFreshSql,
             StringComparison.Ordinal);
-        Assert.Equal(28, CountOccurrences(materializedFreshSql, "?"));
+        Assert.Equal(24, CountOccurrences(materializedFreshSql, "?"));
         Assert.DoesNotContain("?0", materializedFreshSql, StringComparison.Ordinal);
         Assert.DoesNotContain("WITH fresh_reference(", standardSql, StringComparison.Ordinal);
         Assert.DoesNotContain("source_symbol_id", standardSql, StringComparison.Ordinal);

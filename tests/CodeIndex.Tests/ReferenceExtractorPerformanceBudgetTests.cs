@@ -311,6 +311,93 @@ public sealed class ReferenceExtractorPerformanceBudgetTests
             $"{language} lambda capture extraction allocated {allocatedBytes:N0} bytes; expected < {allocationBudget:N0}.");
     }
 
+    [Theory]
+    [InlineData("csharp")]
+    [InlineData("razor")]
+    [InlineData("blazor")]
+    [InlineData("cshtml")]
+    public void Extract_CSharpPatternReceiverScopes_ReuseCallableTextWithinAllocationBudget(string language)
+    {
+        ReferenceExtractorWarmup.EnsurePerformanceWarmup();
+
+        const int patternCount = 128;
+        var builder = new StringBuilder();
+        builder.AppendLine("namespace Demo;");
+        builder.AppendLine("enum Status { Ready }");
+        builder.AppendLine("class Holder { public int Ready { get; set; } }");
+        builder.AppendLine("class Uses").AppendLine("{");
+        builder.AppendLine("    void Run(object value)").AppendLine("    {");
+        builder.AppendLine("        var café = \"😀\";");
+        for (var index = 0; index < patternCount; index++)
+        {
+            var pattern = index % 2 == 0 ? "Holder Status" : "Holder { Ready: > 0 } Status";
+            builder.AppendLine("        {");
+            builder.Append("            if (value is ").Append(pattern).AppendLine(")");
+            builder.AppendLine("            {").AppendLine("                _ = Status.Ready;").AppendLine("            }");
+            builder.AppendLine("        }");
+            builder.AppendLine("        _ = Status.Ready;");
+        }
+        builder.AppendLine("    }").AppendLine("}");
+        var content = builder.ToString();
+        var symbols = SymbolExtractor.Extract(1, language, content);
+        _ = ReferenceExtractor.Extract(1, language, content, symbols);
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var references = ReferenceExtractor.Extract(1, language, content, symbols);
+        var allocatedBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        var reads = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "member_read").ToArray();
+        Assert.Equal(patternCount, reads.Length);
+        Assert.Equal(Enumerable.Range(0, patternCount).Select(index => 15 + 7 * index), reads.Select(reference => reference.Line));
+        Assert.All(reads, reference =>
+        {
+            Assert.Equal("Run", reference.ContainerName);
+            Assert.Equal(20, reference.Column);
+        });
+
+        // Rejoining the entire callable for each ordinary/recursive pattern used over 12 MB.
+        const long allocationBudget = 4_000_000;
+        Assert.True(allocatedBytes < allocationBudget,
+            $"{language} pattern receiver extraction allocated {allocatedBytes:N0} bytes; expected < {allocationBudget:N0}.");
+    }
+
+    [Fact]
+    public void CSharpEnumCandidateScan_SkipsUnqualifiedStorageAndEmptyCatalogs()
+    {
+        var targets = new Dictionary<string, List<(string, string?, bool)>>(StringComparer.Ordinal)
+        {
+            ["Ready"] = [("Status", "Demo.Status", true)],
+        };
+        var empty = new Dictionary<string, List<(string, string?, bool)>>(StringComparer.Ordinal);
+        var typeNames = new Dictionary<string, ReferenceExtractor.CSharpContainingTypeValueReceiverNames>();
+        var functionNames = new Dictionary<int, List<ReferenceExtractor.CSharpFunctionValueReceiverNameRecord>>();
+        Func<IReadOnlyDictionary<string, ReferenceExtractor.CSharpContainingTypeValueReceiverNames>> getTypes = () => typeNames;
+        Func<SymbolRecord?, IReadOnlyDictionary<int, List<ReferenceExtractor.CSharpFunctionValueReceiverNameRecord>>> getFunctions = _ => functionNames;
+        Func<int, SymbolRecord?> getContainer = _ => null;
+        var references = new List<ReferenceRecord>();
+        var seen = new ReferenceDedupeSet();
+        var line = string.Join(' ', Enumerable.Repeat("ordinary", 64)) + " other.Member";
+        foreach (var lookup in new[] { targets, empty })
+        {
+            for (var warmup = 0; warmup < 16; warmup++)
+                Scan(lookup);
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            for (var index = 0; index < 128; index++)
+                Scan(lookup);
+            var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+            Assert.Empty(references);
+            if (lookup.Count == 0)
+                Assert.Equal(0, allocated);
+            else
+                Assert.True(allocated < 65_536,
+                    $"Unqualified enum candidates allocated {allocated:N0} bytes; expected storage only for qualified chains.");
+        }
+
+        void Scan(IReadOnlyDictionary<string, List<(string, string?, bool)>> lookup) =>
+            ReferenceExtractor.EmitCSharpQualifiedEnumMemberReferences(
+                line, lookup, null, [], getTypes, getFunctions, references, seen, 1, line, 1, getContainer);
+    }
+
     private sealed class EnumerationCountingReadOnlySet<T> : IReadOnlySet<T>
         where T : notnull
     {

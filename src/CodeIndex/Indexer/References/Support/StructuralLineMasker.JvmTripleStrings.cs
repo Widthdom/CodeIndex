@@ -115,6 +115,10 @@ internal static partial class StructuralLineMasker
 
         private void ScanCode(ref JvmTripleStringLine line)
         {
+            line.Position = FindNextCodeDelimiter(line.Text, line.Position, JvmCodeDelimiters);
+            if (line.Position == line.Text.Length)
+                return;
+
             if (StartsWith(line.Text, line.Position, "//"))
             {
                 line.MoveToEnd();
@@ -171,6 +175,10 @@ internal static partial class StructuralLineMasker
 
         private void ScanInterpolationHole(ref JvmTripleStringLine line)
         {
+            line.Position = FindNextCodeDelimiter(line.Text, line.Position, JvmHoleDelimiters);
+            if (line.Position == line.Text.Length)
+                return;
+
             if (TryScanHoleComment(ref line))
                 return;
 
@@ -232,6 +240,10 @@ internal static partial class StructuralLineMasker
         private void ScanNestedInterpolationHole(
             ref JvmTripleStringLine line)
         {
+            line.Position = FindNextCodeDelimiter(line.Text, line.Position, JvmHoleDelimiters);
+            if (line.Position == line.Text.Length)
+                return;
+
             if (TryScanHoleComment(ref line))
                 return;
 
