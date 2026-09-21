@@ -64,8 +64,8 @@ public sealed class QueryCommandRunnerIssue4831Tests
             Assert.Equal(
                 "Scanner",
                 definition.RootElement.GetProperty("container_name").GetString());
-            Assert.Equal(string.Empty, outStdout);
-            Assert.Equal(string.Empty, paramsStdout);
+            Assert.Empty(ParseJsonLines(outStdout));
+            Assert.Empty(ParseJsonLines(paramsStdout));
         }
         finally
         {

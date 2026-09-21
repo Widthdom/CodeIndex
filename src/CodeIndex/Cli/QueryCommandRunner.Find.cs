@@ -259,7 +259,10 @@ public static partial class QueryCommandRunner
                         resumedCountPage: resumedCountPage,
                         nextCursor: countFindResume.Cursor);
                 }
-                return FindScanExitCode(options, counts.Scan);
+                return FindScanExitCode(options, counts.Scan,
+                    CountResultExitCode(options, counts.Count,
+                        authoritative: !resumedCountPage && !counts.Scan.Truncated
+                            && counts.Scan.UnknownOriginMatches == 0 && !reader.WalStaleSnapshotRisk));
             }
 
             var (contextBefore, contextAfter, snippetLines) = ResolveFindContext(options, preparedFindArgs);
@@ -803,8 +806,8 @@ public static partial class QueryCommandRunner
            && options.JsonOutputFormat == JsonOutputFormatNdjson;
 
     private static int FindScanExitCode(QueryCommandOptions options, FindScanSummary scan, int completeExitCode = CommandExitCodes.Success)
-        => (scan.Truncated || scan.UnknownOriginMatches > 0) && !options.AllowPartial
-            ? CommandExitCodes.PartialResult
+        => scan.Truncated || scan.UnknownOriginMatches > 0
+            ? options.AllowPartial ? CommandExitCodes.Success : CommandExitCodes.PartialResult
             : completeExitCode;
 
     private static string BuildFindScanTerminalLine(

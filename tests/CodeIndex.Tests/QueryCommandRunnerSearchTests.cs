@@ -18135,17 +18135,20 @@ public partial class QueryCommandRunnerTests
             {
                 DbReader.FindRegexMatchTimeoutForTesting = TimeSpan.FromMilliseconds(1);
 
-                var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
-                    ["^(a+)+$", "--regex", "--db", dbPath, "--path", "src/Auth.cs", "--json"],
-                    _jsonOptions));
+                foreach (var flags in new string[][] { [], ["--count", "--strict-not-found"], ["--count", "--strict-not-found", "--allow-partial"] })
+                {
+                    var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                        ["^(a+)+$", "--regex", "--db", dbPath, "--path", "src/Auth.cs", "--json", .. flags],
+                        _jsonOptions));
 
-                Assert.Equal(CommandExitCodes.RuntimeError, exitCode);
-                Assert.Equal(string.Empty, stderr);
-                using var document = ParseJsonOutput(stdout);
-                var json = document.RootElement;
-                Assert.Equal("error", json.GetProperty("status").GetString());
-                Assert.Equal("E014_REGEX_MATCH_TIMEOUT", json.GetProperty("error_code").GetString());
-                Assert.Equal("regex_timeout", json.GetProperty("category").GetString());
+                    Assert.Equal(CommandExitCodes.RuntimeError, exitCode);
+                    Assert.Equal(string.Empty, stderr);
+                    using var document = ParseJsonOutput(stdout);
+                    var json = document.RootElement;
+                    Assert.Equal("error", json.GetProperty("status").GetString());
+                    Assert.Equal("E014_REGEX_MATCH_TIMEOUT", json.GetProperty("error_code").GetString());
+                    Assert.Equal("regex_timeout", json.GetProperty("category").GetString());
+                }
             }
             finally
             {

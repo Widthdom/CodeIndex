@@ -64,17 +64,18 @@ public static partial class QueryCommandRunner
                     if (options.GroupPartials)
                         AddLogicalPartialCountJsonFields(payload, logicalCount: 0, physicalCount: 0, physicalFileCount: 0);
                     var json = payload.ToJsonString(jsonOptions);
-                    return WriteJsonObjectWithOptionalByteLimit(
+                    var writeExitCode = WriteJsonObjectWithOptionalByteLimit(
                         json,
                         options,
                         "symbols count",
                         "Narrow the query or increase --max-json-bytes.",
                         jsonOptions,
                         "symbols");
+                    return CountResultExitCode(options, 0, writeExitCode: writeExitCode);
                 }
 
                 Console.WriteLine("0");
-                return CommandExitCodes.Success;
+                return ZeroResultExitCode(options);
             }
             // Fail closed: an explicit name/query was provided but normalized to empty or a bare
             // verbatim prefix (e.g. `|`, `@`, `--name ""`). Returning null here would broaden into
@@ -141,17 +142,24 @@ public static partial class QueryCommandRunner
                                 ? json => AddLogicalPartialCountJsonFields(json, logicalCount: 0, physicalCount: 0, physicalFileCount: 0)
                                 : null,
                             includeIndexGenerationAuthority: true);
-                        return WriteJsonPayloadWithOptionalByteLimit(
+                        var writeExitCode = WriteJsonPayloadWithOptionalByteLimit(
                             payload,
                             options,
                             jsonOptions,
                             "symbols",
                             "symbols count",
                             "Narrow the query or increase --max-json-bytes.");
+                        return CountResultExitCode(options, 0,
+                            authoritative: JsonBool(payload, "authoritative_count") == true,
+                            writeExitCode: writeExitCode);
                     }
 
                     Console.WriteLine("0");
-                    return CommandExitCodes.Success;
+                    WriteIndexGenerationAuthorityWarningIfNeeded(reader);
+                    return CountResultExitCode(options, 0,
+                        authoritative: reader.GetPersistedIndexCompletion().IndexComplete
+                            && (!hasExactPredicateForCount || exactSignalForCount.ExactIndexAvailable)
+                            && !reader.WalStaleSnapshotRisk);
                 }
 
                 if (options.Json)
@@ -248,13 +256,28 @@ public static partial class QueryCommandRunner
                 return snapshotError;
             }
             WriteExactSymbolWarningIfNeeded(hasExactPredicate, options.Json, exactSignal, reader, options);
+            if (IsDiscoveryNdjson(options))
+            {
+                if (results.Count == 0)
+                    WriteIndexGenerationAuthorityWarningIfNeeded(reader);
+                var counts = options.GroupPartials
+                    ? partialLogicalCounts!.Value
+                    : reader.CountSearchSymbolsTotal(symbolQueries, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters);
+                var stream = WriteDiscoveryNdjson(
+                    reader,
+                    options,
+                    GetCompactJsonOptions(jsonOptions),
+                    "symbols",
+                    results,
+                    counts.Count,
+                    rowFactory,
+                    rowExactSignal);
+                ndjsonTerminalLine = stream.TerminalLine;
+                return stream.ExitCode;
+            }
+
             if (results.Count == 0)
             {
-                if (IsDiscoveryNdjson(options))
-                {
-                    WriteIndexGenerationAuthorityWarningIfNeeded(reader);
-                    return ZeroResultExitCode(options);
-                }
                 if (ShouldWriteBoundedDiscoveryJsonPayload(options))
                 {
                     var payloadExitCode = WriteBoundedDiscoveryJsonPayload(
@@ -295,24 +318,6 @@ public static partial class QueryCommandRunner
                     WriteIndexGenerationAuthorityWarningIfNeeded(reader);
                 }
                 return ZeroResultExitCode(options);
-            }
-
-            if (IsDiscoveryNdjson(options))
-            {
-                var counts = options.GroupPartials
-                    ? partialLogicalCounts!.Value
-                    : reader.CountSearchSymbolsTotal(symbolQueries, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters);
-                var stream = WriteDiscoveryNdjson(
-                    reader,
-                    options,
-                    GetCompactJsonOptions(jsonOptions),
-                    "symbols",
-                    results,
-                    counts.Count,
-                    rowFactory,
-                    rowExactSignal);
-                ndjsonTerminalLine = stream.TerminalLine;
-                return stream.ExitCode;
             }
 
             if (ShouldWriteBoundedDiscoveryJsonPayload(options))
@@ -557,17 +562,20 @@ public static partial class QueryCommandRunner
                         reader.GeneratedFileFilterAvailable);
                     if (options.RawBytes)
                         AddFileCountBytesJsonFields(payload, counts);
-                    return WriteJsonPayloadWithOptionalByteLimit(
+                    var writeExitCode = WriteJsonPayloadWithOptionalByteLimit(
                         payload,
                         options,
                         jsonOptions,
                         "files",
                         "files count",
                         "Narrow the query or increase --max-json-bytes.");
+                    return CountResultExitCode(options, counts.Count,
+                        authoritative: JsonBool(payload, "authoritative_count") == true,
+                        writeExitCode: writeExitCode);
                 }
                 else
                     Console.WriteLine(options.RawBytes ? FormatFileCountBytesSummary(counts) : $"{counts.Count}");
-                return CommandExitCodes.Success;
+                return CountResultExitCode(options, counts.Count, authoritative: !reader.WalStaleSnapshotRisk);
             }
 
             var results = reader.ListFiles(
@@ -583,10 +591,30 @@ public static partial class QueryCommandRunner
                 requiredPathPatterns: filesScope.RequiredPathPatterns);
             Func<FileResult, JsonNode?> rowFactory =
                 result => ToFileDiscoveryJsonNode(result, jsonOptions, options.OutputFormat == OutputFormatCompact);
+            if (IsDiscoveryNdjson(options))
+            {
+                var counts = reader.CountListFiles(
+                    options.Query,
+                    options.Lang,
+                    filesScope.PathPatterns,
+                    filesScope.ExcludePaths,
+                    filesScope.ExcludeTests,
+                    options.Since,
+                    requiredPathPatterns: filesScope.RequiredPathPatterns);
+                var stream = WriteDiscoveryNdjson(
+                    reader,
+                    options,
+                    GetCompactJsonOptions(jsonOptions),
+                    "files",
+                    results,
+                    counts.Count,
+                    rowFactory);
+                ndjsonTerminalLine = stream.TerminalLine;
+                return stream.ExitCode;
+            }
+
             if (results.Count == 0)
             {
-                if (IsDiscoveryNdjson(options))
-                    return ZeroResultExitCode(options);
                 if (options.Json)
                 {
                     if (ShouldWriteBoundedDiscoveryJsonPayload(options))
@@ -614,28 +642,6 @@ public static partial class QueryCommandRunner
                     WriteZeroResultHints(options, reader);
                 }
                 return ZeroResultExitCode(options);
-            }
-
-            if (IsDiscoveryNdjson(options))
-            {
-                var counts = reader.CountListFiles(
-                    options.Query,
-                    options.Lang,
-                    filesScope.PathPatterns,
-                    filesScope.ExcludePaths,
-                    filesScope.ExcludeTests,
-                    options.Since,
-                    requiredPathPatterns: filesScope.RequiredPathPatterns);
-                var stream = WriteDiscoveryNdjson(
-                    reader,
-                    options,
-                    GetCompactJsonOptions(jsonOptions),
-                    "files",
-                    results,
-                    counts.Count,
-                    rowFactory);
-                ndjsonTerminalLine = stream.TerminalLine;
-                return stream.ExitCode;
             }
 
             if (ShouldWriteBoundedDiscoveryJsonPayload(options))
@@ -833,7 +839,24 @@ public static partial class QueryCommandRunner
             records.Add(new((row ?? new JsonObject()).ToJsonString(jsonOptions)));
         }
 
-        return WriteNdjsonStream(
+        // Empty pages still finalize the stream; only a trustworthy zero total proves absence.
+        JsonObject? authority = null;
+        var totalCountAuthoritative = true;
+        if (totalCount == 0)
+        {
+            authority = new JsonObject();
+            if (commandName == "symbols")
+            {
+                AddIndexGenerationAuthorityJsonFields(authority, reader, jsonOptions);
+                if (exactSignal.HasValue)
+                    AddExactJsonFields(authority, exactSignal.Value);
+            }
+            AddReadOnlyFallbackDiagnostics(authority, reader);
+            AddCountAuthorityJsonFields(authority);
+            totalCountAuthoritative = JsonBool(authority, "authoritative_count") == true;
+        }
+
+        var stream = WriteNdjsonStream(
             records,
             totalCount,
             options,
@@ -841,7 +864,13 @@ public static partial class QueryCommandRunner
             reader,
             commandName,
             limitTruncated: totalCount > results.Count,
-            $"Increase --limit or narrow the {commandName} query to retrieve the remaining rows.");
+            $"Increase --limit or narrow the {commandName} query to retrieve the remaining rows.",
+            totalCountAuthoritative: totalCountAuthoritative,
+            terminalMetadata: authority);
+        return stream with
+        {
+            ExitCode = CountResultExitCode(options, totalCount, totalCountAuthoritative, stream.ExitCode),
+        };
     }
 
     private static bool TryWriteDiscoveryOutputControlUsageError(string commandName, QueryCommandOptions options)

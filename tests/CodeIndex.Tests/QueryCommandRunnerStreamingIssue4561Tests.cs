@@ -407,7 +407,10 @@ public partial class QueryCommandRunnerTests
             var filesMetadata = filesRoot.GetProperty("metadata");
             Assert.Equal(0, filesMetadata.GetProperty("result_count").GetInt32());
             Assert.False(filesMetadata.TryGetProperty("stream_control_records", out _));
-            Assert.False(filesMetadata.TryGetProperty("stream_terminal", out _));
+            var filesTerminal = filesMetadata.GetProperty("stream_terminal");
+            Assert.True(filesTerminal.GetProperty("terminal_record").GetBoolean());
+            Assert.True(filesTerminal.GetProperty("done").GetBoolean());
+            Assert.Equal(0, filesTerminal.GetProperty("count").GetInt32());
         }
         finally
         {

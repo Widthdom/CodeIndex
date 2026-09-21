@@ -394,6 +394,15 @@ If you change test code, test helpers, test execution flow, or testing conventio
 
 ## Quick Start
 
+Empty-result completion (#5393) extends the shared #5230 continuation, #5344 batch,
+#4578 find-scan and existing regex-timeout fixtures. Run them on net8/net9 with the
+CLI/output suites. Cover strict numeric/JSON counts, direct/batch terminal parity,
+results-only and array/envelope/compact shapes, exact terminal/newline byte budgets,
+exhausted pages with positive totals, and incomplete symbol authority independently
+of file/text counts. Keep partial/unknown-origin, cancellation and timeout precedence
+with and without `--allow-partial`, alongside the existing mid-scan cancellation
+fixture in #4863.
+
 Include `QueryCommandRunnerAuditSarifIssue4903Tests` in the #5322 regression set. Fully evaluated origin-filtered source counts stay authoritative even when the SARIF UTF-8 byte budget omits whole results; retain exact-boundary, omitted-count, partial-exit, opt-in, cursor-replay and minimum-output assertions on net8/net9.
 
 Issue #5322 extends `AuditBaselineIssue5261Tests` with a tiny origin-filtered fixture: identical/zero-child/exact-row-limit coverage, true caps, changed scope/recipe, reviewed evidence, stale and verified deletion, lexical-budget unknowns rejected before filtering, and default/single/duplicate limit forwarding. Run the baseline tests with audit continuation, recipe selection and token-boundary regressions on both net8/net9. Keep legacy incomplete/provenance/identity and prior-path controls intact.
@@ -1938,6 +1947,14 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 基本はフルスイートを実行してください。手元での反復中だけ対象を絞り、最後は `dotnet test` で締めます。
 
 ## テストスタック
+
+空結果の完了処理 (#5393) は、既存の #5230 継続、#5344 バッチ、#4578 find 走査、
+正規表現タイムアウトの共有フィクスチャを拡張して検証します。CLI・出力のテストと併せて
+net8/net9 で実行してください。strict の数値・JSON 件数、直接実行とバッチの終端の一致、
+results-only・array・envelope・compact の形状、終端と改行の厳密なバイト上限、
+総件数が正の空ページ、ファイル・テキスト件数に影響しない不完全なシンボル索引を維持します。
+部分走査・不明な origin・取消・タイムアウトの優先順位を `--allow-partial` の有無で確認し、
+既存の #4863 の走査途中の取消テストも併せて実行します。
 
 - Issue #5238 の audit-all coverage は `QueryCommandRunnerAuditAllIssue5238Tests.cs`、`DbReaderTests.cs`、`CliFlagSchemaTests.cs`、`ConsoleUiTests.cs` が担当します。authoritative registry の順序、共通 filter と重複結果の帰属、query ごと / 全体の row 上限、JSON / NDJSON row の逐次 byte 受理、SQLite interrupt を伴う実際の scope 付き cancellation、failure 後の継続、上限と省略数を持つ recovery accounting、filter を保持する retry command、interactive な stderr progress の分離、freshness、allocation、help、completion を両 target framework で同期してください。
 - Issue #5236 の dry-run row estimate coverage は `IndexCommandRunnerDryRunTests.cs` が担当します。新規 database、未変更 rebuild、変更 update と後続 execution、未変更 skip、delete、checksum rename purge、parse 利用不能の transition、cross-file TypeScript augmentation rebuild を同じまとまりに維持してください。両 target framework で、独立した delete、insert/upsert、総 operation、予測最終件数、delta の値 / provenance、legacy alias の semantics と移行 metadata、human / JSON の命名 parity、augmentation rebuild 時の保守的な `symbol_references` unknown、checked arithmetic behavior、database / source の非変更を assertion します。

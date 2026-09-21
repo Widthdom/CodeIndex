@@ -406,6 +406,17 @@ opaque `response:v2` continuation contract. When a terminal record has
 resumes after the last emitted row; replay it with the unchanged command,
 query, filters, ordering, and page limit. The replay is returned in the shared
 bounded envelope, whose `metadata.stream_terminal` mirrors the continuation.
+Empty `files` and `symbols` NDJSON responses emit one terminal record with
+`terminal_record: true`, `done: true`, and `count: 0`, unless `--results-only`
+suppresses it. A completed authoritative empty query has `total_count: 0` and
+`has_more: false`; an exhausted page may still have a nonzero total. The terminal
+and its newline count toward `--max-json-bytes`; an insufficient budget returns
+the existing response-budget error rather than an empty success.
+`files`, `symbols`, and `find` also honor `--strict-not-found` after an
+authoritative zero count is printed, in numeric and JSON count modes. Incomplete
+symbol coverage and partial or resumed find counts cannot establish absence.
+`--allow-partial` accepts partial output without making its zero authoritative;
+cancellation, timeout, cursor, and output errors retain their precedence.
 Final and zero-result pages do not advertise a cursor. If a partial stream
 cannot make safe progress—for example, a byte cap leaves room only for the
 terminal record, the query uses row selectors or a recipe/named search, the
@@ -4605,7 +4616,16 @@ cursor はその選択条件と index generation に束縛されるため、入�
 result row を 1 件以上出力した場合、`next_cursor` は最後に出力した row の次から再開します。
 command、query、filter、ordering、page limit を変えずに再利用してください。再開応答は
 共有 bounded envelope となり、`metadata.stream_terminal` にも同じ continuation が
-反映されます。最終 page と 0 件 page は cursor を公開しません。byte cap により terminal
+反映されます。`files` と `symbols` の空の NDJSON 応答は、`--results-only` で抑制しない限り、
+`terminal_record: true`、`done: true`、`count: 0` の終端レコードを 1 件出力します。
+完了した確定的な 0 件の検索では `total_count: 0`、`has_more: false` になりますが、
+ページを読み切った場合は総件数が正のままのこともあります。終端レコードと改行も
+`--max-json-bytes` の計測対象で、収まらない場合は空の成功ではなく既存の応答サイズエラーを返します。
+`files`、`symbols`、`find` は数値・JSON の件数出力でも、確定した 0 件を出力した後に
+`--strict-not-found` により終了コード `2` を返します。シンボル索引が不完全な場合や、
+部分走査・再開した `find` の件数では不在を断定しません。`--allow-partial` は部分結果を
+受け入れるだけで 0 件の確実性を高めず、取消・タイムアウト・カーソル・出力エラーを優先します。
+最終 page と 0 件 page は cursor を公開しません。byte cap により terminal
 record しか出力できない場合、row selector または recipe / named search を使う場合、
 10,000 row の pagination window を使い切ったか、同じ page limit での再開時にその上限を
 越える場合、row の読み取り中に index generation が変わった場合のように、安全に再開できない

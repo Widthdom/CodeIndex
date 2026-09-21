@@ -4150,8 +4150,13 @@ public partial class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, emptyFilesExitCode);
             Assert.Equal(CommandExitCodes.Success, emptySymbolsExitCode);
-            Assert.Equal(string.Empty, emptyFilesStdout);
-            Assert.Equal(string.Empty, emptySymbolsStdout);
+            foreach (var output in new[] { emptyFilesStdout, emptySymbolsStdout })
+            {
+                using var terminal = JsonDocument.Parse(output);
+                Assert.True(terminal.RootElement.GetProperty("terminal_record").GetBoolean());
+                Assert.True(terminal.RootElement.GetProperty("done").GetBoolean());
+                Assert.Equal(0, terminal.RootElement.GetProperty("count").GetInt32());
+            }
             Assert.Equal(string.Empty, emptyFilesStderr);
             Assert.Equal(string.Empty, emptySymbolsStderr);
 

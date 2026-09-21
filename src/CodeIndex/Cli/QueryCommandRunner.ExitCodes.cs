@@ -7,6 +7,15 @@ public static partial class QueryCommandRunner
     private static int ZeroResultExitCode(QueryCommandOptions options)
         => options.StrictNotFound ? CommandExitCodes.NotFound : CommandExitCodes.Success;
 
+    private static int CountResultExitCode(
+        QueryCommandOptions options,
+        int count,
+        bool authoritative = true,
+        int writeExitCode = CommandExitCodes.Success)
+        => writeExitCode != CommandExitCodes.Success
+            ? writeExitCode
+            : count == 0 && authoritative ? ZeroResultExitCode(options) : CommandExitCodes.Success;
+
     private static int UnusedZeroResultExitCode(QueryCommandOptions options, UnusedDefaultSuppressionResult suppression)
         => !options.StrictNotFound && suppression.Applied && GetUnusedSuppressedCount(suppression) > 0
             ? CommandExitCodes.Success
