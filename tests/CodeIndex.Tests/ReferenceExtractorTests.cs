@@ -399,6 +399,65 @@ public partial class ReferenceExtractorTests
     }
 
     [Theory]
+    [InlineData("csharp")]
+    [InlineData("kotlin")]
+    [InlineData("scala")]
+    public void StructuralLineMasker_MaskLines_PreservesCodeSpansAroundNestedLiterals(string language)
+    {
+        foreach (var paddingLength in new[] { 0, 1, 31, 255, 4096 })
+        {
+            var code = new string('x', paddingLength) + " RealCall()";
+            var lines = new List<string>();
+            var expected = new List<string>();
+            void AddLine(params (string Text, bool Masked)[] parts)
+            {
+                lines.Add(string.Concat(parts.Select(part => part.Text)));
+                expected.Add(string.Concat(parts.Select(part =>
+                    part.Masked ? new string(' ', part.Text.Length) : part.Text)));
+            }
+
+            AddLine((code, false));
+            AddLine((code + " // ignored \"\"\" /* $@\"", false));
+            if (language == "csharp")
+            {
+                AddLine((code + " + '\"' + ", false), ("@\"hidden\"", true), (";", false));
+                AddLine((code + " + ", false), ("$\"outer {", true),
+                    (code + " + new { Item = ", false), ("\"hidden\"", true),
+                    (" }.Item + ", false), ("$\"inner {", true), ("Nested()", false),
+                    ("} end\"", true), (" + Call()", false), ("}tail\"", true), (";", false));
+                AddLine(("$$\"\"\"raw {{", true), (code, false));
+                AddLine((code, false));
+                AddLine((code + " + ", false), ("/* hidden", true));
+                AddLine(("continued */", true), ("Call()", false), ("}} end\"\"\"", true), (";", false));
+                AddLine(("@$\"escaped {{ brace }} {", true), (code, false), ("} done\"", true));
+            }
+            else
+            {
+                var prefix = language == "scala" ? "custom" : "";
+                AddLine((code + " + ", false), (prefix, false), ("\"\"\"outer ${", true),
+                    (code + " + { value } + ", false), (prefix, false), ("\"\"\"nested ${", true),
+                    (code + " + \"quoted } /*\" + '\"'", false), ("} tail\"\"\"", true),
+                    (" + Call()", false), ("} end\"\"\"", true));
+                AddLine((prefix, false), ("\"\"\"raw ${", true), (code, false));
+                AddLine((code, false));
+                AddLine((code + " + ", false), ("/* hidden /* nested */", true));
+                AddLine(("continued */", true), ("Call()", false), ("} end\"\"\"", true));
+                if (language == "scala")
+                    AddLine((code + " + ", false), ("\"\"\"plain ${Hidden()}\"\"\"", true));
+            }
+            AddLine((code, false));
+
+            var original = lines.ToArray();
+            var masked = StructuralLineMasker.MaskLines(language, original);
+            Assert.Equal(expected, masked);
+            Assert.Equal(lines, original);
+            Assert.Same(original[0], masked[0]);
+            Assert.Same(original[1], masked[1]);
+            Assert.Same(original[^1], masked[^1]);
+        }
+    }
+
+    [Theory]
     [InlineData("kotlin", "    val value = \"\"\"literal\"\"\"")]
     [InlineData("scala", "    val value = \"\"\"literal\"\"\"")]
     public void StructuralLineMasker_MaskLines_JvmTripleStringsReuseUnchangedLinesUntilMaskNeeded(

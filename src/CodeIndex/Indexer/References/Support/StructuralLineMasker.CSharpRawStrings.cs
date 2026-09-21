@@ -26,7 +26,16 @@ internal static partial class StructuralLineMasker
 
             while (searchStart < line.Length)
             {
-                if (frames.TryPeek(out var activeFrame))
+                var hasFrame = frames.TryPeek(out var activeFrame);
+                if (!hasFrame || activeFrame is InterpolationFrame)
+                {
+                    searchStart = FindNextCodeDelimiter(
+                        line, searchStart, hasFrame ? CSharpHoleDelimiters : CSharpCodeDelimiters);
+                    if (searchStart == line.Length)
+                        break;
+                }
+
+                if (hasFrame)
                 {
                     if (activeFrame is BlockCommentFrame)
                     {

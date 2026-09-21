@@ -1,5 +1,14 @@
 # Initial full-index performance
 
+C#, Kotlin and Scala structural masking skip ordinary code spans with vectorized
+delimiter searches. Only code and interpolation-hole states use this shortcut;
+string, character and comment states keep their existing transitions. Hole searches
+also stop at braces, and Scala interpolation prefixes still read the original text.
+C# string-opening checks reject other initial characters and reuse the quote-run
+count. The C# path also serves Razor, Blazor and CSHTML. Exact masked text, line and
+column positions, and unchanged-line reuse remain the same. JavaScript/TypeScript's
+identifier-dependent lexical state does not use this shortcut.
+
 C# receiver-shadow lookups build type-member names separately and analyze callable
 bodies only when a receiver check requests their start line. Empty results are cached,
 and same-line declarations retain their original last-nonempty winner. Local-function
@@ -265,7 +274,28 @@ and stable contract/readiness metadata match; all four databases pass SQLite
 integrity checks. FTS posting payloads were not compared. These are two observations
 per version on a C#-heavy snapshot, not a general speed guarantee.
 
+For deferred lookahead copies, callable receiver caches and code-span masking,
+two fresh Debug .NET 8 runs on the same `a33c5a8eb` source snapshot on macOS ARM64
+with `--parallelism 2 --memory-trace` took 39.014/40.010 seconds and allocated
+7.30–7.31 GB. Heavy tests and builds were stopped during these runs. These are
+standalone Debug observations: a matched Release before/after timing was not
+collected for this batch, so no end-to-end percentage improvement is claimed.
+Both databases match the saved pre-change `b7c8a0b9a` output in all logical file,
+chunk, symbol, reference-line, issue, reference, candidate and hotspot records,
+including each reference's complete candidate set, after generated-ID and indexing-time
+normalization. Schema, user_version and stable contract/readiness metadata also match;
+all three databases pass SQLite integrity checks. All 1,577 files, 59,387 symbols
+and 562,615 references completed without warnings, errors or extraction cap hits.
+FTS posting payloads were not compared.
+
 ## 日本語
+
+C#・Kotlin・Scalaの構造マスクは、通常コードの区間をvector化された区切り記号の
+検索でまとめて進めます。コードと補間式の状態だけに適用し、文字列・文字literal・
+commentの状態遷移は維持します。補間では波括弧も検索対象に含め、Scalaの補間接頭辞は
+原文を参照します。C#の文字列開始判定も先頭文字で除外し、quote連続数を再利用します。
+C#の経路はRazor・Blazor・CSHTMLも共通で、マスク結果・行列位置・未変更行の再利用は
+変わりません。識別子で字句状態が変わるJavaScript／TypeScriptには適用しません。
 
 C#のreceiver隠蔽lookupは型メンバー名を別に構築し、判定対象の開始行が必要に
 なった時だけ関数本体を解析します。空の結果も再利用し、同じ開始行の宣言は元の
@@ -495,3 +525,15 @@ managedの総割り当て量は7.50～7.51 GBから7.46～7.47 GBへ約0.6%減�
 schema・user_version・実行時刻等に依存しない契約／readiness metadataも一致し、
 4つのDBすべてがSQLiteの整合性検査を通過しています。FTSのposting payloadは比較対象外です。
 C#中心の固定ソースで各版2回の観測値であり、一般的な速度を保証するものではありません。
+
+先読みコピーの保留・関数単位のreceiver cache・コード区間のマスクでは、同じ
+`a33c5a8eb` の固定ソースをmacOS ARM64・Debug .NET 8・`--parallelism 2 --memory-trace`
+で新しいDBに2回実行し、39.014／40.010秒、managedの総割り当て量7.30～7.31 GBでした。
+計測中は重いテストとビルドを止めています。今回は条件を揃えたReleaseの変更前後比較を
+採取していないため、Debugの単独観測値であり、全体の短縮率は主張しません。
+両方のDBは保存済みの変更前 `b7c8a0b9a` の出力と、生成ID・インデックス時刻を
+正規化したファイル・チャンク・シンボル・参照行・issue・参照・解決候補・hotspot集計が
+一致し、参照ごとの候補集合も一致します。schema・user_version・実行時刻等に依存しない
+契約／readiness metadataも一致し、3つのDBすべてがSQLiteの整合性検査を通過しました。
+全1,577ファイル・59,387シンボル・562,615参照が警告・エラー・抽出上限到達なしで
+完了しています。FTSのposting payloadは比較対象外です。

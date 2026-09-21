@@ -1,5 +1,14 @@
 # Testing Guide
 
+`StructuralLineMasker_MaskLines_PreservesCodeSpansAroundNestedLiterals` compares exact
+masked text and unchanged-line identity in C#, Kotlin and Scala, with code spans up to
+4096 characters, nested interpolations, multiline comments and delimiter-free hole
+lines. Keep the C# and JVM nested/deep-triple suites in the full extractor run on both
+runtimes; Scala interpolator prefixes must still inspect the original text.
+C#・Kotlin・Scalaで最大4096文字のコード区間、補間の入れ子、複数行comment、
+記号のない補間行のマスク結果と未変更行の同一性を確認します。Scalaの接頭辞判定と
+深いtriple stringの既存回帰も両runtimeで維持してください。
+
 `ReferenceExtractorReceiverScopeTests` counts structural-line reads to prove sparse
 receiver checks avoid unrelated callable bodies and cache empty scopes. Preserve
 last-nonempty winners for colliding start lines, scoped-to-full lookup completion,
