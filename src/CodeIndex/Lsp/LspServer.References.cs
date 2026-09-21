@@ -154,7 +154,8 @@ internal sealed partial class LspServer
                     if (workToken != null)
                         outbound!(CreateProgressNotification(workToken, new JsonObject
                         {
-                            ["kind"] = "report", ["message"] = $"Streamed {delivered} reference locations.",
+                            ["kind"] = "report",
+                            ["message"] = $"Streamed {delivered} reference locations.",
                         }));
                 }
             });
