@@ -10,6 +10,196 @@ namespace CodeIndex.Tests;
 [Collection("Console sensitive")]
 public sealed class LspCallHierarchyTests
 {
+    [Theory]
+    [InlineData(51)]
+    [InlineData(LspServer.ReferencePageSize * 2 + 1)]
+    public void FramedReferences_DeliversEveryLocationWithIdentityAndTokenParity_Issue5392(int count)
+    {
+        const string call = " _ = \"😀\"; Leaf();";
+        var source = "class Calls\n{\n public static void Leaf() {}\n public static void Empty() {}\n"
+            + " public static void Leaf(int x) {}\n void Caller() {\n"
+            + string.Concat(Enumerable.Repeat(call + "\n", count - 1))
+            + " Leaf(1);\n" + string.Concat(Enumerable.Repeat(" Missing();\n", 51)) + " }\n}";
+        const string other = "class Other\n{\n void Caller() { Calls.Leaf(); Missing(); }\n}\n"
+            + "class Decoy\n{\n void Leaf() {}\n void Caller() { Leaf(); }\n}";
+        using var fixture = new Fixture(source, "日本 #Calls.cs", additionalFiles: new Dictionary<string, string>
+        {
+            ["Other.cs"] = other,
+        });
+        Assert.True(fixture.Capabilities["referencesProvider"]!["workDoneProgress"]!.GetValue<bool>());
+        var expected = Enumerable.Range(6, count - 1)
+            .Select(line => (fixture.Uri, line, call.IndexOf("Leaf", StringComparison.Ordinal))).ToList();
+        expected.Add((LspServer.PathToUri(Path.Combine(Path.GetDirectoryName(fixture.SourcePath)!, "Other.cs")),
+            2, other.Split('\n')[2].IndexOf("Leaf", StringComparison.Ordinal)));
+        foreach (var includeDeclaration in new[] { false, true })
+        {
+            string[]? baseline = null;
+            foreach (var partial in new[] { false, true })
+            {
+                var result = RequestReferences(fixture, partial, includeDeclaration);
+                Assert.Null(result["error"]);
+                var locations = ReferenceLocations(fixture, result, partial);
+                Assert.Equal(count + (includeDeclaration ? 1 : 0), locations.Length);
+                var identities = locations.Select(node => node.ToJsonString()).ToArray();
+                Assert.Equal(identities.Length, identities.Distinct(StringComparer.Ordinal).Count());
+                if (baseline != null)
+                    Assert.Equal(baseline, identities);
+                baseline = identities;
+                var actual = locations.Skip(includeDeclaration ? 1 : 0).Select(node =>
+                    (node["uri"]!.GetValue<string>(), node["range"]!["start"]!["line"]!.GetValue<int>(),
+                        node["range"]!["start"]!["character"]!.GetValue<int>())).ToArray();
+                Assert.Equal(expected.OrderBy(x => x.Item1, StringComparer.Ordinal).ThenBy(x => x.Item2),
+                    actual.OrderBy(x => x.Item1, StringComparer.Ordinal).ThenBy(x => x.Item2));
+                Assert.All(locations, node => Assert.Equal(4,
+                    node["range"]!["end"]!["character"]!.GetValue<int>()
+                    - node["range"]!["start"]!["character"]!.GetValue<int>()));
+                AssertReferenceProgressEnded(fixture);
+                if (partial)
+                {
+                    Assert.True(result.ContainsKey("result"));
+                    Assert.Null(result["result"]);
+                    Assert.All(fixture.Messages.Where(x => IsReferenceChunk(x.Message)), entry =>
+                    {
+                        Assert.InRange(entry.Message["params"]!["value"]!.AsArray().Count, 1, 100);
+                        Assert.InRange(entry.Bytes, 1, LspServer.MaxSymbolProgressChunkBytes);
+                    });
+                    Assert.Equal((locations.Length + 99) / 100,
+                        fixture.Messages.Count(x => IsReferenceChunk(x.Message)));
+                }
+            }
+        }
+        foreach (var partial in new[] { false, true })
+        {
+            var empty = RequestReferences(fixture, partial, false, line: 3);
+            Assert.Null(empty["error"]);
+            Assert.Empty(ReferenceLocations(fixture, empty, partial));
+            AssertReferenceProgressEnded(fixture);
+            var fallback = RequestReferences(fixture, partial, false, line: count + 6, character: 2);
+            Assert.Null(fallback["error"]);
+            var fallbackLocations = ReferenceLocations(fixture, fallback, partial);
+            Assert.Equal(51, fallbackLocations.Length);
+            Assert.All(fallbackLocations, node => Assert.Equal(fixture.Uri, node["uri"]!.GetValue<string>()));
+            AssertReferenceProgressEnded(fixture);
+        }
+        // Another evidence kind at an existing site must not duplicate a Location.
+        using (var db = new DbContext(DbOpenIntent.WriteIndex, fixture.DbPath))
+        using (var command = db.Connection.CreateCommand())
+        {
+            command.CommandText = """
+                INSERT INTO symbol_references(file_id, symbol_name, symbol_name_folded, reference_kind,
+                    line, column_number, target_symbol_id, resolution_state, resolution_candidate_count)
+                SELECT file_id, symbol_name, symbol_name_folded, 'type_reference', line, column_number,
+                    target_symbol_id, resolution_state, resolution_candidate_count
+                FROM symbol_references WHERE symbol_name = 'Leaf' AND line = 7 AND reference_kind = 'call'
+                """;
+            Assert.Equal(1, command.ExecuteNonQuery());
+        }
+        foreach (var partial in new[] { false, true })
+            Assert.Equal(count, ReferenceLocations(fixture, RequestReferences(fixture, partial, false), partial).Length);
+        var highlights = fixture.Position("textDocument/documentHighlight", 2, 20)["result"]!.AsArray();
+        Assert.InRange(highlights.Count, 1, 51);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void FramedReferences_LimitsAreErrorsAndCancellationEndsProgress_Issue5392(bool pretty)
+    {
+        var source = "class Calls\n{\n public static void Leaf() {}\n void Caller() {\n"
+            + string.Concat(Enumerable.Repeat(" Leaf();\n", LspServer.ReferencePageSize * 2 + 1)) + " }\n}";
+        using var fixture = new Fixture(source, pretty: pretty);
+        foreach (var partial in new[] { false, true })
+        {
+            fixture.Server.ReferenceRowsForTesting = LspServer.ReferencePageSize;
+            var limited = RequestReferences(fixture, partial, false);
+            AssertError(limited, -32803, "reference_row_limit");
+            Assert.Contains("CLI inspect", limited["error"]!["data"]!["recovery"]!.GetValue<string>());
+            AssertReferenceProgressEnded(fixture);
+        }
+        fixture.Server.ReferenceRowsForTesting = 101;
+        var partlyDelivered = RequestReferences(fixture, true, false);
+        AssertError(partlyDelivered, -32803, "reference_row_limit");
+        Assert.Equal(100, partlyDelivered["error"]!["data"]!["deliveredLocationCount"]!.GetValue<int>());
+        AssertReferenceProgressEnded(fixture);
+        fixture.Server.ReferenceRowsForTesting = LspServer.MaxReferenceRows;
+        fixture.Server.ReferenceResponseBytesForTesting = 512;
+        var byteLimit = RequestReferences(fixture, false, false);
+        AssertError(byteLimit, -32803, "response_byte_limit");
+        Assert.Contains("partialResultToken", byteLimit["error"]!["data"]!["recovery"]!.GetValue<string>());
+        AssertReferenceProgressEnded(fixture);
+        Assert.Equal(201, ReferenceLocations(fixture, RequestReferences(fixture, true, false), true).Length);
+        fixture.Server.ReferenceResponseBytesForTesting = LspServer.MaxReferenceResponseBytes;
+        fixture.Server.ReferenceChunkBytesForTesting = 1024;
+        Assert.Equal(201, ReferenceLocations(fixture, RequestReferences(fixture, true, false), true).Length);
+        Assert.All(fixture.Messages.Where(x => IsReferenceChunk(x.Message)), entry => Assert.InRange(entry.Bytes, 1, 1024));
+        fixture.Server.ReferenceChunkBytesForTesting = 1;
+        AssertError(RequestReferences(fixture, true, false), -32803, "progress_byte_limit");
+        AssertReferenceProgressEnded(fixture);
+        fixture.Server.ReferenceChunkBytesForTesting = LspServer.MaxSymbolProgressChunkBytes;
+        fixture.Server.ReferenceDeliveryBytesForTesting = 1;
+        AssertError(RequestReferences(fixture, true, false), -32803, "reference_delivery_limit");
+        AssertReferenceProgressEnded(fixture);
+        fixture.Server.ReferenceDeliveryBytesForTesting = LspServer.MaxReferenceDeliveryBytes;
+        fixture.Server.AfterReferenceChunkForTesting = () => fixture.Notify("$/cancelRequest", new { id = 5351 });
+        var cancelled = RequestReferences(fixture, true, false);
+        Assert.Equal(-32800, cancelled["error"]!["code"]!.GetValue<int>());
+        Assert.False(cancelled.ContainsKey("result"));
+        Assert.Equal(100, fixture.Messages.Single(x => IsReferenceChunk(x.Message)).Message["params"]!["value"]!.AsArray().Count);
+        AssertReferenceProgressEnded(fixture);
+        fixture.Server.AfterReferenceChunkForTesting = null;
+        fixture.Server.BeforeReferenceReadForTesting = _ => throw new IOException("Injected failure");
+        Assert.Equal(-32603, RequestReferences(fixture, true, false)["error"]!["code"]!.GetValue<int>());
+        AssertReferenceProgressEnded(fixture);
+        fixture.Server.BeforeReferenceReadForTesting = null;
+        fixture.Server.ReferenceTimeoutForTesting = TimeSpan.FromMilliseconds(1);
+        fixture.Server.BeforeReferenceReadForTesting = token => token.WaitHandle.WaitOne(TestDeterminism.DefaultTimeout);
+        AssertError(RequestReferences(fixture, true, false), -32803, "query_deadline_exceeded");
+        AssertReferenceProgressEnded(fixture);
+        fixture.Server.ReferenceTimeoutForTesting = TimeSpan.FromSeconds(5);
+        fixture.Server.BeforeReferenceReadForTesting = null;
+        fixture.Server.BeforeReferenceValidationForTesting = () =>
+        {
+            using var db = new DbContext(DbOpenIntent.WriteIndex, fixture.DbPath);
+            new DbWriter(db).SetMeta("reference_test_generation", "changed");
+        };
+        AssertError(RequestReferences(fixture, true, false), -32801, "index_generation_changed");
+        AssertReferenceProgressEnded(fixture);
+        fixture.Server.BeforeReferenceValidationForTesting = null;
+        Assert.Equal(201, ReferenceLocations(fixture, RequestReferences(fixture, false, false), false).Length);
+    }
+
+    private static JsonObject RequestReferences(Fixture fixture, bool partial, bool includeDeclaration, int line = 2, int character = 20)
+    {
+        var parameters = new JsonObject
+        {
+            ["textDocument"] = new JsonObject { ["uri"] = fixture.Uri },
+            ["position"] = new JsonObject { ["line"] = line, ["character"] = character },
+            ["context"] = new JsonObject { ["includeDeclaration"] = includeDeclaration },
+            ["workDoneToken"] = "reference-work",
+        };
+        if (partial)
+            parameters["partialResultToken"] = 5392;
+        return fixture.Request("textDocument/references", parameters);
+    }
+
+    private static bool IsReferenceChunk(JsonObject message) => message["method"]?.GetValue<string>() == "$/progress"
+        && message["params"]!["token"] is JsonValue token && token.TryGetValue<int>(out var number) && number == 5392;
+
+    private static JsonNode[] ReferenceLocations(Fixture fixture, JsonObject result, bool partial) => partial
+        ? fixture.Messages.Where(x => IsReferenceChunk(x.Message)).SelectMany(x => x.Message["params"]!["value"]!.AsArray()).Select(x => x!).ToArray()
+        : result["result"]!.AsArray().Select(x => x!).ToArray();
+
+    private static void AssertReferenceProgressEnded(Fixture fixture)
+    {
+        var work = fixture.Messages.Where(x => x.Message["method"]?.GetValue<string>() == "$/progress"
+                && x.Message["params"]!["token"] is JsonValue token && token.TryGetValue<string>(out var value) && value == "reference-work")
+            .Select(x => x.Message["params"]!["value"]!["kind"]!.GetValue<string>()).ToArray();
+        Assert.Equal("begin", work[0]);
+        Assert.Equal("end", work[^1]);
+        Assert.Equal(1, work.Count(x => x == "end"));
+        Assert.True(fixture.Messages[^1].Message.ContainsKey("id"));
+    }
+
     private const string Source = """
         class Alpha
         {
@@ -457,9 +647,10 @@ public sealed class LspCallHierarchyTests
         internal LspServer Server { get; }
         internal JsonNode Capabilities { get; }
         internal List<string> Notices { get; } = [];
+        internal List<(JsonObject Message, int Bytes)> Messages { get; } = [];
 
         internal Fixture(string source, string fileName = "Calls.cs", Encoding? encoding = null,
-            IReadOnlyDictionary<string, string>? additionalFiles = null)
+            IReadOnlyDictionary<string, string>? additionalFiles = null, bool pretty = false)
         {
             SourcePath = Path.Combine(_root, fileName);
             DbPath = Path.Combine(_root, ".cdidx", "codeindex.db");
@@ -471,7 +662,9 @@ public sealed class LspCallHierarchyTests
             }
             Reindex();
             var db = new DbContext(DbOpenIntent.QueryOnly, DbPath);
-            Server = new LspServer(db, DbPath, "test", ProgramRunner.CreateDefaultJsonOptions(), _root);
+            var jsonOptions = ProgramRunner.CreateDefaultJsonOptions();
+            jsonOptions.WriteIndented = pretty;
+            Server = new LspServer(db, DbPath, "test", jsonOptions, _root);
             Capabilities = Request("initialize", new { })["result"]!["capabilities"]!;
         }
 
@@ -505,6 +698,7 @@ public sealed class LspCallHierarchyTests
 
         internal JsonObject Request(string method, object parameters)
         {
+            Messages.Clear();
             var payload = JsonSerializer.Serialize(new { jsonrpc = "2.0", id = 5351, method, @params = parameters });
             using var input = new MemoryStream(Encoding.UTF8.GetBytes($"Content-Length: {Encoding.UTF8.GetByteCount(payload)}\r\n\r\n{payload}"));
             using var output = new MemoryStream();
@@ -514,6 +708,7 @@ public sealed class LspCallHierarchyTests
             while (LspServer.TryReadMessage(output, out var message))
             {
                 var node = JsonNode.Parse(message)!.AsObject();
+                Messages.Add((node, Encoding.UTF8.GetByteCount(message)));
                 if (node.ContainsKey("id"))
                     response = node;
                 else if (node["method"]?.GetValue<string>() == "window/logMessage")

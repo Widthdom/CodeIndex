@@ -3738,6 +3738,11 @@ hierarchical `DocumentSymbol` children when container metadata is available,
 returns at most 1000 symbols from the latest accepted live buffer or the index,
 truncates each `detail` string to 512 characters with `...`, and trims the tree
 before the result array exceeds 524288 JSON bytes.
+`textDocument/references` delivers complete indexed locations through a bounded
+array or partial-result chunks. Resource limits return explicit errors with recovery
+guidance. See [LSP reference delivery](docs/lsp-references.md#english) for token/no-token
+behavior, exact limits, cancellation and identity-preserving CLI pagination.
+
 Both symbol providers advertise work-done progress. Requests may pass bounded
 string or integer `partialResultToken` / `workDoneToken` values. With a partial
 result token, the server sends deterministic `$/progress` notifications capped
@@ -7779,6 +7784,11 @@ clamp します。`textDocument/documentSymbol` は container metadata がある
 `DocumentSymbol` children を返し、最後に受理した live buffer または index から最大 1000 件の
 symbol を返し、各 `detail` string を `...` 付きの 512 文字に切り詰め、result tree が
 524288 JSON bytes を超える前に trim します。
+`textDocument/references` は、上限付き配列または部分結果チャンクでインデックス済み参照を
+全件配送します。リソース上限に達すると復旧手順付きの明示的なエラーを返します。
+トークン有無の動作、具体的な上限、取消、対象を維持する CLI ページ取得については
+[LSP 参照配送](docs/lsp-references.md#日本語) を参照してください。
+
 両方の symbol provider は work-done progress を advertise します。request は上限付きの string
 または integer の `partialResultToken` / `workDoneToken` を渡せます。partial-result token が
 ある場合、server は決定的な順序の `$/progress` notification を1件あたり最大100 symbol・

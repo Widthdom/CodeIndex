@@ -485,7 +485,7 @@ internal sealed partial class LspServer : IDisposable
                             requestCancellation),
                         "textDocument/definition" => Result(id, Definition(root, "textDocument/definition")),
                         "textDocument/declaration" => Result(id, Definition(root, "textDocument/declaration")),
-                        "textDocument/references" => Result(id, References(root, "textDocument/references")),
+                        "textDocument/references" => HandleReferences(id, root, outbound, requestCancellation),
                         "textDocument/prepareCallHierarchy" or "callHierarchy/incomingCalls" or "callHierarchy/outgoingCalls"
                             => HandleCallHierarchy(id, root, method, outbound, requestCancellation),
                         "textDocument/hover" => Result(id, Hover(root, "textDocument/hover")),

@@ -23,6 +23,18 @@ public partial class DbReader
     /// 呼び出し箇所などのインデックス済み参照を検索する。
     /// </summary>
     public List<ReferenceResult> SearchReferences(string? query = null, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, bool excludeSelfReferences = false, int offset = 0, bool includeQualifiedCommonCalls = false)
+        => SearchReferences(query, limit, lang, referenceKind, pathPatterns, excludePathPatterns,
+            excludeTests, exact, maxLineWidth, excludeSelfReferences, offset, includeQualifiedCommonCalls,
+            Math.Max(limit, CSharpUsingStaticReferenceFilterMaxRawLimit));
+
+    internal List<ReferenceResult> SearchReferencesForLsp(string query, int limit, int offset, string? lang = null)
+        => SearchReferences(query, limit, lang, null, null, null, false, true,
+            LineWidthFormatter.DefaultMaxLineWidth, false, offset, false, Math.Max(1, limit));
+
+    private List<ReferenceResult> SearchReferences(string? query, int limit, string? lang, string? referenceKind,
+        IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests,
+        bool exact, int maxLineWidth, bool excludeSelfReferences, int offset, bool includeQualifiedCommonCalls,
+        int maxRawPageSize)
     {
         maxLineWidth = LineWidthFormatter.ClampMaxLineWidth(maxLineWidth);
         lang = NormalizeQueryLanguage(lang);
@@ -33,13 +45,14 @@ public partial class DbReader
         if (!ShouldApplyCSharpUsingStaticConstantPatternReferenceFilter(lang, referenceKind, exact))
             return SearchReferencesCore(query, limit, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact, offset, maxLineWidth, excludeSelfReferences, includeQualifiedCommonCalls);
 
-        var rawLimit = Math.Max(limit, CSharpUsingStaticReferenceFilterChunkSize);
+        var rawLimit = Math.Min(maxRawPageSize, Math.Max(limit, CSharpUsingStaticReferenceFilterChunkSize));
         var rawOffset = 0;
         var acceptedBeforePage = Math.Max(0, offset);
         var accepted = 0;
         var filtered = new List<ReferenceResult>();
         while (filtered.Count < limit)
         {
+            Cancellation.ThrowIfCancellationRequested();
             var rawResults = SearchReferencesCore(query, rawLimit, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact, rawOffset, maxLineWidth, excludeSelfReferences, includeQualifiedCommonCalls);
             if (rawResults.Count == 0)
                 break;
@@ -65,7 +78,7 @@ public partial class DbReader
                 break;
 
             rawOffset += rawResults.Count;
-            rawLimit = Math.Min(rawLimit * 2, CSharpUsingStaticReferenceFilterMaxRawLimit);
+            rawLimit = Math.Min(rawLimit * 2, maxRawPageSize);
         }
 
         return filtered.Count <= limit ? filtered : filtered.Take(limit).ToList();
