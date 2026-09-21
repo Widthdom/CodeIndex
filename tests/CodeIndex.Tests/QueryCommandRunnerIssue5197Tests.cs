@@ -287,9 +287,10 @@ public partial class QueryCommandRunnerTests
         Assert.Equal(2, resolution.GetProperty("reference_count").GetInt64());
         Assert.True(cycle.GetProperty("retained_evidence").GetProperty("classification_complete").GetBoolean());
         Assert.Equal("csharp_non_authoritative_qualified_call", reason.GetProperty("reason").GetString());
-        Assert.Equal(2, reason.GetProperty("edges_affected").GetInt32());
-        Assert.Equal(2, reason.GetProperty("edges_removed").GetInt32());
-        Assert.Equal(2, reason.GetProperty("references_removed").GetInt64());
+        // The unrelated resolved-name decoy is excluded before noise classification.
+        Assert.Equal(1, reason.GetProperty("edges_affected").GetInt32());
+        Assert.Equal(1, reason.GetProperty("edges_removed").GetInt32());
+        Assert.Equal(1, reason.GetProperty("references_removed").GetInt64());
     }
 
     [Fact]
@@ -326,8 +327,6 @@ public partial class QueryCommandRunnerTests
                 static item => item.GetProperty("resolution_state").GetString()!,
                 static item => item.GetProperty("reference_count").GetInt64(),
                 StringComparer.Ordinal);
-        var reason = Assert.Single(json.GetProperty("symbol_filter").GetProperty("suppression_reasons").EnumerateArray());
-
         Assert.Equal(CommandExitCodes.Success, exitCode);
         Assert.Equal(string.Empty, stderr);
         Assert.Equal(
@@ -335,10 +334,7 @@ public partial class QueryCommandRunnerTests
             nodes);
         Assert.Equal(2, resolutions["resolved"]);
         Assert.Equal(2, resolutions["resolved_group"]);
-        Assert.Equal("csharp_non_authoritative_qualified_call", reason.GetProperty("reason").GetString());
-        Assert.Equal(1, reason.GetProperty("edges_affected").GetInt32());
-        Assert.Equal(1, reason.GetProperty("edges_removed").GetInt32());
-        Assert.Equal(1, reason.GetProperty("references_removed").GetInt64());
+        Assert.False(json.GetProperty("symbol_filter").TryGetProperty("suppression_reasons", out _));
     }
 
     [Theory]

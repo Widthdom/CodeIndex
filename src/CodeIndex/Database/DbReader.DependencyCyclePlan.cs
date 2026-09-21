@@ -14,8 +14,9 @@ public partial class DbReader
         string CandidateOrder,
         string RetainedSymbolFilter,
         string ConstrainedAlias,
+        string ReferenceLineJoin,
         string ResolutionState,
-        string SymbolNameMatch,
+        string TargetMatch,
         string SymbolName);
 
     private DependencyCycleQueryPlan BuildDependencyCycleQueryPlan(DependencyQueryRequest request)
@@ -64,8 +65,6 @@ public partial class DbReader
                                       + ") OR "
                                       + csharpNonAuthoritativeQualifiedCall
                                       + ")";
-        // Separate the SQL branch so other languages retain an indexed name lookup,
-        // rather than scanning all symbols through an OR with SQL normalization.
         return new DependencyCycleQueryExpressions(
             markdownExplicitLink,
             csharpNonAuthoritativeQualifiedCall,
@@ -78,13 +77,67 @@ public partial class DbReader
                 ? " WHERE suppression_reason IS NULL"
                 : string.Empty,
             request.Reverse ? "dst" : "src",
-            DependencyResolutionStateSql(),
-            @"s.id IN (
-                SELECT named.id FROM symbols named
-                WHERE src.lang != 'sql' AND named.name = r.symbol_name
+            ReferenceLineJoinSql("r"),
+            BuildDependencyCycleResolutionState(hasCurrentReferenceIdentityContract),
+            BuildDependencyCycleTargetMatch(hasCurrentReferenceIdentityContract),
+            "CASE WHEN src.lang = 'sql' THEN sql_normalize_name(s.name) WHEN src.lang = 'python' THEN s.name ELSE r.symbol_name END");
+    }
+
+    private string BuildDependencyCycleTargetMatch(bool identityCurrent)
+    {
+        // Keep each branch as an indexed ID/name lookup. Both candidate selection and
+        // evidence must use the same reference/definition pairs before graph budgets.
+        // A current resolved reference cannot lend its state to a same-name decoy;
+        // grouped/ambiguous references admit only their persisted candidate identities.
+        var identityTargets = identityCurrent ? @"
+                SELECT r.target_symbol_id
+                WHERE src.lang != 'sql' AND r.resolution_state = 'resolved'
                 UNION ALL
-                SELECT sql_match.symbol_id WHERE src.lang = 'sql')",
-            "CASE WHEN src.lang = 'sql' THEN sql_normalize_name(s.name) ELSE r.symbol_name END");
+                SELECT candidate.symbol_id FROM symbol_reference_candidates candidate
+                WHERE src.lang != 'sql' AND candidate.reference_id = r.id
+                  AND r.resolution_state IN ('resolved_group', 'ambiguous')
+                UNION ALL" : string.Empty;
+        var nameFallback = identityCurrent
+            ? " AND COALESCE(r.resolution_state, '') NOT IN ('resolved', 'resolved_group', 'ambiguous')"
+            : string.Empty;
+        var importIdentityScope = identityCurrent ? @"
+                  AND (COALESCE(r.resolution_state, '') NOT IN ('resolved', 'resolved_group', 'ambiguous')
+                       OR (r.resolution_state = 'resolved' AND r.target_symbol_id = py_import.id)
+                       OR (r.resolution_state IN ('resolved_group', 'ambiguous') AND EXISTS (
+                           SELECT 1 FROM symbol_reference_candidates candidate
+                           WHERE candidate.reference_id = r.id AND candidate.symbol_id = py_import.id)))" : string.Empty;
+        var importSignature = GetSymbolColumnSql("signature", "NULL", "py_import");
+        var context = ReferenceContextSql("r");
+        // Python's persisted identity can be the source-local import binding. Follow
+        // only that binding using ordinary deps' module/alias matcher, never all names.
+        var pythonImports = @"
+                UNION ALL
+                SELECT imported.id FROM symbols py_import
+                CROSS JOIN symbols imported ON imported.name = python_import_target_name(src.path, r.symbol_name, " + context + @", r.column_number, " + importSignature + @")
+                CROSS JOIN files imported_file ON imported_file.id = imported.file_id
+                WHERE src.lang = 'python' AND imported_file.lang = 'python'
+                  AND py_import.file_id = src.id AND py_import.kind = 'import'" + importIdentityScope + @"
+                  AND python_import_resolves(src.path, imported_file.path, r.symbol_name, r.reference_kind, " + context + @", r.column_number, " + importSignature + @")";
+        return @"s.id IN (" + identityTargets + @"
+                SELECT named.id FROM symbols named
+                WHERE src.lang NOT IN ('sql', 'python') AND named.name = r.symbol_name" + nameFallback + pythonImports + @"
+                UNION ALL
+                SELECT sql_match.symbol_id WHERE src.lang = 'sql')";
+    }
+
+    private string BuildDependencyCycleResolutionState(bool identityCurrent)
+    {
+        var state = DependencyResolutionStateSql();
+        if (!identityCurrent)
+            return state;
+        // An import-binding identity proves the binding, not the imported definition.
+        // Keep semantic fallback visible without lending it a confirmed target label.
+        return @"CASE WHEN src.lang = 'python' AND (
+                (r.resolution_state = 'resolved' AND r.target_symbol_id != s.id)
+                OR (r.resolution_state = 'resolved_group' AND NOT EXISTS (
+                    SELECT 1 FROM symbol_reference_candidates candidate
+                    WHERE candidate.reference_id = r.id AND candidate.symbol_id = s.id)))
+            THEN 'unavailable' ELSE " + state + " END";
     }
 
     private static void AppendDependencyCycleTerminalParameters(
