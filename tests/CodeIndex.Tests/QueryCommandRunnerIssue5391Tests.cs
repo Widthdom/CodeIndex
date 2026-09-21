@@ -209,7 +209,9 @@ public partial class QueryCommandRunnerTests
     {
         var response = server.HandleMessage(new JsonObject
         {
-            ["jsonrpc"] = "2.0", ["id"] = 1, ["method"] = "tools/call",
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
             ["params"] = new JsonObject { ["name"] = "deps", ["arguments"] = arguments }
         })!;
         Assert.False(response["result"]?["isError"]?.GetValue<bool>() ?? false, response.ToJsonString());
