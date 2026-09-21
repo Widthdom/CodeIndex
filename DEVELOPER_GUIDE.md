@@ -1244,6 +1244,15 @@ inlay hints are emitted only when the indexed return type is not already written
 before the declaration identifier, so explicit method return, local, and field
 types remain suppressed.
 
+LSP completion returns at most 100 items, preserving local-before-workspace
+precedence, search ranking, and identity by name, kind, indexed path, and line.
+Each source reads at most 101 candidates. `isIncomplete` is true when more than
+100 distinct identities are found or either source fills its probe, even if
+duplicates leave fewer displayed items. An exhausted list of exactly 100 items
+is complete. Clients should request completion again as the token narrows when
+the list is incomplete; the server does not enumerate the entire workspace to
+decide this flag. This describes candidate-list completeness, not index coverage.
+
 LSP symbol and completion kinds come from one ordinal internal-kind mapping so
 document symbols, workspace symbols, and completion items cannot drift. The
 deliberate mappings and fallbacks are:
@@ -5800,6 +5809,14 @@ identifier を確認して、古い不正確な column にも対応する。sour
 保存済み column に fallback し、column も無い場合だけ character 0 を使う。type inlay hint は
 indexed return type が declaration identifier の前に明示されていない場合だけ返すため、method の
 明示 return type、local、field の明示型は表示しない。
+
+LSP 補完は最大100件を返し、ローカル候補をワークスペース候補より優先する順序、検索順位、
+名前・種類・索引パス・行による候補の識別を維持する。各検索元からの取得は最大101件とする。
+異なる候補が100件を超えた場合、またはどちらかの検索元で取得上限に達した場合は、重複排除後の
+表示件数が少なくても `isIncomplete` を true にする。全件取得済みでちょうど100件のリストは
+完全として扱う。不完全なリストでは、クライアントは入力を絞り込む際に補完を再要求する。
+このフラグの判定のためにワークスペース全体の候補を列挙することはない。フラグが示すのは
+候補リストの完全性であり、索引の網羅性ではない。
 
 LSP の symbol kind と completion kind は、ordinal 比較する1つの internal-kind mapping から導出する。
 これにより document symbol、workspace symbol、completion item の分類がずれない。意図的な mapping と
