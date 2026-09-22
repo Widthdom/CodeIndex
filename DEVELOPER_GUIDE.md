@@ -3066,6 +3066,13 @@ discovery-reduction step, not a retroactive license change or deletion.
 
 The `suggest_improvement` MCP tool allows AI agents to report gaps or errors.
 
+Discovery always advertises `openWorldHint: true`: accepted suggestions are stored
+locally and can be published as upstream GitHub issues when `CDIDX_GITHUB_TOKEN`
+is explicitly configured. Keep that conditional side effect in the first sentence
+of the authoritative tool description so compact, full, selected and paged
+`tools/list` responses retain it. Annotations are advisory metadata, not authorization;
+the existing token opt-in, duplicate handling and submission behavior remain unchanged.
+
 ### Source files
 
 | File | Purpose |
@@ -7640,6 +7647,12 @@ Unlist しても exact version restore は不可能になりません。これ�
 ## AIフィードバックの実装
 
 `suggest_improvement` MCPツールにより、AIエージェントがギャップやエラーを報告できる。
+
+ツール一覧では常に `openWorldHint: true` を公開します。受理した提案はローカルに保存され、
+`CDIDX_GITHUB_TOKEN` を明示的に設定した場合は上流の GitHub Issue として公開されることがあります。
+この条件付きの副作用は、正本となるツール説明の最初の一文に記載し、compact・full・
+ツール選択・ページ付きのすべての `tools/list` 応答で維持してください。注釈は参考情報であり、
+認可機能ではありません。既存のトークンによる明示的な許可、重複処理、送信動作は変わりません。
 
 ### ソースファイル
 

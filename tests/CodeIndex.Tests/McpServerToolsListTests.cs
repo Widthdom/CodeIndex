@@ -843,6 +843,56 @@ public partial class McpServerTests
     }
 
     [Fact]
+    public void ToolsList_SuggestionDisclosesConditionalGitHubPublication_Issue5396()
+    {
+        // Share discovery-only requests; never invoke the suggestion submission tool.
+        // 一覧取得だけを共通の fixture で検証し、提案送信ツールは呼び出さない。
+        string?[] variants =
+        [
+            null,
+            """{"format":"compact"}""",
+            """{"format":"full"}""",
+            """{"names":"suggest_improvement"}""",
+            """{"format":"full","names":["suggest_improvement"]}""",
+            """{"format":"compact","limit":2}""",
+            """{"format":"full","limit":2}""",
+            """{"format":"compact","names":["status","suggest_improvement"],"limit":1}""",
+            """{"format":"full","names":["status","suggest_improvement"],"limit":1}""",
+        ];
+
+        foreach (var variant in variants)
+        {
+            var request = new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = 5396,
+                ["method"] = "tools/list",
+            };
+            if (variant != null)
+                request["params"] = JsonNode.Parse(variant);
+            var response = _server.HandleMessage(request)!;
+            if (request["params"]?["limit"] != null)
+                Assert.NotNull(response["result"]!["nextCursor"]);
+
+            var suggestion = Assert.Single(ReadAllToolsListPages(response),
+                tool => tool!["name"]!.GetValue<string>() == "suggest_improvement")!;
+            var annotations = suggestion["annotations"]!;
+            Assert.True(annotations["openWorldHint"]!.GetValue<bool>());
+            Assert.False(annotations["readOnlyHint"]!.GetValue<bool>());
+            Assert.False(annotations["destructiveHint"]!.GetValue<bool>());
+            Assert.True(annotations["idempotentHint"]!.GetValue<bool>());
+
+            var description = suggestion["description"]!.GetValue<string>();
+            Assert.Contains("locally", description, StringComparison.Ordinal);
+            Assert.Contains("may publish an upstream GitHub issue", description, StringComparison.Ordinal);
+            Assert.Contains("when CDIDX_GITHUB_TOKEN is configured", description, StringComparison.Ordinal);
+            Assert.Contains("Never include source code", description, StringComparison.Ordinal);
+            Assert.DoesNotContain(_dbPath, description, StringComparison.Ordinal);
+            Assert.DoesNotContain(_projectRoot, description, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
     public void ToolsList_IndexToolHasWriteAnnotations()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;

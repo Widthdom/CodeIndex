@@ -1,5 +1,12 @@
 # Testing Guide
 
+`ToolsList_SuggestionDisclosesConditionalGitHubPublication_Issue5396` shares one
+discovery fixture across default, compact, full, selected and paged catalogs.
+Keep the open-world annotation, other annotation values, local-storage/token-opt-in
+description and source-code warning consistent without invoking the submission tool.
+Run the discovery, suggestion-store, MCP suggestion and fake GitHub reporter tests
+on net8.0/net9.0; validation must not use real tokens or create external issues.
+
 LSP reference delivery (#5392) extends `LspCallHierarchyTests` with isolated,
 framed 51-location and multi-page fixtures. Compare token/no-token results across
 declaration inclusion, same-name/overload targets, duplicate sites, cross-file URIs
@@ -1724,6 +1731,13 @@ Issue #5300 のテストは隣接・入れ子の C# callable、対象行の除�
 パーサー（#5297）の回帰テストとともに net8.0 / net9.0 で実行します。
 
 # テストガイド
+
+`ToolsList_SuggestionDisclosesConditionalGitHubPublication_Issue5396` は共通の
+フィクスチャで、既定・compact・full・ツール選択・ページ付きの一覧を検証します。
+送信ツールを呼び出さず、外部サービスとのやり取りを示す注釈、その他の注釈値、
+ローカル保存とトークンによる明示的な許可の説明、ソースコードを含めない注意書きを維持してください。
+一覧・提案ストア・MCP 提案・模擬 GitHub 応答のテストを net8.0/net9.0 で実行し、
+実際のトークンや外部 Issue の作成は検証に使用しないでください。
 
 LSP 参照配送 (#5392) は `LspCallHierarchyTests` の分離 DB とフレーム付き通信で、
 51 位置および複数ページを検証します。宣言の有無、同名・オーバーロードの対象、重複位置、

@@ -3934,6 +3934,11 @@ The MCP `tools/list` response includes an `examples` array for every registered 
 | `backfill_fold` | Upgrade folded-name keys in an existing DB without reparsing source files |
 | `suggest_improvement` | Submit structured improvement suggestions or error reports |
 
+With an explicitly configured `CDIDX_GITHUB_TOKEN`, `suggest_improvement` can publish
+an upstream GitHub issue as well as store the suggestion locally. All discovery formats
+therefore advertise `openWorldHint: true`, including local-only sessions without a token.
+This hint describes possible side effects; it does not grant permission to publish.
+
 `suggest_improvement` always stores accepted suggestions locally. Its response includes `submitted_to_github` and `github_submission_reason` so clients can distinguish `submitted`, `token_not_configured`, `repo_not_configured`, `network_error`, and `api_error`; failed GitHub attempts also include `github_submission_error`. If the source-code guard rejects `description`, `context`, or `toolInvocationContext`, the error `structuredContent` includes `source_code_rejection.field`, the primary `source_code_rejection.reason_code`, and bounded `source_code_rejection.reason_code_counts` diagnostics without echoing the rejected text. The guard is a convenience filter for accidental pasted code, not a data-loss-prevention or security boundary; encoded or obfuscated code-like text may pass through.
 
 The MCP `index` tool returns a `diagnostics` object when non-fatal indexing problems occur. It includes category counts and up to 50 bounded items for recoverable indexing errors and skipped file-size measurements; item paths are project-relative when possible, and messages are redacted and bounded so permission or path failures can be acted on without leaking local absolute paths or token-shaped values.
@@ -7978,6 +7983,11 @@ cdidx は現行 Codex client 向けに MCP `2025-06-18` を交渉し、`2025-03-
 | `index` | プロジェクトのインデックス作成・更新 |
 | `backfill_fold` | 既存 DB の folded-name key をソース再解析なしで更新 |
 | `suggest_improvement` | 構造化された改善提案またはエラー報告を送信 |
+
+`CDIDX_GITHUB_TOKEN` を明示的に設定した場合、`suggest_improvement` は提案のローカル保存に加え、
+上流の GitHub Issue を公開することがあります。そのため、トークン未設定でローカル保存のみの
+セッションも含め、すべてのツール一覧形式で `openWorldHint: true` を公開します。
+このヒントは起こり得る副作用を示すもので、公開を許可する機能ではありません。
 
 `suggest_improvement` は受理した提案を常にローカル保存します。応答には `submitted_to_github` と `github_submission_reason` が含まれ、クライアントは `submitted`、`token_not_configured`、`repo_not_configured`、`network_error`、`api_error` を区別できます。GitHub 送信に失敗した場合は `github_submission_error` も含まれます。ソースコードガードが `description`、`context`、または `toolInvocationContext` を拒否した場合、エラーの `structuredContent` には拒否された本文を反映せずに `source_code_rejection.field`、主理由の `source_code_rejection.reason_code`、および上限付き診断の `source_code_rejection.reason_code_counts` が含まれます。このガードは誤って貼り付けられたコードを拾う便宜的なフィルタであり、データ漏えい防止やセキュリティ境界ではありません。エンコードまたは難読化されたコード風テキストは通過する可能性があります。
 
