@@ -2,6 +2,10 @@
 
 ## English
 
+Python code/comment/string origins are available in search and filtered regex find,
+including MCP. CLI Python context also supports `--origin-passes`; see the
+[syntax envelope, budgets and recovery contract](python-origin-classification.md#english).
+
 ### Ad hoc search count authority (#5357)
 
 CLI `search --count` / `--format count`, `--group-by ... --count`, `--count-by`,
@@ -118,9 +122,10 @@ Filtering happens per exact regex occurrence before counts, offsets and limits.
 All semantic options bind continuation cursors. A row page resumed from a native find scan position reports only
 its scan segment; its bounded `total_count_authoritative` remains false.
 
-This v1 reuses search's bounded C# indexed-prefix classifier (4,096 lines,
-8 Mi characters, 128 chunks) and line-local shell classifier. Other languages,
-missing/capped C# context, and zero-width end-of-line positions remain `unknown`.
+Find reuses search's bounded C#/Python indexed-prefix classifiers (4,096 lines,
+8 Mi characters, 128 chunks per pass) and line-local shell classifier. Other
+languages and missing/capped context remain `unknown`. Python additionally
+classifies zero-width end-of-line positions; C#/shell keep their existing unknowns.
 Rows expose `match_facets` with original UTF-16 line/column/length, including
 zero length. `result_kinds` supports origin names and search's `identifier`
 projection for code; `declaration` and `call_site` are not supported here.
@@ -185,6 +190,10 @@ text or JSON output when context from `--before`, `--after`, or
 `--snippet-lines` is needed.
 
 ## 日本語
+
+search と意味フィルター付き正規表現 find は、MCP を含め Python のコード・コメント・文字列の
+origin に対応します。CLI の Python 文脈も `--origin-passes` を使えます。
+[構文の対応範囲・予算・復旧契約](python-origin-classification.md#日本語)を参照してください。
 
 ### 通常検索の件数の確定性 (#5357)
 
@@ -289,9 +298,10 @@ unknown の facet は `origin_unavailable.reason` を返し、追加パスが役
 すべての意味フィルターを継続カーソルへ紐づけます。find の走査位置から再開した行ページはその走査区間だけを
 報告するため、上限付き出力の `total_count_authoritative` は false を維持します。
 
-v1 は search と共通の C# 索引済みプレフィックス分類器（4,096 行、8 Mi 文字、128 チャンク）と
-行単位の shell 分類器を使います。それ以外の言語、C# 文脈の欠落・上限超過、行末のゼロ幅位置は
-`unknown` のままです。行の `match_facets` は元の UTF-16 行・列・長さを保持し、長さ 0 にも対応します。
+find は search と共通の C#／Python 索引済みプレフィックス分類器（各パス 4,096 行、8 Mi 文字、
+128 チャンク）と行単位の shell 分類器を使います。それ以外の言語や文脈の欠落・上限超過は
+`unknown` のままです。Python は行末のゼロ幅位置も分類し、C#／shell は従来の unknown を維持します。
+行の `match_facets` は元の UTF-16 行・列・長さを保持し、長さ 0 にも対応します。
 `result_kinds` は origin 名と、code に対する search と同じ `identifier` 投影に対応します。
 `declaration` と `call_site` には対応しません。fixture は認識済みテストファイルのパスと文字列系 origin から
 判定し、正規表現の文字列から `test_symbol` を推測しません。

@@ -3458,6 +3458,13 @@ For one `--extension` lookup, CLI JSON and the MCP `languages` tool return the s
 
 ### Language extraction matrix
 
+Origin-filtered auditing has a separate syntax envelope: C# and Python have
+bounded indexed multiline classifiers; shell/bash/zsh have a line-local classifier.
+Other languages remain unknown in filtered regex find. Python supports code,
+comments and strings, including executable f-string expressions; see
+[Python origin support and limits](docs/python-origin-classification.md#english).
+`languages` extraction/graph flags do not imply origin-classifier support.
+
 Use `cdidx languages --json` as the live capability probe. JSON rows expose
 `symbol_extraction`, `reference_extraction`, `graph_queries`,
 `capability_gaps`, and `unsupported_guidance`; DB-backed probes such as `--indexed-only` and lookup by
@@ -7547,6 +7554,12 @@ CLI JSON と MCP の `languages` response は同じ catalog snapshot を共有�
 - 曖昧な `.m` / `.pl`: 認識済み shebang を最優先し、その後は bounded content check で Objective-C/MATLAB または Perl/Prolog の強い marker だけを使い、最後に保守的な project marker を確認します。これらの marker を追加・変更・削除する scoped update は workspace を自動的に再 scan し、未変更の曖昧ファイルに古い分類を残しません。弱い証拠や競合する証拠は無条件に言語を割り当てず、`ambiguous_m` / `ambiguous_pl` として全文検索可能なまま残します。未確定の `.m` は両方のコメント構文を位置を保ってマスクした後、MATLAB と Objective-C の symbol/reference を保守的に統合します。Prolog と `ambiguous_pl` は分類後に保守的な symbol、reference、graph query を公開し、`ambiguous_pl` は content-based の言語判定を上書きせず Perl / Prolog 構文の安全な和集合を使います。
 
 ### 言語別 extraction matrix
+
+origin フィルターによる監査の構文対応範囲は別です。C# と Python は索引済みの複数行を
+上限付きで分類し、shell／bash／zsh は行単位で分類します。それ以外の言語は意味フィルター付き
+正規表現 find で unknown のままです。Python はコード・コメント・文字列と f-string の実行式を
+区別します。[Python origin の対応範囲と上限](docs/python-origin-classification.md#日本語)を
+参照してください。`languages` の抽出・グラフ対応フラグは origin 分類の対応を意味しません。
 
 現在の capability は `cdidx languages --json` を live probe として確認してください。JSON 行には
 `symbol_extraction`、`reference_extraction`、`graph_queries`、`capability_gaps`、`unsupported_guidance` が含まれます。`--indexed-only` や

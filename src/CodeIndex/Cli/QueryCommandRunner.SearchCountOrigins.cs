@@ -7,7 +7,7 @@ namespace CodeIndex.Cli;
 
 public static partial class QueryCommandRunner
 {
-    private sealed class SearchCountOriginCoverage(QueryCommandOptions options)
+    internal sealed class SearchCountOriginCoverage(QueryCommandOptions options)
     {
         private readonly bool _enabled = HasSearchOriginFilters(options)
             || options.GroupBy == "origin" || options.CountBy == "origin" || options.UniqueBy == "origin";
@@ -47,15 +47,14 @@ public static partial class QueryCommandRunner
         }
 
         private string RecoveryGuidance => _retryPasses is { } passes
-            ? $"Rerun with --origin-passes {passes} for another bounded C# lexical pass. Inspect unknown matches without origin/result-kind exclusions; missing or malformed context remains unknown. Larger output limits do not repair classification."
+            ? $"Rerun with --origin-passes {passes} for another bounded C#/Python lexical pass. Inspect unknown matches without origin/result-kind exclusions; missing or malformed context remains unknown. Larger output limits do not repair classification."
             : "Inspect unknown matches without origin/result-kind exclusions and review the affected source manually. Missing/malformed context or the maximum lexical budget cannot be resolved by more passes or larger output limits. Absence is not authoritative.";
 
         public void AddJsonFields(JsonObject payload)
         {
             if (!_enabled)
                 return;
-            payload["origin_classification_complete"] = Complete;
-            payload["origin_passes"] = options.OriginPasses;
+            AddClassificationDiagnostics(payload);
             // Classification cannot restore authority to a potentially stale snapshot.
             // Include diagnostics here for named children as well as their parent.
             AddActiveSqliteDiagnostics(payload);
@@ -66,6 +65,16 @@ public static partial class QueryCommandRunner
             if (Complete)
                 return;
             payload["partial_result"] = true;
+        }
+
+        public void AddClassificationDiagnostics(JsonObject payload)
+        {
+            if (!_enabled)
+                return;
+            payload["origin_classification_complete"] = Complete;
+            payload["origin_passes"] = options.OriginPasses;
+            if (Complete)
+                return;
             payload["classification_incomplete_reason"] = "origin_classification_unavailable";
             payload["classification_incomplete_reasons"] = new JsonArray(_reasons.Select(reason => JsonValue.Create(reason)).ToArray());
             if (_retryPasses.HasValue)

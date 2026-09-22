@@ -22,26 +22,28 @@ public sealed record FindSemanticFilters(
 
 public partial class DbReader
 {
-    private SearchMatchClassifier.CSharpOriginContext? CreateFindOriginContext(FindCandidateFile file, CancellationToken cancellationToken)
+    private SearchResult? CreateFindOriginContext(FindCandidateFile file, CancellationToken cancellationToken)
     {
-        if (!string.Equals(file.Lang, "csharp", StringComparison.OrdinalIgnoreCase))
+        if (file.Lang?.ToLowerInvariant() is not ("csharp" or "python"))
             return null;
         var context = new SearchResult { Path = file.Path, Lang = file.Lang };
         AttachCSharpOriginLines([context], cancellationToken);
-        return context.CSharpOrigins;
+        AttachPythonOriginLines([context], cancellationToken);
+        return context;
     }
 
     private static SearchMatchFacet ClassifyFindMatch(
         FindCandidateFile file,
         IndexedLine line,
         FindLineMatch match,
-        SearchMatchClassifier.CSharpOriginContext? context)
+        SearchResult? context)
     {
         // Only expose classifiers with explicit bounded lexical context in this v1 path.
-        var supported = file.Lang?.ToLowerInvariant() is "csharp" or "shell" or "bash" or "zsh";
-        var facet = supported && line.Text.Length > 0 && match.Column < line.Text.Length
+        var python = string.Equals(file.Lang, "python", StringComparison.OrdinalIgnoreCase);
+        var supported = python || file.Lang?.ToLowerInvariant() is "csharp" or "shell" or "bash" or "zsh";
+        var facet = supported && (python || line.Text.Length > 0 && match.Column < line.Text.Length)
             ? SearchMatchClassifier.Classify(file.Path, file.Lang, line.Number, line.Text,
-                match.Column + 1, match.Length, csharpContext: context)
+                match.Column + 1, match.Length, csharpContext: context?.CSharpOrigins, pythonContext: context?.PythonOrigins)
             : new SearchMatchFacet
             {
                 Origin = SearchMatchClassifier.Unknown,

@@ -50,6 +50,9 @@ public class SearchResult
     internal SearchResult? MatchOriginContext { get; set; }
     [JsonIgnore]
     internal SearchMatchClassifier.CSharpOriginContext? CSharpOrigins { get; set; }
+
+    [JsonIgnore]
+    internal SearchMatchClassifier.PythonOriginContext? PythonOrigins { get; set; }
 }
 
 public sealed class SearchDiagnostic

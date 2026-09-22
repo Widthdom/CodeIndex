@@ -393,6 +393,7 @@ public partial class McpServer
                             ["results"] = ToJsonArray(semanticRows),
                         };
                         AddSemanticSearchCoverage(child, semanticPage.ScanComplete, semanticPage.ClassificationComplete);
+                        semanticPage.OriginCoverage.AddClassificationDiagnostics(child);
                         return child;
                     }, recipe.Name, recipeQuery.Name);
                     if (semanticResult["error"] is not null || semanticResult["result"]?["isError"]?.GetValue<bool>() == true)
