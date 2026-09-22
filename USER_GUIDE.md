@@ -434,9 +434,11 @@ suppresses it. A completed authoritative empty query has `total_count: 0` and
 `has_more: false`; an exhausted page may still have a nonzero total. The terminal
 and its newline count toward `--max-json-bytes`; an insufficient budget returns
 the existing response-budget error rather than an empty success.
-`files`, `symbols`, and `find` also honor `--strict-not-found` after an
-authoritative zero count is printed, in numeric and JSON count modes. Incomplete
-symbol coverage and partial or resumed find counts cannot establish absence.
+`files`, `symbols`, `find`, and plain `search --count` / `search --format count`
+also honor `--strict-not-found` after an authoritative zero count is printed,
+in numeric and JSON count modes. Incomplete symbol coverage, partial or resumed
+find counts, incomplete search-origin classification, and potentially stale
+snapshots cannot establish absence.
 `--allow-partial` accepts partial output without making its zero authoritative;
 cancellation, timeout, cursor, and output errors retain their precedence.
 Final and zero-result pages do not advertise a cursor. If a partial stream
@@ -4701,10 +4703,12 @@ command、query、filter、ordering、page limit を変えずに再利用して�
 完了した確定的な 0 件の検索では `total_count: 0`、`has_more: false` になりますが、
 ページを読み切った場合は総件数が正のままのこともあります。終端レコードと改行も
 `--max-json-bytes` の計測対象で、収まらない場合は空の成功ではなく既存の応答サイズエラーを返します。
-`files`、`symbols`、`find` は数値・JSON の件数出力でも、確定した 0 件を出力した後に
-`--strict-not-found` により終了コード `2` を返します。シンボル索引が不完全な場合や、
-部分走査・再開した `find` の件数では不在を断定しません。`--allow-partial` は部分結果を
-受け入れるだけで 0 件の確実性を高めず、取消・タイムアウト・カーソル・出力エラーを優先します。
+`files`、`symbols`、`find`、通常の `search --count` / `search --format count` は
+数値・JSON の件数出力でも、確定した 0 件を出力した後に `--strict-not-found` により
+終了コード `2` を返します。シンボル索引が不完全な場合、部分走査・再開した `find`、
+検索元の分類が未完了の場合、古い可能性があるスナップショットでは不在を断定しません。
+`--allow-partial` は部分結果を受け入れるだけで 0 件の確実性を高めず、
+取消・タイムアウト・カーソル・出力エラーを優先します。
 最終 page と 0 件 page は cursor を公開しません。byte cap により terminal
 record しか出力できない場合、row selector または recipe / named search を使う場合、
 10,000 row の pagination window を使い切ったか、同じ page limit での再開時にその上限を

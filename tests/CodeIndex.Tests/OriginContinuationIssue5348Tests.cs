@@ -206,6 +206,39 @@ public sealed class OriginContinuationIssue5348Tests
         Assert.Equal("1", plainOutput.Trim());
         Assert.Contains("not authoritative", plainError);
 
+        // #5406: rejected unknown candidates cannot prove a strict zero, even with --allow-partial.
+        foreach (var passes in new[] { 1, 3 })
+            foreach (var strict in new[] { false, true })
+                foreach (var allowPartial in new[] { false, true })
+                    foreach (var format in new string[][] { ["--count"], ["--count", "--json"], ["--format", "count"] })
+                    {
+                        string[] args = ["search", "Needle", "--db", dbPath, "--origin", "string_literal",
+                            "--origin-passes", passes.ToString(), .. format,
+                            .. strict ? new[] { "--strict-not-found" } : Array.Empty<string>(),
+                            .. allowPartial ? new[] { "--allow-partial" } : Array.Empty<string>()];
+                        var (exit, output, error) = CaptureConsole(() => ProgramRunner.Run(args, JsonOptions, "test"));
+                        var expected = passes == 1
+                            ? allowPartial ? CommandExitCodes.Success : CommandExitCodes.PartialResult
+                            : strict ? CommandExitCodes.NotFound : CommandExitCodes.Success;
+                        Assert.Equal(expected, exit);
+                        if (format.Length == 1)
+                        {
+                            Assert.Equal("0", output.Trim());
+                            if (passes == 1)
+                                Assert.Contains("not authoritative", error);
+                        }
+                        else
+                        {
+                            Assert.Empty(error);
+                            using var count = JsonDocument.Parse(output);
+                            Assert.Equal(0, count.RootElement.GetProperty("count").GetInt32());
+                            AssertSearchOriginAuthority(count.RootElement, passes == 3);
+                            var (budgetExit, _, _) = CaptureConsole(() => ProgramRunner.Run(
+                                [.. args, "--max-json-bytes", "1"], JsonOptions, "test"));
+                            Assert.Equal(CommandExitCodes.UsageError, budgetExit);
+                        }
+                    }
+
         // Intentionally omitted origin groups do not make fully classified totals partial.
         var (groupExit, groupOutput, _) = CaptureConsole(() => ProgramRunner.Run(
             ["search", "Needle", "--db", dbPath, "--origin-passes", "3", "--count-by", "origin", "--limit", "1", "--json"], JsonOptions, "test"));
