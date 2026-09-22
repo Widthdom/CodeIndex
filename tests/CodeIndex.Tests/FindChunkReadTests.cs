@@ -15,7 +15,8 @@ public sealed class FindChunkReadTests
         var db = TestProjectHelper.CreateProjectDb(project.Root);
         using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
         {
-            DataSource = db, Pooling = false
+            DataSource = db,
+            Pooling = false
         }.ToString());
         connection.Open();
         var writer = new DbWriter(connection);
@@ -24,11 +25,17 @@ public sealed class FindChunkReadTests
         var id = writer.UpsertFile(new FileRecord { Path = "source.txt", Lang = "text", Lines = totalLines, Size = 4096 });
         writer.InsertChunks(Enumerable.Range(0, chunkCount).Reverse().Select(index => new ChunkRecord
         {
-            FileId = id, ChunkIndex = 1000 + index, StartLine = index * 2 + 1, EndLine = index * 2 + 3,
+            FileId = id,
+            ChunkIndex = 1000 + index,
+            StartLine = index * 2 + 1,
+            EndLine = index * 2 + 3,
             Content = "needle\r\ncontext\r\nneedle"
         }).Append(new ChunkRecord
         {
-            FileId = id, ChunkIndex = 999, StartLine = 1, EndLine = 3,
+            FileId = id,
+            ChunkIndex = 999,
+            StartLine = 1,
+            EndLine = 3,
             Content = "needle needle\r\nowned\r\nneedle"
         }).ToList());
         // A missing indexed source must not fall back to the live file.
@@ -139,7 +146,8 @@ public sealed class FindChunkReadTests
         var db = TestProjectHelper.CreateProjectDb(project.Root);
         using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
         {
-            DataSource = db, Pooling = false
+            DataSource = db,
+            Pooling = false
         }.ToString());
         connection.Open();
         var writer = new DbWriter(connection);
