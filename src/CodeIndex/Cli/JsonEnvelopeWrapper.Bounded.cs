@@ -294,8 +294,8 @@ internal static partial class JsonEnvelopeWrapper
         JsonSerializerOptions jsonOptions,
         Func<string[], int> runInner)
     {
-        if (TryReadRequestedMaxJsonBytes(command, args, out var requestedBytes)
-            && requestedBytes <= 0)
+        var hasRequestedBytes = TryReadRequestedMaxJsonBytes(command, args, out var requestedBytes);
+        if (hasRequestedBytes && requestedBytes <= 0)
         {
             return CommandErrorWriter.WriteResponseBudgetError(
                 json: true,
@@ -311,9 +311,13 @@ internal static partial class JsonEnvelopeWrapper
                 usage: GetBoundedResponseUsage(command));
         }
 
-        if (!TryParseBoundedResponseControls(command, args, out var controls, out var controlError))
+        int WriteUsageError(string message, string hint, string category = "usage")
+            => WriteBoundedResponseUsageError(command, args, jsonOptions, message, hint, category,
+                hasRequestedBytes ? (int)requestedBytes : null);
+
+        if (!TryParseBoundedResponseControls(command, args, out var controls, out var controlError, out var controlCategory))
         {
-            return WriteBoundedResponseUsageError(controlError!, "Use the command help to pass positive --limit/--max-json-bytes values and a next_cursor returned by the same query.");
+            return WriteUsageError(controlError!, "Use the command help to pass positive --limit/--max-json-bytes values and a next_cursor returned by the same query.", controlCategory);
         }
         if (HasUnsupportedStandaloneBoundedControl(command, args)
             || command == "unused" && HasArgument(command, args, "--summary-only"))
@@ -453,9 +457,9 @@ internal static partial class JsonEnvelopeWrapper
             return CommandExitCodes.UsageError;
         if (HasArgument(command, args, "--count")
             || command == "find" && IsFindCountResponseRequest(args))
-            return WriteBoundedResponseUsageError("Bounded response controls cannot be combined with --count.", "Run --count --json separately for a count-only response, or remove --count to page projected rows.");
+            return WriteUsageError("Bounded response controls cannot be combined with --count.", "Run --count --json separately for a count-only response, or remove --count to page projected rows.");
         if (command == "map" && ValidateMapProjectionControls(args, controls.Fields) is { } mapProjectionError)
-            return WriteBoundedResponseUsageError(mapProjectionError, "Remove the conflicting map filter, or select a collection enabled by --sections.");
+            return WriteUsageError(mapProjectionError, "Remove the conflicting map filter, or select a collection enabled by --sections.");
 
         var queryNormalized = ExtractQueryArg(command, args);
         var (resolvedDbPath, dbPathExplicit) = ResolveQueryDbPath(command, args);
@@ -467,20 +471,22 @@ internal static partial class JsonEnvelopeWrapper
         if (controls.CursorQueryFingerprint is not null
             && !string.Equals(controls.CursorQueryFingerprint, queryFingerprint, StringComparison.Ordinal))
         {
-            return WriteBoundedResponseUsageError(
+            return WriteUsageError(
                 "cursor_mismatch: --cursor does not match this command, query, or filter set.",
-                "Use next_cursor from the preceding page without changing query, filter, or sort arguments.");
+                "Use next_cursor from the preceding page without changing query, filter, or sort arguments.",
+                "cursor_mismatch");
         }
         if (controls.CursorGenerationFingerprint is not null
             && !string.Equals(controls.CursorGenerationFingerprint, snapshot.GenerationFingerprint, StringComparison.Ordinal))
         {
-            return WriteBoundedResponseUsageError(
+            return WriteUsageError(
                 "cursor_stale: --cursor is stale because the index generation changed.",
-                "Restart pagination without --cursor and use the next_cursor returned by the refreshed index.");
+                "Restart pagination without --cursor and use the next_cursor returned by the refreshed index.",
+                "cursor_stale");
         }
         if (controls.Offset > MaxPageWindow - controls.PageLimit)
         {
-            return WriteBoundedResponseUsageError(
+            return WriteUsageError(
                 $"The requested cursor window exceeds the {MaxPageWindow} row safety cap.",
                 "Narrow the query or filters before continuing pagination.");
         }
@@ -607,7 +613,7 @@ internal static partial class JsonEnvelopeWrapper
                 : SafeReadResponseSnapshot(resolvedDbPath, dbPathExplicit, appVersion);
             if (!string.Equals(snapshot.GenerationFingerprint, completedArraySnapshot.GenerationFingerprint, StringComparison.Ordinal))
             {
-                return WriteBoundedResponseUsageError(
+                return WriteUsageError(
                     "The index generation changed while this projected array was being read.",
                     "Retry the same command after the active index refresh completes.");
             }
@@ -647,7 +653,7 @@ internal static partial class JsonEnvelopeWrapper
             : SafeReadResponseSnapshot(resolvedDbPath, dbPathExplicit, appVersion);
         if (!string.Equals(snapshot.GenerationFingerprint, completedSnapshot.GenerationFingerprint, StringComparison.Ordinal))
         {
-            return WriteBoundedResponseUsageError(
+            return WriteUsageError(
                 "The index generation changed while this page was being read.",
                 "Restart pagination without --cursor after the active index refresh completes.");
         }
@@ -2244,7 +2250,8 @@ internal static partial class JsonEnvelopeWrapper
         string command,
         string[] args,
         out BoundedResponseControls controls,
-        out string? error)
+        out string? error,
+        out string category)
     {
         List<string>? fields = null;
         string? cursor = null;
@@ -2252,6 +2259,7 @@ internal static partial class JsonEnvelopeWrapper
         var pageLimit = DefaultPageLimit;
         var compact = HasCompactOutputSelection(command, args);
         error = null;
+        category = "usage";
         var tokens = ClassifyArgumentTokens(command, args).ToArray();
         for (var i = 0; i < tokens.Length; i++)
         {
@@ -2335,6 +2343,7 @@ internal static partial class JsonEnvelopeWrapper
         {
             controls = default!;
             error = "cursor_malformed: --cursor must be an opaque response:v2 cursor returned as next_cursor.";
+            category = "cursor_malformed";
             return false;
         }
         controls = new BoundedResponseControls(
@@ -2410,6 +2419,7 @@ internal static partial class JsonEnvelopeWrapper
     private static bool TryReadRequestedMaxJsonBytes(string command, string[] args, out long requestedBytes)
     {
         requestedBytes = 0;
+        var found = false;
         var tokens = ClassifyArgumentTokens(command, args).ToArray();
         for (var i = 0; i < tokens.Length; i++)
         {
@@ -2436,9 +2446,10 @@ internal static partial class JsonEnvelopeWrapper
                 return true;
             if (requestedBytes > int.MaxValue)
                 return false;
+            found = true;
         }
 
-        return false;
+        return found;
     }
 
     private static string BuildResponseFingerprint(string command, string[] args)
@@ -2726,6 +2737,47 @@ internal static partial class JsonEnvelopeWrapper
     {
         CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.UsageError}]: {message}");
         CommandErrorWriter.WriteStderr($"Hint: {hint}");
+        return CommandExitCodes.UsageError;
+    }
+
+    private static int WriteBoundedResponseUsageError(
+        string command,
+        string[] args,
+        JsonSerializerOptions jsonOptions,
+        string message,
+        string hint,
+        string category,
+        int? maxJsonBytes)
+    {
+        var machineOutput = HasJsonOutputSelection(command, args)
+                            || HasEnvelopeFlag(command, args)
+                            || HasArgument(command, args, "--fields")
+                            || HasArgument(command, args, "--max-json-bytes")
+                            || HasCompactOutputSelection(command, args)
+                            || string.Equals(GetExplicitOutputFormat(command, args), "json", StringComparison.OrdinalIgnoreCase);
+        if (!machineOutput)
+            return WriteBoundedResponseUsageError(message, hint);
+
+        var payload = CommandErrorWriter.BuildJsonPayload(
+            jsonOptions, message, CommandExitCodes.UsageError, hint,
+            errorCode: CommandErrorCodes.UsageError, category: category, command: command,
+            omitNullUsage: true);
+        var json = payload.ToJsonString(jsonOptions);
+        if (maxJsonBytes.HasValue && !JsonFitsResponseBudget(json, maxJsonBytes.Value))
+        {
+            return CommandErrorWriter.WriteResponseBudgetError(
+                json: true,
+                jsonOptions,
+                command,
+                $"--max-json-bytes {maxJsonBytes.Value} is too small for the complete bounded validation error.",
+                "Increase --max-json-bytes to receive the validation error, then follow its recovery hint.",
+                requestedBytes: maxJsonBytes.Value,
+                effectiveBytes: maxJsonBytes.Value,
+                minimumRequiredBytes: GetJsonResponseByteCount(json),
+                additionalJsonProperties: new JsonObject { ["validation_error"] = payload });
+        }
+
+        Console.WriteLine(json);
         return CommandExitCodes.UsageError;
     }
 

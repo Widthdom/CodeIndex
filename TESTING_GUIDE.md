@@ -7,6 +7,18 @@ overlap ownership, missing/live source controls, NULL-content failures, line cap
 and row/count continuation across chunk pages. Run on net8/net9 alongside existing
 find, pagination and MCP regressions; no peak-memory or latency claim is implied.
 
+`JsonEnvelopeWrapperIssue5412Tests` shares an isolated indexed fixture across literal,
+line-regex and multiline find cursor errors. Keep JSON/envelope/fields/compact
+selectors, malformed/mismatched/stale cursors, human and count controls, and exact
+UTF-8 byte limits (including pretty output and the final newline) on net8/net9.
+Run it with the envelope, find, pagination and response-budget regression suites;
+the #4863 cursor helper now requires structured output for every machine request.
+Include `QueryCommandRunnerIssue5230Tests` when validating the shared wrapper:
+its symbols NDJSON cursor fixture must assert stdout error identity, all three
+cursor categories and recovery hints with empty stderr. Use Release net8/net9
+coverage for `Cursor|Bounded|JsonEnvelopeWrapper|RunFind|FindMultiline|ResponseBudget`
+test-name groups alongside the issue-specific find/MCP suites.
+
 `RunDeps_PythonContextCoordinatesPreserveBothDirections_Issue5401` shares indexed
 fixtures across ordinary dependencies and cycles for zero/space/tab indentation,
 short/long names, aliases, relative imports and repeated same-line member calls.
@@ -1827,6 +1839,16 @@ Issue #5300 のテストは隣接・入れ子の C# callable、対象行の除�
 実ファイルの対照、NULL 本文エラー、行上限、チャンクページをまたぐ行／件数の継続取得を
 維持してください。既存の find・ページ分割・MCP 回帰とともに net8/net9 で実行します。
 ピークメモリや実行時間の測定結果を保証するテストではありません。
+
+`JsonEnvelopeWrapperIssue5412Tests` は分離した索引 fixture を共有し、リテラル・行単位正規表現・
+複数行 find のカーソルエラーを検証します。JSON・envelope・fields・compact の各指定、
+不正・不一致・世代変更済みカーソル、人向け出力と件数の対照、pretty 出力と末尾改行を含む
+UTF-8 バイト境界を net8/net9 で維持してください。envelope・find・ページ分割・応答サイズの
+回帰テストと実行し、#4863 のカーソル検証も全機械向け指定で構造化出力を必須にします。
+共有ラッパーの検証には `QueryCommandRunnerIssue5230Tests` も含めます。symbols の
+NDJSON カーソル fixture で stdout のエラー識別情報・3種類の理由・復旧案内と、空の stderr を
+検証してください。Issue 別の find/MCP テストとともに、`Cursor|Bounded|JsonEnvelopeWrapper|RunFind|FindMultiline|ResponseBudget`
+を名前に含むテストを Release 構成の net8/net9 で実行します。
 
 `FindMultilineTests` と `McpServerIssue5399Tests` は、索引の LF/CRLF 窓、補助平面文字の
 UTF-16 座標、重複チャンク、一致範囲の上限内外、アンカー、dot-all、ゼロ幅、非重複、件数と行の

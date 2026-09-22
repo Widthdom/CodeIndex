@@ -357,8 +357,9 @@ public partial class QueryCommandRunnerTests
                 "1.0.0-test"));
 
         Assert.Equal(CommandExitCodes.UsageError, mismatchExitCode);
-        Assert.Equal(string.Empty, mismatchStdout);
-        Assert.Contains("cursor_mismatch", mismatchStderr, StringComparison.Ordinal);
+        Assert.Equal(string.Empty, mismatchStderr);
+        using var mismatch = JsonDocument.Parse(mismatchStdout);
+        Assert.Equal("cursor_mismatch", mismatch.RootElement.GetProperty("category").GetString());
 
         TestProjectHelper.InsertIndexedFile(
             dbPath,
@@ -375,8 +376,9 @@ public partial class QueryCommandRunnerTests
                 "1.0.0-test"));
 
         Assert.Equal(CommandExitCodes.UsageError, staleExitCode);
-        Assert.Equal(string.Empty, staleStdout);
-        Assert.Contains("cursor_stale", staleStderr, StringComparison.Ordinal);
+        Assert.Equal(string.Empty, staleStderr);
+        using var stale = JsonDocument.Parse(staleStdout);
+        Assert.Equal("cursor_stale", stale.RootElement.GetProperty("category").GetString());
     }
 
     private static (string ProjectRoot, string DbPath) CreateUnusedByteBudgetFixtureDbIssue4905()
