@@ -3733,11 +3733,16 @@ is a required JSON string; missing, null, or non-string values return `-32602`
 (`Invalid params`) before symbol search, while the empty string remains valid.
 Query strings are capped at 1000 characters before symbol search runs.
 `workspace/symbol` accepts optional numeric `limit` / `maxResults` parameters
-and clamps them to 1000 results. `textDocument/documentSymbol` returns
-hierarchical `DocumentSymbol` children when container metadata is available,
-returns at most 1000 symbols from the latest accepted live buffer or the index,
-truncates each `detail` string to 512 characters with `...`, and trims the tree
-before the result array exceeds 524288 JSON bytes.
+and clamps them to 1000 results. Without a partial-result token,
+`textDocument/documentSymbol` returns hierarchical `DocumentSymbol` children
+when the client initializes with
+`capabilities.textDocument.documentSymbol.hierarchicalDocumentSymbolSupport: true`.
+Otherwise it returns flat `SymbolInformation` items with `location.uri`, an
+identifier `location.range`, and `containerName` when available. Missing or false
+capabilities do not opt into hierarchy. Both forms return at most 1000 symbols
+from the latest accepted live buffer or the index and trim the result array to
+524288 JSON bytes. Hierarchical items retain container nesting, identifier
+`selectionRange`, and `detail` strings capped at 512 characters with `...`.
 `textDocument/references` delivers complete indexed locations through a bounded
 array or partial-result chunks. Resource limits return explicit errors with recovery
 guidance. See [LSP reference delivery](docs/lsp-references.md#english) for token/no-token
@@ -3749,8 +3754,8 @@ result token, the server sends deterministic `$/progress` notifications capped
 at 100 symbols and 65536 JSON body bytes each, then returns `null` as the final
 result. Document-symbol partial
 results use flat LSP `SymbolInformation` items so a large hierarchy never has
-to fit in one progress value; requests without a partial token retain the
-hierarchical `DocumentSymbol` result. Work-done tokens receive
+to fit in one progress value, regardless of hierarchy capability. A request never
+mixes flat and hierarchical items. Work-done tokens receive
 `begin` / `report` / `end` values. Result-limit or progress-frame truncation is
 reported in the work-done `end` message, or through `window/logMessage` when no
 work-done token was supplied. `$/cancelRequest` matches the original string or
@@ -7780,10 +7785,14 @@ invalid request として拒否します。
 symbol search より前に `-32602`（`Invalid params`）を返す一方、空文字列は引き続き有効です。
 query string は symbol search を実行する前に 1000 文字で上限をかけます。
 `workspace/symbol` は任意の numeric `limit` / `maxResults` parameter を受け取り、1000 件までに
-clamp します。`textDocument/documentSymbol` は container metadata がある場合に階層化された
-`DocumentSymbol` children を返し、最後に受理した live buffer または index から最大 1000 件の
-symbol を返し、各 `detail` string を `...` 付きの 512 文字に切り詰め、result tree が
-524288 JSON bytes を超える前に trim します。
+clamp します。partial-result token のない `textDocument/documentSymbol` は、初期化時に
+`capabilities.textDocument.documentSymbol.hierarchicalDocumentSymbolSupport: true`
+を指定したクライアントに階層形式の `DocumentSymbol` を返します。それ以外は
+`location.uri`、識別子の `location.range`、取得できる場合は `containerName` を含む
+フラット形式の `SymbolInformation` を返します。能力指定の省略や `false` は階層対応と
+見なしません。両形式とも最後に受理したライブバッファまたは索引から最大 1000 件を返し、
+結果配列を 524288 JSON bytes 以内に切り詰めます。階層形式では親子関係、識別子の
+`selectionRange`、`...` 付きで最大 512 文字の `detail` を維持します。
 `textDocument/references` は、上限付き配列または部分結果チャンクでインデックス済み参照を
 全件配送します。リソース上限に達すると復旧手順付きの明示的なエラーを返します。
 トークン有無の動作、具体的な上限、取消、対象を維持する CLI ページ取得については
@@ -7794,8 +7803,8 @@ symbol を返し、各 `detail` string を `...` 付きの 512 文字に切り�
 ある場合、server は決定的な順序の `$/progress` notification を1件あたり最大100 symbol・
 65536 JSON body bytesで送り、final result は `null` を返します。document-symbol の partial
 result は flat な LSP `SymbolInformation` item を使うため、大きな hierarchy 全体を1つの
-progress value に収める必要がありません。partial token がない request は従来どおり階層化された
-`DocumentSymbol` result を返します。work-done token には `begin` / `report` / `end` value を
+progress value に収める必要がありません。これは階層対応能力の指定にかかわらず同じで、
+1つの要求内でフラット形式と階層形式を混在させません。work-done token には `begin` / `report` / `end` value を
 送ります。result limit または progress-frame limit による切り詰めは work-done の `end`
 message、work-done token がない場合は `window/logMessage` で通知します。`$/cancelRequest` は
 元の string / integer request ID と型を含めて一致させ、active な work-done progress を終了し、

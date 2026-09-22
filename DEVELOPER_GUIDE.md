@@ -1311,8 +1311,15 @@ Document/workspace symbol providers advertise work-done support and honor
 bounded string/integer `partialResultToken` and `workDoneToken` values. Partial
 results preserve the provider's deterministic order and use `$/progress`
 notifications capped at 100 items and 64 KiB of JSON body each; document-symbol
-partial results deliberately use flat `SymbolInformation` items, while the
-token-free response keeps the existing hierarchical `DocumentSymbol` contract.
+partial results deliberately use flat `SymbolInformation` items for every client.
+Token-free responses use hierarchical `DocumentSymbol` only when initialize
+explicitly advertises `capabilities.textDocument.documentSymbol.hierarchicalDocumentSymbolSupport: true`;
+otherwise they reuse the flat converter, including identifier locations and
+container names, under the same materialization and response-byte limits.
+Missing/false capability values select flat results. Malformed optional values
+follow the existing tolerant initialize policy and do not enable hierarchy.
+The session capability applies equally to indexed and live-buffer symbols;
+partial tokens never enable hierarchy or mix item families within a request.
 That hierarchy materializes every symbol before resolving parents from indexed
 container names, container kinds, enclosing ranges, and same-line selection
 columns. Same-range members such as positional record properties therefore stay
@@ -5873,8 +5880,14 @@ document/workspace symbol provider は work-done 対応を advertise し、上�
 integer `partialResultToken` と `workDoneToken` を処理する。partial result は provider の
 決定的な順序を維持し、1 notification あたり最大100 item・64 KiB JSON body の
 `$/progress` で送る。document-symbol の partial result は意図的に flat な
-`SymbolInformation` item を使い、token のない response は既存の階層化された
-`DocumentSymbol` contract を維持する。この階層は全 symbol を materialize してから、indexed
+`SymbolInformation` item を全クライアントに送る。token のない応答は、初期化時の
+`capabilities.textDocument.documentSymbol.hierarchicalDocumentSymbolSupport: true`
+が明示された場合だけ階層形式の `DocumentSymbol` を返す。それ以外は同じフラット変換を
+使い、識別子の位置とコンテナー名、実体化数と応答バイト数の上限を維持する。
+能力指定の欠落や `false`、不正な任意値は、既存の寛容な初期化方針に従い階層対応を
+有効にしない。このセッション能力は索引とライブバッファの両方に適用し、部分結果の
+トークンによって階層を有効にしたり、1つの要求内で形式を混在させたりしない。
+階層は全 symbol を materialize してから、indexed
 container name・container kind・包含 range・同一行の selection column で親を解決するため、
 positional record property のように同じ range を持つ member も決定的な表示順序に左右されず
 宣言元 type の配下に留まり、行内で後にある同名 container が前の member を取り込まない。

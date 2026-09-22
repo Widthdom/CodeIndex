@@ -136,6 +136,12 @@ LSP document-symbol identity coverage (#5382) shares indexed and unsupported-liv
 extractor fallback requests across case-colliding paths, literal path characters,
 and descendant/suffix decoys. Keep hierarchical roots, identifier ranges and framed
 partial-result parity together in `Run_DocumentSymbol_UsesExactIndexedFileIdentity_Issue5382`.
+Issue #5395 extends this shared fixture across true/false/omitted hierarchy
+capabilities and malformed optional values, with framed initialize, indexed,
+open, full-change, empty-live and extraction-fallback responses. Compare flat
+locations/container names against hierarchical selections without foreign-file
+leakage. Hierarchy fixtures explicitly advertise support through their initialize
+helper; retain compact/indented response-byte checks for both item families.
 The existing partial-progress fixture adds more foreign declarations than the
 materialization limit: they must neither displace local symbols nor mark the
 response truncated. Run all LSP tests on net8/net9, retaining local materialization,
@@ -1728,6 +1734,11 @@ LSP 文書シンボルのファイル同一性テスト (#5382) は、通常の�
 利用できない場合のフォールバックで、大小文字衝突、リテラルなパス文字、配下・接尾辞の
 別パスを共有します。`Run_DocumentSymbol_UsesExactIndexedFileIdentity_Issue5382` で
 階層のルート、識別子の範囲、フレーム化した部分結果の一致を確認してください。
+Issue #5395 は同じ fixture で階層対応の true／false／省略と不正な任意値を切り替え、
+フレーム化した初期化、索引、open、全文変更、空のライブ文書、抽出失敗時の応答を
+検証します。フラット形式の位置・コンテナー名と階層形式の選択範囲を比較し、別ファイルの
+混入を防ぎます。階層を検証する fixture は初期化ヘルパーで対応を明示し、両形式で
+コンパクト／インデント付きの応答バイト上限テストを維持してください。
 既存の部分結果・進捗テストでは materialization 上限を超える別ファイルの宣言を追加し、
 要求文書のシンボルが欠落せず、誤った切り詰め通知も出ないことを検証します。
 文書自身の materialization、応答バイト数、チャンク件数、キャンセル、ライブ抽出の
