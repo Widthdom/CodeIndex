@@ -5,7 +5,7 @@ namespace CodeIndex.Database;
 
 public partial class DbReader
 {
-    private sealed class IndexedFindPipeline(DbReader owner)
+    private sealed partial class IndexedFindPipeline(DbReader owner)
     {
         private readonly DbReader _owner = owner;
         private readonly IndexedFindQuerySource _querySource = new(owner);
@@ -16,7 +16,11 @@ public partial class DbReader
             scan.CancellationToken.ThrowIfCancellationRequested();
             if (string.IsNullOrWhiteSpace(scan.Query) || request.Limit <= 0)
                 return new FindResults([], new FindScanSummary(0, 0, 0));
-            ValidateContinuation(scan.Resume);
+            ValidateWindow(scan);
+            if (scan.Window is not null && (request.Limit > FindWindowOptions.MaxResults || request.Before != 0 || request.After != 0
+                || request.MaxLineWidth is < 1 or > 512))
+                throw new ArgumentException("Multiline find supports at most 200 rows, no surrounding snippet context, and max-line-width/maxLineWidth between 1 and 512.");
+            ValidateContinuation(scan.Resume, scan.Window is not null);
 
             var normalizedRequest = request with
             {
@@ -25,7 +29,7 @@ public partial class DbReader
                 MaxLineWidth = LineWidthFormatter.ClampMaxLineWidth(request.MaxLineWidth),
                 Offset = Math.Max(0, request.Offset),
             };
-            var state = new FindScanState(scan.Resume);
+            var state = new FindScanState(scan.Resume) { ResumedByOffset = normalizedRequest.Offset > 0 };
             var collector = new FindResultCollector(normalizedRequest, state);
             var searchPlan = ScanFiles(scan, collector, state);
             ValidateCompletedScan(collector.Mode, state, collector);
@@ -37,8 +41,9 @@ public partial class DbReader
             request.CancellationToken.ThrowIfCancellationRequested();
             if (string.IsNullOrWhiteSpace(request.Query))
                 return new FindCountResult(0, 0, new FindScanSummary(0, 0, 0));
-            ValidateContinuation(request.Resume);
-            if (request.Resume.MatchOrdinal.HasValue || request.Resume.ByteOffset is not (null or 0))
+            ValidateWindow(request);
+            ValidateContinuation(request.Resume, request.Window is not null);
+            if (request.Resume.MatchOrdinal.HasValue || request.Window is null && request.Resume.ByteOffset is not (null or 0))
             {
                 throw new FindContinuationException(
                     "cursor_malformed",
@@ -58,12 +63,17 @@ public partial class DbReader
             FindScanState state)
         {
             state.ClassificationApplied = request.SemanticFilters is not null;
+            state.Window = request.Window;
+            state.WindowBudget = request.Window is null ? null : request.Window.Budget ?? new FindWindowBudget();
             state.OriginPasses = _owner.OriginPasses;
             var comparison = request.Exact ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
             var regexMatcher = request.Regex
-                ? CreateFindRegexMatcher(request.Query, request.Exact)
+                ? request.Window is null ? CreateFindRegexMatcher(request.Query, request.Exact)
+                    : CodeIndex.Indexer.RegexRegistry.CreateFindRegex(request.Query, request.Exact,
+                        TimeSpan.FromMilliseconds(Math.Min(100, ResolveFindRegexMatchTimeout().TotalMilliseconds)))
                 : null;
-            var searchPlan = _querySource.CreateSearchPlan(request);
+            var searchPlan = request.Window is null ? _querySource.CreateSearchPlan(request)
+                : new FindSearchPlan("multiline_window", null, null);
             using var fileCommand = _querySource.CreateFileCommand(searchPlan, request);
             state.CandidateFiles = _owner.CountFindCandidateFiles(
                 request.Lang,
@@ -75,6 +85,8 @@ public partial class DbReader
             while (fileReader.TrackedRead())
             {
                 request.CancellationToken.ThrowIfCancellationRequested();
+                if (request.Window is not null && WindowTimeExceeded(state))
+                    break;
                 if (collector.ShouldStopBeforeCandidate)
                     break;
 
@@ -122,6 +134,8 @@ public partial class DbReader
             StringComparison comparison,
             Regex? regexMatcher)
         {
+            if (request.Window is not null)
+                return ScanFileWindows(request, collector, state, file, regexMatcher!);
             var origins = request.SemanticFilters is null ? null : _owner.CreateFindOriginContext(file, request.CancellationToken);
             var firstContextLine = Math.Max(1, file.FirstEligibleLine - collector.ContextBefore);
             var stopScanning = false;
@@ -301,7 +315,13 @@ public partial class DbReader
             return true;
         }
 
-        private static void ValidateContinuation(FindResumePosition resume)
+        private static void ValidateWindow(IndexedFindScanRequest request)
+        {
+            if (request.Window?.Validate(request.Regex, request.SemanticFilters, request.FocusLine, request.FocusColumn) is { } error)
+                throw new ArgumentException(error);
+        }
+
+        private static void ValidateContinuation(FindResumePosition resume, bool window = false)
         {
             if (resume.Path is null)
             {
@@ -323,7 +343,7 @@ public partial class DbReader
                 || resume.MatchOrdinal is < 0
                 || resume.ByteOffset is < 0
                 || resume.MatchOrdinal.HasValue && !resume.ByteOffset.HasValue
-                || !resume.MatchOrdinal.HasValue && resume.ByteOffset is not (null or 0))
+                || !window && !resume.MatchOrdinal.HasValue && resume.ByteOffset is not (null or 0))
             {
                 throw new FindContinuationException(
                     "cursor_malformed",
@@ -336,6 +356,10 @@ public partial class DbReader
             FindScanState state,
             IFindScanCollector collector)
         {
+            // A resource stop cannot verify a pending cursor position; preserve its real cause.
+            // 資源上限で未検証のカーソルを不正扱いせず、実際の停止理由を維持する。
+            if (state.Window is not null && state.Truncated)
+                return;
             if (state.ResumePending)
             {
                 throw new FindContinuationException(

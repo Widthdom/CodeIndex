@@ -837,17 +837,21 @@ internal static partial class JsonEnvelopeWrapper
             var nextOffset = controls.Offset + count;
             var paginationWindowExhausted = nextOffset < totalCount && nextOffset >= MaxPageWindow;
             var scanCursor = ReadString(streamTerminal, "next_cursor");
+            var nonResumableWindowStop = command == "find"
+                && streamTerminal?["multiline"]?.GetValue<bool>() == true
+                && streamTerminal?["scan_truncated"]?.GetValue<bool>() == true
+                && scanCursor is null;
             var emittedAllCapturedRows = count == pageItems.Count;
             var selectedScanCursor = emittedAllCapturedRows ? scanCursor : null;
             var findScanTerminalAuthoritative = command == "find"
                                                 && streamTerminal?["scan_complete"] is JsonValue;
             var capturedRowsRemain = !emittedAllCapturedRows && count > 0;
-            var hasMore = selectedScanCursor is not null
+            var hasMore = !nonResumableWindowStop && (selectedScanCursor is not null
                           || capturedRowsRemain
                           || !findScanTerminalAuthoritative
                           && count > 0
                           && nextOffset < totalCount
-                          && !paginationWindowExhausted;
+                          && !paginationWindowExhausted);
             metadata["result_count"] = count;
             metadata["returned_count"] = count;
             metadata["total_count"] = totalCount;
@@ -870,6 +874,22 @@ internal static partial class JsonEnvelopeWrapper
                         controls.ResumeByteOffset)
                     : null);
             metadata["next_cursor"] = nextCursor;
+            if (command == "find" && count < pageItems.Count
+                && metadata["stream_terminal"] is JsonObject windowTerminal
+                && windowTerminal["multiline"]?.GetValue<bool>() == true)
+            {
+                windowTerminal["returned_count"] = count;
+                windowTerminal["done"] = !hasMore && !nonResumableWindowStop;
+                windowTerminal["has_more"] = hasMore;
+                windowTerminal["next_cursor"] = nextCursor;
+                windowTerminal["authoritative_rows"] = false;
+                windowTerminal["partial_result"] = true;
+                if (!nonResumableWindowStop)
+                {
+                    windowTerminal["truncation_reason"] = "max_json_bytes";
+                    windowTerminal["recovery_guidance"] = "Pass next_cursor with the same window/query settings to retrieve omitted rows; the response byte budget may change.";
+                }
+            }
             if (scanCursor is not null
                 && metadata["stream_terminal"] is JsonObject adjustedTerminal)
             {
@@ -1688,6 +1708,11 @@ internal static partial class JsonEnvelopeWrapper
             else if (TryProjectNestedResponseField(obj, projected, field))
                 AddStatusWorkspaceCheckProjectionSignals(obj, projected, command, field);
         }
+        if (command == "find" && obj["match_end_line"] is not null)
+        {
+            foreach (var field in new[] { "path", "line", "column", "length", "match_end_line", "match_end_column" })
+                projected[field] = obj[field]?.DeepClone();
+        }
         return projected;
     }
 
@@ -2430,6 +2455,8 @@ internal static partial class JsonEnvelopeWrapper
         var input = command + "\0" + string.Join('\0', normalized);
         if (scanMode is not null)
             input += "\0scan-mode=" + scanMode;
+        if (command == "find" && HasArgument(command, args, "--multiline"))
+            input += "\0multiline-window-contract=1";
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(input));
         return Convert.ToHexString(hash.AsSpan(0, 8)).ToLowerInvariant();
     }

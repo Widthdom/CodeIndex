@@ -40,6 +40,8 @@ public partial class DbReader
                     Line = pending.LineNumber,
                     Column = pending.Column + 1,
                     Length = pending.Length,
+                    MatchEndLine = pending.EndLine,
+                    MatchEndColumn = pending.EndColumn,
                     OriginalLineLength = matchLine.Length,
                     StartLine = lineNumbers[0],
                     EndLine = lineNumbers[^1],

@@ -1,5 +1,10 @@
 # Developer Guide
 
+Indexed multiline find (#5399) uses `IndexedFindWindows.cs` through the shared
+pipeline. Preserve bounded indexed-source retention, line ownership, non-overlap,
+exclusive UTF-16 endpoints, native cursor replay and false unbounded-absence authority.
+See [the window contract](docs/find-multiline.md#english); no schema change is needed.
+
 LSP definition/declaration and reference position resolution selects local candidates
 by exact indexed path before query limits. `DbReader.BeginExactFilePath` shares the
 binary-equality scope used by audit partitions; keep it limited to local lookups and
@@ -4711,6 +4716,11 @@ CLI、レシピの再実行・フィンガープリント、MCP スキーマ、`
 API version 1 の互換性を維持し、新しい guard scope は contract version 1 を公開します。
 
 # 開発者ガイド
+
+複数行 find（#5399）は共通パイプラインから `IndexedFindWindows.cs` を使います。
+索引ソースの保持上限、開始行の所有、非重複、一致終端の次の UTF-16 座標、カーソル再開と
+任意長の不在を確定しない規則を維持してください。
+[窓の契約](docs/find-multiline.md#日本語)を参照してください。スキーマ変更は不要です。
 
 LSP の定義・宣言・参照の位置解決では、候補数の上限を適用する前に索引内のパスを
 完全一致で絞ります。`DbReader.BeginExactFilePath` は監査の分割検索と同じバイナリ比較の

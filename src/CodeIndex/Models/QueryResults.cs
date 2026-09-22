@@ -116,7 +116,9 @@ public readonly record struct FindScanSummary(
     int UnknownOriginMatches = 0,
     IReadOnlyList<string>? OriginIncompleteReasons = null,
     int? RetryOriginPasses = null,
-    int OriginPasses = 1);
+    int OriginPasses = 1,
+    FindWindowOptions? Window = null,
+    bool Resumed = false);
 
 public readonly record struct FindCountResult(int Count, int FileCount, FindScanSummary Scan);
 
@@ -677,6 +679,12 @@ public class ExcerptRecoveryHint
 
 public class FileFindResult
 {
+    [JsonPropertyName("match_end_line")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? MatchEndLine { get; set; }
+    [JsonPropertyName("match_end_column")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? MatchEndColumn { get; set; }
     [JsonPropertyName("match_facets")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<SearchMatchFacet>? MatchFacets { get; set; }

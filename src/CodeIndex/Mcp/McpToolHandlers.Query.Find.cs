@@ -17,11 +17,16 @@ public partial class McpServer
         bool contextTruncated, int? snippetLines, ArgumentAdjustmentCollector adjustments)
     {
         var cursorArgs = BuildMcpFindCursorArguments(options, filters, cursor);
+        // Byte fitting replays share the query budget, including the deadline.
+        // 応答サイズ調整の再走査も、期限を含むクエリ予算を共有する。
+        var window = options.FindWindow is { } configuredWindow
+            ? configuredWindow with { Budget = new FindWindowBudget() } : null;
         try
         {
             var resume = JsonEnvelopeWrapper.GetStandaloneFindResume(cursorArgs, reader);
             var effectiveLimit = options.Limit;
             var byteLimited = false;
+            FindResults? stoppedWindowResults = null;
             while (true)
             {
                 reader.Cancellation.ThrowIfCancellationRequested();
@@ -39,7 +44,7 @@ public partial class McpServer
                         useIndexedLiteralCandidates: options.All,
                         resumePath: resume.Path, resumeLine: resume.Line, resumeFileOrdinal: resume.FileOrdinal,
                         resumeMatchOrdinal: resume.MatchOrdinal, resumeByteOffset: resume.ByteOffset,
-                        cancellationToken: reader.Cancellation, semanticFilters: filters);
+                        cancellationToken: reader.Cancellation, semanticFilters: filters, window: window);
                     scan = counted.Scan;
                     count = counted.Count;
                     fileCount = counted.FileCount;
@@ -47,7 +52,7 @@ public partial class McpServer
                 }
                 else
                 {
-                    var found = reader.FindInFiles(options.Query!, effectiveLimit, options.Lang,
+                    var found = stoppedWindowResults ?? reader.FindInFiles(options.Query!, effectiveLimit, options.Lang,
                         options.All ? null : options.PathPatterns, options.ExcludePaths, options.ExcludeTests,
                         options.ContextBefore, options.ContextAfter, options.Exact, options.MaxLineWidth,
                         options.FocusLine, options.FocusColumn, options.Regex,
@@ -56,9 +61,13 @@ public partial class McpServer
                         useIndexedLiteralCandidates: options.All,
                         resumePath: resume.Path, resumeLine: resume.Line, resumeFileOrdinal: resume.FileOrdinal,
                         resumeMatchOrdinal: resume.MatchOrdinal, resumeByteOffset: resume.ByteOffset,
-                        captureContinuation: true, cancellationToken: reader.Cancellation, semanticFilters: filters);
-                    results = found.Results;
+                        captureContinuation: true, cancellationToken: reader.Cancellation, semanticFilters: filters, window: window);
+                    results = stoppedWindowResults is null ? found.Results : found.Results.Take(effectiveLimit).ToList();
                     scan = found.Scan;
+                    // A smaller replay could hide the resource failure and invent a cursor.
+                    // 再走査で資源上限を隠さず、取得済みの上限付き行だけを縮小する。
+                    if (window is not null && scan.Truncated && scan.NextPath is null)
+                        stoppedWindowResults ??= found;
                     count = results.Count;
                     fileCount = results.Select(row => row.Path).Distinct(StringComparer.Ordinal).Count();
                 }
@@ -98,7 +107,10 @@ public partial class McpServer
                 if (byteLimited)
                 {
                     payload["partial_result"] = true;
-                    payload["truncation_reason"] = "max_bytes";
+                    if (stoppedWindowResults is null)
+                        payload["truncation_reason"] = "max_bytes";
+                    else
+                        payload["byte_limit_omitted_count"] = stoppedWindowResults.Value.Count - count;
                 }
                 if (next.Cursor is not null)
                     payload["recovery_guidance"] = "Pass next_cursor as cursor with the same query, scope, filters and countOnly mode; limit, maxBytes and lineScanLimit may change. Restart after indexing.";
@@ -116,8 +128,8 @@ public partial class McpServer
                         suggestion: "Increase maxBytes/server response budget or reduce before, after, snippetLines, or maxLineWidth. Retry the same cursor; no matches were consumed.",
                         extraData: new JsonObject { ["error_code"] = CommandErrorCodes.ResponseBudgetTooSmall, ["max_bytes"] = maxBytes, ["restart_required"] = false });
 
-                // Reuse the scanner from the original position with a smaller page. Its raw match
-                // ordinal and UTF-8 position remain correct even for zero-width/same-line matches.
+                // Resize stopped windows in memory; otherwise replay from the original position.
+                // Raw match ordinals and UTF-8 positions preserve zero-width/same-line matches.
                 effectiveLimit = Math.Max(1, results.Count / 2);
                 byteLimited = true;
             }
@@ -156,6 +168,12 @@ public partial class McpServer
         foreach (var path in options.ExcludePaths) Value("--exclude-path", path);
         Flag("--all", options.All);
         Flag("--regex", options.Regex);
+        Flag("--multiline", options.Multiline);
+        if (options.FindWindow is { } window)
+        {
+            Value("--window-lines", window.Lines);
+            Value("--window-bytes", window.Bytes);
+        }
         Flag("--exact", options.Exact);
         Flag("--count", options.CountOnly);
         Flag("--exclude-tests", options.ExcludeTests);

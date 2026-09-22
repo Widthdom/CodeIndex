@@ -10,7 +10,7 @@ namespace CodeIndex.Cli;
 public static partial class QueryCommandRunner
 {
     internal const int MaxFindLineScanLimit = 10_000_000;
-    private const string FindUsage = "Usage: cdidx find <query> (--path <glob>|--all) [--db <path>] [--json] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--fields <csv>] [--cursor <next_cursor>] [--max-json-bytes <n>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--context <n>] [--before <n>] [--after <n>] [--snippet-lines <n>] [--focus-line <line>] [--focus-column <n>] [--max-line-width <n>] [--line-scan-limit <n>] [--allow-partial] [--exact] [--regex] [--origin <origin>] [--exclude-origin <origin>] [--result-kind <kind>] [--exclude-comments] [--exclude-strings] [--exclude-fixtures] [--origin-passes <n>] [--count]\n       cdidx find --query <query> (--path <glob>|--all) [...]\n       cdidx find [options] -- <query>";
+    private const string FindUsage = "Usage: cdidx find <query> (--path <glob>|--all) [--db <path>] [--json] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--fields <csv>] [--cursor <next_cursor>] [--max-json-bytes <n>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--context <n>] [--before <n>] [--after <n>] [--snippet-lines <n>] [--focus-line <line>] [--focus-column <n>] [--max-line-width <n>] [--line-scan-limit <n>] [--allow-partial] [--exact] [--regex] [--multiline] [--window-lines <n>] [--window-bytes <n>] [--origin <origin>] [--exclude-origin <origin>] [--result-kind <kind>] [--exclude-comments] [--exclude-strings] [--exclude-fixtures] [--origin-passes <n>] [--count]\n       cdidx find --query <query> (--path <glob>|--all) [...]\n       cdidx find [options] -- <query>";
 
     public static int RunFind(
         string[] cmdArgs,
@@ -173,6 +173,26 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.UsageError;
         }
 
+        var windowError = !options.Multiline && (options.WindowLines.HasValue || options.WindowBytes.HasValue)
+            ? "--window-lines and --window-bytes require --multiline."
+            : options.FindWindow?.Validate(options.Regex, semanticFilters, options.FocusLine, options.FocusColumn);
+        if (options.Multiline && windowError is null)
+        {
+            var context = ResolveFindContext(options, preparedFindArgs);
+            if (context.Before != 0 || context.After != 0 || options.Limit > FindWindowOptions.MaxResults
+                || options.MaxLineWidth is < 1 or > 512)
+                windowError = "Multiline find supports at most 200 rows, no surrounding context, and --max-line-width from 1 to 512.";
+            else if (!options.CountOnly && options.Json
+                && (options.OutputFormat != OutputFormatJson && !IsFindWindowCompactEnvelope(options)
+                    || options.JsonOutputFormat == JsonOutputFormatArray))
+                windowError = "Multiline find requires text or JSON/NDJSON with terminal metadata; use --json or --json-envelope, not row-only formats.";
+        }
+        if (windowError is not null)
+            return CommandErrorWriter.WriteJsonOrHuman(machineErrorOutput || options.Json, jsonOptions,
+                windowError, CommandExitCodes.UsageError,
+                "Use find <pattern> --regex --multiline --path <glob> --json; remove incompatible options.",
+                errorCode: CommandErrorCodes.UsageError, category: "usage", command: "find");
+
         string? findTerminalLine = null;
         return WithDb(options, jsonOptions, reader =>
         {
@@ -207,7 +227,7 @@ public static partial class QueryCommandRunner
                         resumeMatchOrdinal: countResumeMatchOrdinal,
                         resumeByteOffset: countResumeByteOffset,
                         cancellationToken: cancellationToken,
-                        semanticFilters: semanticFilters);
+                        semanticFilters: semanticFilters, window: options.FindWindow);
                 }
                 catch (FindContinuationException ex)
                 {
@@ -232,7 +252,7 @@ public static partial class QueryCommandRunner
                         extraFields: payload =>
                         {
                             AddFindScanJsonFields(payload, counts.Scan);
-                            if (options.All)
+                            if (options.All || options.Multiline)
                             {
                                 AddFindTerminalScanFields(
                                     payload,
@@ -296,7 +316,7 @@ public static partial class QueryCommandRunner
                     resumeByteOffset: resumeByteOffset,
                     captureContinuation: true,
                     cancellationToken: cancellationToken,
-                    semanticFilters: semanticFilters);
+                    semanticFilters: semanticFilters, window: options.FindWindow);
             }
             catch (FindContinuationException ex)
             {
@@ -311,10 +331,11 @@ public static partial class QueryCommandRunner
                 return WriteFindRegexTimeoutError(ex, jsonOptions, options.Json);
             }
             var results = findResults.Results;
-            if (semanticFilters is not null)
+            if (semanticFilters is not null || options.Multiline)
                 JsonEnvelopeWrapper.ReportBoundedResponseTotal("find",
                     results.Count + JsonEnvelopeWrapper.GetBoundedResponseOffset("find") + (findResults.Scan.ResultLimitReached ? 1 : 0),
-                    resumePath is null && !findResults.Scan.Truncated && !findResults.Scan.ResultLimitReached && findResults.Scan.UnknownOriginMatches == 0);
+                    resumePath is null && (!options.Multiline || !findResults.Scan.Resumed)
+                    && !findResults.Scan.Truncated && !findResults.Scan.ResultLimitReached && findResults.Scan.UnknownOriginMatches == 0);
             var findResume = BuildFindResumeCursor(cmdArgs, reader, findResults.Scan);
             if (results.Count == 0)
             {
@@ -329,7 +350,7 @@ public static partial class QueryCommandRunner
                             jsonOptions));
                         return FindScanExitCode(options, findResults.Scan, ZeroResultExitCode(options));
                     }
-                    if (TryWriteEmptyFormattedResult(options, jsonOptions))
+                    if (!IsFindWindowCompactEnvelope(options) && TryWriteEmptyFormattedResult(options, jsonOptions))
                         return FindScanExitCode(options, findResults.Scan, ZeroResultExitCode(options));
                     var payload = BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "results", queryOptions: options, extraFields: payload =>
                     {
@@ -373,7 +394,7 @@ public static partial class QueryCommandRunner
                     {
                         WriteZeroResultHints(options, reader, filterHint: "try broadening --path or adding another --path value; --path is required for find.");
                     }
-                    if (options.All || semanticFilters is not null)
+                    if (options.All || options.Multiline || semanticFilters is not null)
                         WriteFindScanSummary(findResults.Scan, nextCursor: findResume.Cursor);
                 }
                 return FindScanExitCode(options, findResults.Scan, ZeroResultExitCode(options));
@@ -381,7 +402,7 @@ public static partial class QueryCommandRunner
 
             if (options.Json)
             {
-                if (TryWriteFormattedLocations(
+                if (!IsFindWindowCompactEnvelope(options) && TryWriteFormattedLocations(
                     options,
                     results.Select(r => new FormattedLocation(r.Path, r.Line, r.Column, $"find match: {options.Query}")),
                     jsonOptions))
@@ -427,7 +448,7 @@ public static partial class QueryCommandRunner
             {
                 foreach (var r in results)
                 {
-                    Console.WriteLine($"{r.Path}:{r.Line}:{r.Column}");
+                    Console.WriteLine(r.MatchEndLine is { } end ? $"{r.Path}:{r.Line}:{r.Column}-{end}:{r.MatchEndColumn}" : $"{r.Path}:{r.Line}:{r.Column}");
                     WriteNumberedExcerpt(r.StartLine, r.Snippet);
                     Console.WriteLine();
                 }
@@ -759,6 +780,21 @@ public static partial class QueryCommandRunner
 
     private static void AddFindScanJsonFields(JsonObject payload, FindScanSummary scan)
     {
+        if (scan.Window is { } window)
+        {
+            payload["multiline"] = true;
+            payload["window_contract_version"] = 1;
+            payload["window_lines"] = window.Lines;
+            payload["window_bytes"] = window.Bytes;
+            payload["count_scope"] = "bounded_multiline_nonoverlapping_matches";
+            payload["unbounded_absence_authoritative"] = false;
+            if (scan.Truncated)
+            {
+                payload["authoritative_count"] = false;
+                payload["authoritative_rows"] = false;
+                payload["partial_result"] = true;
+            }
+        }
         if (scan.ClassificationApplied)
         {
             payload["origin_classification_complete"] = scan.UnknownOriginMatches == 0;
@@ -800,10 +836,14 @@ public static partial class QueryCommandRunner
            || JsonEnvelopeWrapper.HasArgument("find", options.InvocationArgs, "--origin-passes");
 
     private static bool IsFindAllNdjson(QueryCommandOptions options)
-        => (options.All || HasFindOriginClassification(options))
+        => (options.All || options.Multiline || HasFindOriginClassification(options))
            && options.Json
-           && options.OutputFormat == OutputFormatJson
+           && (options.OutputFormat == OutputFormatJson || IsFindWindowCompactEnvelope(options))
            && options.JsonOutputFormat == JsonOutputFormatNdjson;
+
+    private static bool IsFindWindowCompactEnvelope(QueryCommandOptions options)
+        => options.Multiline && options.OutputFormat == OutputFormatCompact
+           && JsonEnvelopeWrapper.GetBoundedResponseLimit("find").HasValue;
 
     private static int FindScanExitCode(QueryCommandOptions options, FindScanSummary scan, int completeExitCode = CommandExitCodes.Success)
         => scan.Truncated || scan.UnknownOriginMatches > 0
@@ -858,7 +898,8 @@ public static partial class QueryCommandRunner
         payload["next_cursor"] = nextCursor;
         payload["result_stable_at"] = resultStableAt;
         if (!countMode)
-            payload["authoritative_rows"] = scanComplete && scan.UnknownOriginMatches == 0;
+            payload["authoritative_rows"] = scanComplete && scan.UnknownOriginMatches == 0
+                && (scan.Window is null || !scan.Resumed);
         if (appliedLimit.HasValue)
             payload["applied_limit"] = appliedLimit.Value;
         if (resultLimitReached)
@@ -896,6 +937,10 @@ public static partial class QueryCommandRunner
             ? "Pass next_cursor back with --cursor to resume after the scan cap without rescanning completed lines; --line-scan-limit may be increased for the next page."
             : scan.TruncationReason switch
             {
+                "multiline_window_bytes" => "Increase --window-bytes (MCP: windowBytes) up to 262144 or reduce --window-lines (windowLines), then restart without a cursor. This scan cannot prove absence.",
+                "multiline_chunk_bytes" or "multiline_source_gap" => "Inspect the affected indexed source manually; refresh missing source or split oversized source chunks. No continuation can repair this incomplete window.",
+                "multiline_source_index" => "Refresh the index to restore ordered chunk indexes; legacy fallback is limited to 256 chunks per file. Restart without a cursor.",
+                "multiline_query_bytes" or "multiline_query_lines" or "multiline_query_time" => "Narrow --path (MCP: path) or reduce windowLines, then restart without a cursor. Output limits do not restore scan coverage.",
                 "line_scan_limit" => $"Increase --line-scan-limit up to {MaxFindLineScanLimit}, or replace --all with one or more --path filters. Pass --allow-partial only when exit code 0 is acceptable for an incomplete scan.",
                 "candidate_file_limit" => "Replace --all with one or more --path filters to scan fewer candidate files. Pass --allow-partial only when exit code 0 is acceptable for an incomplete scan.",
                 _ when scan.Truncated => "Replace --all with one or more --path filters and rerun. Pass --allow-partial only when exit code 0 is acceptable for an incomplete scan.",
@@ -912,6 +957,8 @@ public static partial class QueryCommandRunner
     {
         var summary = $"scanned {scan.FilesScanned}/{scan.CandidateFiles} candidate files, {ConsoleUi.Counted(scan.LinesScanned, "line")}";
         summary += $"; search_strategy={scan.SearchStrategy}";
+        if (scan.Window is { } window)
+            summary += $"; window_lines={window.Lines}; window_bytes={window.Bytes}; absence beyond the bounded window is not authoritative";
         if (scan.SearchFallbackReason != null)
             summary += $"; search_fallback_reason={scan.SearchFallbackReason}";
         if (scan.CandidateFileLimit.HasValue)
@@ -924,7 +971,7 @@ public static partial class QueryCommandRunner
         summary += $"; scan_complete={scanComplete.ToString().ToLowerInvariant()}";
         summary += countMode
             ? $"; authoritative_count={(!scan.Truncated && !resumedCountPage && scan.UnknownOriginMatches == 0).ToString().ToLowerInvariant()}"
-            : $"; authoritative_rows={(scanComplete && scan.UnknownOriginMatches == 0).ToString().ToLowerInvariant()}";
+            : $"; authoritative_rows={(scanComplete && scan.UnknownOriginMatches == 0 && (scan.Window is null || !scan.Resumed)).ToString().ToLowerInvariant()}";
         if (scan.UnknownOriginMatches > 0)
         {
             summary += $"; unknown_origin_matches={scan.UnknownOriginMatches}; absence is not authoritative";

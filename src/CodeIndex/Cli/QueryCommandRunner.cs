@@ -82,6 +82,10 @@ public static partial class QueryCommandRunner
 
 public sealed class QueryCommandOptions
 {
+    public bool Multiline { get; init; }
+    public int? WindowLines { get; init; }
+    public int? WindowBytes { get; init; }
+    internal FindWindowOptions? FindWindow => Multiline ? new(WindowLines ?? 8, WindowBytes ?? 65_536) : null;
     internal QueryCommandInvocationContext InvocationContext { get; set; } = QueryCommandInvocationContext.Search;
     internal JsonSerializerOptions? InvocationJsonOptions { get; set; }
     internal bool InvocationMachineErrorOutputRequested { get; set; }
