@@ -165,7 +165,9 @@ public sealed class InspectCompactCandidateTests
                 {
                     response = server.HandleMessage(new JsonObject
                     {
-                        ["jsonrpc"] = "2.0", ["id"] = 5397, ["method"] = "tools/call",
+                        ["jsonrpc"] = "2.0",
+                        ["id"] = 5397,
+                        ["method"] = "tools/call",
                         ["params"] = new JsonObject { ["name"] = "analyze_symbol", ["arguments"] = args },
                     });
                     return 0;
