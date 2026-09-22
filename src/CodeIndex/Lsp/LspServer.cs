@@ -141,6 +141,7 @@ internal sealed partial class LspServer : IDisposable
     private readonly StringComparison _pathStringComparison;
     private readonly object _sessionStateGate = new();
     private LspSessionState _sessionState;
+    private bool _hierarchicalDocumentSymbolSupport;
     private int _activeSessionDispatches;
     private int _ownedResourcesDisposed;
     private int _ownedResourceDisposeCount;
@@ -1196,6 +1197,9 @@ internal sealed partial class LspServer : IDisposable
 
     private JsonObject HandleInitialize(JsonNode? id, JsonElement root)
     {
+        _hierarchicalDocumentSymbolSupport = GetBool(
+            root, "params", "capabilities", "textDocument", "documentSymbol",
+            "hierarchicalDocumentSymbolSupport") == true;
         CaptureInitializeWorkspaceFolders(root);
         return Result(id, BuildInitializeResult());
     }

@@ -216,6 +216,20 @@ internal sealed partial class LspServer : IDisposable
                 materializationTruncated);
         }
 
+        if (!_hierarchicalDocumentSymbolSupport)
+        {
+            var items = new JsonArray();
+            foreach (var item in EnumerateDocumentSymbolItems(document, symbols, cancellationToken))
+                items.Add(item);
+            var removedCount = TrimDocumentSymbolsToBudget(items);
+            Activity.Current?.SetTag("lsp.document_symbols.returned_root_count", items.Count);
+            return new SymbolResponse(
+                items,
+                [],
+                items.Count,
+                materializationTruncated || removedCount > 0);
+        }
+
         var tree = BuildDocumentSymbolTree(document, symbols, cancellationToken);
         Activity.Current?.SetTag("lsp.document_symbols.returned_root_count", tree.Roots.Count);
         return new SymbolResponse(

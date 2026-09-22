@@ -3575,62 +3575,130 @@ public class LspServerTests
                     command.Parameters.AddWithValue("@path", indexedPath);
                     Assert.Equal(1, command.ExecuteNonQuery());
                 }
-                using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
-                InitializeSession(server);
-                if (fallback)
-                    Assert.Null(server.HandleMessage(CreateDidOpenRequest(sourcePath, source, version: 1)));
-
-                var partialRequest = JsonSerializer.Serialize(new
+                foreach (var capabilities in new[]
                 {
-                    jsonrpc = "2.0",
-                    id = 53821,
-                    method = "textDocument/documentSymbol",
-                    @params = new
+                    """{"textDocument":{"documentSymbol":{"hierarchicalDocumentSymbolSupport":true}}}""",
+                    """{"textDocument":{"documentSymbol":{"hierarchicalDocumentSymbolSupport":false}}}""",
+                    """{"textDocument":{"documentSymbol":{}}}""",
+                    """{"textDocument":{}}""",
+                    "{}",
+                    "null",
+                    // Initialize tolerates malformed optional capability values.
+                    """{"textDocument":{"documentSymbol":{"hierarchicalDocumentSymbolSupport":"true"}}}""",
+                    """{"textDocument":{"documentSymbol":false}}""",
+                    """{"textDocument":[]}""",
+                })
+                {
+                    var hierarchy = capabilities.Contains(":true", StringComparison.Ordinal);
+                    using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+                    var initializeParams = new JsonObject();
+                    if (capabilities != "null")
+                        initializeParams["capabilities"] = JsonNode.Parse(capabilities);
+                    using (var initializeInput = new MemoryStream(Encoding.UTF8.GetBytes(Frame(new JsonObject
                     {
-                        textDocument = new { uri = new Uri(sourcePath).AbsoluteUri },
-                        partialResultToken = "exact-document",
-                        workDoneToken = 5382,
-                    },
-                });
-                using var input = new MemoryStream(Encoding.UTF8.GetBytes(
-                    Frame(CreateTextDocumentRequest("textDocument/documentSymbol", sourcePath, 53820))
-                    + Frame(partialRequest)));
-                using var output = new MemoryStream();
-                Assert.Equal(CommandExitCodes.Success, server.Run(input, output));
-                var messages = ReadLspMessages(output);
-                var response = Assert.Single(messages, entry => entry.Message["id"]?.GetValue<int>() == 53820).Message;
-                var roots = response["result"]!.AsArray();
-                Assert.Equal(new[] { "B", "Calls" }, roots.Select(symbol => symbol!["name"]!.GetValue<string>()));
-                Assert.Equal("Leaf", Assert.Single(roots[0]!["children"]!.AsArray())!["name"]!.GetValue<string>());
-                Assert.Equal("Caller", Assert.Single(roots[1]!["children"]!.AsArray())!["name"]!.GetValue<string>());
-                var symbols = FlattenDocumentSymbols(roots).ToArray();
-                Assert.Equal(new[] { "B", "Leaf", "Calls", "Caller" }, symbols.Select(symbol => symbol!["name"]!.GetValue<string>()));
-                Assert.Equal(new[] { 0, 2, 4, 6 }, symbols.Select(symbol => symbol!["selectionRange"]!["start"]!["line"]!.GetValue<int>()));
-                var lines = source.Split('\n');
-                foreach (var symbol in symbols)
-                {
-                    var selection = symbol!["selectionRange"]!;
-                    var line = selection["start"]!["line"]!.GetValue<int>();
-                    var start = selection["start"]!["character"]!.GetValue<int>();
-                    var end = selection["end"]!["character"]!.GetValue<int>();
-                    Assert.Equal(line, selection["end"]!["line"]!.GetValue<int>());
-                    Assert.Equal(symbol["name"]!.GetValue<string>(), lines[line][start..end]);
-                    Assert.InRange(line, symbol["range"]!["start"]!["line"]!.GetValue<int>(), symbol["range"]!["end"]!["line"]!.GetValue<int>());
-                }
+                        ["jsonrpc"] = "2.0",
+                        ["id"] = 5395,
+                        ["method"] = "initialize",
+                        ["params"] = initializeParams,
+                    }.ToJsonString()))))
+                    using (var initializeOutput = new MemoryStream())
+                    {
+                        Assert.Equal(CommandExitCodes.Success, server.Run(initializeInput, initializeOutput));
+                        Assert.Null(Assert.Single(ReadLspMessages(initializeOutput)).Message["error"]);
+                    }
 
-                var partialMessages = messages.Where(entry => HasProgressToken(entry.Message, "exact-document")).ToArray();
-                var partial = Assert.Single(partialMessages);
-                Assert.InRange(partial.BodyBytes, 1, LspServer.MaxSymbolProgressChunkBytes);
-                var items = partial.Message["params"]!["value"]!.AsArray();
-                Assert.Equal(symbols.Select(symbol => symbol!["name"]!.GetValue<string>()), items.Select(symbol => symbol!["name"]!.GetValue<string>()));
-                for (var i = 0; i < items.Count; i++)
-                {
-                    Assert.Equal(new Uri(sourcePath).AbsoluteUri, items[i]!["location"]!["uri"]!.GetValue<string>());
-                    Assert.True(JsonNode.DeepEquals(symbols[i]!["selectionRange"], items[i]!["location"]!["range"]));
+                    var opened = source.Replace("Leaf", "OpenedLeaf", StringComparison.Ordinal);
+                    var changed = "\n" + source.Replace("Leaf", "ChangedLeaf", StringComparison.Ordinal);
+                    var snapshots = new[]
+                    {
+                        (Text: source, Notification: "", Leaf: "Leaf", Offset: 0),
+                        (Text: opened, Notification: CreateDidOpenRequest(sourcePath, opened, version: 1), Leaf: "OpenedLeaf", Offset: 0),
+                        (Text: changed, Notification: CreateDidChangeRequest(sourcePath, changed, version: 2), Leaf: "ChangedLeaf", Offset: 1),
+                        (Text: "", Notification: CreateDidChangeRequest(sourcePath, "", version: 3), Leaf: "", Offset: 0),
+                    };
+                    foreach (var snapshot in snapshots)
+                    {
+                        // An unavailable live extractor must continue returning the exact indexed file.
+                        var expectedText = fallback ? source : snapshot.Text;
+                        var expectedNames = expectedText.Length == 0 ? Array.Empty<string>()
+                            : new[] { "B", fallback ? "Leaf" : snapshot.Leaf, "Calls", "Caller" };
+                        var partialRequest = JsonSerializer.Serialize(new
+                        {
+                            jsonrpc = "2.0",
+                            id = 53821,
+                            method = "textDocument/documentSymbol",
+                            @params = new
+                            {
+                                textDocument = new { uri = new Uri(sourcePath).AbsoluteUri },
+                                partialResultToken = "exact-document",
+                                workDoneToken = 5382,
+                            },
+                        });
+                        using var input = new MemoryStream(Encoding.UTF8.GetBytes(
+                            (snapshot.Notification.Length == 0 ? "" : Frame(snapshot.Notification))
+                            + Frame(CreateTextDocumentRequest("textDocument/documentSymbol", sourcePath, 53820))
+                            + Frame(partialRequest)));
+                        using var output = new MemoryStream();
+                        Assert.Equal(CommandExitCodes.Success, server.Run(input, output));
+                        var messages = ReadLspMessages(output);
+                        var response = Assert.Single(messages, entry => entry.Message["id"]?.GetValue<int>() == 53820).Message;
+                        var roots = response["result"]!.AsArray();
+                        if (hierarchy && expectedNames.Length > 0)
+                        {
+                            Assert.Equal(new[] { "B", "Calls" }, roots.Select(symbol => symbol!["name"]!.GetValue<string>()));
+                            Assert.Equal(expectedNames[1], Assert.Single(roots[0]!["children"]!.AsArray())!["name"]!.GetValue<string>());
+                            Assert.Equal("Caller", Assert.Single(roots[1]!["children"]!.AsArray())!["name"]!.GetValue<string>());
+                        }
+                        var symbols = FlattenDocumentSymbols(roots).ToArray();
+                        Assert.Equal(expectedNames, symbols.Select(symbol => symbol!["name"]!.GetValue<string>()));
+                        if (!fallback && symbols.Length > 0)
+                        {
+                            Assert.Equal(new[] { 0, 2, 4, 6 }.Select(line => line + snapshot.Offset),
+                                symbols.Select(symbol => Selection(symbol!)["start"]!["line"]!.GetValue<int>()));
+                            var lines = expectedText.Split('\n');
+                            foreach (var symbol in symbols)
+                            {
+                                var selection = Selection(symbol!);
+                                var line = selection["start"]!["line"]!.GetValue<int>();
+                                var start = selection["start"]!["character"]!.GetValue<int>();
+                                var end = selection["end"]!["character"]!.GetValue<int>();
+                                Assert.Equal(line, selection["end"]!["line"]!.GetValue<int>());
+                                Assert.Equal(symbol!["name"]!.GetValue<string>(), lines[line][start..end]);
+                                if (hierarchy)
+                                    Assert.InRange(line, symbol["range"]!["start"]!["line"]!.GetValue<int>(), symbol["range"]!["end"]!["line"]!.GetValue<int>());
+                            }
+                        }
+
+                        var partialMessages = messages.Where(entry => HasProgressToken(entry.Message, "exact-document")).ToArray();
+                        if (symbols.Length == 0)
+                            Assert.Empty(partialMessages);
+                        else
+                        {
+                            var partial = Assert.Single(partialMessages);
+                            Assert.InRange(partial.BodyBytes, 1, LspServer.MaxSymbolProgressChunkBytes);
+                            var items = partial.Message["params"]!["value"]!.AsArray();
+                            Assert.Equal(expectedNames, items.Select(symbol => symbol!["name"]!.GetValue<string>()));
+                            Assert.Equal(new string?[] { null, "B", null, "Calls" }, items.Select(symbol => symbol!["containerName"]?.GetValue<string>()));
+                            for (var i = 0; i < items.Count; i++)
+                            {
+                                Assert.Equal(new Uri(sourcePath).AbsoluteUri, items[i]!["location"]!["uri"]!.GetValue<string>());
+                                Assert.True(JsonNode.DeepEquals(Selection(symbols[i]!), items[i]!["location"]!["range"]));
+                                Assert.Null(items[i]!["children"]);
+                                Assert.Null(items[i]!["selectionRange"]);
+                                Assert.Null(items[i]!["range"]);
+                                if (hierarchy)
+                                    Assert.Null(symbols[i]!["location"]);
+                                else
+                                    Assert.True(JsonNode.DeepEquals(symbols[i], items[i]));
+                            }
+                        }
+                        var endProgress = messages.Last(entry => HasProgressToken(entry.Message, 5382)).Message["params"]!["value"]!;
+                        Assert.Equal($"Returned {expectedNames.Length} symbols.", endProgress["message"]!.GetValue<string>());
+                        Assert.Null(Assert.Single(messages, entry => entry.Message["id"]?.GetValue<int>() == 53821).Message["result"]);
+
+                        JsonNode Selection(JsonNode symbol) => hierarchy ? symbol["selectionRange"]! : symbol["location"]!["range"]!;
+                    }
                 }
-                var endProgress = messages.Last(entry => HasProgressToken(entry.Message, 5382)).Message["params"]!["value"]!;
-                Assert.Equal("Returned 4 symbols.", endProgress["message"]!.GetValue<string>());
-                Assert.Null(Assert.Single(messages, entry => entry.Message["id"]?.GetValue<int>() == 53821).Message["result"]);
             }
         }
         finally
@@ -4296,11 +4364,13 @@ public class LspServerTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void HandleMessage_DocumentSymbol_TruncatesDetailsAndCapsResponse_Issue3130_Issue3743(bool writeIndented)
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void HandleMessage_DocumentSymbol_TruncatesDetailsAndCapsResponse_Issue3130_Issue3743(bool writeIndented, bool hierarchy)
     {
-        const int responseBudget = 4 * 1024;
+        var responseBudget = hierarchy ? 4 * 1024 : 1024;
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_document_symbol_budget");
         LspServer.DocumentSymbolResponseBytesForTesting = responseBudget;
         try
@@ -4321,6 +4391,13 @@ public class LspServerTests
                 WriteIndented = writeIndented,
             };
             using var server = new LspServer(new DbReader(db), "1.2.3", jsonOptions, projectRoot);
+            InitializeSession(server, JsonSerializer.Serialize(new
+            {
+                jsonrpc = "2.0",
+                id = 5395,
+                method = "initialize",
+                @params = new { capabilities = new { textDocument = new { documentSymbol = new { hierarchicalDocumentSymbolSupport = hierarchy } } } },
+            }));
             var request = JsonSerializer.Serialize(new
             {
                 jsonrpc = "2.0",
@@ -4340,13 +4417,25 @@ public class LspServerTests
             Assert.True(symbols.Count < LspServer.MaxDocumentSymbols);
             Assert.True(Encoding.UTF8.GetByteCount(symbols.ToJsonString(jsonOptions)) <= responseBudget);
             var allSymbols = FlattenDocumentSymbols(symbols).ToArray();
-            Assert.True(allSymbols.Length < LspServer.MaxDocumentSymbols);
-            Assert.Contains(allSymbols, symbol =>
+            Assert.True(allSymbols.Length < 13);
+            if (hierarchy)
             {
-                var detail = symbol?["detail"]?.GetValue<string>();
-                return detail is { Length: <= LspServer.MaxDocumentSymbolDetailChars }
-                    && detail.EndsWith("...", StringComparison.Ordinal);
-            });
+                Assert.Contains(allSymbols, symbol =>
+                {
+                    var detail = symbol?["detail"]?.GetValue<string>();
+                    return detail is { Length: <= LspServer.MaxDocumentSymbolDetailChars }
+                        && detail.EndsWith("...", StringComparison.Ordinal);
+                });
+            }
+            else
+            {
+                Assert.All(allSymbols, symbol =>
+                {
+                    Assert.Equal(new Uri(sourcePath).AbsoluteUri, symbol!["location"]!["uri"]!.GetValue<string>());
+                    Assert.Null(symbol["children"]);
+                    Assert.Null(symbol["selectionRange"]);
+                });
+            }
             Assert.All(allSymbols, symbol =>
             {
                 var detail = symbol?["detail"]?.GetValue<string>();
@@ -6198,7 +6287,7 @@ public class LspServerTests
 
     private static JsonObject InitializeSession(
         LspServer server,
-        string payload = """{"jsonrpc":"2.0","id":"__test_initialize__","method":"initialize","params":{}}""")
+        string payload = """{"jsonrpc":"2.0","id":"__test_initialize__","method":"initialize","params":{"capabilities":{"textDocument":{"documentSymbol":{"hierarchicalDocumentSymbolSupport":true}}}}}""")
     {
         lock (server)
         {
