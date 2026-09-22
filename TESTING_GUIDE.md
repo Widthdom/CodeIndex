@@ -12,6 +12,16 @@ and 128 calls across multiple chunks. Bound source-line reconstruction counts fo
 both query paths; cycles materialize each reference context once. Keep the non-null
 content predicate that enables the existing partial chunk-range indexes.
 
+Ordinary dependency identity coverage (#5400) shares the independent-entrypoint
+fixture with #5391 and adds `QueryCommandRunnerIssue5400Tests.cs`. Run both on
+net8/net9 with the dependency, metadata, Python, SQL, summary and MCP regressions.
+Keep confirmed IDs independent of stale candidates, grouped/ambiguous candidates,
+NULL/unknown and legacy evidence, repeated Python calls, module/alias ownership,
+effective-state filters, path/reverse/symbol selectors and CLI/MCP parity together.
+The real C++ `struct stat` / function fixture checks one reference and ranking
+contribution for mixed-kind candidates in the same file. Reused readers must switch
+to unavailable name evidence after contract invalidation and recover after restamping.
+
 `FindMultilineTests` and `McpServerIssue5399Tests` cover indexed LF/CRLF windows,
 astral UTF-16 coordinates, overlapping chunks, exact/beyond-span bounds, anchors,
 dot-all/zero-width/non-overlapping matches, count and row replay, cursor changes,
@@ -1733,6 +1743,16 @@ Check the following:
 呼び出し 128 個を複数チャンクに配置し、両クエリのソース行復元回数を制限します。
 循環解析では参照文脈を一度だけ復元し、既存の部分的なチャンク範囲インデックスを
 利用できるよう、内容が NULL でないことを確認する条件を維持してください。
+
+通常の依存検索の識別情報テスト（#5400）は #5391 の独立エントリーポイント fixture を
+共有し、`QueryCommandRunnerIssue5400Tests.cs` を追加しています。依存関係、metadata、
+Python、SQL、summary、MCP の回帰テストとともに net8/net9 で実行してください。
+古い候補と独立した確定 ID、グループ・曖昧候補、NULL・未知値・旧形式の証拠、Python の
+反復呼び出し、モジュール・別名の所有関係、選択先の状態フィルター、path・reverse・symbol
+による選択、CLI / MCP の一致を維持します。
+実際の C++ の `struct stat`・関数 fixture では、同一ファイル内の異種候補が参照数・
+順位に一度だけ寄与することを確認します。再利用した Reader も契約無効化後は
+`unavailable` の名前照合に切り替え、契約を戻した後は識別情報による照合へ復帰させます。
 
 `InspectCompactCandidateTests`（#5397）は実際に索引を作成した共通 fixture で
 CLI inspect と MCP の compact 解析を検証します。0 件・上限ちょうど・追加候補・

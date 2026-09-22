@@ -19,6 +19,18 @@ public partial class QueryCommandRunnerTests
         SetDependencyLanguage(dbPath, "java");
         SetDependencyEvidence(dbPath, "src/Caller.java",
             [("call", "resolved"), ("type_reference", "unresolved"), ("unsubscribe", "resolved")]);
+        // Resolved evidence must identify its selected definition (#5400).
+        using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+        using (var command = db.Connection.CreateCommand())
+        {
+            command.CommandText = """
+                UPDATE symbol_references SET target_symbol_id = (
+                    SELECT s.id FROM symbols s JOIN files f ON f.id = s.file_id
+                    WHERE f.path = 'src/Target.java' AND s.name = 'Target')
+                WHERE resolution_state = 'resolved'
+                """;
+            Assert.Equal(2, command.ExecuteNonQuery());
+        }
         MarkDependencyGraphReady(dbPath);
         SetReferenceIdentityContractVersion(dbPath, DbContext.ReferenceIdentityContractVersion.ToString());
         Assert.Equal(1, CountDependencyEvidence(dbPath, "type_reference", "unresolved"));
