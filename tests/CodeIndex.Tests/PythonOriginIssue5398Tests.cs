@@ -39,24 +39,24 @@ public sealed class PythonOriginIssue5398Tests
             ("f'{Needle!r # Needle\n}'; Needle()", ["code", "comment", "code"]),
         ];
         foreach (var (source, expected) in cases)
-        foreach (var newline in new[] { "\n", "\r\n" })
-        foreach (var prefix in new[] { "", "x = 'ASCII'; ", "x = '日本語'; ", "x = '😀'; " })
-        {
-            var text = prefix + source.Replace("\n", newline, StringComparison.Ordinal);
-            var lines = Lines(text);
-            var context = new SearchMatchClassifier.PythonOriginContext(lines);
-            var actual = new List<string>();
-            foreach (var (line, value) in lines)
-            foreach (Match match in Regex.Matches(value, "Needle"))
-            {
-                var facet = SearchMatchClassifier.Classify("tests/test_origins.py", "python", line, value,
-                    match.Index + 1, match.Length, pythonContext: context);
-                actual.Add(facet.Origin);
-                Assert.Equal((line, match.Index + 1, 6), (facet.Line, facet.Column, facet.Length));
-                Assert.Equal(facet.Origin == "string_literal", facet.TestFixture);
-            }
-            Assert.True(expected.SequenceEqual(actual), $"{text}: {string.Join(',', actual)}");
-        }
+            foreach (var newline in new[] { "\n", "\r\n" })
+                foreach (var prefix in new[] { "", "x = 'ASCII'; ", "x = '日本語'; ", "x = '😀'; " })
+                {
+                    var text = prefix + source.Replace("\n", newline, StringComparison.Ordinal);
+                    var lines = Lines(text);
+                    var context = new SearchMatchClassifier.PythonOriginContext(lines);
+                    var actual = new List<string>();
+                    foreach (var (line, value) in lines)
+                        foreach (Match match in Regex.Matches(value, "Needle"))
+                        {
+                            var facet = SearchMatchClassifier.Classify("tests/test_origins.py", "python", line, value,
+                                match.Index + 1, match.Length, pythonContext: context);
+                            actual.Add(facet.Origin);
+                            Assert.Equal((line, match.Index + 1, 6), (facet.Line, facet.Column, facet.Length));
+                            Assert.Equal(facet.Origin == "string_literal", facet.TestFixture);
+                        }
+                    Assert.True(expected.SequenceEqual(actual), $"{text}: {string.Join(',', actual)}");
+                }
     }
 
     [Fact]
@@ -195,21 +195,21 @@ public sealed class PythonOriginIssue5398Tests
         Assert.Equal("code", Assert.Single(ends.Where(r => r.Line == 8)).MatchFacets![0].Origin);
 
         foreach (var command in new[] { "search", "find" })
-        foreach (var origin in new[] { "code", "comment", "string_literal" })
-        {
-            var args = new[] { command, "Needle", "--path", "tests/test_origins.py", "--db", dbPath,
+            foreach (var origin in new[] { "code", "comment", "string_literal" })
+            {
+                var args = new[] { command, "Needle", "--path", "tests/test_origins.py", "--db", dbPath,
                 "--origin", origin, "--json", "--count", command == "find" ? "--regex" : "--exact" };
-            var (exit, output, error) = CaptureConsole(() => ProgramRunner.Run(args, JsonOptions, "test"));
-            Assert.Equal(0, exit);
-            Assert.Empty(error);
-            using var result = JsonDocument.Parse(output);
-            Assert.True(result.RootElement.GetProperty("origin_classification_complete").GetBoolean());
-            Assert.True(result.RootElement.GetProperty("authoritative_count").GetBoolean());
-            var expected = command == "find" ? search.Count(f => f.Origin == origin)
-                : SearchSnippetFormatter.ToCompactResults(searchRows, "Needle", exposeLiteralHighlights: true)
-                    .Count(row => row.MatchFacets.Any(f => f.Origin == origin));
-            Assert.Equal(expected, result.RootElement.GetProperty("count").GetInt32());
-        }
+                var (exit, output, error) = CaptureConsole(() => ProgramRunner.Run(args, JsonOptions, "test"));
+                Assert.Equal(0, exit);
+                Assert.Empty(error);
+                using var result = JsonDocument.Parse(output);
+                Assert.True(result.RootElement.GetProperty("origin_classification_complete").GetBoolean());
+                Assert.True(result.RootElement.GetProperty("authoritative_count").GetBoolean());
+                var expected = command == "find" ? search.Count(f => f.Origin == origin)
+                    : SearchSnippetFormatter.ToCompactResults(searchRows, "Needle", exposeLiteralHighlights: true)
+                        .Count(row => row.MatchFacets.Any(f => f.Origin == origin));
+                Assert.Equal(expected, result.RootElement.GetProperty("count").GetInt32());
+            }
     }
 
     [Fact]
@@ -324,12 +324,17 @@ public sealed class PythonOriginIssue5398Tests
         var writer = new DbWriter(db.Connection);
         var id = writer.UpsertFile(new FileRecord
         {
-            Path = "tests/test_origins.py", Lang = "python", Lines = lines.Length,
-            Size = string.Join(newline, lines).Length, Modified = ManualTimeProvider.FixtureUtcNow.UtcDateTime,
+            Path = "tests/test_origins.py",
+            Lang = "python",
+            Lines = lines.Length,
+            Size = string.Join(newline, lines).Length,
+            Modified = ManualTimeProvider.FixtureUtcNow.UtcDateTime,
         });
         writer.InsertChunks(Enumerable.Range(0, (lines.Length + chunkSize - 1) / chunkSize).Select(index => new ChunkRecord
         {
-            FileId = id, ChunkIndex = index, StartLine = index * chunkSize + 1,
+            FileId = id,
+            ChunkIndex = index,
+            StartLine = index * chunkSize + 1,
             EndLine = Math.Min(lines.Length, (index + 1) * chunkSize),
             Content = string.Join(newline, lines.Skip(index * chunkSize).Take(chunkSize)),
         }).ToList());

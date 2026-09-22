@@ -203,7 +203,7 @@ internal static partial class SearchMatchClassifier
                     var quote = source[quoteIndex];
                     var triple = quoteIndex + 2 < source.Length && source[quoteIndex + 1] == quote && source[quoteIndex + 2] == quote;
                     if (!Push(new Frame(FrameKind.String, line, i)
-                        { Quote = quote, Triple = triple, Raw = normalized.Contains('r'), Formatted = normalized.Contains('f') }, line, i))
+                    { Quote = quote, Triple = triple, Raw = normalized.Contains('r'), Formatted = normalized.Contains('f') }, line, i))
                         return false;
                     i = quoteIndex + (triple ? 3 : 1);
                     if (!Add(parsed, start, i, StringLiteral, line)) return false;
