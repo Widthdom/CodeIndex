@@ -20,6 +20,8 @@ ranges. Queries never read the live source file for this matching. Current index
 with source chunks need no refresh for this query fix (#5401). If indexed source is
 unavailable, matching uses the stored reference name without guessing a receiver
 or alias from a shifted display context.
+Cycle queries share each reconstructed reference context across import matching
+and evidence aggregation; source-line lookup uses the existing chunk-range indexes.
 
 Existing Python rows written with extractor contract 1 or 2 need a normal
 whole-workspace index refresh (`cdidx index <project> --db <db>`). Contract 3
@@ -47,6 +49,8 @@ Python の `deps` と `deps --cycles` は、インデックス内のソースチ
 読み直すことはありません。ソースチャンクを持つ現在の索引では、このクエリ修正に
 よる更新は不要です（#5401）。索引内のソースが利用できない場合は保存済みの参照名を
 使い、座標のずれた表示用文脈から receiver や別名を推測しません。
+循環クエリは復元した参照文脈を import 照合と証拠集計で共有し、ソース行の検索には
+既存のチャンク範囲インデックスを利用します。
 
 抽出契約バージョン 1 または 2 で保存した Python の行は、通常のワークスペース全体の
 索引更新（`cdidx index <project> --db <db>`）が必要です。バージョン 3 は変更のない

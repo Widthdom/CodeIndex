@@ -6,6 +6,57 @@ namespace CodeIndex.Tests;
 
 public partial class QueryCommandRunnerTests
 {
+    [Fact]
+    public void RunDeps_PythonSourceContextWorkScalesWithReferences_Issue5401()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_python_context_work_5401");
+        const int importCount = 8;
+        const int callCount = 128;
+        var lines = new List<string>();
+        for (var i = 0; i < importCount; i++)
+        {
+            lines.Add($"import target{i} as m{i}");
+            TestProjectHelper.WriteTextFile(project.Root, $"target{i}.py", $"def action{i}():\n    pass\n");
+        }
+        lines.Add("def caller():");
+        for (var i = 0; i < callCount; i++)
+        {
+            lines.Add($"    m{i % importCount}.action{i % importCount}()");
+            lines.AddRange(Enumerable.Repeat("    value = 0", 5));
+        }
+        TestProjectHelper.WriteTextFile(project.Root, "caller.py", string.Join('\n', lines) + '\n');
+        TestProjectHelper.WriteTextFile(project.Root, "narrow.py", "import target0 as m\ndef narrow():\n    m.action0()\n");
+        var dbPath = Path.Combine(project.Root, ".cdidx", "codeindex.db");
+        var indexed = CaptureConsole(() => IndexCommandRunner.Run([project.Root, "--db", dbPath, "--json", "--quiet"], _jsonOptions));
+        Assert.True(indexed.Result == 0, indexed.Stdout + indexed.Stderr);
+
+        using var db = new DbContext(DbOpenIntent.QueryOnly, dbPath);
+        var sourceReads = 0;
+        db.Connection.CreateFunction("source_line_at", (string? text, long? start, long? line) =>
+        {
+            sourceReads++;
+            return DbContext.GetTextInLineRange(text, start, line, line);
+        });
+        using var reader = new DbReader(db);
+        foreach (var cycles in new[] { false, true })
+        {
+            sourceReads = 0;
+            var edges = cycles
+                ? reader.GetFileDependencyCycleCandidates(20, out _, lang: "python")
+                : reader.GetFileDependencies(limit: 20, lang: "python");
+            Assert.Equal(importCount + 1, edges.Count);
+            Assert.All(edges.Where(edge => edge.SourcePath == "caller.py"), edge => Assert.Equal(callCount / importCount, edge.ReferenceCount));
+            Assert.Equal(1, Assert.Single(edges, edge => edge.SourcePath == "narrow.py").ReferenceCount);
+            Assert.Equal(callCount + 1, edges.Sum(edge => edge.ReferenceCount));
+            // Ordinary deps evaluates its grouping key and projected context; cycles
+            // must share one materialized context across imports and both stages.
+            Assert.InRange(sourceReads, 1, (callCount + 1) * (cycles ? 1 : 2));
+        }
+        sourceReads = 0;
+        Assert.Single(reader.GetFileDependencyCycleCandidates(20, out _, lang: "python", pathPatterns: ["narrow.py"]));
+        Assert.Equal(1, sourceReads);
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData(" ")]

@@ -28,6 +28,16 @@ public partial class DbReader
         builder.Append("WITH ");
         builder.Append(new DependencyTargetSqlBuilder(this, request, BuildDependencyQueryExpressions()).BuildCycleTargets());
         builder.Append(BuildDependencyCycleSqlMatches());
+        // Both cycle stages revisit references for each candidate edge. Reconstruct
+        // Python source positions once, before the per-import/target matching loops.
+        builder.Append($@"
+            cycle_python_contexts AS MATERIALIZED (
+                SELECT r.id AS reference_id, {DependencyReferenceContextSql("r", "src")} AS context
+                FROM symbol_references r
+                JOIN files src ON src.id = r.file_id
+                {ReferenceLineJoinSql("r")}
+                WHERE src.lang = 'python'{BuildDependencyCyclePythonContextScope(request)}
+            ),");
         builder.Append(candidates.Sql);
         builder.Append(evidence.Sql);
         builder.AddParameters(candidates.Parameters);
@@ -35,6 +45,26 @@ public partial class DbReader
         AppendDependencyCycleTerminalParameters(builder, request);
         var query = builder.Build();
         return new DependencyCycleQueryPlan(query.Sql, query.Parameters);
+    }
+
+    private string BuildDependencyCyclePythonContextScope(DependencyQueryRequest request)
+    {
+        var scope = BuildDependencyGeneratedFilter("src");
+        if (request.Lang != null)
+            scope += " AND src.lang = @lang";
+        // Reverse path filters constrain target files, so every source can contribute.
+        if (!request.Reverse)
+        {
+            if (request.PathPatterns is { Count: > 0 })
+                scope += " AND (" + string.Join(" OR ", request.PathPatterns.Select((path, i) =>
+                    BuildPathFilterPredicate("src", "pathPattern", i, path))) + ")";
+            if (request.ExcludePathPatterns is { Count: > 0 })
+                scope += string.Concat(request.ExcludePathPatterns.Select((path, i) =>
+                    $" AND NOT {BuildPathFilterPredicate("src", "excludePath", i, path)}"));
+        }
+        if (request.ExcludeTests)
+            scope += $" AND NOT {DependencyTestPathCondition("src.path")}";
+        return scope;
     }
 
     private DependencyCycleQueryExpressions BuildDependencyCycleQueryExpressions(DependencyQueryRequest request)
@@ -107,7 +137,7 @@ public partial class DbReader
                            SELECT 1 FROM symbol_reference_candidates candidate
                            WHERE candidate.reference_id = r.id AND candidate.symbol_id = py_import.id)))" : string.Empty;
         var importSignature = GetSymbolColumnSql("signature", "NULL", "py_import");
-        var context = DependencyReferenceContextSql("r", "src");
+        const string context = "(SELECT context FROM cycle_python_contexts WHERE reference_id = r.id)";
         // Python's persisted identity can be the source-local import binding. Follow
         // only that binding using ordinary deps' module/alias matcher, never all names.
         var pythonImports = @"

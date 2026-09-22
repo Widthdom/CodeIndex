@@ -21,15 +21,20 @@ public partial class DbReader
         // source positions. Python import matching needs the indexed original line
         // to distinguish aliases and multiple same-line member calls. Never read live
         // files or guess an occurrence from the trimmed display text.
+        // Select the chunk ID first so overlapping candidates do not reconstruct
+        // multiple source lines before LIMIT chooses the one retained chunk.
         var pythonContext = _hasChunksTable
             ? $"""
-                (SELECT source_line_at(piece.content, piece.start_line, {referenceAlias}.line)
-                 FROM chunks piece
-                 WHERE piece.file_id = {referenceAlias}.file_id
-                   AND piece.start_line <= {referenceAlias}.line
-                   AND piece.end_line >= {referenceAlias}.line
-                 ORDER BY piece.start_line DESC, piece.id
-                 LIMIT 1)
+                (SELECT source_line_at(source_piece.content, source_piece.start_line, {referenceAlias}.line)
+                 FROM chunks source_piece
+                 WHERE source_piece.id = (
+                     SELECT piece.id FROM chunks piece
+                     WHERE piece.content IS NOT NULL
+                       AND piece.file_id = {referenceAlias}.file_id
+                       AND piece.start_line <= {referenceAlias}.line
+                       AND piece.end_line >= {referenceAlias}.line
+                     ORDER BY piece.start_line DESC, piece.id
+                     LIMIT 1))
                 """
             : "NULL";
         return $"CASE WHEN {fileAlias}.lang = 'python' THEN {pythonContext} ELSE {ReferenceContextSql(referenceAlias)} END";

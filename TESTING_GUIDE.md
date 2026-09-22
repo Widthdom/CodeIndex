@@ -7,6 +7,10 @@ Keep persisted UTF-16 columns and trimmed display contexts unchanged, and query
 after live files change to prove indexed-source ownership. Cover missing chunks
 and legacy schemas without guessing receivers from display text. Run `Issue5401`,
 `Issue5391`, Python dependency regressions and `Issue5362` on net8/net9.
+`RunDeps_PythonSourceContextWorkScalesWithReferences_Issue5401` uses eight imports
+and 128 calls across multiple chunks. Bound source-line reconstruction counts for
+both query paths; cycles materialize each reference context once. Keep the non-null
+content predicate that enables the existing partial chunk-range indexes.
 
 `FindMultilineTests` and `McpServerIssue5399Tests` cover indexed LF/CRLF windows,
 astral UTF-16 coordinates, overlapping chunks, exact/beyond-span bounds, anchors,
@@ -1725,6 +1729,10 @@ Check the following:
 空白除去済み表示文脈を維持し、実ファイル変更後も索引内のソースを使うことを確認します。
 チャンク欠落や旧スキーマでも、表示文脈から receiver を推測しないことを確認します。
 `Issue5401`・`Issue5391`・Python 依存の回帰・`Issue5362` を net8/net9 で実行してください。
+`RunDeps_PythonSourceContextWorkScalesWithReferences_Issue5401` は import 8 個・
+呼び出し 128 個を複数チャンクに配置し、両クエリのソース行復元回数を制限します。
+循環解析では参照文脈を一度だけ復元し、既存の部分的なチャンク範囲インデックスを
+利用できるよう、内容が NULL でないことを確認する条件を維持してください。
 
 `InspectCompactCandidateTests`（#5397）は実際に索引を作成した共通 fixture で
 CLI inspect と MCP の compact 解析を検証します。0 件・上限ちょうど・追加候補・
