@@ -165,7 +165,11 @@ public sealed class QueryCommandRunnerIssue4835Tests
                 ProgramRunner.Run([.. baseArgs, "--json"], _jsonOptions, "1.0.0-test"));
 
             Assert.Equal(CommandExitCodes.Success, ndjsonExitCode);
-            Assert.Equal(string.Empty, ndjsonStdout);
+            using (var terminal = JsonDocument.Parse(ndjsonStdout))
+            {
+                Assert.True(terminal.RootElement.GetProperty("terminal_record").GetBoolean());
+                Assert.Equal(0, terminal.RootElement.GetProperty("count").GetInt32());
+            }
             Assert.Equal(string.Empty, ndjsonStderr);
 
             var (arrayExitCode, arrayStdout, arrayStderr) = CaptureConsole(() =>

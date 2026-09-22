@@ -85,6 +85,53 @@ public class QueryCommandRunnerFindIssue4578Tests
             Assert.False(limited.GetProperty("partial_result").GetBoolean());
             Assert.True(limited.GetProperty("result_limit_reached").GetBoolean());
             Assert.Equal("limit", limited.GetProperty("truncation_reason").GetString());
+
+            foreach (var countMode in new[] { false, true })
+                foreach (var allowPartial in new[] { false, true })
+                {
+                    var (exit, output, _) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                        ["missing5393", "--regex", "--db", dbPath, "--all", "--json",
+                            "--line-scan-limit", "1", "--strict-not-found",
+                            .. countMode ? new[] { "--count" } : Array.Empty<string>(),
+                            .. allowPartial ? new[] { "--allow-partial" } : Array.Empty<string>()], JsonOptions));
+                    Assert.Equal(allowPartial ? CommandExitCodes.Success : CommandExitCodes.PartialResult, exit);
+                    using var emptyPartial = ParseLastNdjsonRecord(output);
+                    var partial = emptyPartial.RootElement;
+                    Assert.Equal(0, partial.GetProperty("returned_count").GetInt32());
+                    Assert.False(partial.GetProperty("scan_complete").GetBoolean());
+                    Assert.False(partial.GetProperty(countMode ? "authoritative_count" : "authoritative_rows").GetBoolean());
+                    if (countMode)
+                    {
+                        var cursor = partial.GetProperty("next_cursor").GetString()!;
+                        var (resumedExit, resumedOutput, _) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                            ["missing5393", "--regex", "--db", dbPath, "--all", "--json", "--count",
+                                "--line-scan-limit", "1", "--strict-not-found", "--cursor", cursor,
+                                .. allowPartial ? new[] { "--allow-partial" } : Array.Empty<string>()], JsonOptions));
+                        Assert.Equal(CommandExitCodes.Success, resumedExit);
+                        using var resumed = JsonDocument.Parse(resumedOutput);
+                        Assert.Equal(0, resumed.RootElement.GetProperty("count").GetInt32());
+                        Assert.False(resumed.RootElement.GetProperty("authoritative_count").GetBoolean());
+                    }
+                }
+
+            foreach (var allowPartial in new[] { false, true })
+            {
+                using var cancellation = new CancellationTokenSource();
+                cancellation.Cancel();
+                Assert.Throws<OperationCanceledException>(() => CaptureConsole(() => QueryCommandRunner.RunFind(
+                    ["missing5393", "--regex", "--db", dbPath, "--all", "--json", "--count", "--strict-not-found",
+                        .. allowPartial ? new[] { "--allow-partial" } : Array.Empty<string>()],
+                    JsonOptions, cancellation.Token)));
+
+                var (unknownExit, unknownOutput, _) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                    ["alpha", "--regex", "--db", dbPath, "--path", "src/large.txt", "--exclude-origin", "unknown",
+                        "--json", "--count", "--strict-not-found",
+                        .. allowPartial ? new[] { "--allow-partial" } : Array.Empty<string>()], JsonOptions));
+                Assert.Equal(allowPartial ? CommandExitCodes.Success : CommandExitCodes.PartialResult, unknownExit);
+                using var unknown = JsonDocument.Parse(unknownOutput);
+                Assert.Equal(0, unknown.RootElement.GetProperty("count").GetInt32());
+                Assert.False(unknown.RootElement.GetProperty("authoritative_count").GetBoolean());
+            }
         }
         finally
         {

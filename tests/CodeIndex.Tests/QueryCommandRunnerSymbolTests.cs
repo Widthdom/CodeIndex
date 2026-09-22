@@ -1920,7 +1920,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunSymbols_JsonZeroResults_ReturnEmptyStdout()
+    public void RunSymbols_JsonZeroResults_ReturnCompletionRecord()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_zero_json");
         try
@@ -1931,7 +1931,10 @@ public partial class QueryCommandRunnerTests
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stdout);
+            using var terminal = JsonDocument.Parse(stdout);
+            Assert.True(terminal.RootElement.GetProperty("terminal_record").GetBoolean());
+            Assert.True(terminal.RootElement.GetProperty("done").GetBoolean());
+            Assert.Equal(0, terminal.RootElement.GetProperty("count").GetInt32());
             Assert.Equal(string.Empty, stderr);
         }
         finally
@@ -4958,7 +4961,7 @@ public partial class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, fontFaceExitCode);
             Assert.Equal(string.Empty, fontFaceStderr);
-            Assert.Equal(string.Empty, fontFaceStdout);
+            Assert.Empty(ParseJsonLines(fontFaceStdout));
         }
         finally
         {
@@ -5387,10 +5390,10 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
             Assert.Equal(string.Empty, indexStderr);
             Assert.Equal(CommandExitCodes.Success, valueExitCode);
-            Assert.Equal(string.Empty, valueStdout);
+            Assert.Empty(ParseJsonLines(valueStdout));
             Assert.Equal(string.Empty, valueStderr);
             Assert.Equal(CommandExitCodes.Success, otherExitCode);
-            Assert.Equal(string.Empty, otherStdout);
+            Assert.Empty(ParseJsonLines(otherStdout));
             Assert.Equal(string.Empty, otherStderr);
         }
         finally
@@ -8068,7 +8071,7 @@ public partial class QueryCommandRunnerTests
                     _jsonOptions));
 
                 Assert.Equal(CommandExitCodes.Success, exitCode);
-                Assert.Equal(string.Empty, stdout);
+                Assert.Empty(ParseJsonLines(stdout));
                 Assert.Equal(string.Empty, stderr);
             }
 

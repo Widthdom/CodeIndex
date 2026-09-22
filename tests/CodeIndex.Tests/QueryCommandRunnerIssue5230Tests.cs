@@ -29,7 +29,7 @@ public sealed class QueryCommandRunnerIssue5230Tests
 
             var args = new[]
             {
-                "symbols", "Issue5230Type", "--db", dbPath, "--json", "--limit", "2",
+                "symbols", "Issue5230Type", "--db", dbPath, "--json", "--limit", "2", "--strict-not-found",
             };
             var (firstExitCode, firstStdout, firstStderr) = CaptureConsole(() =>
                 ProgramRunner.Run(args, _jsonOptions, "1.0.0-test"));
@@ -72,6 +72,20 @@ public sealed class QueryCommandRunnerIssue5230Tests
             Assert.False(finalTerminal.GetProperty("has_more").GetBoolean());
             Assert.False(finalTerminal.TryGetProperty("next_cursor", out _));
             Assert.False(finalTerminal.TryGetProperty("next_cursor_unavailable_reason", out _));
+
+            // An exhausted page still has five total matches; strict mode must not call it absent.
+            var exhaustedCursor = ReplaceResponseCursorOffset(
+                firstRecords[^1].GetProperty("next_cursor").GetString()!, 5);
+            var (exhaustedExit, exhaustedOutput, exhaustedError) = CaptureConsole(() => ProgramRunner.Run(
+                [.. args, "--cursor", exhaustedCursor], _jsonOptions, "test"));
+            Assert.True(exhaustedExit == CommandExitCodes.Success, exhaustedOutput + exhaustedError);
+            using var exhausted = JsonDocument.Parse(exhaustedOutput);
+            Assert.Empty(exhausted.RootElement.GetProperty("results").EnumerateArray());
+            var exhaustedTerminal = exhausted.RootElement.GetProperty("metadata").GetProperty("stream_terminal");
+            Assert.Equal(0, exhaustedTerminal.GetProperty("count").GetInt32());
+            Assert.Equal(5, exhaustedTerminal.GetProperty("total_count").GetInt32());
+            Assert.False(exhaustedTerminal.GetProperty("has_more").GetBoolean());
+            Assert.False(exhaustedTerminal.TryGetProperty("next_cursor", out _));
         }
         finally
         {
@@ -264,13 +278,18 @@ public sealed class QueryCommandRunnerIssue5230Tests
             var args = new[]
             {
                 "symbols", "Issue5230Validation", "--kind", "class",
-                "--db", dbPath, "--json", "--limit", "1",
+                "--db", dbPath, "--json", "--limit", "1", "--strict-not-found",
             };
             var (_, firstStdout, _) = CaptureConsole(() =>
                 ProgramRunner.Run(args, _jsonOptions, "1.0.0-test"));
             var cursor = Assert.IsType<string>(ParseNdjson(firstStdout)[^1]
                 .GetProperty("next_cursor")
                 .GetString());
+
+            var (invalidExit, _, invalidError) = CaptureConsole(() => ProgramRunner.Run(
+                [.. args, "--cursor", "response:v2:invalid"], _jsonOptions, "test"));
+            Assert.Equal(CommandExitCodes.UsageError, invalidExit);
+            Assert.Contains("cursor", invalidError, StringComparison.OrdinalIgnoreCase);
 
             var (mismatchExitCode, mismatchStdout, mismatchStderr) = CaptureConsole(() =>
                 ProgramRunner.Run(
@@ -333,6 +352,103 @@ public sealed class QueryCommandRunnerIssue5230Tests
             var zeroTerminal = ParseNdjson(zeroStdout)[^1];
             Assert.False(zeroTerminal.GetProperty("has_more").GetBoolean());
             Assert.False(zeroTerminal.TryGetProperty("next_cursor", out _));
+
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/DiscoveryBudget.cs", "csharp",
+                $"public class {new string('B', 2048)} {{ }}\n");
+
+            foreach (var command in new[] { "files", "symbols" })
+            {
+                foreach (var strict in new[] { false, true })
+                {
+                    string[] emptyArgs = [command, "Issue5393Missing", "--db", dbPath, "--json",
+                        .. strict ? new[] { "--strict-not-found" } : Array.Empty<string>()];
+                    foreach (var controls in new string[][] { [], ["--max-json-bytes", "4096"] })
+                    {
+                        var (exit, output, error) = CaptureConsole(() =>
+                            ProgramRunner.Run([.. emptyArgs, .. controls], _jsonOptions, "test"));
+                        Assert.Equal(strict ? CommandExitCodes.NotFound : CommandExitCodes.Success, exit);
+                        Assert.Empty(error);
+                        var terminal = Assert.Single(ParseNdjson(output));
+                        Assert.True(terminal.GetProperty("terminal_record").GetBoolean());
+                        Assert.True(terminal.GetProperty("done").GetBoolean());
+                        Assert.Equal(0, terminal.GetProperty("count").GetInt32());
+                        Assert.Equal(0, terminal.GetProperty("total_count").GetInt32());
+                        Assert.True(terminal.GetProperty("total_count_authoritative").GetBoolean());
+                        Assert.False(terminal.GetProperty("has_more").GetBoolean());
+                        Assert.False(terminal.TryGetProperty("next_cursor", out _));
+                        Assert.True(Encoding.UTF8.GetByteCount(output) <= 4096);
+                    }
+
+                    var (suppressedExit, suppressedOutput, _) = CaptureConsole(() =>
+                        ProgramRunner.Run([.. emptyArgs, "--results-only", "--max-json-bytes", "1"], _jsonOptions, "test"));
+                    Assert.Equal(strict ? CommandExitCodes.NotFound : CommandExitCodes.Success, suppressedExit);
+                    Assert.Empty(suppressedOutput);
+
+                    var (budgetExit, budgetOutput, _) = CaptureConsole(() =>
+                        ProgramRunner.Run([.. emptyArgs, "--max-json-bytes", "1"], _jsonOptions, "test"));
+                    Assert.Equal(CommandExitCodes.UsageError, budgetExit);
+                    using var budgetError = JsonDocument.Parse(budgetOutput);
+                    Assert.Equal(CommandErrorCodes.ResponseBudgetTooSmall, budgetError.RootElement.GetProperty("error_code").GetString());
+
+                    foreach (var shape in new string[][] { ["--json=array"], ["--json-envelope"], ["--format", "compact"] })
+                    {
+                        var (exit, output, error) = CaptureConsole(() =>
+                            ProgramRunner.Run([.. emptyArgs.Where(arg => arg != "--json"), .. shape], _jsonOptions, "test"));
+                        Assert.True(exit == (strict ? CommandExitCodes.NotFound : CommandExitCodes.Success),
+                            $"{command} {string.Join(' ', shape)}: {output}{error}");
+                        using var shaped = JsonDocument.Parse(output);
+                        if (shape[0] == "--json=array")
+                            Assert.Empty(shaped.RootElement.EnumerateArray());
+                        else
+                            Assert.Equal(JsonValueKind.Object, shaped.RootElement.ValueKind);
+                    }
+                }
+
+                // Account for the budget value and newline in an exactly fitting terminal-only response.
+                var budget = 4096;
+                string[] boundedArgs = [command, "Issue5393Missing", "--db", dbPath, "--json", "--strict-not-found"];
+                for (var iteration = 0; iteration < 4; iteration++)
+                {
+                    var (exit, output, _) = CaptureConsole(() => ProgramRunner.Run(
+                        [.. boundedArgs, "--max-json-bytes", budget.ToString()], _jsonOptions, "test"));
+                    Assert.Equal(CommandExitCodes.NotFound, exit);
+                    var actualBytes = Encoding.UTF8.GetByteCount(output);
+                    Assert.True(actualBytes <= budget);
+                    if (actualBytes == budget)
+                        break;
+                    budget = actualBytes;
+                    Assert.True(iteration < 3, "Terminal byte accounting did not converge.");
+                }
+                var (tooSmallExit, tooSmallOutput, _) = CaptureConsole(() => ProgramRunner.Run(
+                    [.. boundedArgs, "--max-json-bytes", (budget - 1).ToString()], _jsonOptions, "test"));
+                Assert.Equal(CommandExitCodes.UsageError, tooSmallExit);
+                using var tooSmall = JsonDocument.Parse(tooSmallOutput);
+                Assert.Equal(CommandErrorCodes.ResponseBudgetTooSmall, tooSmall.RootElement.GetProperty("error_code").GetString());
+
+                var terminalOnlyBudget = 0;
+                for (var candidateBudget = 128; candidateBudget <= 2048; candidateBudget += 32)
+                {
+                    string[] args = [command, "--db", dbPath, "--json", "--strict-not-found", "--limit", "20",
+                        "--max-json-bytes", candidateBudget.ToString()];
+                    var (exit, output, _) = CaptureConsole(() => ProgramRunner.Run(args, _jsonOptions, "test"));
+                    if (exit != CommandExitCodes.PartialResult)
+                        continue;
+                    var terminal = Assert.Single(ParseNdjson(output));
+                    Assert.Equal(0, terminal.GetProperty("count").GetInt32());
+                    Assert.True(terminal.GetProperty("total_count").GetInt32() > 0);
+                    Assert.True(terminal.GetProperty("interrupted").GetBoolean());
+                    Assert.True(terminal.GetProperty("has_more").GetBoolean());
+                    Assert.False(terminal.TryGetProperty("next_cursor", out _));
+                    Assert.True(Encoding.UTF8.GetByteCount(output) <= candidateBudget);
+                    var (allowedExit, allowedOutput, _) = CaptureConsole(() =>
+                        ProgramRunner.Run([.. args, "--allow-partial"], _jsonOptions, "test"));
+                    Assert.Equal(CommandExitCodes.Success, allowedExit);
+                    Assert.Equal(output, allowedOutput);
+                    terminalOnlyBudget = candidateBudget;
+                    break;
+                }
+                Assert.NotEqual(0, terminalOnlyBudget);
+            }
 
             var (_, firstPageStdout, _) = CaptureConsole(() => ProgramRunner.Run(
                 [
