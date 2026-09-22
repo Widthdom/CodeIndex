@@ -38,6 +38,11 @@ public partial class DbContext
         private static void RegisterDependencyAndNameNormalizationFunctions(SqliteConnection connection)
         {
             connection.CreateFunction(
+                "source_line_at",
+                (string? text, long? chunkStartLine, long? line) =>
+                    GetTextInLineRange(text, chunkStartLine, line, line),
+                isDeterministic: true);
+            connection.CreateFunction(
                 "markdown_resolve_path",
                 (string? sourcePath, string? targetPath) => DbReader.ResolveMarkdownDependencyPath(sourcePath, targetPath));
             connection.CreateFunction(

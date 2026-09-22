@@ -1,5 +1,17 @@
 # Testing Guide
 
+`RunDeps_PythonContextCoordinatesPreserveBothDirections_Issue5401` shares indexed
+fixtures across ordinary dependencies and cycles for zero/space/tab indentation,
+short/long names, aliases, relative imports and repeated same-line member calls.
+Keep persisted UTF-16 columns and trimmed display contexts unchanged, and query
+after live files change to prove indexed-source ownership. Cover missing chunks
+and legacy schemas without guessing receivers from display text. Run `Issue5401`,
+`Issue5391`, Python dependency regressions and `Issue5362` on net8/net9.
+`RunDeps_PythonSourceContextWorkScalesWithReferences_Issue5401` uses eight imports
+and 128 calls across multiple chunks. Bound source-line reconstruction counts for
+both query paths; cycles materialize each reference context once. Keep the non-null
+content predicate that enables the existing partial chunk-range indexes.
+
 Ordinary dependency identity coverage (#5400) shares the independent-entrypoint
 fixture with #5391 and adds `QueryCommandRunnerIssue5400Tests.cs`. Run both on
 net8/net9 with the dependency, metadata, Python, SQL, summary and MCP regressions.
@@ -1720,6 +1732,17 @@ Check the following:
 ---
 
 <a id="テストガイド"></a>
+
+`RunDeps_PythonContextCoordinatesPreserveBothDirections_Issue5401` は共通の索引で
+通常の依存と循環を比較し、インデントなし・空白・タブ、短い／長い名前、別名、
+相対 import、同一行の複数メンバー呼び出しを検証します。保存済みの UTF-16 列と
+空白除去済み表示文脈を維持し、実ファイル変更後も索引内のソースを使うことを確認します。
+チャンク欠落や旧スキーマでも、表示文脈から receiver を推測しないことを確認します。
+`Issue5401`・`Issue5391`・Python 依存の回帰・`Issue5362` を net8/net9 で実行してください。
+`RunDeps_PythonSourceContextWorkScalesWithReferences_Issue5401` は import 8 個・
+呼び出し 128 個を複数チャンクに配置し、両クエリのソース行復元回数を制限します。
+循環解析では参照文脈を一度だけ復元し、既存の部分的なチャンク範囲インデックスを
+利用できるよう、内容が NULL でないことを確認する条件を維持してください。
 
 通常の依存検索の識別情報テスト（#5400）は #5391 の独立エントリーポイント fixture を
 共有し、`QueryCommandRunnerIssue5400Tests.cs` を追加しています。依存関係、metadata、

@@ -147,7 +147,7 @@ public partial class DbReader
         return new DependencyQueryExpressions(
             identityCurrent,
             ReferenceLineJoinSql("r"),
-            ReferenceContextSql("r"),
+            DependencyReferenceContextSql("r", "src"),
             identityCurrent ? $"CASE WHEN {identityObservationScope} THEN r.id ELSE 0 END" : "CAST(0 AS INTEGER)",
             identityCurrent ? $"CASE WHEN {identityObservationScope} THEN r.target_symbol_id ELSE NULL END" : "NULL",
             $"CASE WHEN {identityObservationScope} THEN {resolutionState} ELSE NULL END",

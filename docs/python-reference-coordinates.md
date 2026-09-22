@@ -12,6 +12,17 @@ strings and comments do not become calls.
 For example, `    s = '😀'; 終了()` on source line 4 records column 15. The LSP
 range starts at line 3, character 14 and ends at character 16.
 
+Python `deps` and `deps --cycles` match import bindings against the original line
+from indexed source chunks, including indentation. The trimmed reference `context`
+is for display and is not a coordinate base. This preserves aliases, relative
+imports and separate same-line member calls without changing CLI columns or LSP
+ranges. Queries never read the live source file for this matching. Current indexes
+with source chunks need no refresh for this query fix (#5401). If indexed source is
+unavailable, matching uses the stored reference name without guessing a receiver
+or alias from a shifted display context.
+Cycle queries share each reconstructed reference context across import matching
+and evidence aggregation; source-line lookup uses the existing chunk-range indexes.
+
 Existing Python rows written with extractor contract 1 or 2 need a normal
 whole-workspace index refresh (`cdidx index <project> --db <db>`). Contract 3
 re-extracts unchanged Python files and replaces the old reference coordinates;
@@ -30,6 +41,16 @@ Python の参照列は、UTF-16 コード単位で数えた 1 始まりの位置
 
 例えば、ソースの 4 行目にある `    s = '😀'; 終了()` の参照列は 15 です。LSP の
 範囲は行 3・文字位置 14 から始まり、文字位置 16 で終わります。
+
+Python の `deps` と `deps --cycles` は、インデックス内のソースチャンクから取得した
+インデント付きの元の行で import の対応を照合します。空白除去済みの参照 `context` は
+表示用であり、列位置の基準にはしません。CLI の列や LSP の範囲を変更せずに、別名、
+相対 import、同一行の個別のメンバー呼び出しを維持します。照合のために実ファイルを
+読み直すことはありません。ソースチャンクを持つ現在の索引では、このクエリ修正に
+よる更新は不要です（#5401）。索引内のソースが利用できない場合は保存済みの参照名を
+使い、座標のずれた表示用文脈から receiver や別名を推測しません。
+循環クエリは復元した参照文脈を import 照合と証拠集計で共有し、ソース行の検索には
+既存のチャンク範囲インデックスを利用します。
 
 抽出契約バージョン 1 または 2 で保存した Python の行は、通常のワークスペース全体の
 索引更新（`cdidx index <project> --db <db>`）が必要です。バージョン 3 は変更のない
