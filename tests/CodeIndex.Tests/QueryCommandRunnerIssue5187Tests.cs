@@ -233,9 +233,9 @@ public sealed class QueryCommandRunnerIssue5187Tests
                     "1.0.0-test"));
 
             Assert.Equal(CommandExitCodes.UsageError, mismatchExitCode);
-            Assert.Equal(string.Empty, mismatchStdout);
-            Assert.Contains("cursor", mismatchStderr, StringComparison.OrdinalIgnoreCase);
-            Assert.Contains("cursor_mismatch", mismatchStderr, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(string.Empty, mismatchStderr);
+            using var error = QueryCommandTestSupport.ParseJsonOutput(mismatchStdout);
+            Assert.Equal("cursor_mismatch", error.RootElement.GetProperty("category").GetString());
         }
         finally
         {

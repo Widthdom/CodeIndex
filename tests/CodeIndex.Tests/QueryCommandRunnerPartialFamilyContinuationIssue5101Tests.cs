@@ -315,8 +315,9 @@ public partial class QueryCommandRunnerTests
             ProgramRunner.Run(args, _jsonOptions, "1.0.0-test"));
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
-        Assert.Equal(string.Empty, stdout);
-        Assert.Contains(expectedError, stderr, StringComparison.Ordinal);
+        Assert.Equal(string.Empty, stderr);
+        using var error = JsonDocument.Parse(stdout);
+        Assert.Equal(expectedError, error.RootElement.GetProperty("category").GetString());
     }
 
     private static string MutateIssue5101Cursor(string cursor, Action<JsonObject> mutate)

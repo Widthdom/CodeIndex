@@ -108,8 +108,9 @@ public sealed class JsonEnvelopeWrapperIssue4730Tests
                 ProgramRunner.Run(args.Concat(["--cursor", cursor]).ToArray(), _jsonOptions, "1.0.0-test"));
 
             Assert.Equal(CommandExitCodes.UsageError, staleExitCode);
-            Assert.Equal(string.Empty, staleStdout);
-            Assert.Contains("index generation changed", staleStderr, StringComparison.Ordinal);
+            Assert.Equal(string.Empty, staleStderr);
+            using var staleError = JsonDocument.Parse(staleStdout);
+            Assert.Equal("cursor_stale", staleError.RootElement.GetProperty("category").GetString());
         }
         finally
         {
@@ -271,8 +272,9 @@ public sealed class JsonEnvelopeWrapperIssue4730Tests
                     "1.0.0-test"));
 
             Assert.Equal(CommandExitCodes.UsageError, mismatchExitCode);
-            Assert.Equal(string.Empty, mismatchStdout);
-            Assert.Contains("does not match this command, query, or filter set", mismatchStderr, StringComparison.Ordinal);
+            Assert.Equal(string.Empty, mismatchStderr);
+            using var mismatchError = JsonDocument.Parse(mismatchStdout);
+            Assert.Equal("cursor_mismatch", mismatchError.RootElement.GetProperty("category").GetString());
 
             using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
@@ -284,9 +286,10 @@ public sealed class JsonEnvelopeWrapperIssue4730Tests
                 ProgramRunner.Run(symbolsArgs.Concat(["--cursor", symbolsCursor]).ToArray(), _jsonOptions, "1.0.0-test"));
 
             Assert.Equal(CommandExitCodes.UsageError, staleExitCode);
-            Assert.Equal(string.Empty, staleStdout);
-            Assert.Contains("index generation changed", staleStderr, StringComparison.Ordinal);
-            Assert.Contains("Restart pagination", staleStderr, StringComparison.Ordinal);
+            Assert.Equal(string.Empty, staleStderr);
+            using var staleError = JsonDocument.Parse(staleStdout);
+            Assert.Equal("cursor_stale", staleError.RootElement.GetProperty("category").GetString());
+            Assert.Contains("Restart pagination", staleError.RootElement.GetProperty("hint").GetString(), StringComparison.Ordinal);
         }
         finally
         {

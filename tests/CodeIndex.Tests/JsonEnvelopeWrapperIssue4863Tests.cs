@@ -654,21 +654,14 @@ public sealed class JsonEnvelopeWrapperIssue4863Tests
             ProgramRunner.Run(args, _jsonOptions, "1.0.0-test"));
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
-        if (string.IsNullOrEmpty(stdout))
-        {
-            Assert.Contains(expectedCategory, stderr, StringComparison.Ordinal);
-            return;
-        }
-
         Assert.Equal(string.Empty, stderr);
         using var document = JsonDocument.Parse(stdout);
+        var error = document.RootElement.TryGetProperty("metadata", out var metadata)
+            ? metadata.GetProperty("error")
+            : document.RootElement;
         Assert.Equal(
             expectedCategory,
-            document.RootElement
-                .GetProperty("metadata")
-                .GetProperty("error")
-                .GetProperty("category")
-                .GetString());
+            error.GetProperty("category").GetString());
     }
 
     private static string MutateCursor(

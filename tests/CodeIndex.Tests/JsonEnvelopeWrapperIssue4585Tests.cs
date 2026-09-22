@@ -1036,16 +1036,20 @@ public sealed class JsonEnvelopeWrapperIssue4585Tests
                 _jsonOptions,
                 "1.0.0-test"));
             Assert.Equal(CommandExitCodes.UsageError, summaryExitCode);
-            Assert.Equal(string.Empty, summaryStdout);
-            Assert.Contains("cannot be combined with --summary-only", summaryStderr, StringComparison.Ordinal);
+            Assert.Equal(string.Empty, summaryStderr);
+            using var summaryError = JsonDocument.Parse(summaryStdout);
+            Assert.Equal("usage", summaryError.RootElement.GetProperty("category").GetString());
+            Assert.Contains("cannot be combined with --summary-only", summaryError.RootElement.GetProperty("message").GetString(), StringComparison.Ordinal);
 
             var (sectionsExitCode, sectionsStdout, sectionsStderr) = CaptureConsole(() => ProgramRunner.Run(
                 ["map", "--db", dbPath, "--fields", "top_files.path", "--sections", "languages", "--limit", "1"],
                 _jsonOptions,
                 "1.0.0-test"));
             Assert.Equal(CommandExitCodes.UsageError, sectionsExitCode);
-            Assert.Equal(string.Empty, sectionsStdout);
-            Assert.Contains("requires --sections hotspots", sectionsStderr, StringComparison.Ordinal);
+            Assert.Equal(string.Empty, sectionsStderr);
+            using var sectionsError = JsonDocument.Parse(sectionsStdout);
+            Assert.Equal("usage", sectionsError.RootElement.GetProperty("category").GetString());
+            Assert.Contains("requires --sections hotspots", sectionsError.RootElement.GetProperty("message").GetString(), StringComparison.Ordinal);
         }
         finally
         {

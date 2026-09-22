@@ -743,8 +743,9 @@ public class JsonEnvelopeWrapperTests
                     "1.0.0-test"));
 
                 Assert.Equal(CommandExitCodes.UsageError, resumeExitCode);
-                Assert.Equal(string.Empty, resumeStdout);
-                Assert.Contains("cursor_mismatch", resumeStderr, StringComparison.Ordinal);
+                Assert.Equal(string.Empty, resumeStderr);
+                using var error = JsonDocument.Parse(resumeStdout);
+                Assert.Equal("cursor_mismatch", error.RootElement.GetProperty("category").GetString());
             }
         }
         finally
