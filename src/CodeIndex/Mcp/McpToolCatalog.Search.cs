@@ -28,17 +28,24 @@ public partial class McpServer
         var scopedProperties = scopedFind["inputSchema"]!["properties"]!.AsObject();
         scopedProperties["multiline"] = new JsonObject
         {
-            ["type"] = "boolean", ["default"] = false,
+            ["type"] = "boolean",
+            ["default"] = false,
             ["description"] = "Pass bounded multiline source to regex=true; default regex is line-local. Example: A\\nB. No semantic/focus/context filters. Non-overlapping matches expose exclusive match_end_line/match_end_column; LF-normalized source, UTF-16 columns. See docs/find-multiline.md.",
         };
         scopedProperties["windowLines"] = new JsonObject
         {
-            ["type"] = "integer", ["minimum"] = 1, ["maximum"] = 64, ["default"] = 8,
+            ["type"] = "integer",
+            ["minimum"] = 1,
+            ["maximum"] = 64,
+            ["default"] = 8,
             ["description"] = "Maximum physical lines per multiline owner window; requires multiline=true and binds cursors.",
         };
         scopedProperties["windowBytes"] = new JsonObject
         {
-            ["type"] = "integer", ["minimum"] = 1, ["maximum"] = 262144, ["default"] = 65536,
+            ["type"] = "integer",
+            ["minimum"] = 1,
+            ["maximum"] = 262144,
+            ["default"] = 65536,
             ["description"] = "Maximum LF-normalized UTF-8 window bytes; overflow is partial, never authoritative absence. Requires multiline=true; binds cursors.",
         };
         scopedProperties["cursor"] = new JsonObject

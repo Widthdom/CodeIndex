@@ -13,8 +13,15 @@ public partial class McpServerTests
         InsertIndexedFile("window5399/a.txt", "text", "😀A\nB A\nB\nA\nB");
         foreach (var tool in new[] { "find", "find_in_file" })
         {
-            var args = new JsonObject { ["query"] = "A\\nB", ["path"] = "window5399/", ["regex"] = true,
-                ["multiline"] = true, ["windowLines"] = 2, ["limit"] = 1 };
+            var args = new JsonObject
+            {
+                ["query"] = "A\\nB",
+                ["path"] = "window5399/",
+                ["regex"] = true,
+                ["multiline"] = true,
+                ["windowLines"] = 2,
+                ["limit"] = 1
+            };
             var first = Payload5349(Call5349(tool, args));
             var row = Assert.Single(first["results"]!.AsArray())!;
             Assert.Equal(1, row["line"]!.GetValue<int>());
@@ -67,8 +74,15 @@ public partial class McpServerTests
             Enumerable.Repeat(new string('x', 500) + "A\nB", 20)));
         foreach (var tool in new[] { "find", "find_in_file" })
         {
-            var args = new JsonObject { ["query"] = "A\\nB", ["path"] = "budget5399/", ["regex"] = true,
-                ["multiline"] = true, ["limit"] = 20, ["maxBytes"] = 6000 };
+            var args = new JsonObject
+            {
+                ["query"] = "A\\nB",
+                ["path"] = "budget5399/",
+                ["regex"] = true,
+                ["multiline"] = true,
+                ["limit"] = 20,
+                ["maxBytes"] = 6000
+            };
             var lines = new List<int>();
             string? cursor = null;
             var byteLimited = false;
@@ -92,14 +106,21 @@ public partial class McpServerTests
             connection.Open();
             var writer = new DbWriter(connection);
             var fileId = writer.UpsertFile(new CodeIndex.Models.FileRecord
-                { Path = "budget5399/z-gap.txt", Lang = "text", Lines = 2, Size = 2 });
+            { Path = "budget5399/z-gap.txt", Lang = "text", Lines = 2, Size = 2 });
             writer.InsertChunks([new CodeIndex.Models.ChunkRecord
                 { FileId = fileId, ChunkIndex = 0, StartLine = 2, EndLine = 2, Content = "X" }]);
         }
         foreach (var tool in new[] { "find", "find_in_file" })
         {
-            var args = new JsonObject { ["query"] = "A\\nB", ["path"] = "budget5399/", ["regex"] = true,
-                ["multiline"] = true, ["limit"] = 200, ["maxBytes"] = 6000 };
+            var args = new JsonObject
+            {
+                ["query"] = "A\\nB",
+                ["path"] = "budget5399/",
+                ["regex"] = true,
+                ["multiline"] = true,
+                ["limit"] = 200,
+                ["maxBytes"] = 6000
+            };
             var result = Payload5349(Call5349(tool, args));
             Assert.True(result["byte_limit_reached"]!.GetValue<bool>());
             Assert.True(result["byte_limit_omitted_count"]!.GetValue<int>() > 0);

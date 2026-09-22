@@ -28,11 +28,23 @@ public sealed class FindMultilineTests
             for (var start = 0; start < lines.Length; start += 2)
             {
                 var selected = lines.Skip(start).Take(3).ToArray();
-                chunks.Add(new ChunkRecord { FileId = id, ChunkIndex = start, StartLine = start + 1,
-                    EndLine = start + selected.Length, Content = string.Join(newline, selected) });
+                chunks.Add(new ChunkRecord
+                {
+                    FileId = id,
+                    ChunkIndex = start,
+                    StartLine = start + 1,
+                    EndLine = start + selected.Length,
+                    Content = string.Join(newline, selected)
+                });
             }
-            chunks.Add(new ChunkRecord { FileId = id, ChunkIndex = 99, StartLine = 1, EndLine = 3,
-                Content = string.Join(newline, lines.Take(3)) });
+            chunks.Add(new ChunkRecord
+            {
+                FileId = id,
+                ChunkIndex = 99,
+                StartLine = 1,
+                EndLine = 3,
+                Content = string.Join(newline, lines.Take(3))
+            });
             writer.InsertChunks(chunks);
         }
         TestProjectHelper.InsertIndexedFile(db, "next.txt", "text", "START");
@@ -272,8 +284,11 @@ public sealed class FindMultilineTests
         var largeId = writer.UpsertFile(new FileRecord { Path = "many.txt", Lang = "text", Lines = 1024, Size = 1048576 });
         writer.InsertChunks(Enumerable.Range(0, 16).Select(index => new ChunkRecord
         {
-            FileId = largeId, ChunkIndex = index, StartLine = index * 64 + 1,
-            EndLine = (index + 1) * 64, Content = string.Join('\n', Enumerable.Repeat(boundedText, 64)),
+            FileId = largeId,
+            ChunkIndex = index,
+            StartLine = index * 64 + 1,
+            EndLine = (index + 1) * 64,
+            Content = string.Join('\n', Enumerable.Repeat(boundedText, 64)),
         }).ToList());
         var workCapped = reader.CountFindInFiles("missing", pathPatterns: ["many.txt"], regex: true, window: new(64, 262144));
         Assert.Equal("multiline_query_bytes", workCapped.Scan.TruncationReason);
@@ -291,11 +306,20 @@ public sealed class FindMultilineTests
             Assert.Contains(descriptions, text => text.Contains(DbReader.BoundedResourceReadChunkIndexName, StringComparison.Ordinal));
             Assert.DoesNotContain(descriptions, text => text.Contains("TEMP B-TREE", StringComparison.OrdinalIgnoreCase));
         }
-        var legacyId = writer.UpsertFile(new FileRecord { Path = "legacy-many.txt", Lang = "text",
-            Lines = DbReader.MaxLegacyWindowChunks + 1, Size = DbReader.MaxLegacyWindowChunks * 2 + 1 });
+        var legacyId = writer.UpsertFile(new FileRecord
+        {
+            Path = "legacy-many.txt",
+            Lang = "text",
+            Lines = DbReader.MaxLegacyWindowChunks + 1,
+            Size = DbReader.MaxLegacyWindowChunks * 2 + 1
+        });
         writer.InsertChunks(Enumerable.Range(0, DbReader.MaxLegacyWindowChunks + 1).Select(index => new ChunkRecord
         {
-            FileId = legacyId, ChunkIndex = index, StartLine = index + 1, EndLine = index + 1, Content = "X",
+            FileId = legacyId,
+            ChunkIndex = index,
+            StartLine = index + 1,
+            EndLine = index + 1,
+            Content = "X",
         }).ToList());
         using (var drop = connection.CreateCommand())
         {
