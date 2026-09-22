@@ -1398,7 +1398,7 @@ public static partial class QueryCommandRunner
             : rows.Skip(responseOffset).ToList();
     }
 
-    internal static (List<CompactSearchResult> Rows, bool ScanComplete, bool ClassificationComplete) ReadSemanticSearchRows(
+    internal static (List<CompactSearchResult> Rows, bool ScanComplete, bool ClassificationComplete, SearchCountOriginCoverage OriginCoverage) ReadSemanticSearchRows(
         DbReader reader,
         QueryCommandOptions options,
         int requestedLimit,
@@ -1407,13 +1407,14 @@ public static partial class QueryCommandRunner
     {
         var scanComplete = false;
         var classificationComplete = true;
+        var originCoverage = new SearchCountOriginCoverage(options);
         var rows = ReadOriginFilteredSearchDisplayRows(reader, options,
             options.Exact || options.ExactSubstring || options.TokenBoundary, requestedLimit,
             complete => classificationComplete &= complete,
-            complete => scanComplete = complete, recipeQuery, requiredPathPatterns);
+            complete => scanComplete = complete, recipeQuery, requiredPathPatterns, originCoverage);
         if (options.CountOnly && options.GuardFilters.Count > 0 && !options.TokenBoundary)
             rows = rows.DistinctBy(row => SearchDisplayResultUnitKey.Create(row.Result)).ToList();
-        return (rows.Select(row => row.Compact).ToList(), scanComplete, classificationComplete);
+        return (rows.Select(row => row.Compact).ToList(), scanComplete, classificationComplete, originCoverage);
     }
 
     private static List<SearchDisplayRow> ReadOriginFilteredSearchDisplayRows(
@@ -1424,7 +1425,8 @@ public static partial class QueryCommandRunner
         Action<bool>? originCoverageObserver = null,
         Action<bool>? candidateCoverageObserver = null,
         SearchAuditRecipeQuery? recipeQuery = null,
-        IReadOnlyList<string>? requiredPathPatterns = null)
+        IReadOnlyList<string>? requiredPathPatterns = null,
+        SearchCountOriginCoverage? countOriginCoverage = null)
     {
         requestedLimit = Math.Max(0, requestedLimit);
         if (requestedLimit == 0)
@@ -1461,7 +1463,7 @@ public static partial class QueryCommandRunner
 
             candidates.AddRange(page);
             displayRows = BuildSearchDisplayRows(candidates, options, exact,
-                recipeQuery: recipeQuery, originCoverageObserver: originCoverageObserver);
+                recipeQuery: recipeQuery, originCoverageObserver: originCoverageObserver, countOriginCoverage: countOriginCoverage);
 
             var last = page[^1];
             if (last.NextOffset <= currentOffset)

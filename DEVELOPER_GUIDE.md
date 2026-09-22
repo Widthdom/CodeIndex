@@ -96,6 +96,12 @@ untruncated output. Attestation still relies on the verifier's exit status.
 
 ## C# search-origin context
 
+Python query origins use the same indexed-window reader and pass budgets in
+`DbSearchReader.PythonOrigins.cs`, with an independent bounded lexer. Keep original
+UTF-16 coordinates, unknown evidence before filtering, generation/overlap guards,
+and CLI/MCP diagnostics synchronized. The reference-masker is unchanged. See
+[Python origin classification](docs/python-origin-classification.md#english).
+
 Issue #5348 adds explicit `--origin-passes` (1–16, default 1) to CLI search/audit/regex-find. `DbSearchReader.CSharpOrigins.cs` supplies successive bounded windows to one `CSharpOriginContext`; lexical locals, interpolation frames, labels and schema state survive each window. Limits apply per pass, including overlapping chunk characters, with at most 65,536 lines / 128 Mi source characters retained per file. State never survives a query; local `total_changes()` and external `data_version` checks discard contexts if their indexed generation changes. Preserve missing/conflicting-line holes, cancellation, fixed per-query pass budgets, cursor/replay binding, and bounded retry diagnostics. A zero-progress window cannot request another pass. See [continuation behavior](docs/find-scan-controls.md#bounded-c-lexical-continuation-5348).
 
 Compare newly encountered overlap with retained bounded evidence before resuming. Conflicting overlap discards the entire provisional context: earlier interpolation decisions may depend on its closing text.
@@ -4771,6 +4777,11 @@ JSON の `installer_output_incomplete` に記録します。判明した親の�
 完全かつ切り詰めのない出力を必須とし、attestation は引き続き検証器の終了状態を使います。
 
 ## C# 検索 origin のコンテキスト
+
+Python のクエリ origin は `DbSearchReader.PythonOrigins.cs` で同じ索引窓の読み取り処理と
+パス予算を使い、独立した上限付き字句分類器で判定します。元の UTF-16 座標、フィルター前の
+unknown の根拠、世代・重複の検証と CLI／MCP の診断情報を同期してください。参照用マスク処理は
+変更しません。[Python origin 分類](docs/python-origin-classification.md#日本語)を参照してください。
 
 Issue #5348 は CLI の search／audit／regex-find に明示的な `--origin-passes`（1〜16、既定 1）を追加します。`DbSearchReader.CSharpOrigins.cs` は同じ `CSharpOriginContext` へ上限付きの窓を順次渡し、字句状態、補間フレーム、ラベル、schema の文脈を引き継ぎます。重複チャンクの文字数を含む上限はパスごとに適用し、保持するソースはファイルごとに最大 65,536 行／128 Mi 文字です。クエリを越えて状態を保持せず、同一接続の `total_changes()` と外部変更の `data_version` によって索引世代の変化時に文脈を破棄します。欠落・不整合な行、キャンセル、クエリごとに固定したパス数、カーソル・再実行条件の紐づけ、上限付き再試行診断を維持してください。前進できない窓では追加パスを案内しません。[継続動作の説明](docs/find-scan-controls.md#上限付き-c-字句分類の継続-5348)も参照してください。
 

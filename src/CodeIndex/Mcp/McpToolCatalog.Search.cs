@@ -14,7 +14,8 @@ public partial class McpServer
             var properties = tool["inputSchema"]!["properties"]!.AsObject();
             properties["origin"] = StringOrArraySchema(
                 "Include lexical match origins (OR within the list). Accepts comma-separated strings or arrays: "
-                + string.Join(", ", CliFlagSchema.GetCanonicalValuesForCommand("search", "--origin")) + ".");
+                + string.Join(", ", CliFlagSchema.GetCanonicalValuesForCommand("search", "--origin"))
+                + ". Bounded indexed lexical context supports C# and Python (3.12/3.13 strings and f-strings); shell uses line-local classification. Unknown context keeps filtered results non-authoritative.");
             properties["excludeOrigin"] = StringOrArraySchema("Exclude lexical match origins; exclusions win over inclusion. Accepts comma-separated strings or arrays.");
             properties["resultKind"] = StringOrArraySchema("Include result kinds, using CLI search classification. Find supports origin names and identifier; declaration/call_site require search.");
             properties["excludeComments"] = new JsonObject { ["type"] = "boolean", ["default"] = false };

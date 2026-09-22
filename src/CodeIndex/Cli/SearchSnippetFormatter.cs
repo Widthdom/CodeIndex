@@ -207,6 +207,9 @@ public static class SearchSnippetFormatter
         var csharpOrigins = result.CSharpOrigins;
         if (csharpOrigins is null && string.Equals(result.Lang, "csharp", StringComparison.OrdinalIgnoreCase))
             csharpOrigins = new SearchMatchClassifier.CSharpOriginContext(result.Path, lineContext);
+        var pythonOrigins = result.PythonOrigins;
+        if (pythonOrigins is null && string.Equals(result.Lang, "python", StringComparison.OrdinalIgnoreCase))
+            pythonOrigins = new SearchMatchClassifier.PythonOriginContext(lineContext);
         var matchSet = matchScan.MatchIndexes.ToHashSet();
         foreach (var snippetLine in snippetLines)
         {
@@ -234,7 +237,7 @@ public static class SearchSnippetFormatter
                     length: 1,
                     result.EnclosingSymbolKind,
                     lineContext,
-                    csharpOrigins));
+                    csharpOrigins, pythonOrigins));
                 continue;
             }
 
@@ -249,7 +252,7 @@ public static class SearchSnippetFormatter
                     occurrence.Length,
                     result.EnclosingSymbolKind,
                     lineContext,
-                    csharpOrigins));
+                    csharpOrigins, pythonOrigins));
             }
         }
 

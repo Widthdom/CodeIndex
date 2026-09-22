@@ -394,6 +394,13 @@ EOF; Windows runs it through the synchronous-pipe adapter.
 
 ## C# multiline search-origin coverage
 
+Python origin coverage (#5398) lives in `PythonOriginIssue5398Tests` and
+`McpServerIssue5398Tests`. Run both frameworks with classifier/search/find, MCP
+semantic-filter, #5307/#5321/#5324/#5348/#5357 and #5362 coordinate regressions.
+Keep strings/f-strings, comments, Unicode, LF/CRLF, zero-width/end-of-line positions,
+page/window continuation, malformed/budget unknowns, cancellation and indexed
+generation/overlap checks together; compare CLI counts/NDJSON and MCP authority.
+
 `OriginContinuationIssue5348Tests` covers three lexical windows, comments and ordinary/verbatim/raw interpolations, malformed/missing context, Unicode and zero-width coordinates, row/count/search/find parity, cursor pass binding, character limits, cancellation, generation invalidation, and conflicting/consistent overlaps at the 128-chunk boundary. The existing #5307 chunk-limit fixture also resumes with two passes. Run these with #5307/#5321/#5324 and CLI help/completion tests on net8/net9; retain one-pass defaults and unknown/partial controls.
 
 Keep cross-chunk closing evidence independent of row limits in database, CLI counts and MCP tests; include schema alignment commas/nested builders and ordinary-format newline rejection with verbatim/raw controls.
@@ -1929,6 +1936,12 @@ net8/net9 で #3831 の末尾保持と JSON 成功・失敗時の収集完了フ
 中断、BOM・Unicode の復号、EOF を確認し、Windows では同期パイプ用アダプターを通します。
 
 ## C# 複数行検索 origin の検証
+
+Python origin（#5398）は `PythonOriginIssue5398Tests` と `McpServerIssue5398Tests` で
+検証します。両 runtime で分類器・search・find・MCP 意味フィルター、#5307／#5321／#5324／
+#5348／#5357 と #5362 の座標回帰を実行してください。文字列・f-string・コメント・Unicode・
+LF／CRLF・ゼロ幅／行末位置・ページ／窓の継続、不正／上限超過時の unknown、キャンセル、
+索引世代・重複の検証を維持し、CLI 件数／NDJSON と MCP の確定性を比較します。
 
 `OriginContinuationIssue5348Tests` は 3 つの字句処理窓、コメント、通常／verbatim／raw 補間、不正・欠落文脈、Unicode とゼロ幅の座標、行／件数／search／find の一致、パス数とカーソルの紐づけ、文字数上限、キャンセル、世代変更による無効化、128 チャンク境界で重複行が不一致・一致する場合を検証します。既存の #5307 チャンク上限 fixture でも 2 パスで継続します。#5307／#5321／#5324 と CLI のヘルプ・補完テストとともに net8／net9 で実行し、既定の 1 パス動作と unknown／partial の対照を維持してください。
 

@@ -810,7 +810,7 @@ public static partial class QueryCommandRunner
                 if (scan.RetryOriginPasses is { } passes)
                     payload["retry_origin_passes"] = passes;
                 payload["classification_recovery_guidance"] = scan.RetryOriginPasses is { } retry
-                    ? $"Restart without --cursor using --origin-passes {retry} for another bounded C# lexical pass. Missing/malformed context remains unknown; inspect those matches without exclusions."
+                    ? $"Restart without --cursor using --origin-passes {retry} for another bounded C#/Python lexical pass. Missing/malformed context remains unknown; inspect those matches without exclusions."
                     : "Inspect unknown matches without semantic exclusions; missing/malformed context or the maximum lexical budget cannot be resolved by more passes. Absence is not authoritative.";
             }
         }
@@ -982,7 +982,7 @@ public static partial class QueryCommandRunner
             summary += $"; continuation_action={continuationAction}";
         CommandErrorWriter.WriteStderr($"({summary})");
         if (scan.RetryOriginPasses is { } passes)
-            CommandErrorWriter.WriteStderr($"Hint: restart without --cursor using --origin-passes {passes} for another bounded C# lexical pass; missing/malformed context remains unknown.");
+            CommandErrorWriter.WriteStderr($"Hint: restart without --cursor using --origin-passes {passes} for another bounded C#/Python lexical pass; missing/malformed context remains unknown.");
         if (nextCursor != null)
             CommandErrorWriter.WriteStderr($"next_cursor={nextCursor}");
         var recoveryGuidance = FindScanRecoveryGuidance(scan, resultLimitReached);

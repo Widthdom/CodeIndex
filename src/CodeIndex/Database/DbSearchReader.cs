@@ -381,6 +381,7 @@ public partial class DbReader
 
         AttachSearchEnclosingSymbols(pagedResults, searchPrimaryMatchContext);
         AttachCSharpOriginLines(pagedResults);
+        AttachPythonOriginLines(pagedResults);
         candidateCapObserver?.Invoke(guardCandidateLimitReached || contextRankingCandidateLimitReached);
         candidateWindowObserver?.Invoke(guardCandidateLimitReached || contextRankingCandidateLimitReached
             || !hasCandidatePostProcessing && nextOffset - (cursor?.Offset ?? 0) >= limit
