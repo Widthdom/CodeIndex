@@ -2,6 +2,32 @@
 
 ## English
 
+### CLI cursor validation errors (#5412)
+
+Bounded `find` validation honors machine output selected by `--json`,
+`--json=ndjson`, `--format json`, `--json-envelope`, `--fields`, compact output,
+or `--max-json-bytes`. Malformed, query-mismatched and stale cursors return exit
+`1` with a single error object on stdout and no human diagnostic on stderr.
+Before query execution, this is a top-level error object even for envelope or
+field projection requests: `api_version:"1"`, `status:"error"`, `command:"find"`,
+`exit_code:1`, `error_code:"E010_USAGE_ERROR"`, `message`, `hint`, and `category`
+(`cursor_malformed`, `cursor_mismatch`, or `cursor_stale`). Errors are not projected.
+Other shared bounded-control validation failures use `category:"usage"`.
+The shared bounded-query wrapper uses the same error contract for other commands
+when machine output is selected, with their own `command` identity.
+
+Use an opaque `next_cursor` from the same query and filters. After indexing,
+restart without `--cursor`. This applies to literal, line-regex and multiline
+find; ordinary human diagnostics and standalone count continuation retain their
+existing formats.
+
+The byte cap includes the serialized error's final platform newline. If the
+complete error cannot fit, stdout instead contains `E028_RESPONSE_BUDGET_TOO_SMALL`
+with the measured `minimum_required_bytes`, retry budget and original
+`validation_error` object. This budget diagnostic may exceed the requested cap,
+as with other response-budget errors; it never reports an empty success or drops
+the cursor reason. Retry at the recommended size, then follow the validation hint.
+
 Regex is line-local by default. To match adjacent lines such as `A\nB`, use
 `--regex --multiline` (MCP `regex:true, multiline:true`); see
 [bounded multiline windows](find-multiline.md#english). Window mode rejects semantic
@@ -195,6 +221,31 @@ text or JSON output when context from `--before`, `--after`, or
 `--snippet-lines` is needed.
 
 ## 日本語
+
+### CLI カーソルの検証エラー (#5412)
+
+上限付き `find` の検証は、`--json`、`--json=ndjson`、`--format json`、
+`--json-envelope`、`--fields`、compact 出力、`--max-json-bytes` による機械向け出力の
+指定を尊重します。不正・クエリ不一致・索引の世代変更済みカーソルでは終了コード `1` と
+単一のエラーオブジェクトを stdout に返し、人向け診断を stderr に出しません。
+クエリ実行前は envelope・フィールド投影の指定時もトップレベルのエラーです。
+`api_version:"1"`、`status:"error"`、`command:"find"`、`exit_code:1`、
+`error_code:"E010_USAGE_ERROR"`、`message`、`hint`、`category` を含みます。
+`category` は `cursor_malformed`、`cursor_mismatch`、`cursor_stale` のいずれかで、
+その他の共有出力制御の検証失敗は `usage` です。エラーにはフィールド投影を適用しません。
+共有ラッパーを使う他のコマンドでも、機械向け出力の指定時は同じエラー形式を使い、
+`command` にそのコマンド名を保持します。
+
+同じクエリ・フィルターから返された不透明な `next_cursor` を使ってください。
+索引更新後は `--cursor` を外して再開します。リテラル・行単位正規表現・複数行 find に
+適用され、人向け診断と独立した件数取得の継続処理は既存の形式を維持します。
+
+バイト上限にはエラー末尾のプラットフォーム固有の改行も含めます。完全なエラーが収まらない
+場合は `E028_RESPONSE_BUDGET_TOO_SMALL` を stdout に返し、実測した
+`minimum_required_bytes`、再試行用の上限値、元の `validation_error` を保持します。
+他の応答サイズエラーと同様、この診断自体は指定上限を超える場合があります。
+空の成功応答にしたり、カーソルの理由を省略したりはしません。推奨サイズで再試行してから、
+検証エラーの復旧案内に従ってください。
 
 通常の正規表現は行単位です。`A\nB` のような隣接行には `--regex --multiline`
 （MCP は `regex:true, multiline:true`）を使います。[上限付きの複数行窓](find-multiline.md#日本語)を

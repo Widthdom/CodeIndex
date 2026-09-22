@@ -1,5 +1,12 @@
 # Testing Guide
 
+`JsonEnvelopeWrapperIssue5412Tests` shares an isolated indexed fixture across literal,
+line-regex and multiline find cursor errors. Keep JSON/envelope/fields/compact
+selectors, malformed/mismatched/stale cursors, human and count controls, and exact
+UTF-8 byte limits (including pretty output and the final newline) on net8/net9.
+Run it with the envelope, find, pagination and response-budget regression suites;
+the #4863 cursor helper now requires structured output for every machine request.
+
 `RunDeps_PythonContextCoordinatesPreserveBothDirections_Issue5401` shares indexed
 fixtures across ordinary dependencies and cycles for zero/space/tab indentation,
 short/long names, aliases, relative imports and repeated same-line member calls.
@@ -1812,6 +1819,12 @@ Issue #5300 のテストは隣接・入れ子の C# callable、対象行の除�
 パーサー（#5297）の回帰テストとともに net8.0 / net9.0 で実行します。
 
 # テストガイド
+
+`JsonEnvelopeWrapperIssue5412Tests` は分離した索引 fixture を共有し、リテラル・行単位正規表現・
+複数行 find のカーソルエラーを検証します。JSON・envelope・fields・compact の各指定、
+不正・不一致・世代変更済みカーソル、人向け出力と件数の対照、pretty 出力と末尾改行を含む
+UTF-8 バイト境界を net8/net9 で維持してください。envelope・find・ページ分割・応答サイズの
+回帰テストと実行し、#4863 のカーソル検証も全機械向け指定で構造化出力を必須にします。
 
 `FindMultilineTests` と `McpServerIssue5399Tests` は、索引の LF/CRLF 窓、補助平面文字の
 UTF-16 座標、重複チャンク、一致範囲の上限内外、アンカー、dot-all、ゼロ幅、非重複、件数と行の
