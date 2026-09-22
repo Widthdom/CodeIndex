@@ -86,6 +86,32 @@ public partial class McpServerTests
             Assert.True(byteLimited);
             Assert.Equal(Enumerable.Range(0, 20).Select(index => index * 2 + 1), lines);
         }
+        using (var connection = new Microsoft.Data.Sqlite.SqliteConnection(
+            new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder { DataSource = _dbPath, Pooling = false }.ToString()))
+        {
+            connection.Open();
+            var writer = new DbWriter(connection);
+            var fileId = writer.UpsertFile(new CodeIndex.Models.FileRecord
+                { Path = "budget5399/z-gap.txt", Lang = "text", Lines = 2, Size = 2 });
+            writer.InsertChunks([new CodeIndex.Models.ChunkRecord
+                { FileId = fileId, ChunkIndex = 0, StartLine = 2, EndLine = 2, Content = "X" }]);
+        }
+        foreach (var tool in new[] { "find", "find_in_file" })
+        {
+            var args = new JsonObject { ["query"] = "A\\nB", ["path"] = "budget5399/", ["regex"] = true,
+                ["multiline"] = true, ["limit"] = 200, ["maxBytes"] = 6000 };
+            var result = Payload5349(Call5349(tool, args));
+            Assert.True(result["byte_limit_reached"]!.GetValue<bool>());
+            Assert.True(result["byte_limit_omitted_count"]!.GetValue<int>() > 0);
+            Assert.False(result["authoritative_rows"]!.GetValue<bool>());
+            Assert.False(result["scan_complete"]!.GetValue<bool>());
+            Assert.Null(result["next_cursor"]);
+            Assert.Equal("multiline_source_gap", result["scan_truncation_reason"]!.GetValue<string>());
+            Assert.Equal("multiline_source_gap", result["truncation_reason"]!.GetValue<string>());
+            Assert.Contains("refresh", result["recovery_guidance"]!.GetValue<string>(), StringComparison.OrdinalIgnoreCase);
+            args["maxBytes"] = 100;
+            Assert.Contains(CommandErrorCodes.ResponseBudgetTooSmall, Call5349(tool, args).ToJsonString(), StringComparison.Ordinal);
+        }
         var tools = _server.HandleMessage(new JsonObject { ["jsonrpc"] = "2.0", ["id"] = 5399, ["method"] = "tools/list" })!["result"]!["tools"]!.AsArray();
         foreach (var tool in tools.Where(item => item!["name"]!.GetValue<string>() is "find" or "find_in_file"))
         {
