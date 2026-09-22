@@ -2,6 +2,11 @@
 
 ## English
 
+Regex is line-local by default. To match adjacent lines such as `A\nB`, use
+`--regex --multiline` (MCP `regex:true, multiline:true`); see
+[bounded multiline windows](find-multiline.md#english). Window mode rejects semantic
+filters rather than silently dropping cross-origin evidence.
+
 ### Ad hoc search count authority (#5357)
 
 CLI `search --count` / `--format count`, `--group-by ... --count`, `--count-by`,
@@ -185,6 +190,10 @@ text or JSON output when context from `--before`, `--after`, or
 `--snippet-lines` is needed.
 
 ## 日本語
+
+通常の正規表現は行単位です。`A\nB` のような隣接行には `--regex --multiline`
+（MCP は `regex:true, multiline:true`）を使います。[上限付きの複数行窓](find-multiline.md#日本語)を
+参照してください。窓モードは意味フィルターを明示的に拒否し、origin をまたぐ証拠を黙って省略しません。
 
 ### 通常検索の件数の確定性 (#5357)
 

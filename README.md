@@ -58,7 +58,7 @@ and [supported languages](USER_GUIDE.md#supported-languages).
 |---|---|
 | Commands and examples | [User Guide](USER_GUIDE.md#command-reference) |
 | Indexing and freshness | [Index a project](USER_GUIDE.md#index-a-project), [check status](USER_GUIDE.md#check-status) |
-| Search and audits | [Search code](USER_GUIDE.md#search-code), [regex find controls](docs/find-scan-controls.md) |
+| Search and audits | [Search code](USER_GUIDE.md#search-code), [regex find controls](docs/find-scan-controls.md), [multiline windows](docs/find-multiline.md#english) |
 | JSON fields and limits | [Output format](USER_GUIDE.md#json-output-format), [Status JSON contract](DEVELOPER_GUIDE.md#status-json-contract) |
 | MCP, LSP, and compatibility | [AI Integration](USER_GUIDE.md#ai-integration), [status field explanations](docs/mcp-status-explanations.md#english), [Integration Policy](INTEGRATION_POLICY.md) |
 | Installation and releases | [Distribution](DISTRIBUTION.md), [platforms](docs/platform-support.md), [release verification](USER_GUIDE.md#release-artifact-verification), [cloud bootstrap](CLOUD_BOOTSTRAP_PROMPT.md) |
@@ -129,7 +129,7 @@ AIツールやエディターから利用する場合は `cdidx mcp` または
 |---|---|
 | コマンドと使用例 | [ユーザーガイド](USER_GUIDE.md#コマンドリファレンス) |
 | 索引と鮮度の管理 | [プロジェクトをインデックス](USER_GUIDE.md#プロジェクトをインデックス)、[状態確認](USER_GUIDE.md#状態確認) |
-| 検索・監査 | [コード検索](USER_GUIDE.md#コード検索)、[正規表現 find の制御](docs/find-scan-controls.md#日本語) |
+| 検索・監査 | [コード検索](USER_GUIDE.md#コード検索)、[正規表現 find の制御](docs/find-scan-controls.md#日本語)、[複数行の窓](docs/find-multiline.md#日本語) |
 | JSONフィールドと上限 | [出力形式](USER_GUIDE.md#json-出力形式)、[Status JSON 契約](DEVELOPER_GUIDE.md#status-json-契約) |
 | MCP・LSPと互換性 | [AIとの連携](USER_GUIDE.md#aiとの連携)、[status フィールドの説明](docs/mcp-status-explanations.md#日本語)、[統合ポリシー](INTEGRATION_POLICY.md) |
 | 導入とリリース | [配布チャネル](DISTRIBUTION.md)、[対応環境](docs/platform-support.md)、[成果物の検証](USER_GUIDE.md#リリースアセットの検証)、[クラウドでの導入](CLOUD_BOOTSTRAP_PROMPT.md#日本語) |

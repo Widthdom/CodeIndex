@@ -1,5 +1,9 @@
 # cdidx User Guide
 
+For indexed multiline regex, use `find 'A\nB' --regex --multiline --path src/ --json`
+(MCP: `regex:true, multiline:true`). Ordinary regex is line-local; `(?s)` alone
+cannot cross lines. See [bounded windows, coordinates and continuation](docs/find-multiline.md#english).
+
 This is the detailed user documentation moved out of the concise
 [README.md](README.md). It keeps the extended install notes, command examples,
 AI/MCP setup, language list, and troubleshooting details.
@@ -4261,6 +4265,10 @@ The short version: `version.json` is the single source of truth, and the maintai
 
 <a id="cdidx日本語"></a>
 # cdidx（日本語）
+
+索引の複数行正規表現には `find 'A\nB' --regex --multiline --path src/ --json` を使います
+（MCP は `regex:true, multiline:true`）。通常の正規表現は行単位で、`(?s)` だけでは行をまたげません。
+[窓の上限・座標・ページ再開](docs/find-multiline.md#日本語)を参照してください。
 
 **ターミナルとMCPワークフローでAIのトークン浪費を減らす、AIネイティブなローカルコードインデックス。**
 

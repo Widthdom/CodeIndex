@@ -1,5 +1,13 @@
 # Testing Guide
 
+`FindMultilineTests` and `McpServerIssue5399Tests` cover indexed LF/CRLF windows,
+astral UTF-16 coordinates, overlapping chunks, exact/beyond-span bounds, anchors,
+dot-all/zero-width/non-overlapping matches, count and row replay, cursor changes,
+source caps, cancellation/timeouts, projection and response budgets. Run
+`--filter 'FullyQualifiedName~FindMultilineTests|FullyQualifiedName~Issue5399'`
+on net8.0/net9.0 with the existing find, pagination, MCP and output-budget suites.
+Keep the legacy literal and line-regex controls; the fixtures own their databases.
+
 `InspectCompactCandidateTests` (#5397) shares a real indexed fixture across CLI
 inspect and MCP compact analysis. Keep zero, exact-limit, probe-overflow and the
 internal five-definition boundary, partial and unrelated same-name/overload
@@ -1750,6 +1758,13 @@ Issue #5300 のテストは隣接・入れ子の C# callable、対象行の除�
 パーサー（#5297）の回帰テストとともに net8.0 / net9.0 で実行します。
 
 # テストガイド
+
+`FindMultilineTests` と `McpServerIssue5399Tests` は、索引の LF/CRLF 窓、補助平面文字の
+UTF-16 座標、重複チャンク、一致範囲の上限内外、アンカー、dot-all、ゼロ幅、非重複、件数と行の
+再開、カーソル条件変更、読取上限、取消・タイムアウト、投影と応答サイズを検証します。
+`--filter 'FullyQualifiedName~FindMultilineTests|FullyQualifiedName~Issue5399'` を net8.0/net9.0 で、
+既存の find・ページ分割・MCP・出力予算のテストと実行してください。従来のリテラル・行単位正規表現の
+対照を維持し、各 fixture が自分の DB を所有します。
 
 `ToolsList_SuggestionDisclosesConditionalGitHubPublication_Issue5396` は共通の
 フィクスチャで、既定・compact・full・ツール選択・ページ付きの一覧を検証します。

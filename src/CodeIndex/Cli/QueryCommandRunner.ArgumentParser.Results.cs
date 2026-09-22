@@ -173,6 +173,22 @@ public static partial class QueryCommandRunner
                 case "--exact":
                     exact = true;
                     break;
+                case "--multiline":
+                    multiline = true;
+                    break;
+                case "--window-lines":
+                case "--window-bytes":
+                    if (!TryReadRawOptionValue(args, ref i, normalizedArg, inlineValue, out var windowValue, out var windowMissing))
+                        AddParseError(windowMissing!);
+                    else if (!TryParsePositiveInt(windowValue!, normalizedArg, out var windowLimit, out var windowError))
+                        AddParseError(windowError!);
+                    else
+                    {
+                        WarnIfDuplicateSingleValueOption(normalizedArg, windowValue!);
+                        if (normalizedArg == "--window-lines") windowLines = windowLimit;
+                        else windowBytes = windowLimit;
+                    }
+                    break;
                 case "--regex":
                     regex = true;
                     break;

@@ -17,6 +17,10 @@ public partial class McpServer
         bool contextTruncated, int? snippetLines, ArgumentAdjustmentCollector adjustments)
     {
         var cursorArgs = BuildMcpFindCursorArguments(options, filters, cursor);
+        // Byte fitting replays share the query budget, including the deadline.
+        // 応答サイズ調整の再走査も、期限を含むクエリ予算を共有する。
+        var window = options.FindWindow is { } configuredWindow
+            ? configuredWindow with { Budget = new FindWindowBudget() } : null;
         try
         {
             var resume = JsonEnvelopeWrapper.GetStandaloneFindResume(cursorArgs, reader);
@@ -39,7 +43,7 @@ public partial class McpServer
                         useIndexedLiteralCandidates: options.All,
                         resumePath: resume.Path, resumeLine: resume.Line, resumeFileOrdinal: resume.FileOrdinal,
                         resumeMatchOrdinal: resume.MatchOrdinal, resumeByteOffset: resume.ByteOffset,
-                        cancellationToken: reader.Cancellation, semanticFilters: filters);
+                        cancellationToken: reader.Cancellation, semanticFilters: filters, window: window);
                     scan = counted.Scan;
                     count = counted.Count;
                     fileCount = counted.FileCount;
@@ -56,7 +60,7 @@ public partial class McpServer
                         useIndexedLiteralCandidates: options.All,
                         resumePath: resume.Path, resumeLine: resume.Line, resumeFileOrdinal: resume.FileOrdinal,
                         resumeMatchOrdinal: resume.MatchOrdinal, resumeByteOffset: resume.ByteOffset,
-                        captureContinuation: true, cancellationToken: reader.Cancellation, semanticFilters: filters);
+                        captureContinuation: true, cancellationToken: reader.Cancellation, semanticFilters: filters, window: window);
                     results = found.Results;
                     scan = found.Scan;
                     count = results.Count;
@@ -156,6 +160,12 @@ public partial class McpServer
         foreach (var path in options.ExcludePaths) Value("--exclude-path", path);
         Flag("--all", options.All);
         Flag("--regex", options.Regex);
+        Flag("--multiline", options.Multiline);
+        if (options.FindWindow is { } window)
+        {
+            Value("--window-lines", window.Lines);
+            Value("--window-bytes", window.Bytes);
+        }
         Flag("--exact", options.Exact);
         Flag("--count", options.CountOnly);
         Flag("--exclude-tests", options.ExcludeTests);
