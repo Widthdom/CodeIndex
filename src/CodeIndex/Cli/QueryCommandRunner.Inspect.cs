@@ -689,6 +689,8 @@ public static partial class QueryCommandRunner
         if (field is "graph" or "definitions" or "references" or "callers" or "callees" or "candidates")
         {
             keep.Add("candidate_count");
+            keep.Add("candidate_count_authoritative");
+            keep.Add("candidate_count_lower_bound");
             keep.Add("graph_scope");
             keep.Add("selection_required");
         }
@@ -903,7 +905,8 @@ public static partial class QueryCommandRunner
             .Contains("candidates", StringComparer.Ordinal);
         foreach (var sectionName in sections.Select(section => section.Key)
                      .Where(section => !keepSections.Contains(section)
-                                       && !(keepCandidateSections && section.StartsWith("candidate_bundles[", StringComparison.Ordinal)))
+                                       && !(keepCandidateSections && (section == "candidate_bundles"
+                                           || section.StartsWith("candidate_bundles[", StringComparison.Ordinal))))
                      .ToList())
             sections.Remove(sectionName);
     }
