@@ -2671,6 +2671,21 @@ Without `--check`, the `status` summary freshness indicator is based on stored `
 
 For the complete field reference, metadata limits, and explanation output, see the [Status JSON contract](DEVELOPER_GUIDE.md#status-json-contract).
 
+### Ordinary dependency evidence
+
+For ordinary non-C# code references such as Java and JavaScript, single-database
+`deps` uses persisted target identities. A resolved self-call does not create an
+edge to another file merely because it defines the same name. Grouped and ambiguous
+references use their recorded candidates; uncertain or legacy name matches retain
+`unresolved` or `unavailable` evidence.
+
+Python imports still select the owning module, including aliases. If the recorded
+ID identifies only a source-local import binding, the module edge is retained with
+`resolution_state: unavailable`: the imported definition is not confirmed by that
+ID. `--resolution-state` (MCP: `resolutionStates`) filters this effective state.
+For example, `from beta import beta; beta()` can retain `caller.py → beta.py` under
+`unavailable` while being absent under `resolved`. Current indexes need no reindex.
+
 ### Dependency cycles
 
 #### SQL dependency cycles
@@ -6811,6 +6826,20 @@ edge が存在しない証拠として扱わないでください。
 `--check` なしの `status` summary の鮮度判定は、ビルドからの経過時間ではなく、保存された `indexed_at` と `latest_modified` の比較で決まります。`indexed_at >= latest_modified` かつ workspace が clean なら、index 自体が数分以上前でも fresh と表示されます。
 
 フィールド一覧、メタデータの上限、説明出力の詳細は[Status JSON 契約](DEVELOPER_GUIDE.md#status-json-契約)を参照してください。
+
+### 通常の依存検索の証拠
+
+単一 DB の `deps` は、Java / JavaScript などの通常の非 C# コード参照について、
+保存済みの参照先識別情報を使います。解決済みの自己呼び出しは、別ファイルに同名定義が
+あるだけではファイル間の辺を作りません。グループ解決・曖昧な参照は保存済み候補を使い、
+不確かな名前一致や旧形式の情報は `unresolved`・`unavailable` の証拠を維持します。
+
+Python の import は別名を含め、所有するモジュールを選択します。保存 ID が参照元の
+import binding だけを示す場合、その ID は import 先の定義を確定しないため、モジュールへの
+辺を `resolution_state: unavailable` として残します。`--resolution-state`（MCP:
+`resolutionStates`）はこの状態で絞り込みます。例えば `from beta import beta; beta()` の
+`caller.py → beta.py` は `unavailable` では残り、`resolved` では除外される場合があります。
+現行 index の再作成は不要です。
 
 ### 依存関係の循環
 

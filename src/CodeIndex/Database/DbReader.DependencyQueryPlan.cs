@@ -84,6 +84,7 @@ public partial class DbReader
         string ReferenceLineJoin,
         string ContextSql,
         string ReferenceIdSql,
+        string TargetSymbolIdSql,
         string ScopedResolutionStateSql,
         string IdentityScopedSql,
         string IdentityNameEdgePredicate,
@@ -91,17 +92,36 @@ public partial class DbReader
         string TargetLogicalSymbolSegmentCount,
         string PythonImportMatchSignature,
         string PythonImportSignature,
+        string PythonImportIdentityMatch,
+        string NamedEvidenceResolutionState,
         string SqlDependencyTargetMatch);
 
     private DependencyQueryExpressions BuildDependencyQueryExpressions()
     {
-        var identityScopeCondition = """
+        var resolutionState = _referenceIdentityContractCurrent ? "r.resolution_state" : "NULL";
+        var identityScopeCondition = $$"""
             (
                 (src.lang = 'csharp' AND r.reference_kind NOT IN ('attribute', 'annotation'))
                 OR (src.lang = 'dependency_lock' AND r.reference_kind = 'dependency')
+                OR (src.lang NOT IN ('csharp', 'dependency_lock', 'sql', 'python', 'markdown', 'msbuild', 'solution')
+                    AND r.reference_kind NOT IN ('attribute', 'annotation')
+                    AND {{resolutionState}} IN ('resolved', 'resolved_group', 'ambiguous'))
             )
             """;
-        var resolutionState = _referenceIdentityContractCurrent ? "r.resolution_state" : "NULL";
+        var identityObservationScope = "(" + identityScopeCondition + " OR src.lang = 'python')";
+        var namedTargetIdentityMatch = BuildPythonDependencyTargetIdentityMatch();
+        var pythonImportIdentityMatch = _referenceIdentityContractCurrent ? @"(
+            snc.evidence_resolution_state NOT IN ('resolved', 'resolved_group', 'ambiguous')
+            OR " + namedTargetIdentityMatch + @"
+            OR (snc.evidence_resolution_state = 'resolved' AND snc.target_symbol_id = py_import.id)
+            OR (snc.evidence_resolution_state IN ('resolved_group', 'ambiguous') AND EXISTS (
+                SELECT 1 FROM symbol_reference_candidates binding_candidate
+                WHERE binding_candidate.reference_id = snc.reference_id
+                  AND binding_candidate.symbol_id = py_import.id)))" : "1 = 1";
+        var namedEvidenceResolutionState = _referenceIdentityContractCurrent
+            ? "CASE WHEN snc.source_lang = 'python' AND snc.evidence_resolution_state IN ('resolved', 'resolved_group') AND NOT "
+              + namedTargetIdentityMatch + " THEN 'unavailable' ELSE snc.evidence_resolution_state END"
+            : "snc.evidence_resolution_state";
         var pythonImportMatchSignature = GetSymbolColumnSql("signature", "NULL", "py_import_match");
         var sqlDependencyTargetMatch = @"(
                     (tf.target_lang != 'sql'
@@ -125,15 +145,38 @@ public partial class DbReader
         return new DependencyQueryExpressions(
             ReferenceLineJoinSql("r"),
             ReferenceContextSql("r"),
-            $"CASE WHEN {identityScopeCondition} THEN r.id ELSE 0 END",
-            $"CASE WHEN {identityScopeCondition} THEN {resolutionState} ELSE NULL END",
+            _referenceIdentityContractCurrent ? $"CASE WHEN {identityObservationScope} THEN r.id ELSE 0 END" : "CAST(0 AS INTEGER)",
+            _referenceIdentityContractCurrent ? $"CASE WHEN {identityObservationScope} THEN r.target_symbol_id ELSE NULL END" : "NULL",
+            $"CASE WHEN {identityObservationScope} THEN {resolutionState} ELSE NULL END",
             $"CASE WHEN {identityScopeCondition} THEN 1 ELSE 0 END",
             _referenceIdentityContractCurrent ? "snc.identity_scoped = 0" : "snc.source_lang <> 'dependency_lock'",
             BuildLogicalDependencySymbolNameExpr("dst", "s.name"),
             BuildLogicalDependencySymbolSegmentCountExpr("dst", "s.name"),
             pythonImportMatchSignature,
             GetSymbolColumnSql("signature", "NULL", "py_import"),
+            pythonImportIdentityMatch,
+            namedEvidenceResolutionState,
             sqlDependencyTargetMatch);
+    }
+
+    private string BuildPythonDependencyTargetIdentityMatch()
+    {
+        if (!_referenceIdentityContractCurrent)
+            return "0 = 1";
+        // target_files aggregates definitions by file/name. Confirm membership in
+        // that selected target rather than copying a source binding's state.
+        return @"EXISTS (
+            SELECT 1 FROM symbols confirmed_target
+            JOIN files confirmed_file ON confirmed_file.id = confirmed_target.file_id
+            WHERE confirmed_target.id IN (
+                SELECT snc.target_symbol_id WHERE snc.evidence_resolution_state = 'resolved'
+                UNION ALL
+                SELECT candidate.symbol_id FROM symbol_reference_candidates candidate
+                WHERE candidate.reference_id = snc.reference_id
+                  AND snc.evidence_resolution_state IN ('resolved_group', 'ambiguous'))
+              AND confirmed_file.path = tf.target_path
+              AND confirmed_file.lang = tf.target_lang
+              AND confirmed_target.name = tf.symbol_name)";
     }
 
     private DependencyQueryPlan BuildDependencyQueryPlan(DependencyQueryRequest request)
@@ -163,6 +206,7 @@ public partial class DbReader
         builder.AddParameters(target.Parameters);
         builder.AddParameters(edge.Parameters);
         builder.AddParameters(specialEdges.Parameters);
+        builder.AddParameters(final.Parameters);
         AppendDependencyTerminalParameters(builder, request);
         var fragment = builder.Build();
         return new DependencyQueryPlan(request, fragment.Sql, fragment.Parameters);

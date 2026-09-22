@@ -29,7 +29,7 @@ public partial class DbReader
         private void AppendNameMatchedEdges()
         {
             _sql.Append(@"
-            edges AS (
+            unfiltered_edges AS (
                 ");
             _sql.Append(_resolvedIdentity.Sql);
             _sql.Append(@"
@@ -43,7 +43,7 @@ public partial class DbReader
                                THEN 'markdown_heading_name_match'
                            ELSE 'symbol_name_match'
                        END AS origin,
-                       snc.evidence_resolution_state,
+                       " + _expressions.NamedEvidenceResolutionState + @" AS evidence_resolution_state,
                        snc.raw_reference_kind,
                        CASE WHEN tf.has_heading_kind = 1 THEN 'heading' ELSE 'symbol' END AS target_kind
                 FROM bounded_source_name_counts snc
@@ -98,6 +98,7 @@ public partial class DbReader
                         FROM symbols py_import
                         WHERE py_import.file_id = snc.source_file_id
                           AND py_import.kind = 'import'
+                          AND " + _expressions.PythonImportIdentityMatch + @"
                           AND python_import_resolves(snc.source_path, tf.target_path, snc.symbol_name, snc.raw_reference_kind, snc.context, snc.column_number, " + _expressions.PythonImportSignature + @")
                   ))");
         }

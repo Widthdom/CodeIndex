@@ -28,15 +28,20 @@ public partial class DbReader
                            lrp.raw_reference_kind,
                            target.kind AS target_kind
                     FROM logical_references_primary lrp
-                    JOIN symbol_reference_candidates candidate
-                      ON candidate.reference_id = lrp.reference_id
-                    JOIN symbols target ON target.id = candidate.symbol_id
+                    JOIN symbols target ON target.id IN (
+                        SELECT lrp.target_symbol_id WHERE lrp.resolution_state = 'resolved'
+                        UNION ALL
+                        SELECT candidate.symbol_id FROM symbol_reference_candidates candidate
+                        WHERE candidate.reference_id = lrp.reference_id
+                          AND lrp.resolution_state IN ('resolved_group', 'ambiguous'))
                     JOIN files target_file ON target_file.id = target.file_id
                     JOIN target_files scoped_target
                       ON scoped_target.target_path = target_file.path
                      AND scoped_target.target_lang = target_file.lang
                     WHERE lrp.identity_scoped = 1
-                      AND lrp.resolution_state IN ('resolved', 'resolved_group')
+                      AND (lrp.resolution_state IN ('resolved', 'resolved_group')
+                           OR (lrp.resolution_state = 'ambiguous' AND lrp.source_lang NOT IN ('csharp', 'dependency_lock')))
+                      AND target_file.lang = lrp.source_lang
                       AND lrp.source_path != target_file.path");
         builder.Append(BuildDependencySymbolFilter(
             "lrp.symbol_name",
