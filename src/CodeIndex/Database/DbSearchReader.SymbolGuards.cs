@@ -68,7 +68,7 @@ public partial class DbReader
         var checksum = cmd.ExecuteScalar() as string;
         try
         {
-            var current = new FileContentLoader(4 * 1024 * 1024).Load(absolute, path, path, _cancellation).Checksum;
+            var current = new FileContentLoader(4 * 1024 * 1024).Load(absolute, path, path, Cancellation).Checksum;
             if (string.IsNullOrEmpty(checksum) || !string.Equals(checksum, current, StringComparison.OrdinalIgnoreCase))
                 throw SameSymbolGuardUnavailable("source_stale_missing_or_over_budget");
         }

@@ -17,6 +17,88 @@ public class QueryCommandRunnerSearchCancellationTests
     ];
 
     [Fact]
+    public void PlainSearch_ManagedOriginsRetainScopedCancellationAndReaderRestoresLifetime_Issue5421()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_search_origin_cancel_5421");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        TestProjectHelper.InsertIndexedFile(dbPath, "Widget.cs", "csharp", "class Widget { }\n");
+        TestProjectHelper.InsertIndexedFile(dbPath, "Widget.py", "python", "class Widget:\n    pass\n");
+        using var db = new DbContext(DbOpenIntent.QueryOnly, dbPath);
+        using var lifetime = new CancellationTokenSource();
+        using var reader = new DbReader(db, lifetime.Token);
+        foreach (var language in new[] { "csharp", "python" })
+        {
+            using var cancellation = new CancellationTokenSource();
+            using (reader.BeginCancellationScope(cancellation.Token))
+            {
+                var row = Assert.Single(reader.Search("Widget", lang: language));
+                Action classify = () =>
+                {
+                    if (language == "csharp")
+                        _ = row.CSharpOrigins!.GetOrigin(1, "class Widget { }", 6);
+                    else
+                        _ = row.PythonOrigins!.GetOrigin(1, "class Widget:", 6);
+                };
+                classify();
+                cancellation.Cancel();
+                var error = Assert.ThrowsAny<OperationCanceledException>(classify);
+                Assert.Equal(cancellation.Token, error.CancellationToken);
+            }
+            Assert.Equal(lifetime.Token, reader.Cancellation);
+            Assert.Single(reader.Search("Widget", lang: language));
+        }
+        lifetime.Cancel();
+        Assert.ThrowsAny<OperationCanceledException>(reader.ThrowIfCancellationRequested);
+    }
+
+    [Fact]
+    public void PlainSearch_ManagedAggregationCancellationEmitsNoSuccess_Issue5421()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_search_group_cancel_5421");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        TestProjectHelper.InsertIndexedFile(dbPath, "First.cs", "csharp", "class Widget { }\n");
+        TestProjectHelper.InsertIndexedFile(dbPath, "Second.cs", "csharp", "namespace Other { class Widget { } }\n");
+        var previousHook = QueryCommandRunner.SearchAggregationGroupPreparedForTesting;
+        try
+        {
+            foreach (var mode in new string[][]
+            {
+                ["--group-by", "file", "--count"], ["--group-by", "symbol", "--count"],
+                ["--count-by", "path"], ["--unique", "path"],
+            })
+                foreach (var json in new[] { false, true })
+                    foreach (var allowPartial in new[] { false, true })
+                        foreach (var cancelAt in new[] { 1, 2 })
+                        {
+                            using var cancellation = new CancellationTokenSource();
+                            var groupsPrepared = 0;
+                            QueryCommandRunner.SearchAggregationGroupPreparedForTesting = () =>
+                            {
+                                if (++groupsPrepared == cancelAt)
+                                    cancellation.Cancel();
+                            };
+                            var (_, stdout, stderr) = CaptureConsole(() =>
+                            {
+                                var error = Assert.ThrowsAny<OperationCanceledException>(() => QueryCommandRunner.RunSearch(
+                                    ["Widget", "--db", dbPath, "--strict-not-found", .. mode,
+                                        .. json ? new[] { "--json" } : Array.Empty<string>(),
+                                        .. allowPartial ? new[] { "--allow-partial" } : Array.Empty<string>()],
+                                    JsonOptions, cancellation.Token));
+                                Assert.Equal(cancellation.Token, error.CancellationToken);
+                                return 0;
+                            });
+                            Assert.Equal(cancelAt, groupsPrepared);
+                            Assert.Empty(stdout);
+                            Assert.Empty(stderr);
+                        }
+        }
+        finally
+        {
+            QueryCommandRunner.SearchAggregationGroupPreparedForTesting = previousHook;
+        }
+    }
+
+    [Fact]
     public void PlainSearch_PreCancelledTokenPrecedesResults_Issue5421()
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_search_cancel_5421");
@@ -122,6 +204,12 @@ public class QueryCommandRunnerSearchCancellationTests
                                 Assert.Equal(9, Assert.IsType<SqliteException>(exception.InnerException).SqliteErrorCode);
                                 Assert.Empty(result.Stdout);
                                 Assert.Empty(result.Stderr);
+                            }
+                            else if (entry == "cli")
+                            {
+                                Assert.Empty(result.Stdout);
+                                Assert.Contains("Error: command cancelled before it could complete.", result.Stderr);
+                                Assert.DoesNotContain(CommandErrorCodes.Interrupted, result.Stderr);
                             }
                             else if (entry.StartsWith("batch-", StringComparison.Ordinal))
                             {

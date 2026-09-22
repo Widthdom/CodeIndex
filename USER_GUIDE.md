@@ -443,8 +443,9 @@ snapshots cannot establish absence.
 cancellation, timeout, cursor, and output errors retain their precedence.
 Plain search propagates cancellation through database setup and query execution for
 rows, counts, and aggregations, including serial and parallel batch children.
-Cancelling the CLI returns exit `130` (`E012_INTERRUPTED`); `--strict-not-found`
-and `--allow-partial` cannot turn that cancellation into a miss or success.
+Cancelling the CLI returns exit `130`; cancelled batch children also report
+`E012_INTERRUPTED`. `--strict-not-found` and `--allow-partial` cannot turn that
+cancellation into a miss or success.
 Final and zero-result pages do not advertise a cursor. If a partial stream
 cannot make safe progress—for example, a byte cap leaves room only for the
 terminal record, the query uses row selectors or a recipe/named search, the
@@ -4714,9 +4715,9 @@ command、query、filter、ordering、page limit を変えずに再利用して�
 `--allow-partial` は部分結果を受け入れるだけで 0 件の確実性を高めず、
 取消・タイムアウト・カーソル・出力エラーを優先します。
 通常検索は、行・件数・集計の各出力で、DB の準備から検索の実行まで取消を伝播します。
-直列・並列バッチ内の検索も対象です。CLI の取消は終了コード `130`
-（`E012_INTERRUPTED`）を返し、`--strict-not-found` や `--allow-partial` を指定しても
-未検出や成功には変換しません。
+直列・並列バッチ内の検索も対象です。CLI の取消は終了コード `130` を返し、
+バッチ内の取消では `E012_INTERRUPTED` も報告します。`--strict-not-found` や
+`--allow-partial` を指定しても、取消を未検出や成功には変換しません。
 最終 page と 0 件 page は cursor を公開しません。byte cap により terminal
 record しか出力できない場合、row selector または recipe / named search を使う場合、
 10,000 row の pagination window を使い切ったか、同じ page limit での再開時にその上限を
