@@ -137,15 +137,6 @@ internal static partial class SearchMatchClassifier
                 }
                 if (frame is not null && frame.Delimiters.Count == 0)
                 {
-                    if (frame.AwaitingConversion)
-                    {
-                        if (ch is not ('s' or 'r' or 'a'))
-                            return Fail(line, i, "unsupported_interpolation_conversion");
-                        frame.AwaitingConversion = false;
-                        frame.Conversion = true;
-                        if (!Add(parsed, i, ++i, StringLiteral, line)) return false;
-                        continue;
-                    }
                     if (ch == '}')
                     {
                         if (!frame.HasExpression) return Fail(line, i, "unbalanced_interpolation");
@@ -162,10 +153,11 @@ internal static partial class SearchMatchClassifier
                     }
                     if (ch == '!' && (i + 1 == source.Length || source[i + 1] != '='))
                     {
-                        if (!frame.HasExpression || frame.Conversion)
+                        if (!frame.HasExpression || frame.Conversion || i + 1 == source.Length || source[i + 1] is not ('s' or 'r' or 'a'))
                             return Fail(line, i, "unsupported_interpolation_conversion");
-                        frame.AwaitingConversion = true;
-                        if (!Add(parsed, i, ++i, StringLiteral, line)) return false;
+                        frame.Conversion = true;
+                        i += 2;
+                        if (!Add(parsed, start, i, StringLiteral, line)) return false;
                         continue;
                     }
                     if (frame.Conversion || frame.Debug)
@@ -383,7 +375,6 @@ internal static partial class SearchMatchClassifier
             public bool Formatted;
             public bool HasExpression;
             public bool Conversion;
-            public bool AwaitingConversion;
             public bool Debug;
             public Stack<char> Delimiters { get; } = new();
         }

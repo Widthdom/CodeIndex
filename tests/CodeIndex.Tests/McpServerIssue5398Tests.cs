@@ -55,17 +55,41 @@ public partial class McpServerTests
             Assert.Equal(JsonNode.Parse(json)!["count"]!.GetValue<int>(), result["count"]!.GetValue<int>());
         }
 
-        InsertIndexedFile("bad5398.py", "python", "value = f'{Needle5398(]}'\n");
-        foreach (var tool in new[] { "search", "find", "find_in_file" })
-        foreach (var countOnly in new[] { false, true })
+        foreach (var (suffix, source, reason) in new[]
         {
-            var args = new JsonObject { ["path"] = "bad5398.py", ["query"] = "Needle5398",
-                ["origin"] = "code", ["countOnly"] = countOnly, [tool == "search" ? "exact" : "regex"] = true };
-            var result = Payload5349(Call5349(tool, args));
-            Assert.False(result["origin_classification_complete"]!.GetValue<bool>());
-            Assert.True(result["partial_result"]!.GetValue<bool>());
-            if (countOnly) Assert.False(result["authoritative_count"]!.GetValue<bool>());
-            Assert.Contains("unbalanced_interpolation", result.ToJsonString(), StringComparison.Ordinal);
+            ("bracket", "value = f'{Needle5398(]}'\n", "unbalanced_interpolation"),
+            ("space", "f'{Needle5398! r}'\nNeedle5398()\n", "unsupported_interpolation_conversion"),
+            ("comment", "f'{Needle5398! # comment\n r}'\nNeedle5398()\n", "unsupported_interpolation_conversion"),
+            ("newline", "f'{Needle5398!\n r}'\nNeedle5398()\n", "unsupported_interpolation_conversion"),
+            ("continuation", "f'{Needle5398!\\\n r}'\nNeedle5398()\n", "unsupported_interpolation_conversion"),
+        })
+        {
+            var badPath = $"bad5398-{suffix}.py";
+            InsertIndexedFile(badPath, "python", source);
+            foreach (var tool in new[] { "search", "find", "find_in_file" })
+            foreach (var countOnly in new[] { false, true })
+            {
+                var args = new JsonObject { ["path"] = badPath, ["query"] = "Needle5398",
+                    ["origin"] = "code", ["countOnly"] = countOnly, [tool == "search" ? "exact" : "regex"] = true };
+                var result = Payload5349(Call5349(tool, args));
+                Assert.False(result["origin_classification_complete"]!.GetValue<bool>());
+                Assert.True(result["partial_result"]!.GetValue<bool>());
+                if (countOnly) Assert.False(result["authoritative_count"]!.GetValue<bool>());
+                Assert.Contains(reason, result.ToJsonString(), StringComparison.Ordinal);
+            }
+            foreach (var command in new[] { "search", "find" })
+            {
+                var (exit, json, _) = QueryCommandTestSupport.CaptureConsole(() => CodeIndex.Cli.ProgramRunner.Run(
+                    [command, "Needle5398", "--path", badPath, "--db", _dbPath, "--count", "--json",
+                        "--origin", "code", command == "search" ? "--exact" : "--regex"],
+                    QueryCommandTestSupport.JsonOptions, "test"));
+                Assert.Equal(11, exit);
+                var result = JsonNode.Parse(json)!;
+                Assert.False(result["authoritative_count"]!.GetValue<bool>());
+                Assert.False(result["origin_classification_complete"]!.GetValue<bool>());
+                Assert.Equal(0, result["count"]!.GetValue<int>());
+                Assert.Contains(reason, json, StringComparison.Ordinal);
+            }
         }
     }
 }

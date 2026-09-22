@@ -21,8 +21,9 @@ The syntax envelope is Python 3.12/3.13 lexical string syntax, including PEP 701
   multiline expressions are supported, including in a single-quoted f-string.
 - Balanced parentheses, brackets and dictionaries, debug `=`, `!s`/`!r`/`!a`,
   literal format specifications and nested format replacement expressions are
-  supported, including whitespace, comments and line continuations around
-  conversion/debug suffixes. Format text follows raw/non-raw escape rules,
+  supported, including whitespace, comments and line continuations after
+  conversion letters or debug `=`. A conversion letter must immediately follow
+  `!`. Format text follows raw/non-raw escape rules,
   including named Unicode escapes and escaped physical newlines. Keywords may
   directly precede a quoted literal. Parenthesize lambdas and assignment
   expressions as Python requires. A format specification containing an unescaped
@@ -98,7 +99,8 @@ MCP の `search`、`find`、`find_in_file` も同じ分類器を使い、従来�
   式に入れ子になった通常／raw／bytes／f-string やコメントはそれぞれの origin を保ちます。
   同じ引用符の再利用や、単一引用符の f-string 内も含む複数行の補間式に対応します。
 - 対応する丸括弧・角括弧・辞書、デバッグ用 `=`、`!s`／`!r`／`!a`、書式の文字部分と
-  入れ子の書式補間式に対応し、変換・デバッグ指定の周囲の空白・コメント・行継続も扱います。
+  入れ子の書式補間式に対応し、変換文字やデバッグ用 `=` の後の空白・コメント・行継続も扱います。
+  変換文字は `!` の直後に置く必要があります。
   書式の文字部分は raw／非 raw のエスケープ規則に従い、Unicode 名によるエスケープと
   エスケープされた物理改行にも対応します。キーワードと引用符付き文字列の直接隣接も扱います。
   lambda と代入式は Python の規則に従って括弧で囲みます。

@@ -37,7 +37,6 @@ public sealed class PythonOriginIssue5398Tests
             ("f'{Needle!r }' f'{Needle!r :>12}'; Needle()", ["code", "code", "code"]),
             ("f'{Needle= # Needle\n}'; Needle()", ["code", "comment", "code"]),
             ("f'{Needle!r # Needle\n}'; Needle()", ["code", "comment", "code"]),
-            ("f'{Needle! # Needle\n r}'; Needle()", ["code", "comment", "code"]),
         ];
         foreach (var (source, expected) in cases)
         foreach (var newline in new[] { "\n", "\r\n" })
@@ -68,6 +67,10 @@ public sealed class PythonOriginIssue5398Tests
             ("f'{Needle(]}'", "unbalanced_interpolation"),
             ("f'Needle }'", "unbalanced_interpolation"),
             ("f'{Needle!z}'", "unsupported_interpolation_conversion"),
+            ("f'{Needle! r}'\nNeedle()", "unsupported_interpolation_conversion"),
+            ("f'{Needle! # comment\n r}'\nNeedle()", "unsupported_interpolation_conversion"),
+            ("f'{Needle!\n r}'\nNeedle()", "unsupported_interpolation_conversion"),
+            ("f'{Needle!\\\n r}'\nNeedle()", "unsupported_interpolation_conversion"),
             ("f'{Needle!r x}'", "unsupported_interpolation_expression"),
             ("f'{Needle:\n}'", "unterminated_ordinary_string"),
             ("x = 'Needle", "unterminated_ordinary_string"),
