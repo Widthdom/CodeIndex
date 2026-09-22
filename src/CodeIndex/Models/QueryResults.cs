@@ -2891,6 +2891,9 @@ public class SymbolAnalysisResult
     [JsonPropertyName("candidate_count")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public int CandidateCount { get; set; }
+    // The bounded definition lookup reached its limit; no complete census was taken.
+    [JsonIgnore]
+    internal bool CandidateCountIsLowerBound { get; set; }
     [JsonPropertyName("graph_scope")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? GraphScope { get; set; }

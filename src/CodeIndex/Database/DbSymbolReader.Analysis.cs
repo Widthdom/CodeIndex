@@ -358,6 +358,7 @@ public partial class DbReader
                     : []
                 : []
             : PrioritizeSourceDefinitions(GetDefinitions(normalizedQuery, definitionLimit, kind: kind, lang, includeBody, pathPatterns, excludePathPatterns, excludeTests, since: null, exact, bodyStartLine: bodyStartLine, bodyLineCount: bodyLineCount, groupPartials: groupPartials));
+        var candidateCountIsLowerBound = selectedSymbolId == null && definitions.Count >= definitionLimit;
         DefinitionResult? primaryDefinition = definitions
             .FirstOrDefault(definition => SupportsReferenceLanguage(definition.Lang) && !IsCSharpEnumMemberDefinition(definition))
             ?? definitions.FirstOrDefault(definition => SupportsReferenceLanguage(definition.Lang))
@@ -509,6 +510,7 @@ public partial class DbReader
             Callees = [.. callees],
             GraphSections = graphSections,
             CandidateCount = candidateBundles.Count,
+            CandidateCountIsLowerBound = candidateCountIsLowerBound,
             GraphScope = candidateBundles.Count switch
             {
                 > 1 => "primary_candidate",

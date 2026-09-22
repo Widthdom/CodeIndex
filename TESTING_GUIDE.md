@@ -1,5 +1,12 @@
 # Testing Guide
 
+`InspectCompactCandidateTests` (#5397) shares a real indexed fixture across CLI
+inspect and MCP compact analysis. Keep zero, exact-limit, probe-overflow and the
+internal five-definition boundary, partial and unrelated same-name/overload
+identities, field projection, byte guards, selectors and graph continuation on
+net8/net9. Noncompact output remains a control; child limits and family recovery
+must survive the outer candidate cap.
+
 `ToolsList_SuggestionDisclosesConditionalGitHubPublication_Issue5396` shares one
 discovery fixture across default, compact, full, selected and paged catalogs.
 Keep the open-world annotation, other annotation values, local-storage/token-opt-in
@@ -1679,6 +1686,12 @@ Check the following:
 ---
 
 <a id="テストガイド"></a>
+
+`InspectCompactCandidateTests`（#5397）は実際に索引を作成した共通 fixture で
+CLI inspect と MCP の compact 解析を検証します。0 件・上限ちょうど・追加候補・
+内部の定義上限 5 件、partial 宣言と無関係な同名／overload の identity、field 投影、
+バイト制限、selector と graph cursor の継続を net8/net9 で確認してください。
+非 compact 出力を対照とし、外側の候補上限適用後も子配列の上限と family の復旧を維持します。
 
 Issue #5391 の `QueryCommandRunnerIssue5391Tests.cs` は、Python・JavaScript・Java・
 C# の同名エントリーポイント、Python のファイル間循環、曖昧・旧形式の候補を使い、
