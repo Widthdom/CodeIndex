@@ -47,7 +47,7 @@
     {
       "name": "wrapped_review_prompt_local_dll",
       "command": "env REVIEW_MODE=readonly timeout 30 codex exec 'Use dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll'",
-      "expected": "allow"
+      "expected": "deny"
     },
     {
       "name": "unsupported_cdidx_dll",
@@ -153,6 +153,91 @@
       "name": "global_cdidx_execution",
       "command": "cdidx status",
       "expected": "deny"
+    },
+    {
+      "name": "comment_quotes_cannot_hide_dll_substitution",
+      "command": "true # '\nprintf '%s' \"$(dotnet ./src/CodeIndex/bin/Release/net8.0/cdidx.dll status)\"\n#'",
+      "expected": "deny"
+    },
+    {
+      "name": "comment_quotes_cannot_hide_dll_execution",
+      "command": "echo ignore # 'fake\ndotnet ./src/CodeIndex/bin/Release/net8.0/cdidx.dll status\n#'",
+      "expected": "deny"
+    },
+    {
+      "name": "interspersed_redirection_dll_execution",
+      "command": "dotnet 2>&1 ./src/CodeIndex/bin/Release/net8.0/cdidx.dll status",
+      "expected": "deny"
+    },
+    {
+      "name": "leading_redirection_dll_execution",
+      "command": "2>&1 dotnet ./src/CodeIndex/bin/Release/net8.0/cdidx.dll status",
+      "expected": "deny"
+    },
+    {
+      "name": "negated_dll_execution",
+      "command": "! dotnet ./src/CodeIndex/bin/Release/net8.0/cdidx.dll status",
+      "expected": "deny"
+    },
+    {
+      "name": "brace_group_dll_execution",
+      "command": "{ dotnet ./src/CodeIndex/bin/Release/net8.0/cdidx.dll status; }",
+      "expected": "deny"
+    },
+    {
+      "name": "xargs_dll_execution",
+      "command": "printf 'status\\n' | xargs dotnet ./src/CodeIndex/bin/Release/net8.0/cdidx.dll",
+      "expected": "deny"
+    },
+    {
+      "name": "legacy_nice_dll_execution",
+      "command": "nice -5 dotnet ./src/CodeIndex/bin/Release/net8.0/cdidx.dll status",
+      "expected": "deny"
+    },
+    {
+      "name": "builtin_command_dll_execution",
+      "command": "builtin command dotnet ./src/CodeIndex/bin/Release/net8.0/cdidx.dll status",
+      "expected": "deny"
+    },
+    {
+      "name": "variable_host_dll_execution",
+      "command": "RUNNER=dotnet; \"$RUNNER\" ./src/CodeIndex/bin/Release/net8.0/cdidx.dll status",
+      "expected": "deny"
+    },
+    {
+      "name": "line_continuation_dll_host",
+      "command": "dot\\\nnet ./src/CodeIndex/bin/Release/net8.0/cdidx.dll status",
+      "expected": "deny"
+    },
+    {
+      "name": "printed_dll_document_with_literal_separator",
+      "command": "printf '%s\\n' ';' 'dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll status'",
+      "expected": "allow"
+    },
+    {
+      "name": "printed_dll_document_with_escaped_separator",
+      "command": "printf '%s\\n' \\; 'dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll status'",
+      "expected": "allow"
+    },
+    {
+      "name": "review_dll_config_is_not_prompt_data",
+      "command": "codex exec --config 'mcp_servers.example.args=[\"/tmp/cdidx.dll\"]' Review",
+      "expected": "deny"
+    },
+    {
+      "name": "review_dll_config_without_prompt",
+      "command": "codex exec --config 'mcp_servers.example.args=[\"/tmp/cdidx.dll\"]'",
+      "expected": "deny"
+    },
+    {
+      "name": "review_prompt_supported_review_subcommand",
+      "command": "codex review --base origin/main 'Use dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll'",
+      "expected": "allow"
+    },
+    {
+      "name": "document_body_dll_equals_option",
+      "command": "gh --repo Widthdom/CodeIndex issue create --title Update --body='Use dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll'",
+      "expected": "allow"
     },
     {
       "name": "repo_local_installer_doctor",

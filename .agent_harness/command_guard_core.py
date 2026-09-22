@@ -301,11 +301,9 @@ def _deny(reason: str) -> GuardDecision:
     return GuardDecision(False, reason)
 
 
-def _split_command(command: str, *, preserve_newlines: bool = False) -> list[str]:
+def _split_command(command: str) -> list[str]:
     try:
-        lexer = shlex.shlex(command, posix=True, punctuation_chars="();<>|&\n" if preserve_newlines else True)
-        if preserve_newlines:
-            lexer.whitespace = lexer.whitespace.replace("\n", "")
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
         lexer.whitespace_split = True
         lexer.commenters = ""
         return list(lexer)
@@ -368,7 +366,7 @@ def _command_is_safe_local_cdidx(command: str, cwd: Path, project_root: Path) ->
     return dll == expected
 
 
-def _has_active_command_substitution(command: str) -> bool:
+def _has_active_shell_syntax(command: str) -> bool:
     quote: str | None = None
     index = 0
     while index < len(command):
@@ -383,35 +381,49 @@ def _has_active_command_substitution(command: str) -> bool:
                 quote = None
         elif quote != "'" and (char == "`" or command.startswith("$(", index)):
             return True
-        elif quote is None and command[index : index + 2] in {"<(", ">("}:
+        elif quote is None and char in "();<>|&\n#":
             return True
         index += 1
     return False
 
 
-def _command_invokes_cdidx_dll(command: str) -> bool:
-    tokens = _split_command(command, preserve_newlines=True)
-    # Fail closed for malformed commands and active substitutions; single-quoted
-    # Markdown/backticks are data, but double-quoted substitutions execute code.
-    if not tokens or _has_active_command_substitution(command):
-        return bool(LOCAL_CDIDX_DLL_RE.search(command))
-
-    tokens = [";" if token and set(token) <= set("();<>|&\n") else token for token in tokens]
-    for segment in _token_segments(tokens):
-        segment = _strip_transparent_script_wrappers(_strip_leading_env_assignments(segment))
-        while segment and segment[0] in _SHELL_COMMAND_PREFIX_KEYWORDS:
-            segment = _strip_transparent_script_wrappers(_strip_leading_env_assignments(segment[1:]))
-        if not segment:
-            continue
-        if LOCAL_CDIDX_DLL_RE.search(segment[0]):
-            return True
-        # Keep unsupported dotnet host forms (including `dotnet exec`) denied.
-        # Arguments to unrelated programs, such as review prompts, are data.
-        if _token_command_name(segment[0]) == "dotnet" and any(
-            LOCAL_CDIDX_DLL_RE.search(arg) for arg in segment[1:]
-        ):
-            return True
-    return False
+def _command_has_unsupported_cdidx_dll(command: str) -> bool:
+    tokens = _split_command(command)
+    if not LOCAL_CDIDX_DLL_RE.search(command) and not any(LOCAL_CDIDX_DLL_RE.search(token) for token in tokens):
+        return False
+    # This is a bounded data-argument exception, not a general shell parser.
+    # Preserve denial for unknown executors, wrappers, comments, redirections
+    # and compound commands. Quoted/escaped punctuation stays literal data.
+    if not tokens or _has_active_shell_syntax(command):
+        return True
+    if tokens[0] in {"echo", "printf", "ls"}:
+        return False
+    if tokens[0] == "codex" and len(tokens) >= 3 and tokens[1] in {"exec", "review"}:
+        prompt, rest = _subcommand_args(
+            tokens[2:],
+            {"--sandbox", "-s", "--output-last-message", "-o", "--output-schema", "--model", "-m",
+             "--profile", "-p", "--config", "-c", "--cd", "-C", "--image", "-i", "--color",
+             "--enable", "--disable", "--base", "--commit", "--title"},
+            valueless_options={"--ephemeral", "--json", "--skip-git-repo-check", "--uncommitted"},
+            fail_on_unknown_option=True,
+        )
+        return not (
+            prompt == tokens[-1] and not rest
+            and not any(LOCAL_CDIDX_DLL_RE.search(token) for token in tokens[:-1])
+        )
+    if tokens[0] == "gh":
+        subcommand, _ = _subcommand_args(
+            tokens[1:], {"-R", "--repo", "--hostname", "--config"}, fail_on_unknown_option=True,
+        )
+        if subcommand in {"pr", "issue"}:
+            data_options = {"--body", "-b", "--title", "-t", "--search", "-S"}
+            return any(
+                LOCAL_CDIDX_DLL_RE.search(token)
+                and not (index > 0 and tokens[index - 1] in data_options)
+                and not any(token.startswith(option + "=") for option in data_options if option.startswith("--"))
+                for index, token in enumerate(tokens)
+            )
+    return True
 
 
 def _token_is_expanded_installed_cdidx(token: str, cwd: Path) -> bool:
@@ -1315,7 +1327,7 @@ def evaluate_bash_command(command: str, cwd: Path, project_root: Path) -> GuardD
     if _command_mentions_local_cdidx(command, project_root):
         return _deny("local cdidx commands must not use shell control operators or command substitutions")
 
-    if _command_invokes_cdidx_dll(command):
+    if _command_has_unsupported_cdidx_dll(command):
         return _deny("use dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll instead")
 
     if _command_is_safe_cdidx_resolver(command):
