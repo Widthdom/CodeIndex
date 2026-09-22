@@ -15,6 +15,146 @@
       "expected": "allow"
     },
     {
+      "name": "review_prompt_local_dll_single_quoted",
+      "command": "codex exec --sandbox read-only --ephemeral --output-last-message /tmp/issue5417-review.txt 'For source discovery/search use only the repository-built binary dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll with --db .cdidx/codeindex.db'",
+      "expected": "allow"
+    },
+    {
+      "name": "review_prompt_local_dll_double_quoted",
+      "command": "codex exec --sandbox read-only \"Use dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll with --db .cdidx/codeindex.db\"",
+      "expected": "allow"
+    },
+    {
+      "name": "review_prompt_local_dll_multiline_markdown",
+      "command": "codex exec --sandbox read-only 'Review the change.\nUse `dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll` for discovery.'",
+      "expected": "allow"
+    },
+    {
+      "name": "document_body_local_dll_literal_argument",
+      "command": "gh pr create --title Update --body 'dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll'",
+      "expected": "allow"
+    },
+    {
+      "name": "local_dll_read_operand",
+      "command": "ls -l './src/CodeIndex/bin/Debug/net8.0/cdidx.dll'",
+      "expected": "allow"
+    },
+    {
+      "name": "local_cdidx_quoted_operand",
+      "command": "dotnet './src/CodeIndex/bin/Debug/net8.0/cdidx.dll' status",
+      "expected": "allow"
+    },
+    {
+      "name": "wrapped_review_prompt_local_dll",
+      "command": "env REVIEW_MODE=readonly timeout 30 codex exec 'Use dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll'",
+      "expected": "allow"
+    },
+    {
+      "name": "unsupported_cdidx_dll",
+      "command": "dotnet ./src/CodeIndex/bin/Release/net8.0/cdidx.dll status",
+      "expected": "deny"
+    },
+    {
+      "name": "unsupported_cdidx_dll_fragmented_quotes",
+      "command": "dotnet ./src/CodeIndex/bin/Release/net8.0/cdi''dx.dll status",
+      "expected": "deny"
+    },
+    {
+      "name": "absolute_dotnet_host_cdidx_dll",
+      "command": "/usr/local/bin/dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll status",
+      "expected": "deny"
+    },
+    {
+      "name": "local_cdidx_trailing_command",
+      "command": "dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll status; true",
+      "expected": "deny"
+    },
+    {
+      "name": "direct_cdidx_dll",
+      "command": "'./src/CodeIndex/bin/Debug/net8.0/cdidx.dll' status",
+      "expected": "deny"
+    },
+    {
+      "name": "dotnet_exec_cdidx_dll",
+      "command": "dotnet exec './src/CodeIndex/bin/Debug/net8.0/cdidx.dll' status",
+      "expected": "deny"
+    },
+    {
+      "name": "wrapped_local_cdidx_dll",
+      "command": "env REVIEW_MODE=readonly timeout 30 dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll status",
+      "expected": "deny"
+    },
+    {
+      "name": "split_string_local_cdidx_dll",
+      "command": "env -S 'dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll status'",
+      "expected": "deny"
+    },
+    {
+      "name": "chained_local_cdidx_dll",
+      "command": "true && dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll status",
+      "expected": "deny"
+    },
+    {
+      "name": "newline_local_cdidx_dll",
+      "command": "true\ndotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll status",
+      "expected": "deny"
+    },
+    {
+      "name": "subshell_local_cdidx_dll",
+      "command": "true;(dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll status)",
+      "expected": "deny"
+    },
+    {
+      "name": "process_substitution_local_cdidx_dll",
+      "command": "cat <(dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll status)",
+      "expected": "deny"
+    },
+    {
+      "name": "conditional_local_cdidx_dll",
+      "command": "if dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll status; then true; fi",
+      "expected": "deny"
+    },
+    {
+      "name": "inline_shell_local_cdidx_dll",
+      "command": "bash -lc 'dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll status'",
+      "expected": "deny"
+    },
+    {
+      "name": "eval_local_cdidx_dll",
+      "command": "eval 'dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll status'",
+      "expected": "deny"
+    },
+    {
+      "name": "review_prompt_dll_command_substitution",
+      "command": "codex exec \"Review $(dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll status)\"",
+      "expected": "deny"
+    },
+    {
+      "name": "review_prompt_dll_backtick_substitution",
+      "command": "codex exec \"Review `dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll status`\"",
+      "expected": "deny"
+    },
+    {
+      "name": "review_prompt_dll_literal_substitution",
+      "command": "codex exec 'Review $(dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll status)'",
+      "expected": "allow"
+    },
+    {
+      "name": "review_prompt_dll_escaped_substitution",
+      "command": "codex exec \"Review \\$(dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll status)\"",
+      "expected": "allow"
+    },
+    {
+      "name": "review_prompt_dll_unterminated_quote",
+      "command": "codex exec 'Use dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll",
+      "expected": "deny"
+    },
+    {
+      "name": "global_cdidx_execution",
+      "command": "cdidx status",
+      "expected": "deny"
+    },
+    {
       "name": "repo_local_installer_doctor",
       "command": "bash ./install.sh --doctor v1.2.3",
       "expected": "allow"

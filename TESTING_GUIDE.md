@@ -1,5 +1,11 @@
 # Testing Guide
 
+Run `python3 -m unittest discover -s .agent_harness/tests` for shared command-guard
+changes. The existing policy-contract matrix checks the core, Codex PreToolUse and
+PermissionRequest, and Claude PreToolUse without executing the tested commands.
+Keep #5417's quoted review/document data, multiline Markdown and literal substitution
+controls alongside real DLL invocations, wrappers, shell operators and active substitutions.
+
 `JsonEnvelopeWrapperIssue5412Tests` shares an isolated indexed fixture across literal,
 line-regex and multiline find cursor errors. Keep JSON/envelope/fields/compact
 selectors, malformed/mismatched/stale cursors, human and count controls, and exact
@@ -1825,6 +1831,12 @@ Issue #5300 のテストは隣接・入れ子の C# callable、対象行の除�
 パーサー（#5297）の回帰テストとともに net8.0 / net9.0 で実行します。
 
 # テストガイド
+
+共有コマンドガードの変更では `python3 -m unittest discover -s .agent_harness/tests` を
+実行してください。既存の契約テストは、対象コマンド自体を実行せずに共有コア、Codex の
+PreToolUse・PermissionRequest、Claude の PreToolUse を検証します。#5417 の引用された
+レビュー・文書データ、複数行 Markdown、置換構文の文字列としての使用とともに、実際の DLL
+実行、ラッパー、シェル演算子、有効なコマンド置換の対照例を維持してください。
 
 `JsonEnvelopeWrapperIssue5412Tests` は分離した索引 fixture を共有し、リテラル・行単位正規表現・
 複数行 find のカーソルエラーを検証します。JSON・envelope・fields・compact の各指定、
