@@ -62,15 +62,22 @@ internal sealed partial class LspServer : IDisposable
             return CompletionList([]);
         }
 
-        var symbols = _reader.SearchSymbols(context.Token, MaxCompletionItems, pathPatterns: [context.IndexedPath])
-            .Concat(_reader.SearchSymbols(context.Token, MaxCompletionItems))
+        const int candidateLimit = MaxCompletionItems + 1;
+        var localCandidates = _reader.SearchSymbols(context.Token, candidateLimit, pathPatterns: [context.IndexedPath]);
+        var workspaceCandidates = _reader.SearchSymbols(context.Token, candidateLimit);
+        var symbols = localCandidates
+            .Concat(workspaceCandidates)
             .DistinctBy(BuildCompletionIdentity)
-            .Take(MaxCompletionItems)
+            .Take(candidateLimit)
             .ToList();
+        // A saturated source may hide a tail even when duplicate identities leave
+        // fewer than 101 distinct candidates. Only exhausted sources prove completeness.
+        var isIncomplete = symbols.Count > MaxCompletionItems ||
+            localCandidates.Count == candidateLimit || workspaceCandidates.Count == candidateLimit;
         var items = new JsonArray();
-        for (var i = 0; i < symbols.Count; i++)
+        for (var i = 0; i < Math.Min(symbols.Count, MaxCompletionItems); i++)
             items.Add((JsonNode)ToCompletionItem(symbols[i], i));
-        return CompletionList(items);
+        return CompletionList(items, isIncomplete);
     }
 
     private JsonArray DocumentHighlight(JsonElement root, string method)
@@ -224,9 +231,9 @@ internal sealed partial class LspServer : IDisposable
         => ComparePosition(line, character, startLine, startCharacter) >= 0 &&
            ComparePosition(line, character, endLine, endCharacter) < 0;
 
-    private static JsonObject CompletionList(JsonArray items) => new()
+    private static JsonObject CompletionList(JsonArray items, bool isIncomplete = false) => new()
     {
-        ["isIncomplete"] = false,
+        ["isIncomplete"] = isIncomplete,
         ["items"] = items,
     };
 

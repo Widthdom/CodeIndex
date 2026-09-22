@@ -1936,31 +1936,146 @@ public class LspServerTests
     }
 
     [Fact]
-    public void HandleMessage_Completion_ReturnsEmptyListWhenNoIndexedSymbolMatches_Issue4360()
+    public async Task Run_Completion_PreservesCompletenessAndIdentityBoundaries_Issue5394()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_completion_empty");
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_completion_boundaries");
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             var sourcePath = Path.Combine(projectRoot, "app.cs");
-            var source = """
-                public class App
-                {
-                    public int Count() { return 1; }
-                    public void Call() { MissingPrefix(); }
-                }
-                """;
+            var cases = new (string Query, int Count, bool Incomplete)[]
+            {
+                ("MissingPrefix", 0, false),
+                ("Few", 4, false),
+                ("Exact", 100, false),
+                ("Mixed", 100, false),
+                ("RemoteOnly", 100, true),
+                ("LocalCrowded", 1, true),
+                ("RemoteCrowded", 1, true),
+                ("Get", 100, true),
+            };
+            var source = string.Join('\n', cases.Select(test => test.Query));
             File.WriteAllText(sourcePath, source);
-            TestProjectHelper.InsertIndexedFile(dbPath, "app.cs", "csharp", source);
+            using (var fixtureDb = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                var writer = new DbWriter(fixtureDb.Connection);
+                var localId = AddFile("app.cs");
+                var remoteId = AddFile("other.cs");
+                AddSeries(localId, "Exact", 100);
+                AddSeries(localId, "MixedZ", 1);
+                AddSeries(remoteId, "MixedA", 99);
+                AddSeries(remoteId, "RemoteOnly", 101);
+                AddSeries(localId, "Get", 100);
+                AddSeries(remoteId, "GetWorkspace", 1);
+
+                // Same completion identity, but different columns/signatures, can
+                // saturate either raw source before its distinct tail is examined.
+                AddSeries(localId, "LocalCrowded", 101, sameIdentity: true);
+                AddSeries(remoteId, "LocalCrowdedTail", 1);
+                AddSeries(remoteId, "RemoteCrowded", 101, sameIdentity: true);
+                AddSeries(remoteId, "RemoteCrowdedTail", 1);
+                writer.InsertSymbols([
+                    new() { FileId = localId, Name = "Few", Kind = "function", Line = 1, Signature = "local function" },
+                    new() { FileId = localId, Name = "Few", Kind = "field", Line = 1, Signature = "local field" },
+                    new() { FileId = localId, Name = "Few", Kind = "function", Line = 2, Signature = "local other line" },
+                    new() { FileId = remoteId, Name = "Few", Kind = "function", Line = 1, Signature = "remote function" },
+                ]);
+
+                long AddFile(string path) => writer.UpsertFile(new FileRecord
+                {
+                    Path = path,
+                    Lang = "csharp",
+                    Size = source.Length,
+                    Lines = cases.Length,
+                    Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                    Checksum = "issue5394-completion",
+                });
+
+                void AddSeries(long fileId, string prefix, int count, bool sameIdentity = false)
+                {
+                    writer.InsertSymbols(Enumerable.Range(0, count).Select(index => new SymbolRecord
+                    {
+                        FileId = fileId,
+                        Name = sameIdentity ? prefix : prefix + index.ToString("D3", CultureInfo.InvariantCulture),
+                        Kind = "function",
+                        Line = sameIdentity ? 1 : index + 1,
+                        StartColumn = index,
+                        Signature = prefix + " signature " + index.ToString(CultureInfo.InvariantCulture),
+                    }).ToList());
+                }
+            }
+
             using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
-            var missingCharacter = CharacterOf(source, 3, "MissingPrefix();") + 3;
+            InitializeSession(server);
+            Assert.Null(server.HandleMessage(CreateDidOpenRequest(sourcePath, source, 1)));
+            var frames = string.Concat(cases.Select((test, index) => Frame(CreatePositionRequest(
+                "textDocument/completion", sourcePath, 539400 + index, index, test.Query.Length))));
+            using var input = new StagedReadStream(
+                Encoding.UTF8.GetBytes(frames),
+                Encoding.UTF8.GetBytes(
+                    Frame(CreateDidChangeRequest(sourcePath, "GetWorkspace", 2)) +
+                    Frame(CreatePositionRequest("textDocument/completion", sourcePath, 539408, 0, "GetWorkspace".Length))));
+            using var output = new MarkerWriteGateMemoryStream("\"id\":539407");
+            using var cancellation = new CancellationTokenSource(TestDeterminism.DefaultTimeout);
+            var runTask = server.RunAsync(input, output, cancellation.Token);
+            try
+            {
+                // Do not change the live buffer until the broad response is written.
+                await output.WaitForMarkerAsync().WaitAsync(TestDeterminism.DefaultTimeout);
+                input.ReleaseSuffix();
+                output.ReleaseMarker();
+                Assert.Equal(CommandExitCodes.Success, await runTask.WaitAsync(TestDeterminism.DefaultTimeout));
+            }
+            finally
+            {
+                input.ReleaseSuffix();
+                output.ReleaseMarker();
+                cancellation.Cancel();
+                await runTask.WaitAsync(TestDeterminism.DefaultTimeout);
+            }
 
-            var completion = HandleInitializedMessage(server, CreatePositionRequest("textDocument/completion", sourcePath, 43601, 3, missingCharacter));
+            var responses = ReadLspMessages(output).ToDictionary(
+                entry => entry.Message["id"]!.GetValue<int>(), entry => entry.Message);
+            Assert.Equal(cases.Length + 1, responses.Count);
+            for (var index = 0; index < cases.Length; index++)
+            {
+                var test = cases[index];
+                var response = responses[539400 + index];
+                Assert.Null(response["error"]);
+                var result = response["result"]!;
+                Assert.Equal(test.Incomplete, result["isIncomplete"]!.GetValue<bool>());
+                var items = result["items"]!.AsArray();
+                Assert.Equal(test.Count, items.Count);
+                Assert.Equal(items.Count, items.Select(item => item!["detail"]!.GetValue<string>()).Distinct().Count());
+                for (var itemIndex = 0; itemIndex < items.Count; itemIndex++)
+                {
+                    var item = items[itemIndex]!;
+                    Assert.Equal(
+                        itemIndex.ToString("D4", CultureInfo.InvariantCulture) + "_" + item["label"]!.GetValue<string>(),
+                        item["sortText"]!.GetValue<string>());
+                    Assert.Equal(item["detail"]!.GetValue<string>() == "local field" ? 5 : 3, item["kind"]!.GetValue<int>());
+                }
+            }
 
-            Assert.NotNull(completion);
-            Assert.False(completion!["result"]!["isIncomplete"]!.GetValue<bool>());
-            Assert.Empty(completion["result"]!["items"]!.AsArray());
+            string[] Labels(int id) => responses[id]["result"]!["items"]!.AsArray()
+                .Select(item => item!["label"]!.GetValue<string>()).ToArray();
+            string[] Series(string prefix, int count) => Enumerable.Range(0, count)
+                .Select(index => prefix + index.ToString("D3", CultureInfo.InvariantCulture)).ToArray();
+
+            Assert.Equal(new[] { "Few", "Few", "Few", "Few" }, Labels(539401));
+            Assert.Equal("remote function", responses[539401]["result"]!["items"]![3]!["detail"]!.GetValue<string>());
+            Assert.Equal(Series("Exact", 100), Labels(539402));
+            Assert.Equal(new[] { "MixedZ000" }.Concat(Series("MixedA", 99)), Labels(539403));
+            Assert.Equal(Series("RemoteOnly", 100), Labels(539404));
+            Assert.Equal(new[] { "LocalCrowded" }, Labels(539405));
+            Assert.Equal(new[] { "RemoteCrowded" }, Labels(539406));
+            Assert.Equal(Series("Get", 100), Labels(539407));
+            Assert.Null(responses[539408]["error"]);
+            Assert.False(responses[539408]["result"]!["isIncomplete"]!.GetValue<bool>());
+            Assert.Equal(new[] { "GetWorkspace000" }, Labels(539408));
+            Assert.DoesNotContain("GetWorkspace000", Labels(539407));
+            Assert.Equal(source, File.ReadAllText(sourcePath));
         }
         finally
         {
