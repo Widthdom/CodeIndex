@@ -115,7 +115,8 @@ public static partial class QueryCommandRunner
                     route.Options,
                     route.JsonOptions,
                     route.ExactSearch,
-                    route.Options.Query!)),
+                    route.Options.Query!,
+                    route.CancellationToken)),
             _ => throw new InvalidOperationException("Unknown search execution route."),
         };
     }

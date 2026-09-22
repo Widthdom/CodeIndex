@@ -12,7 +12,8 @@ public static partial class QueryCommandRunner
         JsonSerializerOptions NdjsonOptions,
         bool ExactSearch,
         string Query,
-        SearchQueryHint? ExactSubstringHint);
+        SearchQueryHint? ExactSubstringHint,
+        CancellationToken CancellationToken);
 
     private sealed record SearchRowExecution(
         FtsQueryDiagnostics FtsQueryDiagnostics,
@@ -31,7 +32,8 @@ public static partial class QueryCommandRunner
         QueryCommandOptions options,
         JsonSerializerOptions jsonOptions,
         bool exactSearch,
-        string query)
+        string query,
+        CancellationToken cancellationToken)
     {
         var exactSubstringHint = SearchQueryAdvisor.BuildExactSubstringHint(
             query,
@@ -47,17 +49,24 @@ public static partial class QueryCommandRunner
             ndjsonOptions,
             exactSearch,
             query,
-            exactSubstringHint);
+            exactSubstringHint,
+            cancellationToken);
     }
 
     private static int ExecutePlainSearch(SearchExecutionPlan plan)
     {
+        plan.CancellationToken.ThrowIfCancellationRequested();
         var outcome = new SearchExecutionOutcome();
         return WithDb(
             plan.Options,
             plan.JsonOptions,
-            reader => ExecutePlainSearch(reader, plan, outcome),
-            _ => WritePlainSearchTerminal(plan, outcome));
+            reader =>
+            {
+                using var cancellationScope = reader.BeginCancellationScope(plan.CancellationToken);
+                return reader.RunWithCancellationInterrupt(() => ExecutePlainSearch(reader, plan, outcome));
+            },
+            _ => WritePlainSearchTerminal(plan, outcome),
+            cancellationToken: plan.CancellationToken);
     }
 
     private static int ExecutePlainSearch(
@@ -88,6 +97,7 @@ public static partial class QueryCommandRunner
             return WritePlainSearchCount(reader, plan);
 
         var rows = PreparePlainSearchRows(reader, plan);
+        plan.CancellationToken.ThrowIfCancellationRequested();
         var exitCode = rows.DisplayRows.Count == 0
             ? WriteEmptyPlainSearchResults(reader, plan, rows, outcome)
             : WritePlainSearchResults(reader, plan, rows, outcome);
@@ -101,6 +111,7 @@ public static partial class QueryCommandRunner
         var options = plan.Options;
         var originCoverage = new SearchCountOriginCoverage(options);
         var counts = CountSearchMatches(reader, options, plan.ExactSearch, originCoverage);
+        plan.CancellationToken.ThrowIfCancellationRequested();
         var queryDiagnostics = DbReader.AnalyzeFtsQuery(
             plan.Query,
             options.RawFts,
