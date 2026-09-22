@@ -87,6 +87,7 @@ public static partial class IndexCommandRunner
                         parallelExtractionEventForTesting,
                         parallelExtractionFailureForTesting,
                         extractionStallTimeoutForTesting,
+                        windowStallTimeoutForTesting,
                         parallelExtractionWorkersStoppedForTesting);
                 });
 

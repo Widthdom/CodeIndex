@@ -71,6 +71,7 @@ public static partial class IndexCommandRunner
         Action<UpdateParallelExtractionTestEvent>? ExtractionEvent,
         Func<string, string, Exception?>? ExtractionFailure,
         Func<TimeSpan>? ExtractionStallTimeout,
+        Func<int, TimeSpan>? WindowStallTimeout,
         Action? ExtractionWorkersStopped);
 
     private readonly record struct UpdateFileLoopRefreshResult(
@@ -187,6 +188,7 @@ public static partial class IndexCommandRunner
         private Func<string, string, Exception?>? parallelExtractionFailureForTesting
             => testing.ExtractionFailure;
         private Func<TimeSpan>? extractionStallTimeoutForTesting => testing.ExtractionStallTimeout;
+        private Func<int, TimeSpan>? windowStallTimeoutForTesting => testing.WindowStallTimeout;
         private Action? parallelExtractionWorkersStoppedForTesting => testing.ExtractionWorkersStopped;
 
         private void RecordScanErrors(

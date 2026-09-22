@@ -121,6 +121,7 @@ public static partial class IndexCommandRunner
     internal static Action<string, string?>? UpdateSkippedFileRecordBuiltForTesting { get; set; }
     internal static Action<int, int>? UpdateFileCommittedForTesting { get; set; }
     internal static Func<TimeSpan>? IndexExtractionStallTimeoutForTesting { get; set; }
+    internal static Func<int, TimeSpan>? UpdateParallelWindowStallTimeoutForTesting { get; set; }
     internal static Func<string, Exception?>? DryRunParseEstimateFailureForTesting { get; set; }
     internal static Action? DryRunCSharpExpansionScanStartingForTesting { get; set; }
     internal static Func<string, Exception?>? DryRunFileProbeFailureForTesting { get; set; }

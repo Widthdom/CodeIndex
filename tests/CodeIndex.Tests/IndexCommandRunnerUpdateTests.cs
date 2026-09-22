@@ -5700,7 +5700,7 @@ public partial class IndexCommandRunnerTests
     {
         var projectRoot = CreateTempProject();
         var previousTimeout =
-            IndexCommandRunner.IndexExtractionStallTimeoutForTesting;
+            IndexCommandRunner.UpdateParallelWindowStallTimeoutForTesting;
         var previousSchedulingHook =
             IndexCommandRunner.UpdateParallelExtractionSchedulingForTesting;
         var previousFailureHook =
@@ -5710,7 +5710,6 @@ public partial class IndexCommandRunnerTests
         var previousWorkersStoppedHook =
             IndexCommandRunner.UpdateParallelExtractionWorkersStoppedForTesting;
         using var sourceZeroCompleted = new ManualResetEventSlim();
-        using var stalledWorkerStarted = new ManualResetEventSlim();
         using var stalledWorkerEntered = new ManualResetEventSlim();
         using var releaseStalledWorker = new ManualResetEventSlim();
         using var stalledWorkerCompleted = new ManualResetEventSlim();
@@ -5755,10 +5754,9 @@ public partial class IndexCommandRunnerTests
                     if (path != "Source01.cs" || phase != "symbols")
                         return null;
 
-                    stalledWorkerStarted.Set();
-                    sourceZeroCompleted.Wait(TimeSpan.FromSeconds(30));
+                    Assert.True(sourceZeroCompleted.Wait(TimeSpan.FromSeconds(30)));
                     stalledWorkerEntered.Set();
-                    releaseStalledWorker.Wait(TimeSpan.FromSeconds(30));
+                    Assert.True(releaseStalledWorker.Wait(TimeSpan.FromSeconds(30)));
                     return null;
                 };
             IndexCommandRunner.UpdateParallelExtractionEventForTesting = item =>
@@ -5791,10 +5789,30 @@ public partial class IndexCommandRunnerTests
                     stalledWorkerCompleted.Set();
                 }
             };
-            IndexCommandRunner.IndexExtractionStallTimeoutForTesting = () =>
-                TimeSpan.FromSeconds(3);
+            var setupStopwatch = Stopwatch.StartNew();
+            var stalledRunStopwatch = new Stopwatch();
+            IndexCommandRunner.UpdateParallelWindowStallTimeoutForTesting = remainingCount =>
+            {
+                if (!stalledRunStopwatch.IsRunning)
+                {
+                    Assert.True(
+                        setupStopwatch.Elapsed < TimeSpan.FromSeconds(30),
+                        "The blocked target and completed peers were not ready for stall observation.");
+                    if (remainingCount != 1
+                        || !stalledWorkerEntered.IsSet
+                        || !completedExtractions.ContainsKey("Source00.cs")
+                        || !completedExtractions.ContainsKey("Source02.cs")
+                        || !completedExtractions.ContainsKey("IParseable.cs"))
+                    {
+                        return TimeSpan.Zero;
+                    }
 
-            var stalledRunStopwatch = Stopwatch.StartNew();
+                    // Isolate the no-progress watchdog from cold symbol-worker startup.
+                    // A real fatal peer result must still keep that peer's diagnostic.
+                    stalledRunStopwatch.Start();
+                }
+                return TimeSpan.FromSeconds(3);
+            };
             var (exitCode, json) = RunAndCaptureJson(
                 [
                     projectRoot,
@@ -5804,6 +5822,7 @@ public partial class IndexCommandRunnerTests
                     "--parallelism",
                     "2",
                 ]);
+            Assert.True(stalledRunStopwatch.IsRunning, "The stall watchdog was never armed.");
             stalledRunStopwatch.Stop();
 
             Assert.True(parallelScheduled);
@@ -5850,7 +5869,7 @@ public partial class IndexCommandRunnerTests
             Assert.True(startedExtractions.Keys.All(completedExtractions.ContainsKey));
             IndexCommandRunner.UpdateParallelExtractionFailureForTesting =
                 previousFailureHook;
-            IndexCommandRunner.IndexExtractionStallTimeoutForTesting = previousTimeout;
+            IndexCommandRunner.UpdateParallelWindowStallTimeoutForTesting = previousTimeout;
             Assert.Equal(
                 CommandExitCodes.Success,
                 IndexCommandRunner.Run(
@@ -5881,7 +5900,7 @@ public partial class IndexCommandRunnerTests
             releaseStalledWorker.Set();
             var cleanupSafe = Volatile.Read(ref parallelPipelineUsed) == 0
                 || workersStopped.Wait(TimeSpan.FromSeconds(30));
-            IndexCommandRunner.IndexExtractionStallTimeoutForTesting =
+            IndexCommandRunner.UpdateParallelWindowStallTimeoutForTesting =
                 previousTimeout;
             IndexCommandRunner.UpdateParallelExtractionSchedulingForTesting =
                 previousSchedulingHook;

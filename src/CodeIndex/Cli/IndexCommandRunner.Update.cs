@@ -768,6 +768,7 @@ public static partial class IndexCommandRunner
                 UpdateParallelExtractionEventForTesting,
                 UpdateParallelExtractionFailureForTesting,
                 IndexExtractionStallTimeoutForTesting,
+                UpdateParallelWindowStallTimeoutForTesting,
                 UpdateParallelExtractionWorkersStoppedForTesting))
             .Run();
         updated = updateLoop.Counters.Updated;
