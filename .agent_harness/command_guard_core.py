@@ -379,7 +379,7 @@ def _has_active_shell_syntax(command: str) -> bool:
                 quote = char
             elif quote == char:
                 quote = None
-        elif quote != "'" and (char == "`" or command.startswith("$(", index)):
+        elif quote != "'" and char in "`$":
             return True
         elif quote is None and char in "();<>|&\n#":
             return True
@@ -396,8 +396,18 @@ def _command_has_unsupported_cdidx_dll(command: str) -> bool:
     # and compound commands. Quoted/escaped punctuation stays literal data.
     if not tokens or _has_active_shell_syntax(command):
         return True
-    if tokens[0] in {"echo", "printf", "ls"}:
+    if tokens[0] in {"echo", "ls"}:
         return False
+    if tokens[0] == "printf":
+        args = tokens[1:]
+        if args and args[0] == "--":
+            args = args[1:]
+        # Shell printf can evaluate variable targets (-v / %n) and numeric
+        # arguments. Only literal text, %% and %s are known display forms.
+        return not (
+            args and not args[0].startswith("-")
+            and re.fullmatch(r"(?:[^%]|%%|%s)*", args[0]) is not None
+        )
     if tokens[0] == "codex" and len(tokens) >= 3 and tokens[1] in {"exec", "review"}:
         prompt, rest = _subcommand_args(
             tokens[2:],

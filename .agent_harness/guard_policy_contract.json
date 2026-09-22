@@ -240,6 +240,46 @@
       "expected": "allow"
     },
     {
+      "name": "review_nested_parameter_dll_substitution",
+      "command": "codex exec \"${review_text:-\"'$(dotnet ./src/CodeIndex/bin/Release/net8.0/cdidx.dll status)'\"}\"",
+      "expected": "deny"
+    },
+    {
+      "name": "echo_nested_parameter_dll_substitution",
+      "command": "echo \"${review_text:-\"'$(dotnet ./src/CodeIndex/bin/Release/net8.0/cdidx.dll status)'\"}\"",
+      "expected": "deny"
+    },
+    {
+      "name": "review_literal_parameter_dll_text",
+      "command": "codex exec '${review_text:-$(dotnet ./src/CodeIndex/bin/Release/net8.0/cdidx.dll status)}'",
+      "expected": "allow"
+    },
+    {
+      "name": "printf_variable_target_dll_substitution",
+      "command": "printf -v 'a[$(dotnet ./src/CodeIndex/bin/Release/net8.0/cdidx.dll status)]' '%s' x",
+      "expected": "deny"
+    },
+    {
+      "name": "printf_count_target_dll_substitution",
+      "command": "printf '%n' 'a[$(dotnet ./src/CodeIndex/bin/Release/net8.0/cdidx.dll status)]'",
+      "expected": "deny"
+    },
+    {
+      "name": "printf_numeric_dll_argument",
+      "command": "printf '%d' 'a[$(dotnet ./src/CodeIndex/bin/Release/net8.0/cdidx.dll status)]'",
+      "expected": "deny"
+    },
+    {
+      "name": "printf_string_dll_argument",
+      "command": "printf -- '%s%%\\n' 'a[$(dotnet ./src/CodeIndex/bin/Release/net8.0/cdidx.dll status)]'",
+      "expected": "allow"
+    },
+    {
+      "name": "printf_literal_dll_format",
+      "command": "printf 'Use dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll'",
+      "expected": "allow"
+    },
+    {
       "name": "repo_local_installer_doctor",
       "command": "bash ./install.sh --doctor v1.2.3",
       "expected": "allow"

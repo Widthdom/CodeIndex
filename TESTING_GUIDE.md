@@ -8,6 +8,8 @@ controls alongside real DLL invocations, wrappers, shell operators and active su
 Cover comment quotes, leading/interspersed redirections, negation, brace groups,
 indirect hosts, line continuations and literal separators. Unknown DLL-bearing command
 forms stay denied; a DLL in a Codex configuration option is not prompt data.
+Keep nested parameter expansions and `printf` variable/count/numeric targets denied,
+with single-quoted expansion text and `%s`/`%%` display arguments as allow controls.
 
 `JsonEnvelopeWrapperIssue5412Tests` shares an isolated indexed fixture across literal,
 line-regex and multiline find cursor errors. Keep JSON/envelope/fields/compact
@@ -1843,6 +1845,8 @@ PreToolUse・PermissionRequest、Claude の PreToolUse を検証します。#541
 コメント内の引用符、先頭・途中のリダイレクト、否定、波括弧のグループ、間接的な実行元、
 行継続、文字列としての区切り記号も検証します。DLL に言及する未対応のコマンド形式は拒否し、
 Codex の設定オプション内の DLL をプロンプトデータとして扱わないことを確認してください。
+入れ子のパラメーター展開と `printf` の変数代入・文字数代入・数値変換は拒否し、単一引用符内の
+展開構文と `%s`・`%%` による文字列表示を許可する対照例も維持してください。
 
 `JsonEnvelopeWrapperIssue5412Tests` は分離した索引 fixture を共有し、リテラル・行単位正規表現・
 複数行 find のカーソルエラーを検証します。JSON・envelope・fields・compact の各指定、
