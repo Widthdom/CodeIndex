@@ -28,6 +28,21 @@ public partial class QueryCommandRunnerTests
         SetCycleReferenceResolvedGroupCandidates(dbPath, "Caller.cs", ["Second.cs", "Decoy.cs"]);
         SetCycleReferenceResolution(dbPath, "Caller.cs", "First.cs", "resolved");
         AssertTargets("resolved", "First.cs");
+        using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+        using (var reader = new DbReader(db))
+        {
+            var writer = new DbWriter(db.Connection);
+            Assert.Single(reader.GetFileDependencies(10, lang: language));
+            foreach (var contract in new string?[] { null, "0" })
+            {
+                SetReferenceIdentityContractVersion(dbPath, contract);
+                var fallback = reader.GetFileDependencies(10, lang: language);
+                Assert.Equal(3, fallback.Count);
+                Assert.All(fallback, edge => Assert.Equal("unavailable", Assert.Single(edge.Evidence!).ResolutionState));
+                writer.SetMeta(DbContext.ReferenceIdentityContractVersionMetaKey, DbContext.ReferenceIdentityContractVersion.ToString());
+                Assert.Equal("First.cs", Assert.Single(reader.GetFileDependencies(10, lang: language)).TargetPath);
+            }
+        }
         Assert.Empty(RunOrdinaryIdentityDeps(dbPath, "--reverse", "--path", "Decoy.cs").GetProperty("edges").EnumerateArray());
         Assert.Empty(RunOrdinaryIdentityDeps(dbPath, "--exclude-path", "Caller.cs").GetProperty("edges").EnumerateArray());
         Assert.Empty(RunOrdinaryIdentityDeps(dbPath, "--symbol", "Missing").GetProperty("edges").EnumerateArray());
@@ -131,6 +146,50 @@ public partial class QueryCommandRunnerTests
             var mcp = RunIdentityCycleMcp(server, new JsonObject { ["resolutionStates"] = new JsonArray(state) });
             AssertOrdinaryDepsMcpParity(all, mcp);
             Assert.Empty(RunIdentityCycleMcp(server, new JsonObject { ["resolutionStates"] = new JsonArray(rejected) })["edges"]!.AsArray());
+        }
+    }
+
+    [Fact]
+    public void RunDeps_CountsMixedKindCandidatesOncePerReference_Issue5400()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_dependency_candidate_counts_5400");
+        File.WriteAllText(Path.Combine(project.Root, "stat.cpp"), "struct stat { int mode; };\nint stat(const char* path, struct stat* result);\n");
+        File.WriteAllText(Path.Combine(project.Root, "caller.cpp"), "int main() {\n    stat(\"a\", nullptr);\n}\n");
+        var dbPath = Path.Combine(project.Root, ".cdidx", "codeindex.db");
+        var indexed = CaptureConsole(() => IndexCommandRunner.Run([project.Root, "--db", dbPath, "--json", "--quiet"], _jsonOptions));
+        Assert.True(indexed.Result == 0, indexed.Stdout + indexed.Stderr);
+        using (var db = new DbContext(DbOpenIntent.QueryOnly, dbPath))
+        using (var command = db.Connection.CreateCommand())
+        {
+            command.CommandText = """
+                SELECT COUNT(DISTINCT target.kind) FROM symbol_references r
+                JOIN files source ON source.id = r.file_id
+                JOIN symbol_reference_candidates candidate ON candidate.reference_id = r.id
+                JOIN symbols target ON target.id = candidate.symbol_id
+                WHERE source.path = 'caller.cpp' AND r.symbol_name = 'stat' AND r.resolution_state = 'resolved_group'
+                """;
+            Assert.Equal(2L, command.ExecuteScalar());
+        }
+        foreach (var state in new[] { "resolved_group", "ambiguous" })
+        {
+            if (state == "ambiguous")
+            {
+                using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+                using var command = db.Connection.CreateCommand();
+                command.CommandText = "UPDATE symbol_references SET resolution_state = 'ambiguous' WHERE file_id = (SELECT id FROM files WHERE path = 'caller.cpp') AND symbol_name = 'stat'";
+                Assert.Equal(1, command.ExecuteNonQuery());
+            }
+            var result = RunOrdinaryIdentityDeps(dbPath, "--resolution-state", state, "--limit", "1");
+            var edge = Assert.Single(result.GetProperty("edges").EnumerateArray());
+            Assert.Equal("stat.cpp", edge.GetProperty("target_path").GetString());
+            Assert.Equal(1, edge.GetProperty("reference_count").GetInt32());
+            Assert.Equal(1, edge.GetProperty("ranking_score").GetDouble());
+            var evidence = Assert.Single(edge.GetProperty("evidence").EnumerateArray());
+            Assert.Equal(1, evidence.GetProperty("reference_count").GetInt32());
+            Assert.Equal("symbol", evidence.GetProperty("target_kind").GetString());
+            using var server = new McpServer(dbPath, "test", dbPathExplicit: true);
+            AssertOrdinaryDepsMcpParity(result, RunIdentityCycleMcp(server,
+                new JsonObject { ["resolutionStates"] = new JsonArray(state), ["limit"] = 1 }));
         }
     }
 

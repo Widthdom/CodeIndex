@@ -81,6 +81,7 @@ public partial class DbReader
     }
 
     private sealed record DependencyQueryExpressions(
+        bool IdentityCurrent,
         string ReferenceLineJoin,
         string ContextSql,
         string ReferenceIdSql,
@@ -98,7 +99,8 @@ public partial class DbReader
 
     private DependencyQueryExpressions BuildDependencyQueryExpressions()
     {
-        var resolutionState = _referenceIdentityContractCurrent ? "r.resolution_state" : "NULL";
+        var identityCurrent = HasCurrentReferenceIdentityContractForRead();
+        var resolutionState = identityCurrent ? "r.resolution_state" : "NULL";
         var identityScopeCondition = $$"""
             (
                 (src.lang = 'csharp' AND r.reference_kind NOT IN ('attribute', 'annotation'))
@@ -109,8 +111,8 @@ public partial class DbReader
             )
             """;
         var identityObservationScope = "(" + identityScopeCondition + " OR src.lang = 'python')";
-        var namedTargetIdentityMatch = BuildPythonDependencyTargetIdentityMatch();
-        var pythonImportIdentityMatch = _referenceIdentityContractCurrent ? @"(
+        var namedTargetIdentityMatch = BuildPythonDependencyTargetIdentityMatch(identityCurrent);
+        var pythonImportIdentityMatch = identityCurrent ? @"(
             snc.evidence_resolution_state NOT IN ('resolved', 'resolved_group', 'ambiguous')
             OR " + namedTargetIdentityMatch + @"
             OR (snc.evidence_resolution_state = 'resolved' AND snc.target_symbol_id = py_import.id)
@@ -118,7 +120,7 @@ public partial class DbReader
                 SELECT 1 FROM symbol_reference_candidates binding_candidate
                 WHERE binding_candidate.reference_id = snc.reference_id
                   AND binding_candidate.symbol_id = py_import.id)))" : "1 = 1";
-        var namedEvidenceResolutionState = _referenceIdentityContractCurrent
+        var namedEvidenceResolutionState = identityCurrent
             ? "CASE WHEN snc.source_lang = 'python' AND snc.evidence_resolution_state IN ('resolved', 'resolved_group') AND NOT "
               + namedTargetIdentityMatch + " THEN 'unavailable' ELSE snc.evidence_resolution_state END"
             : "snc.evidence_resolution_state";
@@ -143,13 +145,14 @@ public partial class DbReader
                 )";
 
         return new DependencyQueryExpressions(
+            identityCurrent,
             ReferenceLineJoinSql("r"),
             ReferenceContextSql("r"),
-            _referenceIdentityContractCurrent ? $"CASE WHEN {identityObservationScope} THEN r.id ELSE 0 END" : "CAST(0 AS INTEGER)",
-            _referenceIdentityContractCurrent ? $"CASE WHEN {identityObservationScope} THEN r.target_symbol_id ELSE NULL END" : "NULL",
+            identityCurrent ? $"CASE WHEN {identityObservationScope} THEN r.id ELSE 0 END" : "CAST(0 AS INTEGER)",
+            identityCurrent ? $"CASE WHEN {identityObservationScope} THEN r.target_symbol_id ELSE NULL END" : "NULL",
             $"CASE WHEN {identityObservationScope} THEN {resolutionState} ELSE NULL END",
             $"CASE WHEN {identityScopeCondition} THEN 1 ELSE 0 END",
-            _referenceIdentityContractCurrent ? "snc.identity_scoped = 0" : "snc.source_lang <> 'dependency_lock'",
+            identityCurrent ? "snc.identity_scoped = 0" : "snc.source_lang <> 'dependency_lock'",
             BuildLogicalDependencySymbolNameExpr("dst", "s.name"),
             BuildLogicalDependencySymbolSegmentCountExpr("dst", "s.name"),
             pythonImportMatchSignature,
@@ -159,9 +162,9 @@ public partial class DbReader
             sqlDependencyTargetMatch);
     }
 
-    private string BuildPythonDependencyTargetIdentityMatch()
+    private static string BuildPythonDependencyTargetIdentityMatch(bool identityCurrent)
     {
-        if (!_referenceIdentityContractCurrent)
+        if (!identityCurrent)
             return "0 = 1";
         // target_files aggregates definitions by file/name. Confirm membership in
         // that selected target rather than copying a source binding's state.
@@ -182,7 +185,7 @@ public partial class DbReader
     private DependencyQueryPlan BuildDependencyQueryPlan(DependencyQueryRequest request)
     {
         var expressions = BuildDependencyQueryExpressions();
-        var resolvedIdentity = BuildResolvedDependencyIdentitySql(request);
+        var resolvedIdentity = BuildResolvedDependencyIdentitySql(request, expressions.IdentityCurrent);
         var source = new DependencySourceSqlBuilder(this, request, expressions).Build();
         var sourceCandidate = new DependencySourceCandidateSqlBuilder(this, request, expressions).Build();
         var target = new DependencyTargetSqlBuilder(this, request, expressions).Build();

@@ -2,9 +2,9 @@ namespace CodeIndex.Database;
 
 public partial class DbReader
 {
-    private DependencySqlFragment BuildResolvedDependencyIdentitySql(DependencyQueryRequest request)
+    private static DependencySqlFragment BuildResolvedDependencyIdentitySql(DependencyQueryRequest request, bool identityCurrent)
     {
-        if (!_referenceIdentityContractCurrent)
+        if (!identityCurrent)
             return DependencySqlFragment.Empty;
 
         var builder = new DependencySqlFragmentBuilder();
@@ -19,14 +19,15 @@ public partial class DbReader
                        resolved.raw_reference_kind,
                        resolved.target_kind
                 FROM (
-                    SELECT DISTINCT lrp.source_path,
+                    SELECT lrp.source_path,
                            target_file.path AS target_path,
                            lrp.symbol_name,
                            lrp.reference_id,
                            lrp.source_lang,
                            lrp.evidence_resolution_state,
                            lrp.raw_reference_kind,
-                           target.kind AS target_kind
+                           CASE WHEN MIN(target.kind) = MAX(target.kind) THEN MIN(target.kind)
+                                ELSE 'symbol' END AS target_kind
                     FROM logical_references_primary lrp
                     JOIN symbols target ON target.id IN (
                         SELECT lrp.target_symbol_id WHERE lrp.resolution_state = 'resolved'
@@ -50,7 +51,11 @@ public partial class DbReader
             request.SuppressDependencyNoise,
             "resolvedDependency"));
         var limitSql = request.Lang == "csharp" ? " LIMIT @sourceCandidateLimit" : string.Empty;
+        // One observation contributes once per destination, including a group
+        // containing different kinds (for example C++ struct/function stat).
         builder.Append(@"
+                     GROUP BY lrp.source_path, target_file.path, lrp.symbol_name, lrp.reference_id,
+                              lrp.source_lang, lrp.evidence_resolution_state, lrp.raw_reference_kind
                      ORDER BY lrp.source_path, lrp.symbol_name, lrp.reference_id" + limitSql + @"
                 ) resolved
                 GROUP BY resolved.source_path, resolved.target_path, resolved.symbol_name,

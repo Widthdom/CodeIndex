@@ -122,6 +122,9 @@ imported definition: its edge remains visible with `unavailable` evidence, and
 resolution filters use that effective state before edge ranking and limits.
 SQL qualification, metadata eligibility, special file-path edges and C# candidate
 budgets retain their existing semantics. Existing current indexes need no reindex.
+Each reference contributes once per destination file even when its candidates have
+different kinds; such mixed evidence uses `target_kind: symbol`. Recheck the identity
+contract for each query so reused readers discard invalidated target identities.
 
 ## Dependency-cycle target identity
 
@@ -4810,6 +4813,9 @@ Issue #5321 は、同時に開いている補間フレームを最大 64、式�
 定義の確定を意味しないため、辺を残して証拠を `unavailable` とし、順位付け・件数制限より
 前にその状態で解決状態フィルターを適用します。SQL 修飾名、metadata の適格性、特殊な
 ファイルパスの辺、C# の候補上限は既存の意味を保ちます。現行 index の再作成は不要です。
+候補の種類が異なっても各参照は宛先ファイルごとに一度だけ数え、混在する証拠は
+`target_kind: symbol` とします。クエリごとに識別契約を再確認し、再利用した Reader が
+無効化済みの参照先情報を使い続けないようにします。
 
 ## 依存循環の参照先識別
 
