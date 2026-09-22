@@ -286,22 +286,19 @@ public sealed class QueryCommandRunnerIssue5230Tests
                 .GetProperty("next_cursor")
                 .GetString());
 
-            var (invalidExit, _, invalidError) = CaptureConsole(() => ProgramRunner.Run(
-                [.. args, "--cursor", "response:v2:invalid"], _jsonOptions, "test"));
-            Assert.Equal(CommandExitCodes.UsageError, invalidExit);
-            Assert.Contains("cursor", invalidError, StringComparison.OrdinalIgnoreCase);
+            AssertMachineCursorError(CaptureConsole(() => ProgramRunner.Run(
+                [.. args, "--cursor", "response:v2:invalid"], _jsonOptions, "test")),
+                "cursor_malformed");
 
-            var (mismatchExitCode, mismatchStdout, mismatchStderr) = CaptureConsole(() =>
+            AssertMachineCursorError(CaptureConsole(() =>
                 ProgramRunner.Run(
                     [
                         "symbols", "Issue5230Validation", "--kind", "interface",
                         "--db", dbPath, "--json", "--limit", "1", "--cursor", cursor,
                     ],
                     _jsonOptions,
-                    "1.0.0-test"));
-            Assert.Equal(CommandExitCodes.UsageError, mismatchExitCode);
-            Assert.Equal(string.Empty, mismatchStdout);
-            Assert.Contains("does not match this command, query, or filter set", mismatchStderr, StringComparison.Ordinal);
+                    "1.0.0-test")),
+                "cursor_mismatch");
 
             using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
@@ -311,18 +308,34 @@ public sealed class QueryCommandRunnerIssue5230Tests
                     "2026-08-31T23:59:59.0000000+00:00");
             }
 
-            var (staleExitCode, staleStdout, staleStderr) = CaptureConsole(() =>
+            AssertMachineCursorError(CaptureConsole(() =>
                 ProgramRunner.Run(
                     args.Concat(["--cursor", cursor]).ToArray(),
                     _jsonOptions,
-                    "1.0.0-test"));
-            Assert.Equal(CommandExitCodes.UsageError, staleExitCode);
-            Assert.Equal(string.Empty, staleStdout);
-            Assert.Contains("index generation changed", staleStderr, StringComparison.Ordinal);
+                    "1.0.0-test")),
+                "cursor_stale");
         }
         finally
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+
+        static void AssertMachineCursorError(
+            (int ExitCode, string Stdout, string Stderr) response,
+            string category)
+        {
+            Assert.Equal(CommandExitCodes.UsageError, response.ExitCode);
+            Assert.Empty(response.Stderr);
+            using var document = JsonDocument.Parse(response.Stdout);
+            var error = document.RootElement;
+            Assert.Equal("1", error.GetProperty("api_version").GetString());
+            Assert.Equal("error", error.GetProperty("status").GetString());
+            Assert.Equal("symbols", error.GetProperty("command").GetString());
+            Assert.Equal(CommandExitCodes.UsageError, error.GetProperty("exit_code").GetInt32());
+            Assert.Equal(CommandErrorCodes.UsageError, error.GetProperty("error_code").GetString());
+            Assert.Equal(category, error.GetProperty("category").GetString());
+            Assert.Contains(category, error.GetProperty("message").GetString(), StringComparison.Ordinal);
+            Assert.False(string.IsNullOrWhiteSpace(error.GetProperty("hint").GetString()));
         }
     }
 

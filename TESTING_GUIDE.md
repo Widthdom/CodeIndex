@@ -6,6 +6,11 @@ selectors, malformed/mismatched/stale cursors, human and count controls, and exa
 UTF-8 byte limits (including pretty output and the final newline) on net8/net9.
 Run it with the envelope, find, pagination and response-budget regression suites;
 the #4863 cursor helper now requires structured output for every machine request.
+Include `QueryCommandRunnerIssue5230Tests` when validating the shared wrapper:
+its symbols NDJSON cursor fixture must assert stdout error identity, all three
+cursor categories and recovery hints with empty stderr. Use Release net8/net9
+coverage for `Cursor|Bounded|JsonEnvelopeWrapper|RunFind|FindMultiline|ResponseBudget`
+test-name groups alongside the issue-specific find/MCP suites.
 
 `RunDeps_PythonContextCoordinatesPreserveBothDirections_Issue5401` shares indexed
 fixtures across ordinary dependencies and cycles for zero/space/tab indentation,
@@ -1825,6 +1830,10 @@ Issue #5300 のテストは隣接・入れ子の C# callable、対象行の除�
 不正・不一致・世代変更済みカーソル、人向け出力と件数の対照、pretty 出力と末尾改行を含む
 UTF-8 バイト境界を net8/net9 で維持してください。envelope・find・ページ分割・応答サイズの
 回帰テストと実行し、#4863 のカーソル検証も全機械向け指定で構造化出力を必須にします。
+共有ラッパーの検証には `QueryCommandRunnerIssue5230Tests` も含めます。symbols の
+NDJSON カーソル fixture で stdout のエラー識別情報・3種類の理由・復旧案内と、空の stderr を
+検証してください。Issue 別の find/MCP テストとともに、`Cursor|Bounded|JsonEnvelopeWrapper|RunFind|FindMultiline|ResponseBudget`
+を名前に含むテストを Release 構成の net8/net9 で実行します。
 
 `FindMultilineTests` と `McpServerIssue5399Tests` は、索引の LF/CRLF 窓、補助平面文字の
 UTF-16 座標、重複チャンク、一致範囲の上限内外、アンカー、dot-all、ゼロ幅、非重複、件数と行の
