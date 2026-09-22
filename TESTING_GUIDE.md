@@ -1,5 +1,12 @@
 # Testing Guide
 
+`FindChunkReadTests` (#5415) shares a many-chunk fixture across literal, exact,
+trigram-candidate and line-regex row/count queries on current and read-only legacy
+indexes. Keep ordered query-plan checks, bounded metadata pages, reversed insertion,
+overlap ownership, missing/live source controls, NULL-content failures, line caps,
+and row/count continuation across chunk pages. Run on net8/net9 alongside existing
+find, pagination and MCP regressions; no peak-memory or latency claim is implied.
+
 `RunDeps_PythonContextCoordinatesPreserveBothDirections_Issue5401` shares indexed
 fixtures across ordinary dependencies and cycles for zero/space/tab indentation,
 short/long names, aliases, relative imports and repeated same-line member calls.
@@ -1813,6 +1820,13 @@ Issue #5300 のテストは隣接・入れ子の C# callable、対象行の除�
 パーサー（#5297）の回帰テストとともに net8.0 / net9.0 で実行します。
 
 # テストガイド
+
+`FindChunkReadTests`（#5415）は多数のチャンクを持つ共通 fixture を使い、現在の索引と
+読取専用の旧索引でリテラル・exact・trigram 候補・行単位正規表現の行／件数検索を検証します。
+順序付きクエリ計画、上限付きメタデータページ、逆順挿入、重複行の優先順、索引本文の欠落と
+実ファイルの対照、NULL 本文エラー、行上限、チャンクページをまたぐ行／件数の継続取得を
+維持してください。既存の find・ページ分割・MCP 回帰とともに net8/net9 で実行します。
+ピークメモリや実行時間の測定結果を保証するテストではありません。
 
 `FindMultilineTests` と `McpServerIssue5399Tests` は、索引の LF/CRLF 窓、補助平面文字の
 UTF-16 座標、重複チャンク、一致範囲の上限内外、アンカー、dot-all、ゼロ幅、非重複、件数と行の
