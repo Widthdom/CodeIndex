@@ -3596,7 +3596,10 @@ public class LspServerTests
                         initializeParams["capabilities"] = JsonNode.Parse(capabilities);
                     using (var initializeInput = new MemoryStream(Encoding.UTF8.GetBytes(Frame(new JsonObject
                     {
-                        ["jsonrpc"] = "2.0", ["id"] = 5395, ["method"] = "initialize", ["params"] = initializeParams,
+                        ["jsonrpc"] = "2.0",
+                        ["id"] = 5395,
+                        ["method"] = "initialize",
+                        ["params"] = initializeParams,
                     }.ToJsonString()))))
                     using (var initializeOutput = new MemoryStream())
                     {
@@ -4390,7 +4393,9 @@ public class LspServerTests
             using var server = new LspServer(new DbReader(db), "1.2.3", jsonOptions, projectRoot);
             InitializeSession(server, JsonSerializer.Serialize(new
             {
-                jsonrpc = "2.0", id = 5395, method = "initialize",
+                jsonrpc = "2.0",
+                id = 5395,
+                method = "initialize",
                 @params = new { capabilities = new { textDocument = new { documentSymbol = new { hierarchicalDocumentSymbolSupport = hierarchy } } } },
             }));
             var request = JsonSerializer.Serialize(new
