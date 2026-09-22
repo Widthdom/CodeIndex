@@ -5,6 +5,23 @@ public partial class DbReader
     private static DependencySqlFragment BuildDependencyFinalSql(DependencyQueryRequest request)
     {
         var sql = new DependencySqlFragmentBuilder();
+        sql.Append(@"
+            ),
+            edges AS (
+                SELECT * FROM unfiltered_edges WHERE 1 = 1");
+        // Resolution belongs to the selected target; import bindings can become
+        // unavailable only after target selection. Filter before ranking/limits.
+        if (request.EvidenceFilter is { Resolutions.Count: > 0 } filter)
+        {
+            var parameters = new List<string>();
+            for (var i = 0; i < filter.Resolutions.Count; i++)
+            {
+                var name = SqliteDynamicSql.BuildParameterName("selectedEvidenceResolution", i);
+                parameters.Add(name);
+                sql.AddText(name, filter.Resolutions[i]);
+            }
+            sql.Append(" AND evidence_resolution_state IN (" + string.Join(",", parameters) + ")");
+        }
         AppendDependencyEdgeTotals(sql, request.SuppressDependencyNoise);
         AppendDependencyEvidence(sql);
         AppendDependencySymbolsAndSelect(sql, request);

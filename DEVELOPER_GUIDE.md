@@ -114,6 +114,23 @@ Issue #5321 resumes ordinary/verbatim/raw interpolation with at most 64 active i
 
 Build `CSharpOriginContext` once per file prefix with cancellation and share its origin spans across rows and occurrences. Track schema argument positions during that same lexical pass, with at most 64 active builder invocations and a 64-line lookback; overflow leaves affected labels unknown. Cache regex/help classification per opening line, with cancellation at label lookup. Do not rescan preceding lines or reconstruct schema context per match or per literal.
 
+## Ordinary dependency target identity
+
+Ordinary single-database `deps` (CLI and MCP) extends persisted-ID matching to
+non-C# code references such as Java and JavaScript: resolved references use target
+IDs, while grouped or ambiguous references use candidate IDs. Self-calls cannot borrow same-name
+definitions in other files. Unresolved references retain name fallback and their
+uncertain state; missing/stale identity contracts retain `unavailable` evidence.
+Python keeps module/alias ownership checks and follows only the selected definition
+or import binding. A confirmed source-local import binding does not confirm the
+imported definition: its edge remains visible with `unavailable` evidence, and
+resolution filters use that effective state before edge ranking and limits.
+SQL qualification, metadata eligibility, special file-path edges and C# candidate
+budgets retain their existing semantics. Existing current indexes need no reindex.
+Each reference contributes once per destination file even when its candidates have
+different kinds; such mixed evidence uses `target_kind: symbol`. Recheck the identity
+contract for each query so reused readers discard invalidated target identities.
+
 ## Dependency-cycle target identity
 
 For non-SQL `deps --cycles` (MCP: `deps` with `cycles=true`), current reference
@@ -4794,6 +4811,21 @@ Issue #5321 は、同時に開いている補間フレームを最大 64、式�
 `DbSearchReader.AttachCSharpOriginLines` は共有のインデックス済みファイル先頭部分を snippet 分類器へ渡します。ファイル・パスごとの 4,096 行、8 Mi 文字、128 チャンクの読み取り上限と重複分の計上を維持し、query のページングで上限を変えないでください。文字数上限は既存の 4 Mi 文字の意味解析ウィンドウより大きく設定しています。欠落行を補わず、字句分類器がコードと推測せず `unknown` を返すようにします。通常／token-boundary の行・件数経路と MCP で同じ origin 判定と元の UTF-16 座標を維持してください。永続スキーマの変更はありません。
 
 `CSharpOriginContext` はキャンセルに対応してファイル先頭部分ごとに一度だけ構築し、origin の区間を行・一致間で共有します。同じ字句走査で schema の引数位置を追跡し、同時に開いている builder 呼び出しは最大 64、遡及範囲は 64 行とし、超過時は対象ラベルを不明にします。regex/help 分類は開始行ごとにキャッシュし、ラベル照会時にもキャンセルを確認してください。一致やリテラルごとに先行行を再走査したり schema コンテキストを再構築したりしないでください。
+
+## 通常の依存検索における参照先識別
+
+単一 DB に対する通常の `deps`（CLI / MCP）は、Java / JavaScript などの非 C# の
+コード参照にも、現行の保存済み参照先 ID と、グループ解決・曖昧な参照の候補 ID を
+使います。自己呼び出しが別ファイルの同名定義への依存になることはありません。
+未解決参照は名前による照合と不確かな状態を保ち、識別情報の契約が欠落・古い場合は
+`unavailable` を維持します。Python はモジュール・別名の所有関係を確認し、選択された
+定義または import binding だけをたどります。参照元の import binding の確定は import 先の
+定義の確定を意味しないため、辺を残して証拠を `unavailable` とし、順位付け・件数制限より
+前にその状態で解決状態フィルターを適用します。SQL 修飾名、metadata の適格性、特殊な
+ファイルパスの辺、C# の候補上限は既存の意味を保ちます。現行 index の再作成は不要です。
+候補の種類が異なっても各参照は宛先ファイルごとに一度だけ数え、混在する証拠は
+`target_kind: symbol` とします。クエリごとに識別契約を再確認し、再利用した Reader が
+無効化済みの参照先情報を使い続けないようにします。
 
 ## 依存循環の参照先識別
 

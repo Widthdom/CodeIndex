@@ -12,9 +12,10 @@ public partial class QueryCommandRunnerTests
     [Theory]
     [InlineData("python", "py", "def main():\n    pass\n\nmain()\n")]
     [InlineData("javascript", "js", "function main() { return 1; }\nmain();\n")]
+    [InlineData("javascript", "js", "class OWNER {\n    main() { this.main(); }\n}\n")]
     [InlineData("java", "java", "class OWNER {\n    void main() { main(); }\n}\n")]
     [InlineData("csharp", "cs", "class OWNER {\n    void main() { main(); }\n}\n")]
-    public void RunDeps_CyclesDoNotJoinIndependentEntrypoints_Issue5391(string language, string extension, string source)
+    public void RunDeps_CyclesDoNotJoinIndependentEntrypoints_Issue5391_Issue5400(string language, string extension, string source)
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_cycle_local_identity_5391");
         foreach (var owner in new[] { "Left", "Right" })
@@ -38,20 +39,15 @@ public partial class QueryCommandRunnerTests
         Assert.Empty(cycles.GetProperty("cycles").EnumerateArray());
         Assert.True(cycles.GetProperty("analysis_complete").GetBoolean());
         Assert.True(cycles.GetProperty("total_cycle_count_authoritative").GetBoolean());
-        if (language is "python" or "csharp")
-        {
-            var ordinary = CaptureConsole(() => QueryCommandRunner.RunDeps(
-                ["--db", dbPath, "--json", "--lang", language, "--symbol", "main"], _jsonOptions));
-            Assert.Equal(CommandExitCodes.Success, ordinary.Result);
-            using var document = ParseJsonOutput(ordinary.Stdout);
-            Assert.Empty(document.RootElement.GetProperty("edges").EnumerateArray());
-        }
+        Assert.Empty(RunOrdinaryIdentityDeps(dbPath, "--lang", language, "--symbol", "main").GetProperty("edges").EnumerateArray());
 
         using var server = new McpServer(dbPath, "test", dbPathExplicit: true);
         var mcp = RunIdentityCycleMcp(server, new JsonObject { ["cycles"] = true, ["lang"] = language });
         Assert.Equal(0, mcp["graph_edge_count"]!.GetValue<int>());
         Assert.True(mcp["analysis_complete"]!.GetValue<bool>());
         Assert.True(mcp["total_cycle_count_authoritative"]!.GetValue<bool>());
+        var ordinaryMcp = RunIdentityCycleMcp(server, new JsonObject { ["lang"] = language });
+        Assert.Empty(ordinaryMcp["edges"]!.AsArray());
     }
 
     [Theory]

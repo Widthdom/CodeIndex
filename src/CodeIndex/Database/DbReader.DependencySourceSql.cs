@@ -25,7 +25,17 @@ public partial class DbReader
         {
             AppendPrimaryReferences();
             AppendSourceScope();
-            _sql.Append(_reader.BuildDependencyEvidenceFilter(_request.EvidenceFilter, "dependencyEvidence"));
+            _sql.Append(_reader.BuildDependencyEvidenceFilter(
+                Models.DependencyEvidenceFilter.Create(kinds: _request.EvidenceFilter?.Kinds), "dependencyEvidence"));
+            if (_request.EvidenceFilter is { Resolutions.Count: > 0 } filter)
+            {
+                // Keep existing source budgets for evidence whose state cannot
+                // change during target selection. Python binding evidence must wait.
+                var resolutionFilter = _reader.BuildDependencyEvidenceFilter(
+                    Models.DependencyEvidenceFilter.Create(resolutions: filter.Resolutions), "sourceEvidence");
+                _sql.Append(" AND (src.lang = 'python' OR (1 = 1" + resolutionFilter.Sql + "))");
+                _sql.AddParameters(resolutionFilter.Parameters);
+            }
             AppendLogicalReferences();
             AppendSourceNameCounts();
             return _sql.Build();
@@ -39,6 +49,7 @@ public partial class DbReader
                        src.path AS source_path,
                        src.lang AS source_lang,
                        " + _expressions.ReferenceIdSql + @" AS reference_id,
+                       " + _expressions.TargetSymbolIdSql + @" AS target_symbol_id,
                        " + _expressions.ScopedResolutionStateSql + @" AS resolution_state,
                        " + _expressions.IdentityScopedSql + @" AS identity_scoped,
                        " + _reader.DependencyResolutionStateSql() + @" AS evidence_resolution_state,
@@ -81,10 +92,13 @@ public partial class DbReader
         private void AppendLogicalReferences()
         {
             _sql.Append(@"
-                GROUP BY evidence_resolution_state, src.id, src.path, src.lang, " + _expressions.ReferenceIdSql + @", " + _expressions.ScopedResolutionStateSql + @", " + _expressions.IdentityScopedSql + @", r.symbol_name, " + _expressions.ContextSql + @", r.container_name, r.line, r.column_number, r.reference_kind, logical_reference_kind
+                GROUP BY evidence_resolution_state, src.id, src.path, src.lang, " + _expressions.ReferenceIdSql + @", " + _expressions.TargetSymbolIdSql + @", " + _expressions.ScopedResolutionStateSql + @", " + _expressions.IdentityScopedSql + @", r.symbol_name, " + _expressions.ContextSql + @", r.container_name, r.line, r.column_number, r.reference_kind, logical_reference_kind
             ),
             logical_references AS (
-                SELECT source_file_id, source_path, source_lang, reference_id, identity_scoped, evidence_resolution_state,
+                SELECT source_file_id, source_path, source_lang,
+                       CASE WHEN source_lang = 'python' THEN reference_id ELSE 0 END AS reference_id,
+                       CASE WHEN source_lang = 'python' THEN target_symbol_id ELSE NULL END AS target_symbol_id,
+                       identity_scoped, evidence_resolution_state,
                        " + BuildLogicalReferenceNameExpr("source_lang", "symbol_name", "context", "container_name", "column_number") + @" AS symbol_name,
                        " + BuildLogicalReferenceSegmentCountExpr("source_lang", "symbol_name", "context", "container_name", "column_number") + @" AS symbol_segment_count,
                        " + BuildLogicalReferenceLeafFallbackAllowedExpr("source_lang", "symbol_name", "context", "container_name", "column_number") + @" AS allow_leaf_fallback,
@@ -104,7 +118,7 @@ public partial class DbReader
                 -- deps がクラス側のファイルを target として join できるようにする。alias 行には
                 -- フラグを付け、edges CTE 側で class-like target だけに限定する。これにより、
                 -- 偶然 'FooAttribute' という名前を持つ関数やプロパティへの誤ったエッジを防ぐ。
-                SELECT source_file_id, source_path, source_lang, reference_id, identity_scoped, evidence_resolution_state,
+                SELECT source_file_id, source_path, source_lang, 0, NULL, identity_scoped, evidence_resolution_state,
                        symbol_name || 'Attribute' AS symbol_name,
                        1 AS symbol_segment_count,
                        0 AS allow_leaf_fallback,
@@ -134,6 +148,8 @@ public partial class DbReader
                 SELECT source_file_id,
                        source_path,
                        source_lang,
+                       reference_id,
+                       target_symbol_id,
                        identity_scoped,
                        evidence_resolution_state,
                        symbol_name,
@@ -157,7 +173,7 @@ public partial class DbReader
                 "sourceDependency",
                 "source_lang = 'csharp'"));
             _sql.Append(@"
-                GROUP BY source_file_id, source_path, source_lang, identity_scoped, evidence_resolution_state, symbol_name, symbol_segment_count, allow_leaf_fallback, raw_symbol_name, context, column_number, raw_reference_kind, logical_reference_kind, is_attribute_alias, is_metadata
+                GROUP BY source_file_id, source_path, source_lang, reference_id, target_symbol_id, identity_scoped, evidence_resolution_state, symbol_name, symbol_segment_count, allow_leaf_fallback, raw_symbol_name, context, column_number, raw_reference_kind, logical_reference_kind, is_attribute_alias, is_metadata
             )");
         }
     }
