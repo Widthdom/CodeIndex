@@ -104,11 +104,20 @@ public class JsonOutputApiVersionTests
     public void UtilityCommands_JsonSuccessAndFailureResponsesIncludeApiVersion_Issue4579()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_api_version_utilities_4579");
+        var previousDirectory = Environment.CurrentDirectory;
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             TestProjectHelper.InsertIndexedFile(dbPath, "src/Lib.cs", "csharp", "namespace Demo;\nclass Lib { }\n");
             Directory.CreateDirectory(Path.Combine(projectRoot, ".git", "hooks"));
+
+            // Keep workspace/root discovery away from a concurrently refreshed checkout (#5404).
+            using var workspaceEnvironment = EnvironmentVariableScope.Capture(
+                ActiveWorkspace.EnvironmentVariable, "XDG_CONFIG_HOME", "CDIDX_DATA_DIR");
+            workspaceEnvironment.Set(ActiveWorkspace.EnvironmentVariable, null);
+            workspaceEnvironment.Set("XDG_CONFIG_HOME", Path.Combine(projectRoot, "config"));
+            workspaceEnvironment.Set("CDIDX_DATA_DIR", Path.GetDirectoryName(dbPath));
+            Environment.CurrentDirectory = projectRoot;
 
             AssertCommandApiVersion(() => DbCommandRunner.Run(
                 ["restore-backups", "--list", "--db", dbPath, "--json"],
@@ -119,9 +128,18 @@ public class JsonOutputApiVersionTests
             AssertCommandApiVersion(() => HookCommandRunner.Run(
                 ["status", "--project", projectRoot, "--json"],
                 _jsonOptions));
-            AssertCommandApiVersion(() => WorkspaceCommandRunner.Run(
+            var inactiveWorkspace = AssertCommandApiVersion(() => WorkspaceCommandRunner.Run(
                 ["current", "--json"],
                 _jsonOptions));
+            Assert.False(inactiveWorkspace["active"]!.GetValue<bool>());
+            Assert.Null(inactiveWorkspace["workspace"]);
+
+            workspaceEnvironment.Set(ActiveWorkspace.EnvironmentVariable, dbPath);
+            var activeWorkspace = AssertCommandApiVersion(() => WorkspaceCommandRunner.Run(
+                ["current", "--json"],
+                _jsonOptions));
+            Assert.True(activeWorkspace["active"]!.GetValue<bool>());
+            Assert.Equal(dbPath, activeWorkspace["workspace"]?["db_path"]?.GetValue<string>());
             AssertCommandApiVersion(() => QueryCommandRunner.RunLanguages(
                 ["--json"],
                 _jsonOptions));
@@ -161,6 +179,7 @@ public class JsonOutputApiVersionTests
         }
         finally
         {
+            Environment.CurrentDirectory = previousDirectory;
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }
@@ -231,19 +250,20 @@ public class JsonOutputApiVersionTests
         throw new InvalidOperationException("No JSON object found in stdout.");
     }
 
-    private static void AssertCommandApiVersion(Func<int> command)
+    private static JsonObject AssertCommandApiVersion(Func<int> command)
     {
         var (exitCode, stdout, stderr) = CaptureConsole(command);
         Assert.True(
             exitCode == CommandExitCodes.Success,
             $"Expected success but got exit {exitCode}. stdout: {stdout} stderr: {stderr}");
-        AssertApiVersion(stdout);
+        return AssertApiVersion(stdout);
     }
 
-    private static void AssertApiVersion(string stdout)
+    private static JsonObject AssertApiVersion(string stdout)
     {
         var json = ParseFirstObject(stdout);
         Assert.Equal(JsonOutputContract.ApiVersion, json["api_version"]?.GetValue<string>());
+        return json;
     }
 
     private static (int ExitCode, string Stdout, string Stderr) CaptureConsole(Func<int> action)
