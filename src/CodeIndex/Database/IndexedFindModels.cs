@@ -24,7 +24,8 @@ public partial class DbReader
         bool UseIndexedLiteralCandidates,
         FindResumePosition Resume,
         CancellationToken CancellationToken,
-        FindSemanticFilters? SemanticFilters);
+        FindSemanticFilters? SemanticFilters,
+        FindWindowOptions? Window);
 
     private sealed record IndexedFindListRequest(
         IndexedFindScanRequest Scan,
@@ -77,7 +78,8 @@ public partial class DbReader
 
     private readonly record struct IndexedLine(int Number, string Text);
 
-    private readonly record struct FindLineMatch(int Column, int Length, SearchMatchFacet? Facet = null);
+    private readonly record struct FindLineMatch(int Column, int Length, SearchMatchFacet? Facet = null,
+        int? EndLine = null, int? EndColumn = null);
 
     private readonly record struct PendingFileFindMatch(
         int LineNumber,
@@ -85,10 +87,23 @@ public partial class DbReader
         int Length,
         int SnippetStart,
         int SnippetEnd,
-        SearchMatchFacet? Facet);
+        SearchMatchFacet? Facet,
+        int? EndLine,
+        int? EndColumn);
 
     private sealed class FindScanState(FindResumePosition resume)
     {
+        internal bool ResumedByOffset { get; init; }
+        internal FindWindowOptions? Window { get; set; }
+        internal FindWindowBudget? WindowBudget { get; set; }
+        internal void StopWindow(string reason)
+        {
+            Truncated = true;
+            TruncationReason ??= reason;
+            NextPath = null;
+            NextLine = NextFileOrdinal = NextMatchOrdinal = NextByteOffset = null;
+        }
+        internal void SetWindowResumeColumn(int byteOffset) => NextByteOffset = byteOffset;
         internal int UnknownOriginMatches { get; set; }
         internal bool ClassificationApplied { get; set; }
         internal int OriginPasses { get; set; } = 1;
@@ -162,8 +177,8 @@ public partial class DbReader
                 FilesScanned,
                 LinesScanned,
                 Truncated,
-                CapReached: Truncated,
-                TimedOut: false,
+                CapReached: Truncated && TruncationReason != "multiline_source_gap",
+                TimedOut: TruncationReason == "multiline_query_time",
                 TruncationReason,
                 candidateFileLimit,
                 lineLimit,
@@ -179,6 +194,8 @@ public partial class DbReader
                 UnknownOriginMatches,
                 OriginIncompleteReasons.ToArray(),
                 RetryOriginPasses,
-                OriginPasses);
+                OriginPasses,
+                Window,
+                resume.Path is not null || ResumedByOffset);
     }
 }

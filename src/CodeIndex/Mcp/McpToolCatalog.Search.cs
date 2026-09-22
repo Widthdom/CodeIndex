@@ -24,8 +24,30 @@ public partial class McpServer
         }
 
         scopedFind["description"] = scopedFind["description"]!.GetValue<string>()
-            + " Semantic filters require regex=true. / 意味フィルターには regex=true が必要。";
+            + " Regex is line-local unless multiline=true (example: A\\nB). Semantic filters require regex=true and multiline=false. / 通常の正規表現は行単位。複数行の例 A\\nB には multiline=true を指定。意味フィルターは regex=true、multiline=false が必要。";
         var scopedProperties = scopedFind["inputSchema"]!["properties"]!.AsObject();
+        scopedProperties["multiline"] = new JsonObject
+        {
+            ["type"] = "boolean",
+            ["default"] = false,
+            ["description"] = "Pass bounded multiline source to regex=true; default regex is line-local. Example: A\\nB. No semantic/focus/context filters. Non-overlapping matches expose exclusive match_end_line/match_end_column; LF-normalized source, UTF-16 columns. See docs/find-multiline.md.",
+        };
+        scopedProperties["windowLines"] = new JsonObject
+        {
+            ["type"] = "integer",
+            ["minimum"] = 1,
+            ["maximum"] = 64,
+            ["default"] = 8,
+            ["description"] = "Maximum physical lines per multiline owner window; requires multiline=true and binds cursors.",
+        };
+        scopedProperties["windowBytes"] = new JsonObject
+        {
+            ["type"] = "integer",
+            ["minimum"] = 1,
+            ["maximum"] = 262144,
+            ["default"] = 65536,
+            ["description"] = "Maximum LF-normalized UTF-8 window bytes; overflow is partial, never authoritative absence. Requires multiline=true; binds cursors.",
+        };
         scopedProperties["cursor"] = new JsonObject
         {
             ["type"] = "string",
@@ -59,7 +81,7 @@ public partial class McpServer
             ["description"] = "Maximum indexed lines per all=true scan page; may change when resuming a cursor. Requires all=true.",
         };
         tools.Add(CreateToolDefinition("find",
-            "Bounded repository-wide literal or regex find over indexed files. Pass all=true or an explicit path. Resume next_cursor after row, file, line, or byte caps; inspect scan_complete, partial_result, authority, and recovery_guidance. Semantic filters require regex=true and reuse CLI classification. / 索引済みファイルを対象とする上限付きのリポジトリ横断検索。all=true または path を指定する。行数・ファイル数・走査行数・応答サイズの上限に達したら next_cursor で続行し、走査完了・部分結果・確定性・復旧案内を確認する。意味フィルターは regex=true が必要で CLI と同じ分類を使う。",
+            "Bounded repository-wide literal or regex find over indexed files. Regex is line-local unless multiline=true (example: A\\nB); semantic filters cannot be combined with multiline. Pass all=true or an explicit path. Resume next_cursor after row, file, line, or byte caps; inspect scan_complete, partial_result, authority, and recovery_guidance. Semantic filters require regex=true and reuse CLI classification. / 索引済みファイルを対象とする上限付きのリポジトリ横断検索。通常の正規表現は行単位。複数行には multiline=true を指定し、意味フィルターとは併用しない。all=true または path を指定する。行数・ファイル数・走査行数・応答サイズの上限に達したら next_cursor で続行し、走査完了・部分結果・確定性・復旧案内を確認する。意味フィルターは regex=true が必要で CLI と同じ分類を使う。",
             schema, ReadOnlyAnnotations()));
     }
 }

@@ -2,6 +2,11 @@
 
 ## English
 
+Regex is line-local by default. To match adjacent lines such as `A\nB`, use
+`--regex --multiline` (MCP `regex:true, multiline:true`); see
+[bounded multiline windows](find-multiline.md#english). Window mode rejects semantic
+filters rather than silently dropping cross-origin evidence.
+
 Python code/comment/string origins are available in search and filtered regex find,
 including MCP. CLI Python context also supports `--origin-passes`; see the
 [syntax envelope, budgets and recovery contract](python-origin-classification.md#english).
@@ -190,6 +195,10 @@ text or JSON output when context from `--before`, `--after`, or
 `--snippet-lines` is needed.
 
 ## 日本語
+
+通常の正規表現は行単位です。`A\nB` のような隣接行には `--regex --multiline`
+（MCP は `regex:true, multiline:true`）を使います。[上限付きの複数行窓](find-multiline.md#日本語)を
+参照してください。窓モードは意味フィルターを明示的に拒否し、origin をまたぐ証拠を黙って省略しません。
 
 search と意味フィルター付き正規表現 find は、MCP を含め Python のコード・コメント・文字列の
 origin に対応します。CLI の Python 文脈も `--origin-passes` を使えます。

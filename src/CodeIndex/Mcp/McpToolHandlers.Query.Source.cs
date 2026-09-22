@@ -492,10 +492,23 @@ public partial class McpServer
             return maxLineWidthError;
         var exact = args?["exact"]?.GetValue<bool>() ?? false;
         var regex = args?["regex"]?.GetValue<bool>() ?? false;
+        var multiline = args?["multiline"]?.GetValue<bool>() ?? false;
+        var windowLines = ReadOptionalIntArgument(args, "windowLines");
+        var windowBytes = ReadOptionalIntArgument(args, "windowBytes");
+        if (!multiline && (windowLines.HasValue || windowBytes.HasValue))
+            return CreateToolErrorResponse(id, "windowLines/windowBytes require multiline=true.");
         if (ReadSemanticSearchFilters(id, args, out var semanticFilters) is { } semanticError)
             return semanticError;
         if (semanticFilters is not null && (!regex || semanticFilters.ResultKinds.Any(kind => kind is "declaration" or "call_site")))
             return CreateToolErrorResponse(id, "find semantic filters require regex=true; resultKind supports origins and identifier only.");
+        if (multiline)
+        {
+            var window = new FindWindowOptions(windowLines ?? 8, windowBytes ?? 65_536);
+            if (window.Validate(regex, semanticFilters, focusLine, focusColumn) is { } windowError)
+                return CreateToolErrorResponse(id, windowError);
+            if (before != 0 || after != 0 || maxLineWidth is < 1 or > 512)
+                return CreateToolErrorResponse(id, "Multiline find requires no surrounding context and maxLineWidth between 1 and 512.");
+        }
         var lineScanLimit = ReadOptionalIntArgument(args, "lineScanLimit");
         if (lineScanLimit.HasValue && !all)
             return CreateToolErrorResponse(id, "lineScanLimit requires all=true.");
@@ -521,6 +534,9 @@ public partial class McpServer
             ContextAfter = after,
             Exact = exact,
             Regex = regex,
+            Multiline = multiline,
+            WindowLines = windowLines,
+            WindowBytes = windowBytes,
             MaxLineWidth = maxLineWidth,
             FocusLine = focusLine,
             FocusColumn = focusColumn,

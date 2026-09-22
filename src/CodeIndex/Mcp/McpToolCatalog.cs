@@ -385,7 +385,7 @@ public partial class McpServer
                 ReadOnlyAnnotations()),
             CreateToolDefinition(
                 "find_in_file",
-                "Use this when the target file is already known and you need literal or regex navigation inside it. Prefer `excerpt` on returned lines as the next step. Find literal substring matches inside one known indexed file or a small explicit file list, with line numbers and short surrounding context. / 対象ファイルが既に分かっていて、その中を literal または regex で移動したいときに使う。次は返された行の `excerpt` を優先する。既知のインデックス済みファイル1件または少数の明示ファイル群の中で、行番号と短い前後文脈付きの一致を探す。",
+                "Use this when the target file is already known: regex is line-local unless multiline=true enables bounded A\\nB matching. Prefer `excerpt` on returned lines as the next step. Find literal substring matches inside one known indexed file or a small explicit file list, with line numbers and short surrounding context. / 対象が既知のときに使う。通常の regex は行単位で、複数行の A\\nB には multiline=true を指定する。次は返された行の `excerpt` を優先する。既知のインデックス済みファイル1件または少数の明示ファイル群の中で、行番号と短い前後文脈付きの一致を探す。",
                 new JsonObject
                 {
                     ["type"] = "object",

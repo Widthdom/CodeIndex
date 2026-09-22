@@ -82,6 +82,9 @@ public static partial class QueryCommandRunner
         private bool noVisibilityRank;
         private bool exact;
         private bool regex;
+        private bool multiline;
+        private int? windowLines;
+        private int? windowBytes;
         private bool prefix;
         private List<SearchGuardFilter> guardFilters = [];
         private int guardWindow = DbReader.DefaultSearchGuardWindow;
@@ -522,6 +525,9 @@ public static partial class QueryCommandRunner
                 NoVisibilityRank = noVisibilityRank,
                 Exact = exact,
                 Regex = regex,
+                Multiline = multiline,
+                WindowLines = windowLines,
+                WindowBytes = windowBytes,
                 Prefix = prefix,
                 GuardFilters = guardFilters,
                 GuardWindow = guardWindow,
