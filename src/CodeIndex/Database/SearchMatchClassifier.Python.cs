@@ -83,25 +83,7 @@ internal static partial class SearchMatchClassifier
                     }
                     else if (ch == '\\')
                     {
-                        i++;
-                        if (i == source.Length)
-                            continuedString = true;
-                        // Backslashes do not escape f-string braces, even in raw strings.
-                        else if (frame.Formatted && !frame.Raw && source[i] == 'N' &&
-                                 i + 1 < source.Length && source[i + 1] == '{')
-                        {
-                            i += 2;
-                            while (i < source.Length && source[i] != '}')
-                            {
-                                if ((i & 4095) == 0) _cancellation.ThrowIfCancellationRequested();
-                                i++;
-                            }
-                            if (i == source.Length)
-                                return Fail(line, start, "unsupported_python_escape");
-                            i++;
-                        }
-                        else if (!frame.Formatted || source[i] is not ('{' or '}'))
-                            i++;
+                        if (!ConsumeEscape(source, ref i, frame.Raw, frame.Formatted, line, out continuedString)) return false;
                     }
                     else if (frame.Formatted && ch is '{' or '}')
                     {
@@ -123,20 +105,47 @@ internal static partial class SearchMatchClassifier
 
                 if (frame?.Kind == FrameKind.Format)
                 {
-                    if (ch == '}')
-                        _frames.RemoveAt(_frames.Count - 1);
-                    else if (ch == '{')
+                    if (ch == '\\')
                     {
-                        if (!Push(new Frame(FrameKind.Expression, line, i), line, i)) return false;
+                        if (!ConsumeEscape(source, ref i, OuterString()?.Raw == true, true, line, out continuedString)) return false;
                     }
-                    else if (IsOuterQuote(ch))
-                        return Fail(line, i, "unbalanced_interpolation");
-                    if (!Add(parsed, i, ++i, StringLiteral, line)) return false;
+                    else
+                    {
+                        if (ch == '}')
+                            _frames.RemoveAt(_frames.Count - 1);
+                        else if (ch == '{')
+                        {
+                            if (!Push(new Frame(FrameKind.Expression, line, i), line, i)) return false;
+                        }
+                        else if (OuterString()?.Quote == ch)
+                            return Fail(line, i, "unbalanced_interpolation");
+                        i++;
+                    }
+                    if (!Add(parsed, start, i, StringLiteral, line)) return false;
                     continue;
                 }
 
+                if (ch == '#')
+                {
+                    parsed.EndOrigin = Comment;
+                    return Add(parsed, i, source.Length, Comment, line);
+                }
+                if (frame is not null && (char.IsWhiteSpace(ch) || ch == '\\' && i + 1 == source.Length))
+                {
+                    i++;
+                    continue;
+                }
                 if (frame is not null && frame.Delimiters.Count == 0)
                 {
+                    if (frame.AwaitingConversion)
+                    {
+                        if (ch is not ('s' or 'r' or 'a'))
+                            return Fail(line, i, "unsupported_interpolation_conversion");
+                        frame.AwaitingConversion = false;
+                        frame.Conversion = true;
+                        if (!Add(parsed, i, ++i, StringLiteral, line)) return false;
+                        continue;
+                    }
                     if (ch == '}')
                     {
                         if (!frame.HasExpression) return Fail(line, i, "unbalanced_interpolation");
@@ -153,14 +162,13 @@ internal static partial class SearchMatchClassifier
                     }
                     if (ch == '!' && (i + 1 == source.Length || source[i + 1] != '='))
                     {
-                        if (!frame.HasExpression || frame.Conversion || i + 1 == source.Length || source[i + 1] is not ('s' or 'r' or 'a'))
+                        if (!frame.HasExpression || frame.Conversion)
                             return Fail(line, i, "unsupported_interpolation_conversion");
-                        frame.Conversion = true;
-                        i += 2;
-                        if (!Add(parsed, start, i, StringLiteral, line)) return false;
+                        frame.AwaitingConversion = true;
+                        if (!Add(parsed, i, ++i, StringLiteral, line)) return false;
                         continue;
                     }
-                    if (frame.Conversion || frame.Debug && !char.IsWhiteSpace(ch))
+                    if (frame.Conversion || frame.Debug)
                         return Fail(line, i, "unsupported_interpolation_expression");
                     if (ch == '=' && frame.HasExpression &&
                         (i == 0 || source[i - 1] is not ('=' or '!' or '<' or '>' or ':')) &&
@@ -171,11 +179,6 @@ internal static partial class SearchMatchClassifier
                         continue;
                     }
                 }
-                if (ch == '#')
-                {
-                    parsed.EndOrigin = Comment;
-                    return Add(parsed, i, source.Length, Comment, line);
-                }
                 if (frame is not null && !char.IsWhiteSpace(ch))
                     frame.HasExpression = true;
 
@@ -184,12 +187,14 @@ internal static partial class SearchMatchClassifier
                 var quoteIndex = i;
                 if (IsPythonName(ch))
                 {
+                    var possiblePrefix = true;
                     do
                     {
+                        possiblePrefix &= source[quoteIndex] is 'r' or 'R' or 'u' or 'U' or 'b' or 'B' or 'f' or 'F' or 't' or 'T';
                         quoteIndex++;
                         if ((quoteIndex & 4095) == 0) _cancellation.ThrowIfCancellationRequested();
                     } while (quoteIndex < source.Length && IsPythonName(source[quoteIndex]));
-                    if (quoteIndex == source.Length || source[quoteIndex] is not ('\'' or '"'))
+                    if (!possiblePrefix || quoteIndex == source.Length || source[quoteIndex] is not ('\'' or '"'))
                     {
                         i = quoteIndex;
                         continue;
@@ -231,24 +236,40 @@ internal static partial class SearchMatchClassifier
             }
             var top = _frames.Count == 0 ? null : _frames[^1];
             if (top?.Kind == FrameKind.String && !top.Triple && !continuedString ||
-                top?.Kind == FrameKind.Format && !OuterStringIsTriple())
+                top?.Kind == FrameKind.Format && OuterString()?.Triple != true && !continuedString)
                 return Fail(line, 0, "unterminated_ordinary_string");
             parsed.EndOrigin = top?.Kind is FrameKind.String or FrameKind.Format ? StringLiteral : Code;
             return true;
         }
 
-        private bool IsOuterQuote(char ch)
+        private bool ConsumeEscape(string source, ref int index, bool raw, bool formatted, int line, out bool continued)
         {
-            for (var i = _frames.Count - 1; i >= 0; i--)
-                if (_frames[i].Kind == FrameKind.String) return _frames[i].Quote == ch;
-            return false;
+            var start = index++;
+            continued = index == source.Length;
+            if (continued) return true;
+            if (formatted && !raw && source[index] == 'N' && index + 1 < source.Length && source[index + 1] == '{')
+            {
+                index += 2;
+                while (index < source.Length && source[index] != '}')
+                {
+                    if ((index & 4095) == 0) _cancellation.ThrowIfCancellationRequested();
+                    index++;
+                }
+                if (index == source.Length) return Fail(line, start, "unsupported_python_escape");
+                index++;
+            }
+            // Backslashes do not escape f-string braces, including in raw formats.
+            // Consume pairs so an escaped backslash cannot begin a named escape.
+            else if (!formatted || source[index] is not ('{' or '}'))
+                index++;
+            return true;
         }
 
-        private bool OuterStringIsTriple()
+        private Frame? OuterString()
         {
             for (var i = _frames.Count - 1; i >= 0; i--)
-                if (_frames[i].Kind == FrameKind.String) return _frames[i].Triple;
-            return false;
+                if (_frames[i].Kind == FrameKind.String) return _frames[i];
+            return null;
         }
 
         private static bool IsPythonName(char ch) => char.IsLetterOrDigit(ch) || ch == '_' || ch >= 128;
@@ -362,6 +383,7 @@ internal static partial class SearchMatchClassifier
             public bool Formatted;
             public bool HasExpression;
             public bool Conversion;
+            public bool AwaitingConversion;
             public bool Debug;
             public Stack<char> Delimiters { get; } = new();
         }

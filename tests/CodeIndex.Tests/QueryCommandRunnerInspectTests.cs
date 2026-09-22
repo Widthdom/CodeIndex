@@ -382,7 +382,12 @@ public partial class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal(2, bundles.Length);
+            Assert.Single(bundles);
+            var candidates = sections.GetProperty("candidate_bundles");
+            Assert.Equal(1, candidates.GetProperty("returned").GetInt32());
+            Assert.Equal(2, candidates.GetProperty("source_count").GetInt32());
+            Assert.False(candidates.GetProperty("source_count_authoritative").GetBoolean());
+            Assert.Equal(1, candidates.GetProperty("omitted_count_lower_bound").GetInt32());
             Assert.All(bundles, bundle =>
             {
                 var definition = bundle.GetProperty("definition");

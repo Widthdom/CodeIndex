@@ -8,7 +8,7 @@ public static partial class QueryCommandRunner
     private static int GetCompactSectionLimit(QueryCommandOptions options)
         => options.LimitExplicit ? options.Limit : DefaultCompactSectionLimit;
 
-    private static int GetCompactSourceLimit(int compactLimit)
+    internal static int GetCompactSourceLimit(int compactLimit)
     {
         var sourceLimit = compactLimit + 1;
         return NumericFlagUpperBounds.TryGetValue("--limit", out var maxLimit)
@@ -16,7 +16,7 @@ public static partial class QueryCommandRunner
             : sourceLimit;
     }
 
-    private static JsonObject ApplySymbolAnalysisCompactCaps(SymbolAnalysisResult analysis, int sectionLimit)
+    internal static JsonObject ApplySymbolAnalysisCompactCaps(SymbolAnalysisResult analysis, int sectionLimit)
     {
         var sections = new JsonObject();
         TruncateCompactSection(analysis.Definitions, sectionLimit, sections, "definitions");
@@ -24,6 +24,14 @@ public static partial class QueryCommandRunner
         TruncateCompactSection(analysis.References, sectionLimit, sections, "references");
         TruncateCompactSection(analysis.Callers, sectionLimit, sections, "callers");
         TruncateCompactSection(analysis.Callees, sectionLimit, sections, "callees");
+        var bundles = analysis.CandidateBundles ?? [];
+        TruncateCompactSection(bundles, sectionLimit, sections, "candidate_bundles");
+        var candidates = sections["candidate_bundles"]!.AsObject();
+        var countAuthoritative = !analysis.CandidateCountIsLowerBound;
+        var omittedCount = analysis.CandidateCount - bundles.Count;
+        candidates["source_count_authoritative"] = countAuthoritative;
+        candidates["truncated"] = omittedCount > 0 || !countAuthoritative;
+        candidates[countAuthoritative ? "omitted_count" : "omitted_count_lower_bound"] = omittedCount;
         if (analysis.CandidateBundles != null)
         {
             for (var i = 0; i < analysis.CandidateBundles.Count; i++)
@@ -45,11 +53,18 @@ public static partial class QueryCommandRunner
             ["sections"] = sections,
         };
 
-    private static void AddCompactJsonFields(JsonObject payload, int compactLimit, JsonObject truncation)
+    internal static void AddCompactJsonFields(JsonObject payload, int compactLimit, JsonObject truncation)
     {
         payload["compact"] = true;
         payload["compact_limit"] = compactLimit;
         payload["truncation"] = truncation;
+        if (truncation["sections"]?["candidate_bundles"] is JsonObject candidates)
+        {
+            payload["candidate_count"] = candidates["source_count"]!.DeepClone();
+            payload["candidate_count_authoritative"] = candidates["source_count_authoritative"]!.DeepClone();
+            if (!candidates["source_count_authoritative"]!.GetValue<bool>())
+                payload["candidate_count_lower_bound"] = candidates["source_count"]!.DeepClone();
+        }
     }
 
     private static void TruncateCompactSection<T>(List<T> items, int sectionLimit, JsonObject sections, string sectionName)

@@ -29,6 +29,15 @@ public sealed class PythonOriginIssue5398Tests
             ("f'''Needle\n{Needle(\"\"\"Needle\nNeedle\"\"\")}\nNeedle'''", ["string_literal", "code", "string_literal", "string_literal", "string_literal"]),
             ("f'{Needle=}' f'{Needle = !s:>20}' f'{Needle != Needle}'", ["code", "code", "code", "code"]),
             ("f'\\N{LEFT CURLY BRACKET}Needle {Needle:{Needle}.{Needle}f}'", ["string_literal", "code", "code", "code"]),
+            ("def f(): return\"Needle\"\nNeedle()", ["string_literal", "code"]),
+            ("x = 'Needle'if'Needle'else'Needle'; Needle()", ["string_literal", "string_literal", "string_literal", "code"]),
+            ("f'{value:\\N{Sewing Needle}} Needle'; Needle()", ["string_literal", "string_literal", "code"]),
+            ("rf'{value:\\N{Needle}}' f'{value:\\\\N{Needle}}'", ["code", "code"]),
+            ("f'{value:\\\nNeedle}'; Needle()", ["string_literal", "code"]),
+            ("f'{Needle!r }' f'{Needle!r :>12}'; Needle()", ["code", "code", "code"]),
+            ("f'{Needle= # Needle\n}'; Needle()", ["code", "comment", "code"]),
+            ("f'{Needle!r # Needle\n}'; Needle()", ["code", "comment", "code"]),
+            ("f'{Needle! # Needle\n r}'; Needle()", ["code", "comment", "code"]),
         ];
         foreach (var (source, expected) in cases)
         foreach (var newline in new[] { "\n", "\r\n" })

@@ -354,6 +354,24 @@ an overload; extension receiver adjustment and dynamic receiver types are not in
 merging unrelated definitions; consume the corresponding bundle for every other candidate.
 Use `--fields candidates` to project these bundles explicitly.
 
+Compact `inspect` (`--compact` or `--format compact`) and MCP `analyze_symbol`
+with `format: "compact"` cap both definitions and candidate bundles at `compact_limit`,
+retaining the same identities in the same order. `candidate_count` is the number
+observed by the bounded lookup, including any extra truncation probe; it is a total
+only when `candidate_count_authoritative` is true. Otherwise
+`candidate_count_lower_bound` repeats the known minimum. The existing internal
+five-definition lookup cap also makes counts non-authoritative when reached, even
+if the requested compact limit is larger. No second census is performed.
+`truncation.sections.candidate_bundles` reports `returned`, `source_count`,
+`source_count_authoritative`, and either exact `omitted_count` or
+`omitted_count_lower_bound`. `truncated: true` means candidates were omitted or
+lookup exhaustion could not be established; a zero omission lower bound does not
+prove completeness. These counts concern indexed candidates in the selected scope,
+not declarations absent from the index. Narrow the name/path/language or reuse a
+retained selector to inspect a specific candidate. Per-bundle child limits, graph
+cursors and partial-family recovery remain independent of this outer collection.
+Noncompact output is unchanged.
+
 Invalid CLI input emits one command-specific `Error` / `Hint` / `Usage` diagnostic.
 Dependent validation stops after the primary invalid token, and transformed aliases
 such as `recipes list` retain the command name and usage shape the user invoked.
@@ -4585,6 +4603,23 @@ receiver 調整と dynamic receiver の型はこの絞り込みでは推論し�
 明示され、無関係な定義を結合せず優先順位1位の bundle だけを反映します。それ以外は
 対応する bundle を利用してください。`--fields candidates` で bundle を明示的に
 projection できます。
+
+compact な `inspect`（`--compact` または `--format compact`）と
+`format: "compact"` の MCP `analyze_symbol` は、定義と候補 bundle の両方を
+`compact_limit` 以下に制限し、同じ identity を同じ順序で保持します。
+`candidate_count` は省略検出用の追加候補を含む上限付き検索の観測件数であり、
+`candidate_count_authoritative` が true の場合だけ総件数です。それ以外では
+`candidate_count_lower_bound` が既知の最小件数を示します。内部の定義検索上限である
+5 件に達した場合も、要求した compact 上限が大きくても総件数は確定しません。
+総件数を調べる追加走査は行いません。`truncation.sections.candidate_bundles` は
+`returned`、`source_count`、`source_count_authoritative` と、確定した
+`omitted_count` または `omitted_count_lower_bound` を返します。
+`truncated: true` は候補を省略したか、検索を尽くしたことを確認できない状態を示し、
+省略件数の下限が 0 でも完全性の証明にはなりません。これらは選択範囲内の索引済み候補の
+件数であり、索引に存在しない宣言は含みません。名前・path・language を絞り込むか、
+保持された selector を再利用して個別候補を inspect してください。各 bundle 内の
+配列上限、graph cursor、partial family の復旧手順は外側の候補集合と独立しています。
+非 compact 出力は変更ありません。
 
 不正な CLI input は、コマンド固有の `Error` / `Hint` / `Usage` diagnostic を 1 件だけ
 出力します。primary な不正 token の後では dependent validation を打ち切り、

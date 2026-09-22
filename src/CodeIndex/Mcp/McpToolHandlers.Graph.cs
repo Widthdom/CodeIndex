@@ -921,9 +921,10 @@ public partial class McpServer
                     graphCursor.Section,
                     graphCursor.Offset,
                     graphCursor.CandidateSelector);
+            var compact = format == "compact" && !countOnly;
             var analysis = reader.AnalyzeSymbol(
                 query,
-                limit,
+                compact ? QueryCommandRunner.GetCompactSourceLimit(limit) : limit,
                 lang,
                 includeBody,
                 pathPatterns,
@@ -940,6 +941,9 @@ public partial class McpServer
                     id,
                     "cursor candidate is no longer available; rerun analyze_symbol without cursor.");
             }
+            var compactTruncation = compact
+                ? QueryCommandRunner.ApplySymbolAnalysisCompactCaps(analysis, limit)
+                : null;
             QueryCommandRunner.SynchronizeInspectGraphSectionCounts(analysis);
             QueryCommandRunner.ApplyInspectGraphContinuationCursors(
                 analysis,
@@ -967,6 +971,8 @@ public partial class McpServer
                 : format == "compact"
                     ? BuildAnalyzeSymbolCompactPayload(analysis, lang, pathEcho, excludeTests, maxLineWidth)
                     : ToAnalyzeSymbolJsonObject(analysis);
+            if (compactTruncation != null)
+                QueryCommandRunner.AddCompactJsonFields(structured, limit, compactTruncation);
             AddSqlGraphContractSignal(structured, sqlGraphSignal);
             AddHdlGraphContractSignal(
                 structured,
