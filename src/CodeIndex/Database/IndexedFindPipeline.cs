@@ -29,7 +29,7 @@ public partial class DbReader
                 MaxLineWidth = LineWidthFormatter.ClampMaxLineWidth(request.MaxLineWidth),
                 Offset = Math.Max(0, request.Offset),
             };
-            var state = new FindScanState(scan.Resume);
+            var state = new FindScanState(scan.Resume) { ResumedByOffset = normalizedRequest.Offset > 0 };
             var collector = new FindResultCollector(normalizedRequest, state);
             var searchPlan = ScanFiles(scan, collector, state);
             ValidateCompletedScan(collector.Mode, state, collector);

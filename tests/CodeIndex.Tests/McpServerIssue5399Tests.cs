@@ -74,7 +74,8 @@ public partial class McpServerTests
             var byteLimited = false;
             for (var page = 0; page < 30; page++)
             {
-                args["cursor"] = cursor;
+                if (cursor is null) args.Remove("cursor");
+                else args["cursor"] = cursor;
                 var result = Payload5349(Call5349(tool, args));
                 lines.AddRange(result["results"]!.AsArray().Select(row => row!["line"]!.GetValue<int>()));
                 byteLimited |= result["byte_limit_reached"]!.GetValue<bool>();

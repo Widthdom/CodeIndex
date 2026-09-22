@@ -7,6 +7,8 @@ source caps, cancellation/timeouts, projection and response budgets. Run
 `--filter 'FullyQualifiedName~FindMultilineTests|FullyQualifiedName~Issue5399'`
 on net8.0/net9.0 with the existing find, pagination, MCP and output-budget suites.
 Keep the legacy literal and line-regex controls; the fixtures own their databases.
+Also cover index-ordered chunk metadata, bounded legacy fallback, offset-only final
+page authority, and combined execution/output caps without synthesized continuation.
 
 `InspectCompactCandidateTests` (#5397) shares a real indexed fixture across CLI
 inspect and MCP compact analysis. Keep zero, exact-limit, probe-overflow and the
@@ -1765,6 +1767,8 @@ UTF-16 座標、重複チャンク、一致範囲の上限内外、アンカー�
 `--filter 'FullyQualifiedName~FindMultilineTests|FullyQualifiedName~Issue5399'` を net8.0/net9.0 で、
 既存の find・ページ分割・MCP・出力予算のテストと実行してください。従来のリテラル・行単位正規表現の
 対照を維持し、各 fixture が自分の DB を所有します。
+チャンクの索引順取得と旧索引の上限付き代替処理、offset だけで再開した最終ページの確定性、
+実行上限と出力上限が同時に発生しても継続カーソルを作らない規則も検証します。
 
 `ToolsList_SuggestionDisclosesConditionalGitHubPublication_Issue5396` は共通の
 フィクスチャで、既定・compact・full・ツール選択・ページ付きの一覧を検証します。

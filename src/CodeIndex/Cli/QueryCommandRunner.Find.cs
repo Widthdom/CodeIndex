@@ -334,7 +334,8 @@ public static partial class QueryCommandRunner
             if (semanticFilters is not null || options.Multiline)
                 JsonEnvelopeWrapper.ReportBoundedResponseTotal("find",
                     results.Count + JsonEnvelopeWrapper.GetBoundedResponseOffset("find") + (findResults.Scan.ResultLimitReached ? 1 : 0),
-                    resumePath is null && !findResults.Scan.Truncated && !findResults.Scan.ResultLimitReached && findResults.Scan.UnknownOriginMatches == 0);
+                    resumePath is null && (!options.Multiline || !findResults.Scan.Resumed)
+                    && !findResults.Scan.Truncated && !findResults.Scan.ResultLimitReached && findResults.Scan.UnknownOriginMatches == 0);
             var findResume = BuildFindResumeCursor(cmdArgs, reader, findResults.Scan);
             if (results.Count == 0)
             {
@@ -938,6 +939,7 @@ public static partial class QueryCommandRunner
             {
                 "multiline_window_bytes" => "Increase --window-bytes (MCP: windowBytes) up to 262144 or reduce --window-lines (windowLines), then restart without a cursor. This scan cannot prove absence.",
                 "multiline_chunk_bytes" or "multiline_source_gap" => "Inspect the affected indexed source manually; refresh missing source or split oversized source chunks. No continuation can repair this incomplete window.",
+                "multiline_source_index" => "Refresh the index to restore ordered chunk indexes; legacy fallback is limited to 256 chunks per file. Restart without a cursor.",
                 "multiline_query_bytes" or "multiline_query_lines" or "multiline_query_time" => "Narrow --path (MCP: path) or reduce windowLines, then restart without a cursor. Output limits do not restore scan coverage.",
                 "line_scan_limit" => $"Increase --line-scan-limit up to {MaxFindLineScanLimit}, or replace --all with one or more --path filters. Pass --allow-partial only when exit code 0 is acceptable for an incomplete scan.",
                 "candidate_file_limit" => "Replace --all with one or more --path filters to scan fewer candidate files. Pass --allow-partial only when exit code 0 is acceptable for an incomplete scan.",

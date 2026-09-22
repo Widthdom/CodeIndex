@@ -5,6 +5,14 @@ namespace CodeIndex.Database;
 
 public partial class DbReader
 {
+    internal static readonly string FindWindowChunkSql = $"""
+        SELECT c.id, c.start_line, c.end_line
+        FROM chunks c INDEXED BY {BoundedResourceReadChunkIndexName}
+        WHERE c.file_id = @fileId AND c.content IS NOT NULL AND c.end_line >= @firstLine
+        ORDER BY c.start_line, c.chunk_index
+        """;
+    internal const int MaxLegacyWindowChunks = 256;
+
     private sealed partial class IndexedFindPipeline
     {
         private bool ScanFileWindows(IndexedFindScanRequest request, IFindScanCollector collector,
@@ -149,35 +157,39 @@ public partial class DbReader
             // Gate source materialization in SQL; even legacy giant chunks remain bounded.
             // SQL で実体化前に制限し、古い索引の巨大チャンクも上限内に保つ。
             command.CommandText = """
-                SELECT c.start_line, c.end_line, length(CAST(c.content AS BLOB)),
+                SELECT length(CAST(c.content AS BLOB)),
                     CASE WHEN length(CAST(c.content AS BLOB)) <= @chunkBytes THEN c.content END
-                FROM chunks c WHERE c.file_id = @fileId AND c.end_line >= @firstLine
-                ORDER BY c.start_line, c.chunk_index
+                FROM chunks c WHERE c.id = @chunkId
                 """;
-            SqliteCommandPolicy.Add(command, "@fileId", file.Id);
-            SqliteCommandPolicy.Add(command, "@firstLine", file.FirstEligibleLine);
             SqliteCommandPolicy.Add(command, "@chunkBytes", FindWindowOptions.ChunkBytes);
+            var chunkId = command.Parameters.AddWithValue("@chunkId", 0L);
             var lastLine = file.FirstEligibleLine - 1;
-            using var reader = command.ExecuteTrackedReader();
-            while (reader.TrackedRead())
+            foreach (var chunk in EnumerateWindowChunks(request, state, file))
             {
                 request.CancellationToken.ThrowIfCancellationRequested();
                 if (WindowTimeExceeded(state)) yield break;
-                if (reader.IsDBNull(2) || reader.GetInt64(2) > FindWindowOptions.ChunkBytes)
+                chunkId.Value = chunk.Id;
+                using var reader = command.ExecuteTrackedReader();
+                if (!reader.TrackedRead() || reader.IsDBNull(0))
+                {
+                    state.StopWindow("multiline_source_gap");
+                    yield break;
+                }
+                if (reader.GetInt64(0) > FindWindowOptions.ChunkBytes)
                 {
                     state.StopWindow("multiline_chunk_bytes");
                     yield break;
                 }
-                state.WindowBudget!.BytesRead += reader.GetInt64(2);
+                state.WindowBudget!.BytesRead += reader.GetInt64(0);
                 if (state.WindowBudget.BytesRead > FindWindowOptions.QueryBytes)
                 {
                     state.StopWindow("multiline_query_bytes");
                     yield break;
                 }
-                var content = reader.GetString(3);
+                var content = reader.GetString(1);
                 var start = 0;
-                var number = reader.GetInt32(0);
-                var endLine = Math.Min(file.TotalLines, reader.GetInt32(1));
+                var number = chunk.Start;
+                var endLine = Math.Min(file.TotalLines, chunk.End);
                 while (start <= content.Length && number <= endLine)
                 {
                     request.CancellationToken.ThrowIfCancellationRequested();
@@ -206,6 +218,47 @@ public partial class DbReader
             }
             if (lastLine < file.TotalLines)
                 state.StopWindow("multiline_source_gap");
+        }
+
+        private IEnumerable<(long Id, int Start, int End)> EnumerateWindowChunks(
+            IndexedFindScanRequest request, FindScanState state, FindCandidateFile file)
+        {
+            var ordered = _owner._chunkIndexes.Contains(BoundedResourceReadChunkIndexName);
+            if (!ordered && !_owner._chunkIndexes.Contains(LegacyBoundedResourceReadFileIndexName))
+            {
+                state.StopWindow("multiline_source_index");
+                yield break;
+            }
+            using var command = _owner._conn.CreateCommand();
+            // Never put source content into a temporary sort. Older indexes retain only a
+            // bounded set of scalar metadata; larger legacy files require an index refresh.
+            // ソースを一時ソートへ入れず、旧索引も上限付きのメタデータだけを保持する。
+            command.CommandText = ordered ? FindWindowChunkSql : $"""
+                SELECT c.id, c.start_line, c.end_line, c.chunk_index
+                FROM chunks c INDEXED BY {LegacyBoundedResourceReadFileIndexName}
+                WHERE c.file_id = @fileId AND c.end_line >= @firstLine
+                LIMIT {MaxLegacyWindowChunks + 1}
+                """;
+            SqliteCommandPolicy.Add(command, "@fileId", file.Id);
+            SqliteCommandPolicy.Add(command, "@firstLine", file.FirstEligibleLine);
+            using var reader = command.ExecuteTrackedReader();
+            var legacy = ordered ? null : new List<(long Id, int Start, int End, int Order)>();
+            while (reader.TrackedRead())
+            {
+                request.CancellationToken.ThrowIfCancellationRequested();
+                if (WindowTimeExceeded(state)) yield break;
+                var chunk = (Id: reader.GetInt64(0), Start: reader.GetInt32(1), End: reader.GetInt32(2));
+                if (ordered) yield return chunk;
+                else if (legacy!.Count == MaxLegacyWindowChunks)
+                {
+                    state.StopWindow("multiline_source_index");
+                    yield break;
+                }
+                else legacy.Add((chunk.Id, chunk.Start, chunk.End, reader.GetInt32(3)));
+            }
+            if (legacy is not null)
+                foreach (var chunk in legacy.OrderBy(item => item.Start).ThenBy(item => item.Order))
+                    yield return (chunk.Id, chunk.Start, chunk.End);
         }
     }
 }

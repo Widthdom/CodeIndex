@@ -75,6 +75,10 @@ line bounded by that limit, and one joined window. Each UTF-8 byte can require u
 to two managed UTF-16 bytes. Completed rows retain at most 200 bounded snippets;
 no full-file buffer or query-wide source cache is retained. Regex allocations are
 also limited by the existing query-length cap and the bounded input and timeout.
+Chunk selection streams scalar metadata in index order before fetching each source
+chunk; source content is never sorted. Older indexes without the ordered chunk index
+use at most 256 metadata rows per file, or stop with `multiline_source_index` and
+require an index refresh. Missing source still reports incomplete coverage.
 
 `--all` retains its 4,096-file cap and configurable `--line-scan-limit`
 (MCP `lineScanLimit`); this counts evaluated owner lines in multiline mode.
@@ -91,7 +95,7 @@ not matching source lines or files.
 
 Execution omissions set `scan_truncated`, `partial_result`, and false authority,
 with exit `11` (or `0` with explicit `--allow-partial`). Stable reasons are
-`multiline_window_bytes`, `multiline_chunk_bytes`, `multiline_source_gap`,
+`multiline_window_bytes`, `multiline_chunk_bytes`, `multiline_source_gap`, `multiline_source_index`,
 `multiline_query_bytes`, `multiline_query_lines`, and `multiline_query_time`.
 These failures have no advancing cursor. Follow `recovery_guidance`: restart with
 a reviewed window size or narrower file scope, refresh missing indexed source,
@@ -117,6 +121,9 @@ survive projections automatically, and terminal authority survives byte fitting.
 Whole rows are omitted with replayable continuation; an unfit minimum response
 returns `E028_RESPONSE_BUDGET_TOO_SMALL`. Existing `--all` and count format
 restrictions still apply.
+Byte fitting never creates a continuation for a non-resumable source/work cap;
+it retains that execution failure's reason and recovery guidance even when rows
+are also omitted to fit the response.
 
 Semantic origin/result-kind filters and `origin-passes`, focus options, surrounding
 context, and row-only array/CSV/TSV/LSP/quickfix/SARIF formats are rejected with
@@ -192,6 +199,10 @@ DB操作は既存のキャンセル規則を維持します。保持するソー
 UTF-8 の1バイトにつき managed UTF-16 で最大2バイトを要します。完了した結果は最大200件の
 上限付きスニペットだけを保持し、ファイル全体やクエリ全体のソースキャッシュは作りません。
 正規表現の割り当ても既存のクエリ長と入力サイズ、タイムアウトの上限で制限されます。
+チャンク選択は索引順にスカラーのメタデータを読み、その後にソースを1チャンクずつ取得します。
+ソース内容はソートしません。順序付きチャンク索引がない旧索引では、1ファイルあたり最大256件の
+メタデータだけを保持し、それを超える場合は `multiline_source_index` で停止して索引更新を求めます。
+ソースの欠落は引き続き不完全な走査として報告します。
 
 `--all` は既存の4,096ファイル上限と `--line-scan-limit`（MCP は `lineScanLimit`）を維持します。
 複数行モードでは評価した開始行を数え、先行一致が消費した行は追加評価しません。
@@ -205,7 +216,7 @@ UTF-8 の1バイトにつき managed UTF-16 で最大2バイトを要します�
 
 実行上限で網羅できない場合は `scan_truncated` と `partial_result` を有効にし、確定性を false、
 終了コードを `11` にします（明示的な `--allow-partial` で `0`）。理由は
-`multiline_window_bytes`、`multiline_chunk_bytes`、`multiline_source_gap`、
+`multiline_window_bytes`、`multiline_chunk_bytes`、`multiline_source_gap`、`multiline_source_index`、
 `multiline_query_bytes`、`multiline_query_lines`、`multiline_query_time` です。
 これらでは前進するカーソルを出しません。`recovery_guidance` に従って窓の大きさを見直すか
 ファイル範囲を狭めて再開始し、欠落した索引を更新するか巨大なソースを分割・手動確認してください。
@@ -226,6 +237,8 @@ text、JSON/NDJSON、JSON envelope とその compact・フィールド投影、�
 言語・ファイル除外に対応します。必須の一致座標は投影でも自動保持し、サイズ調整でも終端の確定性を保ちます。
 行単位で省略して再開位置を返し、最小応答も収まらなければ `E028_RESPONSE_BUDGET_TOO_SMALL` にします。
 既存の `--all` と件数出力の形式制限は引き続き適用します。
+応答サイズの調整で行を省略しても、再開不能なソース・処理量の上限に対して継続カーソルを作りません。
+実行時の停止理由と復旧案内を保持します。
 
 意味分類フィルター、`origin-passes`、focus、前後の文脈、行だけの array/CSV/TSV/LSP/quickfix/SARIF は
 案内付きで拒否します。origin をまたぐ一致もテキストとして扱い、意味分類は付けず、フィルターを黙って

@@ -93,6 +93,7 @@ public partial class DbReader
 
     private sealed class FindScanState(FindResumePosition resume)
     {
+        internal bool ResumedByOffset { get; init; }
         internal FindWindowOptions? Window { get; set; }
         internal FindWindowBudget? WindowBudget { get; set; }
         internal void StopWindow(string reason)
@@ -195,6 +196,6 @@ public partial class DbReader
                 RetryOriginPasses,
                 OriginPasses,
                 Window,
-                resume.Path is not null);
+                resume.Path is not null || ResumedByOffset);
     }
 }

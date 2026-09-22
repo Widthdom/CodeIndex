@@ -837,17 +837,21 @@ internal static partial class JsonEnvelopeWrapper
             var nextOffset = controls.Offset + count;
             var paginationWindowExhausted = nextOffset < totalCount && nextOffset >= MaxPageWindow;
             var scanCursor = ReadString(streamTerminal, "next_cursor");
+            var nonResumableWindowStop = command == "find"
+                && streamTerminal?["multiline"]?.GetValue<bool>() == true
+                && streamTerminal?["scan_truncated"]?.GetValue<bool>() == true
+                && scanCursor is null;
             var emittedAllCapturedRows = count == pageItems.Count;
             var selectedScanCursor = emittedAllCapturedRows ? scanCursor : null;
             var findScanTerminalAuthoritative = command == "find"
                                                 && streamTerminal?["scan_complete"] is JsonValue;
             var capturedRowsRemain = !emittedAllCapturedRows && count > 0;
-            var hasMore = selectedScanCursor is not null
+            var hasMore = !nonResumableWindowStop && (selectedScanCursor is not null
                           || capturedRowsRemain
                           || !findScanTerminalAuthoritative
                           && count > 0
                           && nextOffset < totalCount
-                          && !paginationWindowExhausted;
+                          && !paginationWindowExhausted);
             metadata["result_count"] = count;
             metadata["returned_count"] = count;
             metadata["total_count"] = totalCount;
@@ -875,13 +879,16 @@ internal static partial class JsonEnvelopeWrapper
                 && windowTerminal["multiline"]?.GetValue<bool>() == true)
             {
                 windowTerminal["returned_count"] = count;
-                windowTerminal["done"] = !hasMore;
+                windowTerminal["done"] = !hasMore && !nonResumableWindowStop;
                 windowTerminal["has_more"] = hasMore;
                 windowTerminal["next_cursor"] = nextCursor;
                 windowTerminal["authoritative_rows"] = false;
                 windowTerminal["partial_result"] = true;
-                windowTerminal["truncation_reason"] = "max_json_bytes";
-                windowTerminal["recovery_guidance"] = "Pass next_cursor with the same window/query settings to retrieve omitted rows; the response byte budget may change.";
+                if (!nonResumableWindowStop)
+                {
+                    windowTerminal["truncation_reason"] = "max_json_bytes";
+                    windowTerminal["recovery_guidance"] = "Pass next_cursor with the same window/query settings to retrieve omitted rows; the response byte budget may change.";
+                }
             }
             if (scanCursor is not null
                 && metadata["stream_terminal"] is JsonObject adjustedTerminal)

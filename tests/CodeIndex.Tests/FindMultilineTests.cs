@@ -144,11 +144,19 @@ public sealed class FindMultilineTests
             Enumerable.Repeat(new string('x', 500) + "A\nB", 20)));
         cursor = null;
         var found = new List<int>();
+        var byteLimited = false;
         for (var i = 0; i < 30; i++)
         {
             string[] budgetArgs = ["find", "A\\nB", "--regex", "--multiline", "--path", "budget.txt", "--db", db,
-                "--json", "--limit", "20", "--max-json-bytes", "6000", .. cursor is null ? Array.Empty<string>() : new[] { "--cursor", cursor }];
+                "--json", "--fields", "path,snippet", "--limit", "20", "--max-json-bytes", cursor is null ? "6000" : "20000",
+                .. cursor is null ? Array.Empty<string>() : new[] { "--cursor", cursor }];
             var budgetPage = Run(budgetArgs);
+            byteLimited |= budgetPage["metadata"]!["byte_limit_reached"]?.GetValue<bool>() == true;
+            if (cursor is not null)
+            {
+                Assert.False(budgetPage["metadata"]!["stream_terminal"]!["authoritative_rows"]!.GetValue<bool>());
+                Assert.False(budgetPage["metadata"]!["total_count_authoritative"]!.GetValue<bool>());
+            }
             found.AddRange(budgetPage["results"]!.AsArray().Select(item => item!["line"]!.GetValue<int>()));
             cursor = budgetPage["metadata"]!["next_cursor"]?.GetValue<string>();
             if (cursor is null) break;
@@ -157,7 +165,28 @@ public sealed class FindMultilineTests
             Assert.False(terminal["authoritative_rows"]!.GetValue<bool>());
         }
         Assert.Null(cursor);
+        Assert.True(byteLimited);
         Assert.Equal(Enumerable.Range(0, 20).Select(index => index * 2 + 1), found);
+        using (var connection = Open(db))
+        {
+            var writer = new DbWriter(connection);
+            var id = writer.UpsertFile(new FileRecord { Path = "z-budget-gap.txt", Lang = "text", Lines = 2, Size = 2 });
+            writer.InsertChunks([new ChunkRecord { FileId = id, ChunkIndex = 0, StartLine = 2, EndLine = 2, Content = "X" }]);
+        }
+        var (stoppedExit, stoppedJson, _) = CaptureConsole(() => ProgramRunner.Run(
+            ["find", "A\\nB", "--regex", "--multiline", "--path", "budget.txt", "--path", "z-budget-gap.txt",
+                "--db", db, "--json", "--fields", "path,snippet", "--limit", "200", "--max-json-bytes", "6000"], JsonOptions, "test"));
+        Assert.Equal(CommandExitCodes.PartialResult, stoppedExit);
+        var stopped = JsonNode.Parse(stoppedJson)!["metadata"]!;
+        Assert.True(stopped["byte_limit_reached"]?.GetValue<bool>() == true, stoppedJson);
+        Assert.False(stopped["has_more"]!.GetValue<bool>());
+        Assert.Null(stopped["next_cursor"]);
+        var stoppedTerminal = stopped["stream_terminal"]!;
+        Assert.Null(stoppedTerminal["next_cursor"]);
+        Assert.False(stoppedTerminal["done"]!.GetValue<bool>());
+        Assert.Equal("multiline_source_gap", stoppedTerminal["scan_truncation_reason"]!.GetValue<string>());
+        Assert.NotEqual("max_json_bytes", stoppedTerminal["truncation_reason"]?.GetValue<string>());
+        Assert.Contains("refresh", stoppedTerminal["recovery_guidance"]!.GetValue<string>(), StringComparison.OrdinalIgnoreCase);
         cursor = Run(args)["metadata"]!["next_cursor"]!.GetValue<string>();
         TestProjectHelper.InsertIndexedFile(db, "changed.txt", "text", "changed");
         var (staleExit, stale, staleError) = CaptureConsole(() => ProgramRunner.Run([.. args, "--cursor", cursor], JsonOptions, "test"));
@@ -250,6 +279,34 @@ public sealed class FindMultilineTests
         Assert.Equal("multiline_query_bytes", workCapped.Scan.TruncationReason);
         Assert.Null(workCapped.Scan.NextPath);
         Assert.True(workCapped.Scan.LinesScanned < 1024);
+
+        using (var plan = connection.CreateCommand())
+        {
+            plan.CommandText = "EXPLAIN QUERY PLAN " + DbReader.FindWindowChunkSql;
+            plan.Parameters.AddWithValue("@fileId", largeId);
+            plan.Parameters.AddWithValue("@firstLine", 1);
+            using var details = plan.ExecuteReader();
+            var descriptions = new List<string>();
+            while (details.Read()) descriptions.Add(details.GetString(3));
+            Assert.Contains(descriptions, text => text.Contains(DbReader.BoundedResourceReadChunkIndexName, StringComparison.Ordinal));
+            Assert.DoesNotContain(descriptions, text => text.Contains("TEMP B-TREE", StringComparison.OrdinalIgnoreCase));
+        }
+        var legacyId = writer.UpsertFile(new FileRecord { Path = "legacy-many.txt", Lang = "text",
+            Lines = DbReader.MaxLegacyWindowChunks + 1, Size = DbReader.MaxLegacyWindowChunks * 2 + 1 });
+        writer.InsertChunks(Enumerable.Range(0, DbReader.MaxLegacyWindowChunks + 1).Select(index => new ChunkRecord
+        {
+            FileId = legacyId, ChunkIndex = index, StartLine = index + 1, EndLine = index + 1, Content = "X",
+        }).ToList());
+        using (var drop = connection.CreateCommand())
+        {
+            drop.CommandText = "DROP INDEX " + DbReader.BoundedResourceReadChunkIndexName;
+            drop.ExecuteNonQuery();
+        }
+        using var legacyReader = new DbReader(connection);
+        Assert.Equal(1, legacyReader.CountFindInFiles("A\\nB", pathPatterns: ["cancel.txt"], regex: true, window: new()).Count);
+        var legacyCap = legacyReader.CountFindInFiles("X", pathPatterns: ["legacy-many.txt"], regex: true, window: new());
+        Assert.Equal("multiline_source_index", legacyCap.Scan.TruncationReason);
+        Assert.Null(legacyCap.Scan.NextPath);
     }
 
     private static SqliteConnection Open(string path)
