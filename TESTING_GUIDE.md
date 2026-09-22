@@ -1,5 +1,13 @@
 # Testing Guide
 
+`RunDeps_PythonContextCoordinatesPreserveBothDirections_Issue5401` shares indexed
+fixtures across ordinary dependencies and cycles for zero/space/tab indentation,
+short/long names, aliases, relative imports and repeated same-line member calls.
+Keep persisted UTF-16 columns and trimmed display contexts unchanged, and query
+after live files change to prove indexed-source ownership. Cover missing chunks
+and legacy schemas without guessing receivers from display text. Run `Issue5401`,
+`Issue5391`, Python dependency regressions and `Issue5362` on net8/net9.
+
 `FindMultilineTests` and `McpServerIssue5399Tests` cover indexed LF/CRLF windows,
 astral UTF-16 coordinates, overlapping chunks, exact/beyond-span bounds, anchors,
 dot-all/zero-width/non-overlapping matches, count and row replay, cursor changes,
@@ -1710,6 +1718,13 @@ Check the following:
 ---
 
 <a id="テストガイド"></a>
+
+`RunDeps_PythonContextCoordinatesPreserveBothDirections_Issue5401` は共通の索引で
+通常の依存と循環を比較し、インデントなし・空白・タブ、短い／長い名前、別名、
+相対 import、同一行の複数メンバー呼び出しを検証します。保存済みの UTF-16 列と
+空白除去済み表示文脈を維持し、実ファイル変更後も索引内のソースを使うことを確認します。
+チャンク欠落や旧スキーマでも、表示文脈から receiver を推測しないことを確認します。
+`Issue5401`・`Issue5391`・Python 依存の回帰・`Issue5362` を net8/net9 で実行してください。
 
 `InspectCompactCandidateTests`（#5397）は実際に索引を作成した共通 fixture で
 CLI inspect と MCP の compact 解析を検証します。0 件・上限ちょうど・追加候補・

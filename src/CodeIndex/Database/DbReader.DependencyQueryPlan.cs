@@ -124,7 +124,7 @@ public partial class DbReader
 
         return new DependencyQueryExpressions(
             ReferenceLineJoinSql("r"),
-            ReferenceContextSql("r"),
+            DependencyReferenceContextSql("r", "src"),
             $"CASE WHEN {identityScopeCondition} THEN r.id ELSE 0 END",
             $"CASE WHEN {identityScopeCondition} THEN {resolutionState} ELSE NULL END",
             $"CASE WHEN {identityScopeCondition} THEN 1 ELSE 0 END",

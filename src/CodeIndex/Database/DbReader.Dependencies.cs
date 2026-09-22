@@ -15,6 +15,26 @@ public partial class DbReader
             ? $"COALESCE({referenceAlias}.context, {referenceLineAlias}.context)"
             : $"{referenceAlias}.context";
 
+    private string DependencyReferenceContextSql(string referenceAlias, string fileAlias)
+    {
+        // Reference display contexts are trimmed, while columns are absolute UTF-16
+        // source positions. Python import matching needs the indexed original line
+        // to distinguish aliases and multiple same-line member calls. Never read live
+        // files or guess an occurrence from the trimmed display text.
+        var pythonContext = _hasChunksTable
+            ? $"""
+                (SELECT source_line_at(piece.content, piece.start_line, {referenceAlias}.line)
+                 FROM chunks piece
+                 WHERE piece.file_id = {referenceAlias}.file_id
+                   AND piece.start_line <= {referenceAlias}.line
+                   AND piece.end_line >= {referenceAlias}.line
+                 ORDER BY piece.start_line DESC, piece.id
+                 LIMIT 1)
+                """
+            : "NULL";
+        return $"CASE WHEN {fileAlias}.lang = 'python' THEN {pythonContext} ELSE {ReferenceContextSql(referenceAlias)} END";
+    }
+
     private string ReferenceLineJoinSql(string referenceAlias, string referenceLineAlias = "rl")
         => _canUseReferenceLines
             ? $" LEFT JOIN reference_lines {referenceLineAlias} ON {referenceLineAlias}.id = {referenceAlias}.reference_line_id"

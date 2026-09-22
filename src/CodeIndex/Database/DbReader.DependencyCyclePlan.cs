@@ -107,7 +107,7 @@ public partial class DbReader
                            SELECT 1 FROM symbol_reference_candidates candidate
                            WHERE candidate.reference_id = r.id AND candidate.symbol_id = py_import.id)))" : string.Empty;
         var importSignature = GetSymbolColumnSql("signature", "NULL", "py_import");
-        var context = ReferenceContextSql("r");
+        var context = DependencyReferenceContextSql("r", "src");
         // Python's persisted identity can be the source-local import binding. Follow
         // only that binding using ordinary deps' module/alias matcher, never all names.
         var pythonImports = @"
