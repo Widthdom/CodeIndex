@@ -19,11 +19,16 @@ internal static partial class SearchMatchClassifier
         int length,
         string? enclosingSymbolKind = null,
         IReadOnlyDictionary<int, string>? lineContext = null,
-        CSharpOriginContext? csharpContext = null)
+        CSharpOriginContext? csharpContext = null,
+        PythonOriginContext? pythonContext = null)
     {
         if (csharpContext is null && lineContext is not null && string.Equals(lang, "csharp", StringComparison.OrdinalIgnoreCase))
             csharpContext = new CSharpOriginContext(path, lineContext);
-        var origin = ClassifyOrigin(path, lang, line, text, column, enclosingSymbolKind, lineContext, csharpContext);
+        if (pythonContext is null && string.Equals(lang, "python", StringComparison.OrdinalIgnoreCase))
+            pythonContext = new PythonOriginContext(lineContext ?? new Dictionary<int, string>());
+        var origin = pythonContext is not null
+            ? pythonContext.GetOrigin(line, text, column - 1)
+            : ClassifyOrigin(path, lang, line, text, column, enclosingSymbolKind, lineContext, csharpContext);
         var testFile = IsLikelyTestPath(path);
         var testSymbol = string.Equals(enclosingSymbolKind, "test.method", StringComparison.OrdinalIgnoreCase);
         var testFixture = (testFile || testSymbol) && IsStringLikeOrigin(origin);
@@ -33,7 +38,7 @@ internal static partial class SearchMatchClassifier
             Column = Math.Max(1, column),
             Length = Math.Max(1, length),
             Origin = origin,
-            OriginUnavailable = origin == Unknown ? csharpContext?.GetUnavailable(line, text) : null,
+            OriginUnavailable = origin == Unknown ? pythonContext?.GetUnavailable(line, text) ?? csharpContext?.GetUnavailable(line, text) : null,
             TestFile = testFile,
             TestSymbol = testSymbol,
             TestFixture = testFixture,

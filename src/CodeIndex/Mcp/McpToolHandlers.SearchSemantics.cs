@@ -99,6 +99,7 @@ public partial class McpServer
         payload["path"] = PathEcho(options.PathPatterns);
         payload["excludeTests"] = options.ExcludeTests;
         var authoritative = AddSemanticSearchCoverage(payload, page.ScanComplete, page.ClassificationComplete);
+        page.OriginCoverage.AddClassificationDiagnostics(payload);
         if (options.CountOnly)
         {
             payload["authoritative_count"] = authoritative;
