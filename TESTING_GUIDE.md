@@ -1,11 +1,15 @@
 # Testing Guide
 
-`FindChunkReadTests` (#5415) shares a many-chunk fixture across literal, exact,
-trigram-candidate and line-regex row/count queries on current and read-only legacy
-indexes. Keep ordered query-plan checks, bounded metadata pages, reversed insertion,
-overlap ownership, missing/live source controls, NULL-content failures, line caps,
-and row/count continuation across chunk pages. Run on net8/net9 alongside existing
-find, pagination and MCP regressions; no peak-memory or latency claim is implied.
+Run `python3 -m unittest discover -s .agent_harness/tests` for shared command-guard
+changes. The existing policy-contract matrix checks the core, Codex PreToolUse and
+PermissionRequest, and Claude PreToolUse without executing the tested commands.
+Keep #5417's quoted review/document data, multiline Markdown and literal substitution
+controls alongside real DLL invocations, wrappers, shell operators and active substitutions.
+Cover comment quotes, leading/interspersed redirections, negation, brace groups,
+indirect hosts, line continuations and literal separators. Unknown DLL-bearing command
+forms stay denied; a DLL in a Codex configuration option is not prompt data.
+Keep nested parameter expansions and `printf` variable/count/numeric targets denied,
+with single-quoted expansion text and `%s`/`%%` display arguments as allow controls.
 
 `JsonEnvelopeWrapperIssue5412Tests` shares an isolated indexed fixture across literal,
 line-regex and multiline find cursor errors. Keep JSON/envelope/fields/compact
@@ -51,6 +55,13 @@ Keep the legacy literal and line-regex controls; the fixtures own their database
 Also cover index-ordered chunk metadata, bounded legacy fallback, offset-only final
 page authority, and combined execution/output caps without synthesized continuation
 in the CLI and both MCP tools.
+
+`FindChunkReadTests` (#5415) shares a many-chunk fixture across literal, exact,
+trigram-candidate and line-regex row/count queries on current and read-only legacy
+indexes. Keep ordered query-plan checks, bounded metadata pages, reversed insertion,
+overlap ownership, missing/live source controls, NULL-content failures, line caps,
+and row/count continuation across chunk pages. Run on net8/net9 alongside existing
+find, pagination and MCP regressions; no peak-memory or latency claim is implied.
 
 `InspectCompactCandidateTests` (#5397) shares a real indexed fixture across CLI
 inspect and MCP compact analysis. Keep zero, exact-limit, probe-overflow and the
@@ -1833,12 +1844,16 @@ Issue #5300 のテストは隣接・入れ子の C# callable、対象行の除�
 
 # テストガイド
 
-`FindChunkReadTests`（#5415）は多数のチャンクを持つ共通 fixture を使い、現在の索引と
-読取専用の旧索引でリテラル・exact・trigram 候補・行単位正規表現の行／件数検索を検証します。
-順序付きクエリ計画、上限付きメタデータページ、逆順挿入、重複行の優先順、索引本文の欠落と
-実ファイルの対照、NULL 本文エラー、行上限、チャンクページをまたぐ行／件数の継続取得を
-維持してください。既存の find・ページ分割・MCP 回帰とともに net8/net9 で実行します。
-ピークメモリや実行時間の測定結果を保証するテストではありません。
+共有コマンドガードの変更では `python3 -m unittest discover -s .agent_harness/tests` を
+実行してください。既存の契約テストは、対象コマンド自体を実行せずに共有コア、Codex の
+PreToolUse・PermissionRequest、Claude の PreToolUse を検証します。#5417 の引用された
+レビュー・文書データ、複数行 Markdown、置換構文の文字列としての使用とともに、実際の DLL
+実行、ラッパー、シェル演算子、有効なコマンド置換の対照例を維持してください。
+コメント内の引用符、先頭・途中のリダイレクト、否定、波括弧のグループ、間接的な実行元、
+行継続、文字列としての区切り記号も検証します。DLL に言及する未対応のコマンド形式は拒否し、
+Codex の設定オプション内の DLL をプロンプトデータとして扱わないことを確認してください。
+入れ子のパラメーター展開と `printf` の変数代入・文字数代入・数値変換は拒否し、単一引用符内の
+展開構文と `%s`・`%%` による文字列表示を許可する対照例も維持してください。
 
 `JsonEnvelopeWrapperIssue5412Tests` は分離した索引 fixture を共有し、リテラル・行単位正規表現・
 複数行 find のカーソルエラーを検証します。JSON・envelope・fields・compact の各指定、
@@ -1858,6 +1873,13 @@ UTF-16 座標、重複チャンク、一致範囲の上限内外、アンカー�
 対照を維持し、各 fixture が自分の DB を所有します。
 チャンクの索引順取得と旧索引の上限付き代替処理、offset だけで再開した最終ページの確定性、
 実行上限と出力上限が同時に発生しても継続カーソルを作らない規則を CLI と両 MCP ツールで検証します。
+
+`FindChunkReadTests`（#5415）は多数のチャンクを持つ共通 fixture を使い、現在の索引と
+読取専用の旧索引でリテラル・exact・trigram 候補・行単位正規表現の行／件数検索を検証します。
+順序付きクエリ計画、上限付きメタデータページ、逆順挿入、重複行の優先順、索引本文の欠落と
+実ファイルの対照、NULL 本文エラー、行上限、チャンクページをまたぐ行／件数の継続取得を
+維持してください。既存の find・ページ分割・MCP 回帰とともに net8/net9 で実行します。
+ピークメモリや実行時間の測定結果を保証するテストではありません。
 
 `ToolsList_SuggestionDisclosesConditionalGitHubPublication_Issue5396` は共通の
 フィクスチャで、既定・compact・full・ツール選択・ページ付きの一覧を検証します。

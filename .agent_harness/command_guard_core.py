@@ -366,6 +366,76 @@ def _command_is_safe_local_cdidx(command: str, cwd: Path, project_root: Path) ->
     return dll == expected
 
 
+def _has_active_shell_syntax(command: str) -> bool:
+    quote: str | None = None
+    index = 0
+    while index < len(command):
+        char = command[index]
+        if char == "\\" and quote != "'":
+            index += 2
+            continue
+        if char in {"'", '"'}:
+            if quote is None:
+                quote = char
+            elif quote == char:
+                quote = None
+        elif quote != "'" and char in "`$":
+            return True
+        elif quote is None and char in "();<>|&\n#":
+            return True
+        index += 1
+    return False
+
+
+def _command_has_unsupported_cdidx_dll(command: str) -> bool:
+    tokens = _split_command(command)
+    if not LOCAL_CDIDX_DLL_RE.search(command) and not any(LOCAL_CDIDX_DLL_RE.search(token) for token in tokens):
+        return False
+    # This is a bounded data-argument exception, not a general shell parser.
+    # Preserve denial for unknown executors, wrappers, comments, redirections
+    # and compound commands. Quoted/escaped punctuation stays literal data.
+    if not tokens or _has_active_shell_syntax(command):
+        return True
+    if tokens[0] in {"echo", "ls"}:
+        return False
+    if tokens[0] == "printf":
+        args = tokens[1:]
+        if args and args[0] == "--":
+            args = args[1:]
+        # Shell printf can evaluate variable targets (-v / %n) and numeric
+        # arguments. Only literal text, %% and %s are known display forms.
+        return not (
+            args and not args[0].startswith("-")
+            and re.fullmatch(r"(?:[^%]|%%|%s)*", args[0]) is not None
+        )
+    if tokens[0] == "codex" and len(tokens) >= 3 and tokens[1] in {"exec", "review"}:
+        prompt, rest = _subcommand_args(
+            tokens[2:],
+            {"--sandbox", "-s", "--output-last-message", "-o", "--output-schema", "--model", "-m",
+             "--profile", "-p", "--config", "-c", "--cd", "-C", "--image", "-i", "--color",
+             "--enable", "--disable", "--base", "--commit", "--title"},
+            valueless_options={"--ephemeral", "--json", "--skip-git-repo-check", "--uncommitted"},
+            fail_on_unknown_option=True,
+        )
+        return not (
+            prompt == tokens[-1] and not rest
+            and not any(LOCAL_CDIDX_DLL_RE.search(token) for token in tokens[:-1])
+        )
+    if tokens[0] == "gh":
+        subcommand, _ = _subcommand_args(
+            tokens[1:], {"-R", "--repo", "--hostname", "--config"}, fail_on_unknown_option=True,
+        )
+        if subcommand in {"pr", "issue"}:
+            data_options = {"--body", "-b", "--title", "-t", "--search", "-S"}
+            return any(
+                LOCAL_CDIDX_DLL_RE.search(token)
+                and not (index > 0 and tokens[index - 1] in data_options)
+                and not any(token.startswith(option + "=") for option in data_options if option.startswith("--"))
+                for index, token in enumerate(tokens)
+            )
+    return True
+
+
 def _token_is_expanded_installed_cdidx(token: str, cwd: Path) -> bool:
     if not token.startswith("/"):
         return False
@@ -1267,7 +1337,7 @@ def evaluate_bash_command(command: str, cwd: Path, project_root: Path) -> GuardD
     if _command_mentions_local_cdidx(command, project_root):
         return _deny("local cdidx commands must not use shell control operators or command substitutions")
 
-    if LOCAL_CDIDX_DLL_RE.search(command):
+    if _command_has_unsupported_cdidx_dll(command):
         return _deny("use dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll instead")
 
     if _command_is_safe_cdidx_resolver(command):
