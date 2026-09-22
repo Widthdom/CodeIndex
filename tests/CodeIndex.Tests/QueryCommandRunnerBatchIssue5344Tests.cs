@@ -16,7 +16,7 @@ public class QueryCommandRunnerBatchIssue5344Tests
         var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
         TestProjectHelper.InsertIndexedFile(dbPath, "src/Widget.cs", "csharp", "public class Widget { }\n");
         var children = new List<(string[] Args, int Exit, JsonNode Expected, bool Ndjson)>();
-        foreach (var command in new[] { "files", "symbols", "find" })
+        foreach (var command in new[] { "files", "symbols", "find", "search" })
             foreach (var query in new[] { "NoMatch5393", "Widget" })
                 foreach (var strict in new[] { false, true })
                 {
@@ -33,11 +33,12 @@ public class QueryCommandRunnerBatchIssue5344Tests
                         var direct = RunDirect(child, dbPath);
                         Assert.Equal(expectedExit, direct.Exit);
                         var payload = JsonNode.Parse(direct.Stdout)!;
+                        Assert.Equal(query == "NoMatch5393" ? 0 : 1, payload["count"]!.GetValue<int>());
                         Assert.True(payload["authoritative_count"]!.GetValue<bool>());
                         Assert.False(payload["degraded"]!.GetValue<bool>());
                         children.Add((child, expectedExit, payload, false));
                     }
-                    if (command != "find" && query == "NoMatch5393")
+                    if (command is "files" or "symbols" && query == "NoMatch5393")
                     {
                         string[] child = [.. args, "--json"];
                         var direct = RunDirect(child, dbPath);
@@ -45,10 +46,9 @@ public class QueryCommandRunnerBatchIssue5344Tests
                         var records = ParseNdjson(direct.Stdout);
                         Assert.Single(records);
                         children.Add((child, expectedExit, records, true));
-
-                        var budget = RunDirect([.. args, "--count", "--json", "--max-json-bytes", "1"], dbPath);
-                        Assert.Equal(CommandExitCodes.UsageError, budget.Exit);
                     }
+                    var budget = RunDirect([.. args, "--count", "--json", "--max-json-bytes", "1"], dbPath);
+                    Assert.Equal(CommandExitCodes.UsageError, budget.Exit);
                 }
 
         // The syntactically empty exact C# name has a separate count fast path.
@@ -88,6 +88,26 @@ public class QueryCommandRunnerBatchIssue5344Tests
                 records[^1]!["command_failures"]!.GetValue<int>());
         }
 
+        // #5406: stale snapshots cannot become strict search misses.
+        foreach (var allowPartial in new[] { false, true })
+            foreach (var format in new string[][] { ["--count"], ["--count", "--json"], ["--format", "count"] })
+            {
+                string[] args = ["NoMatch5393", "--strict-not-found", .. format,
+                    .. allowPartial ? new[] { "--allow-partial" } : Array.Empty<string>()];
+                var snapshot = RunDirect(["search", .. args, "--read-only"], dbPath);
+                Assert.Equal(CommandExitCodes.Success, snapshot.Exit);
+                if (format.Length == 1)
+                    Assert.Equal("0", snapshot.Stdout.Trim());
+                else
+                {
+                    var payload = JsonNode.Parse(snapshot.Stdout)!;
+                    Assert.Equal(0, payload["count"]!.GetValue<int>());
+                    Assert.True(payload["wal_stale_snapshot_risk"]!.GetValue<bool>());
+                    Assert.True(payload["degraded"]!.GetValue<bool>());
+                    Assert.False(payload["authoritative_count"]!.GetValue<bool>());
+                }
+            }
+
         // Removing policy provenance makes symbol absence unknown, but cannot degrade file/text counts.
         using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
         using (var removePolicy = db.Connection.CreateCommand())
@@ -95,7 +115,7 @@ public class QueryCommandRunnerBatchIssue5344Tests
             removePolicy.CommandText = $"DELETE FROM codeindex_meta WHERE key = '{DbContext.SymbolKindFilterMetaKey}'";
             removePolicy.ExecuteNonQuery();
         }
-        foreach (var command in new[] { "files", "symbols", "find" })
+        foreach (var command in new[] { "files", "symbols", "find", "search" })
             foreach (var allowPartial in new[] { false, true })
             {
                 string[] args = [command, "NoMatch5393", "--strict-not-found",
@@ -387,6 +407,7 @@ public class QueryCommandRunnerBatchIssue5344Tests
             "find" => QueryCommandRunner.RunFind(effective, JsonOptions),
             "files" => QueryCommandRunner.RunFiles(effective, JsonOptions),
             "symbols" => QueryCommandRunner.RunSymbols(effective, JsonOptions),
+            "search" => QueryCommandRunner.RunSearch(effective, JsonOptions),
             _ => QueryCommandRunner.RunDefinition(effective, JsonOptions),
         };
         return CaptureConsole(() => JsonEnvelopeWrapper.ShouldWrap(child[0], args)

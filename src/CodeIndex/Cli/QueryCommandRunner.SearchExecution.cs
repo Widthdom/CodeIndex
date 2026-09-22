@@ -108,27 +108,33 @@ public static partial class QueryCommandRunner
             options.Lang);
         if (options.Json)
         {
-            return originCoverage.ExitCode(WriteJsonObjectWithOptionalByteLimit(
-                BuildCountJsonPayload(
-                    reader,
-                    plan.JsonOptions,
-                    counts.Count,
-                    counts.FileCount,
-                    query: plan.Query,
-                    queryOptions: options,
-                    ftsQueryDiagnostics: queryDiagnostics,
-                    exactSubstringHint: plan.ExactSubstringHint,
-                    extraFields: originCoverage.AddJsonFields).ToJsonString(plan.JsonOptions),
+            var payload = BuildCountJsonPayload(
+                reader,
+                plan.JsonOptions,
+                counts.Count,
+                counts.FileCount,
+                query: plan.Query,
+                queryOptions: options,
+                ftsQueryDiagnostics: queryDiagnostics,
+                exactSubstringHint: plan.ExactSubstringHint,
+                extraFields: originCoverage.AddJsonFields);
+            var writeExitCode = WriteJsonObjectWithOptionalByteLimit(
+                payload.ToJsonString(plan.JsonOptions),
                 options,
                 "search count",
                 "Narrow the query or increase --max-json-bytes.",
-                plan.JsonOptions));
+                plan.JsonOptions);
+            return CountResultExitCode(options, counts.Count,
+                authoritative: JsonBool(payload, "authoritative_count") == true,
+                writeExitCode: originCoverage.ExitCode(writeExitCode));
         }
 
         Console.WriteLine($"{counts.Count}");
         WriteExactSubstringHintIfNeeded(plan.ExactSubstringHint);
         originCoverage.WriteHumanWarning();
-        return originCoverage.ExitCode();
+        return CountResultExitCode(options, counts.Count,
+            authoritative: originCoverage.Complete && !reader.WalStaleSnapshotRisk,
+            writeExitCode: originCoverage.ExitCode());
     }
 
     private static SearchRowExecution PreparePlainSearchRows(
