@@ -163,6 +163,7 @@ public static partial class IndexCommandRunner
         private readonly Action<UpdateParallelExtractionTestEvent>? extractionEventForTesting;
         private readonly Func<string, string, Exception?>? extractionFailureForTesting;
         private readonly TimeSpan extractionStallTimeout;
+        private readonly Func<int, TimeSpan>? windowStallTimeoutForTesting;
         private readonly Action? workersStoppedForTesting;
         private int abandonWorkers;
         private int resourcesDisposed;
@@ -178,6 +179,7 @@ public static partial class IndexCommandRunner
             Action<UpdateParallelExtractionTestEvent>? extractionEventForTesting,
             Func<string, string, Exception?>? extractionFailureForTesting,
             Func<TimeSpan>? extractionStallTimeoutForTesting,
+            Func<int, TimeSpan>? windowStallTimeoutForTesting,
             Action? workersStoppedForTesting)
         {
             WorkerCount = workerCount;
@@ -185,6 +187,7 @@ public static partial class IndexCommandRunner
             this.extractionEventForTesting = extractionEventForTesting;
             this.extractionFailureForTesting = extractionFailureForTesting;
             this.workersStoppedForTesting = workersStoppedForTesting;
+            this.windowStallTimeoutForTesting = windowStallTimeoutForTesting;
             extractionStallTimeout =
                 extractionStallTimeoutForTesting?.Invoke()
                 ?? IndexExtractionStallTimeout;
@@ -288,9 +291,13 @@ public static partial class IndexCommandRunner
                             lastProgressTimestamp = Stopwatch.GetTimestamp();
                             continue;
                         }
-                        if (extractionStallTimeout <= TimeSpan.Zero
+                        // A test may arm the window watchdog after its fixture is ready,
+                        // without shortening independent isolated-worker request budgets.
+                        var windowStallTimeout = windowStallTimeoutForTesting?.Invoke(remainingCount)
+                            ?? extractionStallTimeout;
+                        if (windowStallTimeout <= TimeSpan.Zero
                             || Stopwatch.GetElapsedTime(lastProgressTimestamp)
-                                < extractionStallTimeout)
+                                < windowStallTimeout)
                         {
                             continue;
                         }
@@ -306,7 +313,7 @@ public static partial class IndexCommandRunner
                             new IndexExtractionStalledException(
                                 0,
                                 null,
-                                extractionStallTimeout,
+                                windowStallTimeout,
                                 FormatIndexPhasePath(
                                     stalledRequest.Target.DisplayRelativePath,
                                     stalledPhase)),
