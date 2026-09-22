@@ -537,7 +537,15 @@ public partial class IndexCommandRunnerTests
             var (ndjsonSymbolsExitCode, ndjsonSymbolsStdout, ndjsonSymbolsStderr) =
                 RunSymbolsAndCaptureIssue5224(["helper", "--db", dbPath, "--json=ndjson"]);
             Assert.Equal(CommandExitCodes.Success, ndjsonSymbolsExitCode);
-            Assert.Equal(string.Empty, ndjsonSymbolsStdout);
+            using (var terminalDocument = JsonDocument.Parse(ndjsonSymbolsStdout))
+            {
+                var terminal = terminalDocument.RootElement;
+                Assert.True(terminal.GetProperty("terminal_record").GetBoolean());
+                Assert.True(terminal.GetProperty("done").GetBoolean());
+                Assert.Equal(0, terminal.GetProperty("count").GetInt32());
+                Assert.False(terminal.GetProperty("authoritative_count").GetBoolean());
+                Assert.False(terminal.GetProperty("index_complete").GetBoolean());
+            }
             Assert.Contains(
                 DbReader.SymbolKindFilterCoverageLimitedReason,
                 ndjsonSymbolsStderr,
