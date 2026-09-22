@@ -661,15 +661,17 @@ public partial class McpServer : IDisposable
     /// suggest_improvementツール用のMCPツールアノテーションを構築。
     /// Not read-only (writes suggestion to disk), not destructive,
     /// idempotent (duplicate submissions are safely deduplicated).
+    /// Open-world because an explicitly configured token enables upstream GitHub publication.
     /// 読み取り専用ではない（提案をディスクに書き込む）、破壊的ではない、
     /// 冪等（重複送信は安全に排除される）。
+    /// トークンを明示的に設定すると上流の GitHub へ公開できるため、外部とのやり取りを示す。
     /// </summary>
     private static JsonObject SuggestionAnnotations() => new()
     {
         ["readOnlyHint"] = false,
         ["destructiveHint"] = false,
         ["idempotentHint"] = true,
-        ["openWorldHint"] = false
+        ["openWorldHint"] = true
     };
 
 }

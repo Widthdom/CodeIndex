@@ -822,12 +822,12 @@ public partial class McpServer
                 ReadOnlyAnnotations()),
             CreateToolDefinition(
                 "suggest_improvement",
-                "Submit a structured improvement suggestion or error report for cdidx. "
+                "Store cdidx suggestions or error reports locally; may publish an upstream GitHub issue when CDIDX_GITHUB_TOKEN is configured. "
                 + "Call this when you notice a gap (e.g. missing language support, poor ranking) or encounter an unexpected error. "
                 + "Never include source code — describe the gap in natural language only. "
                 + "The tool writes to the resolved .cdidx directory, which must be writable; responses include cdidx_dir for diagnostics. "
                 + "Responses also include github_submission_reason: submitted, token_not_configured, repo_not_configured, network_error, or api_error. "
-                + "/ cdidxへの構造化された改善提案またはエラー報告を送信する。"
+                + "/ cdidxへの改善提案またはエラー報告をローカル保存し、CDIDX_GITHUB_TOKEN 設定時には上流の GitHub Issue として公開することがある。"
                 + "ギャップ（言語サポート不足、ランキング不良等）に気づいたとき、または予期せぬエラーに遭遇したときに呼び出す。"
                 + "ソースコードを含めないこと — 自然言語でのみギャップを記述する。"
                 + "解決された .cdidx ディレクトリへ書き込むため、そのディレクトリは書き込み可能である必要がある。応答には診断用の cdidx_dir と github_submission_reason が含まれる。",
