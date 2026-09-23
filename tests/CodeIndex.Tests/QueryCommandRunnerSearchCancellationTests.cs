@@ -144,7 +144,9 @@ public class QueryCommandRunnerSearchCancellationTests
                             {
                                 var connection = new SqliteConnection(new SqliteConnectionStringBuilder
                                 {
-                                    DataSource = path, Mode = SqliteOpenMode.ReadOnly, Pooling = false,
+                                    DataSource = path,
+                                    Mode = SqliteOpenMode.ReadOnly,
+                                    Pooling = false,
                                 }.ToString());
                                 connection.Open();
                                 // Cancel inside the real search statement, after DB setup. Returning normally
