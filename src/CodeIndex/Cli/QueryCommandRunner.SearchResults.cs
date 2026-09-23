@@ -11,6 +11,13 @@ namespace CodeIndex.Cli;
 public static partial class QueryCommandRunner
 {
     private static readonly AsyncLocal<Action?> ScopedSearchAggregationGroupPreparedForTesting = new();
+    private static readonly AsyncLocal<Action?> ScopedSearchDisplayRowPreparedForTesting = new();
+
+    internal static Action? SearchDisplayRowPreparedForTesting
+    {
+        get => ScopedSearchDisplayRowPreparedForTesting.Value;
+        set => ScopedSearchDisplayRowPreparedForTesting.Value = value;
+    }
 
     internal static Action? SearchAggregationGroupPreparedForTesting
     {
@@ -999,9 +1006,9 @@ public static partial class QueryCommandRunner
         return false;
     }
 
-    private static int RunSearchNamedBatchCount(QueryCommandOptions options, JsonSerializerOptions jsonOptions, bool userExact)
+    private static int RunSearchNamedBatchCount(QueryCommandOptions options, JsonSerializerOptions jsonOptions, bool userExact, CancellationToken cancellationToken)
     {
-        return WithDb(options, jsonOptions, reader =>
+        return WithSearchDb(options, jsonOptions, cancellationToken, reader =>
         {
             var freshnessContext = options.Json
                 ? BuildNamedSearchFreshnessContext(
@@ -1023,6 +1030,7 @@ public static partial class QueryCommandRunner
             var originCoverage = new SearchCountOriginCoverage(options);
             foreach (var coverage in queryOriginCoverage.Values)
                 originCoverage.Merge(coverage);
+            reader.ThrowIfCancellationRequested();
 
             if (options.Json)
             {
@@ -1044,6 +1052,7 @@ public static partial class QueryCommandRunner
                 if (hasFailures)
                     payload["degraded"] = true;
                 originCoverage.AddJsonFields(payload);
+                reader.ThrowIfCancellationRequested();
                 var writeExitCode = WriteJsonObjectWithOptionalByteLimit(
                     payload.ToJsonString(jsonOptions),
                     options,
@@ -1070,11 +1079,12 @@ public static partial class QueryCommandRunner
         });
     }
 
-    private static int RunSearchNamedBatch(QueryCommandOptions options, JsonSerializerOptions jsonOptions, bool userExact)
+    private static int RunSearchNamedBatch(QueryCommandOptions options, JsonSerializerOptions jsonOptions, bool userExact, CancellationToken cancellationToken)
     {
-        return WithDb(options, jsonOptions, reader =>
+        return WithSearchDb(options, jsonOptions, cancellationToken, reader =>
         {
             var queryResults = CollectSearchNamedBatchQueryResults(reader, options, userExact, out var total);
+            reader.ThrowIfCancellationRequested();
 
             if (options.Json)
             {
@@ -1089,6 +1099,7 @@ public static partial class QueryCommandRunner
                             total,
                             queryResults),
                         CliJsonSerializerContextFactory.Create(jsonOptions).SearchNamedBatchRunJsonResult);
+                reader.ThrowIfCancellationRequested();
                 return WriteJsonObjectWithOptionalByteLimit(
                     json,
                     options,
@@ -1101,6 +1112,7 @@ public static partial class QueryCommandRunner
             Console.WriteLine();
             foreach (var queryResult in queryResults)
             {
+                reader.ThrowIfCancellationRequested();
                 Console.WriteLine($"[{queryResult.Name}] {queryResult.Query}");
                 Console.WriteLine($"results: {queryResult.Count}");
                 if (queryResult.SelectionAccounting is { } accounting)
@@ -1283,6 +1295,8 @@ public static partial class QueryCommandRunner
             }
 
             rows.Add(new SearchDisplayRow(result, compact));
+            SearchDisplayRowPreparedForTesting?.Invoke();
+            cancellationToken.ThrowIfCancellationRequested();
         }
 
         cancellationToken.ThrowIfCancellationRequested();
