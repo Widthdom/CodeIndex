@@ -56,6 +56,13 @@ Also cover index-ordered chunk metadata, bounded legacy fallback, offset-only fi
 page authority, and combined execution/output caps without synthesized continuation
 in the CLI and both MCP tools.
 
+`FindChunkReadTests` (#5415) shares a many-chunk fixture across literal, exact,
+trigram-candidate and line-regex row/count queries on current and read-only legacy
+indexes. Keep ordered query-plan checks, bounded metadata pages, reversed insertion,
+overlap ownership, missing/live source controls, NULL-content failures, line caps,
+and row/count continuation across chunk pages. Run on net8/net9 alongside existing
+find, pagination and MCP regressions; no peak-memory or latency claim is implied.
+
 `InspectCompactCandidateTests` (#5397) shares a real indexed fixture across CLI
 inspect and MCP compact analysis. Keep zero, exact-limit, probe-overflow and the
 internal five-definition boundary, partial and unrelated same-name/overload
@@ -1866,6 +1873,13 @@ UTF-16 座標、重複チャンク、一致範囲の上限内外、アンカー�
 対照を維持し、各 fixture が自分の DB を所有します。
 チャンクの索引順取得と旧索引の上限付き代替処理、offset だけで再開した最終ページの確定性、
 実行上限と出力上限が同時に発生しても継続カーソルを作らない規則を CLI と両 MCP ツールで検証します。
+
+`FindChunkReadTests`（#5415）は多数のチャンクを持つ共通 fixture を使い、現在の索引と
+読取専用の旧索引でリテラル・exact・trigram 候補・行単位正規表現の行／件数検索を検証します。
+順序付きクエリ計画、上限付きメタデータページ、逆順挿入、重複行の優先順、索引本文の欠落と
+実ファイルの対照、NULL 本文エラー、行上限、チャンクページをまたぐ行／件数の継続取得を
+維持してください。既存の find・ページ分割・MCP 回帰とともに net8/net9 で実行します。
+ピークメモリや実行時間の測定結果を保証するテストではありません。
 
 `ToolsList_SuggestionDisclosesConditionalGitHubPublication_Issue5396` は共通の
 フィクスチャで、既定・compact・full・ツール選択・ページ付きの一覧を検証します。

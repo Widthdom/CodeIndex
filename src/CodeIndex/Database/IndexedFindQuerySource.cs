@@ -5,6 +5,18 @@ namespace CodeIndex.Database;
 
 public partial class DbReader
 {
+    internal const int FindChunkPageSize = 64;
+
+    internal static string FindLineChunkPageSql(bool ordered, bool resumed) => $"""
+        SELECT c.id, c.start_line, c.end_line, c.chunk_index
+        FROM chunks c{(ordered ? $" INDEXED BY {BoundedResourceReadChunkIndexName}" : "")}
+        WHERE c.file_id = @fileId
+        {(ordered ? "AND c.content IS NOT NULL" : "")}
+        {(resumed ? "AND (c.start_line, c.chunk_index) > (@startLine, @chunkIndex)" : "")}
+        ORDER BY c.start_line, c.chunk_index
+        LIMIT {FindChunkPageSize}
+        """;
+
     private sealed class IndexedFindQuerySource(DbReader owner)
     {
         private readonly DbReader _owner = owner;
@@ -85,35 +97,73 @@ public partial class DbReader
             return command;
         }
 
-        internal IEnumerable<IndexedLine> EnumerateIndexedFileLines(long fileId)
+        internal IEnumerable<IndexedLine> EnumerateIndexedFileLines(long fileId, CancellationToken cancellationToken)
         {
+            // The partial index excludes NULL source. Keep the original read failure for
+            // such rows by routing that file through the all-row metadata fallback.
+            // 部分索引から除外される NULL 本文は、全行のメタデータ経路で従来の読取エラーを維持する。
+            var ordered = _owner._chunkIndexes.Contains(BoundedResourceReadChunkIndexName)
+                && !HasNullChunkContent(fileId);
+            using var pageCommand = _owner._conn.CreateCommand();
+            SqliteCommandPolicy.Add(pageCommand, "@fileId", fileId);
+            var startLine = pageCommand.Parameters.AddWithValue("@startLine", 0);
+            var chunkIndex = pageCommand.Parameters.AddWithValue("@chunkIndex", 0);
             using var command = _owner._conn.CreateCommand();
-            command.CommandText = @"
-                SELECT c.start_line, c.end_line, c.content
-                FROM chunks c
-                WHERE c.file_id = @fileId
-                ORDER BY c.start_line, c.chunk_index";
-            SqliteCommandPolicy.Add(command, "@fileId", fileId);
+            command.CommandText = "SELECT content FROM chunks WHERE id = @chunkId";
+            var chunkId = command.Parameters.AddWithValue("@chunkId", 0L);
 
             var lastEmittedLine = 0;
-            using var reader = command.ExecuteTrackedReader();
-            while (reader.TrackedRead())
+            var resumed = false;
+            while (true)
             {
-                var chunkStartLine = reader.GetInt32(0);
-                var chunkEndLine = reader.GetInt32(1);
-                var chunkLines = reader.GetString(2).Split('\n');
-                var lineCount = chunkEndLine - chunkStartLine + 1;
-
-                for (var index = 0; index < chunkLines.Length && index < lineCount; index++)
+                cancellationToken.ThrowIfCancellationRequested();
+                // LIMIT bounds the legacy top-N sort to scalar metadata. Source is loaded
+                // only after selection, so neither SQLite nor the page retains file content.
+                // 旧索引のソートを少量のメタデータに制限し、選択後にだけ本文を取得する。
+                pageCommand.CommandText = FindLineChunkPageSql(ordered, resumed);
+                var count = 0;
+                using (var page = pageCommand.ExecuteTrackedReader())
                 {
-                    var absoluteLine = chunkStartLine + index;
-                    if (absoluteLine <= lastEmittedLine)
-                        continue;
+                    while (page.TrackedRead())
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        count++;
+                        var chunkStartLine = page.GetInt32(1);
+                        var chunkEndLine = page.GetInt32(2);
+                        startLine.Value = chunkStartLine;
+                        chunkIndex.Value = page.GetInt32(3);
+                        chunkId.Value = page.GetInt64(0);
+                        using var reader = command.ExecuteTrackedReader();
+                        if (!reader.TrackedRead())
+                            throw new InvalidOperationException("Indexed find chunk is no longer available.");
+                        var chunkLines = reader.GetString(0).Split('\n');
+                        var lineCount = chunkEndLine - chunkStartLine + 1;
 
-                    lastEmittedLine = absoluteLine;
-                    yield return new IndexedLine(absoluteLine, chunkLines[index]);
+                        for (var index = 0; index < chunkLines.Length && index < lineCount; index++)
+                        {
+                            cancellationToken.ThrowIfCancellationRequested();
+                            var absoluteLine = chunkStartLine + index;
+                            if (absoluteLine <= lastEmittedLine)
+                                continue;
+
+                            lastEmittedLine = absoluteLine;
+                            yield return new IndexedLine(absoluteLine, chunkLines[index]);
+                        }
+                    }
                 }
+                if (count < FindChunkPageSize)
+                    yield break;
+                resumed = true;
             }
+        }
+
+        private bool HasNullChunkContent(long fileId)
+        {
+            using var command = _owner._conn.CreateCommand();
+            command.CommandText = "SELECT 1 FROM chunks WHERE file_id = @fileId AND content IS NULL LIMIT 1";
+            SqliteCommandPolicy.Add(command, "@fileId", fileId);
+            using var reader = command.ExecuteTrackedReader();
+            return reader.TrackedRead();
         }
 
         internal static IEnumerable<FindLineMatch> EnumerateLineMatches(

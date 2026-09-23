@@ -2,6 +2,17 @@
 
 ## English
 
+Literal and line-regex `find` read indexed chunks in line/chunk order without
+sorting source content. Current indexes use the ordered partial chunk index;
+older indexes page at most 64 scalar chunk records through a metadata-only sort,
+then read each selected chunk's content separately. Pages use the last ordering
+key rather than an increasing offset. Retained sort data is bounded, but legacy
+pages may rescan file metadata and one chunk's content is still read at a time.
+A bounded-memory NULL-content check preserves the existing missing-content error
+by selecting the all-row fallback for such files; that check may scan the file's
+chunk entries. Missing chunks never trigger live-file reads. Overlap ownership,
+counts, line caps and continuation positions are unchanged; no reindex is required.
+
 ### CLI cursor validation errors (#5412)
 
 Bounded `find` validation honors machine output selected by `--json`,
@@ -221,6 +232,16 @@ text or JSON output when context from `--before`, `--after`, or
 `--snippet-lines` is needed.
 
 ## 日本語
+
+リテラル検索と行単位の正規表現 `find` は、本文をソートせず行・チャンク順に索引を読みます。
+現在の索引では順序付き部分インデックスを使い、旧索引では最大64件のチャンクメタデータだけを
+ソートしてから、選択した各チャンクの本文を個別に取得します。ページは増大する offset ではなく
+直前の順序キーから再開します。ソートの保持量には上限がありますが、旧索引ではページごとに
+ファイルのメタデータを再走査する場合があり、本文もチャンク1個単位では読み取ります。
+NULL 本文の確認は保持メモリを制限して行い、該当するファイルでは全行を対象とする代替経路により
+従来の本文欠落エラーを維持します。この確認もファイルのチャンク行を走査する場合があります。
+チャンクが欠けても実ファイルへ読み取りを切り替えません。重複行の優先順、件数、行上限、
+継続位置は従来どおりで、再索引は不要です。
 
 ### CLI カーソルの検証エラー (#5412)
 

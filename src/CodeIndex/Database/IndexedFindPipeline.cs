@@ -139,7 +139,7 @@ public partial class DbReader
             var origins = request.SemanticFilters is null ? null : _owner.CreateFindOriginContext(file, request.CancellationToken);
             var firstContextLine = Math.Max(1, file.FirstEligibleLine - collector.ContextBefore);
             var stopScanning = false;
-            foreach (var indexedLine in _querySource.EnumerateIndexedFileLines(file.Id))
+            foreach (var indexedLine in _querySource.EnumerateIndexedFileLines(file.Id, request.CancellationToken))
             {
                 request.CancellationToken.ThrowIfCancellationRequested();
                 if (indexedLine.Number > file.TotalLines)
