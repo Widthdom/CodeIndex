@@ -10,6 +10,11 @@ internal static class BatchChildErrorParser
     internal const int MaxUtf8Bytes = 64 * 1024;
     internal const int MaxDepth = 16;
     internal const int MaxTextChars = 1024;
+    private static readonly IReadOnlySet<string> PublicOptionNames = CliFlagSchema.All
+        .SelectMany(flag => flag.ShortName is { } shortName ? new[] { flag.Name, shortName } : new[] { flag.Name })
+        // Help is handled by ArgHelper before the per-command flag schema.
+        .Concat(["--help", "-h"])
+        .ToHashSet(StringComparer.Ordinal);
 
     internal static JsonObject? Parse(string stdout, string command, int exitCode)
     {
@@ -171,5 +176,6 @@ internal static class BatchChildErrorParser
     private static string Sanitize(string value)
         => DiagnosticSanitizer.ForMessage(
             new string(value.Select(ch => char.IsControl(ch) ? ' ' : ch).ToArray()),
-            MaxTextChars - 3);
+            MaxTextChars - 3,
+            PublicOptionNames);
 }

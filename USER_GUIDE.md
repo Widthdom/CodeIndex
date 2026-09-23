@@ -2237,7 +2237,11 @@ fields by default, including `E028_RESPONSE_BUDGET_TOO_SMALL`, `requested_bytes`
 `effective_bytes`, `minimum_required_bytes`, its known/uncertain flags and reasons,
 and `retry` (`action`, `option`, `recommended_bytes`, `maximum_effective_bytes`,
 `command`). Parsing is limited to 64 KiB of UTF-8 and depth 16; strings are sanitized
-and limited to 1,024 characters. Unknown fields are omitted. Text, malformed,
+and limited to 1,024 characters. Standalone slash-separated public CLI option
+names such as `--limit/--max-json-bytes` retain their spelling and punctuation in
+recovery hints. Actual filesystem paths and secret values remain redacted; unknown
+option-like names and lists with path prefixes or suffixes retain normal sanitization.
+Unknown fields are omitted. Text, malformed,
 over-limit, or invalid error objects retain the safe exit-code-based fallback.
 Failed stdout/stderr are available only with `--include-raw-streams`, under the
 bounded `raw_streams` object; these diagnostic streams retain their original content.
@@ -6412,6 +6416,9 @@ countなら `result`）の走査状態と確定性を確認し、同じクエリ
 `requested_bytes`、`effective_bytes`、`minimum_required_bytes` と既知・不確実性のフラグ／理由、
 `retry`（`action`、`option`、`recommended_bytes`、`maximum_effective_bytes`、`command`）です。
 解析は UTF-8 で 64 KiB、深さ 16 までとし、文字列は機密情報を除去して 1,024 文字以内に制限します。
+復旧ヒントでは、`--limit/--max-json-bytes` のように独立して記載された公開CLIオプション名の
+スラッシュ連結表記と周囲の句読点を保持します。実際のファイルシステムパスや秘密値は引き続き
+伏せられ、未知のオプション風の名前やパスの接頭辞・接尾辞が付く一覧には通常の秘匿処理を適用します。
 未知のフィールドは省略し、text、不正 JSON、上限超過、不正なエラー object は終了コード由来の安全な
 汎用エラーを維持します。失敗時の stdout / stderr は `--include-raw-streams` を指定した場合だけ、
 上限付きの `raw_streams` object に元の診断内容のまま追加されます。
