@@ -441,8 +441,10 @@ find counts, incomplete search-origin classification, and potentially stale
 snapshots cannot establish absence.
 `--allow-partial` accepts partial output without making its zero authoritative;
 cancellation, timeout, cursor, and output errors retain their precedence.
-Plain search propagates cancellation through database setup and query execution for
-rows, counts, and aggregations, including serial and parallel batch children.
+Plain, named-query and recipe search propagate cancellation through database setup,
+SQLite queries and managed result processing for rows, counts and aggregations,
+including issue-draft exports and serial/parallel batch children. Cancellation stops
+the whole invocation; it is never recorded as an invalid child query or a zero count.
 Cancelling the CLI returns exit `130`; cancelled batch children also report
 `E012_INTERRUPTED`. `--strict-not-found` and `--allow-partial` cannot turn that
 cancellation into a miss or success.
@@ -4718,8 +4720,10 @@ command、query、filter、ordering、page limit を変えずに再利用して�
 検索元の分類が未完了の場合、古い可能性があるスナップショットでは不在を断定しません。
 `--allow-partial` は部分結果を受け入れるだけで 0 件の確実性を高めず、
 取消・タイムアウト・カーソル・出力エラーを優先します。
-通常検索は、行・件数・集計の各出力で、DB の準備から検索の実行まで取消を伝播します。
-直列・並列バッチ内の検索も対象です。CLI の取消は終了コード `130` を返し、
+通常検索・名前付き検索・レシピ検索は、行・件数・集計の各出力で、DB の準備、SQLite 検索、
+管理コードによる結果処理まで取消を伝播します。Issue draft の出力と直列・並列バッチ内の
+検索も対象です。取消は呼出し全体を中断し、無効な子クエリやゼロ件として記録しません。
+CLI の取消は終了コード `130` を返し、
 バッチ内の取消では `E012_INTERRUPTED` も報告します。`--strict-not-found` や
 `--allow-partial` を指定しても、取消を未検出や成功には変換しません。
 最終 page と 0 件 page は cursor を公開しません。byte cap により terminal

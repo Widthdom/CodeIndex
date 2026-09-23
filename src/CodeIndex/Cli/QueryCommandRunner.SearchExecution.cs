@@ -55,18 +55,33 @@ public static partial class QueryCommandRunner
 
     private static int ExecutePlainSearch(SearchExecutionPlan plan)
     {
-        plan.CancellationToken.ThrowIfCancellationRequested();
         var outcome = new SearchExecutionOutcome();
-        return WithDb(
+        return WithSearchDb(
             plan.Options,
             plan.JsonOptions,
+            plan.CancellationToken,
+            reader => ExecutePlainSearch(reader, plan, outcome),
+            _ => WritePlainSearchTerminal(plan, outcome));
+    }
+
+    private static int WithSearchDb(
+        QueryCommandOptions options,
+        JsonSerializerOptions jsonOptions,
+        CancellationToken cancellationToken,
+        Func<DbReader, int> action,
+        Action<int>? afterProfile = null)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return WithDb(
+            options,
+            jsonOptions,
             reader =>
             {
-                using var cancellationScope = reader.BeginCancellationScope(plan.CancellationToken);
-                return reader.RunWithCancellationInterrupt(() => ExecutePlainSearch(reader, plan, outcome));
+                using var cancellationScope = reader.BeginCancellationScope(cancellationToken);
+                return reader.RunWithCancellationInterrupt(() => action(reader));
             },
-            _ => WritePlainSearchTerminal(plan, outcome),
-            cancellationToken: plan.CancellationToken);
+            afterProfile,
+            cancellationToken: cancellationToken);
     }
 
     private static int ExecutePlainSearch(

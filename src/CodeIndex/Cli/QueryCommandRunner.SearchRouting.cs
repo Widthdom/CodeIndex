@@ -73,6 +73,7 @@ public static partial class QueryCommandRunner
 
     private static int ExecuteSearchRoute(SearchRoutePlan route)
     {
+        route.CancellationToken.ThrowIfCancellationRequested();
         using var exactLanguageScope = CodeIndex.Database.DbReader.BeginExactQueryLanguageScope(route.Options.Lang);
         return route.Execution switch
         {
@@ -83,19 +84,23 @@ public static partial class QueryCommandRunner
             SearchExecutionKind.NamedBatchCount => RunSearchNamedBatchCount(
                 route.Options,
                 route.JsonOptions,
-                route.ExactSearch),
+                route.ExactSearch,
+                route.CancellationToken),
             SearchExecutionKind.NamedBatchRows => RunSearchNamedBatch(
                 route.Options,
                 route.JsonOptions,
-                route.ExactSearch),
+                route.ExactSearch,
+                route.CancellationToken),
             SearchExecutionKind.RecipeAggregation => RunSearchRecipeAggregation(
                 route.Options,
                 route.JsonOptions,
-                route.Exact),
+                route.Exact,
+                route.CancellationToken),
             SearchExecutionKind.RecipeCount => RunSearchRecipeCount(
                 route.Options,
                 route.JsonOptions,
-                route.Exact),
+                route.Exact,
+                route.CancellationToken),
             SearchExecutionKind.RecipeIssueDrafts => RunSearchRecipeIssueDrafts(
                 route.Options,
                 route.JsonOptions,
@@ -104,7 +109,8 @@ public static partial class QueryCommandRunner
             SearchExecutionKind.RecipeRows => RunSearchRecipe(
                 route.Options,
                 route.JsonOptions,
-                route.Exact),
+                route.Exact,
+                route.CancellationToken),
             SearchExecutionKind.PlainIssueDrafts => RunSearchIssueDrafts(
                 route.Options,
                 route.JsonOptions,

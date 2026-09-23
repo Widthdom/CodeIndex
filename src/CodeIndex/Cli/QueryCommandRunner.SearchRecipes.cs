@@ -751,7 +751,7 @@ public static partial class QueryCommandRunner
         SearchAuditRecipe Recipe,
         List<SearchAuditRecipeQuery> Queries);
 
-    private static int RunSearchRecipe(QueryCommandOptions options, JsonSerializerOptions jsonOptions, bool userExact)
+    private static int RunSearchRecipe(QueryCommandOptions options, JsonSerializerOptions jsonOptions, bool userExact, CancellationToken cancellationToken)
     {
         if (!TryResolveSearchRecipeSelection(options, out var selection, out var selectionError))
         {
@@ -773,7 +773,7 @@ public static partial class QueryCommandRunner
         }
 
         string? ndjsonTerminalLine = null;
-        return WithDb(options, jsonOptions, reader =>
+        return WithSearchDb(options, jsonOptions, cancellationToken, reader =>
         {
             EnsureSearchRecipeCoverage(reader, scope, options);
             if (options.SearchCursor is { } cursor
@@ -837,6 +837,7 @@ public static partial class QueryCommandRunner
                     compactFreshnessContext,
                     compactFreshnessObservations);
                 var compactJson = compactPayload.ToJsonString(GetJsonNodeSerializationOptions(jsonOptions));
+                reader.ThrowIfCancellationRequested();
                 return CompleteSearchRecipeOutput(
                     WriteJsonObjectWithOptionalByteLimit(
                         compactJson,
@@ -898,6 +899,7 @@ public static partial class QueryCommandRunner
                                 freshnessObservations),
                             queryResults),
                         CliJsonSerializerContextFactory.Create(jsonOptions).SearchRecipeRunJsonResult);
+                reader.ThrowIfCancellationRequested();
                 return CompleteSearchRecipeOutput(
                     WriteJsonObjectWithOptionalByteLimit(
                         json,
@@ -1800,7 +1802,7 @@ public static partial class QueryCommandRunner
         }
     }
 
-    private static int RunSearchRecipeAggregation(QueryCommandOptions options, JsonSerializerOptions jsonOptions, bool userExact)
+    private static int RunSearchRecipeAggregation(QueryCommandOptions options, JsonSerializerOptions jsonOptions, bool userExact, CancellationToken cancellationToken)
     {
         if (!TryResolveSearchRecipeSelection(options, out var selection, out var selectionError))
         {
@@ -1816,7 +1818,7 @@ public static partial class QueryCommandRunner
         var groupBy = NormalizeSearchAggregationKey(options.GroupBy ?? options.CountBy ?? options.UniqueBy!);
         var uniqueOnly = options.UniqueBy != null;
         var mode = uniqueOnly ? "unique" : options.GroupBy != null ? "group_by" : "count_by";
-        return WithDb(options, jsonOptions, reader =>
+        return WithSearchDb(options, jsonOptions, cancellationToken, reader =>
         {
             var queryResults = CollectSearchRecipeAggregationResults(
                 reader,
@@ -1843,6 +1845,7 @@ public static partial class QueryCommandRunner
                             fileCount,
                             queryResults),
                         CliJsonSerializerContextFactory.Create(jsonOptions).SearchRecipeAggregationRunJsonResult);
+                reader.ThrowIfCancellationRequested();
                 return WriteJsonObjectWithOptionalByteLimit(
                     json,
                     options,
@@ -1854,6 +1857,7 @@ public static partial class QueryCommandRunner
             {
                 foreach (var query in queryResults)
                 {
+                    reader.ThrowIfCancellationRequested();
                     Console.WriteLine($"[{query.Name}] {query.Query}");
                     if (uniqueOnly)
                     {
@@ -2012,7 +2016,7 @@ public static partial class QueryCommandRunner
                 options.InvocationContext.CommandName);
         var preflight = preflightResult.Preflight;
 
-        return WithDb(options, jsonOptions, reader =>
+        return WithSearchDb(options, jsonOptions, cancellationToken, reader =>
         {
             var freshnessContext = BuildSearchRecipeFreshnessContext(
                 reader,
@@ -2070,6 +2074,7 @@ public static partial class QueryCommandRunner
                     drafts,
                     BuildSearchIssueDraftSelectionAccounting(recipe.Name, queryResults)),
                 CliJsonSerializerContextFactory.Create(jsonOptions).SearchIssueDraftExportJsonResult);
+            reader.ThrowIfCancellationRequested();
             return CompleteSearchRecipeOutput(
                 WriteJsonObjectWithOptionalByteLimit(
                     json,
@@ -2208,7 +2213,7 @@ public static partial class QueryCommandRunner
     private static int GetJsonDocumentByteCount(string json)
         => Encoding.UTF8.GetByteCount(json) + Encoding.UTF8.GetByteCount(Environment.NewLine);
 
-    private static int RunSearchRecipeCount(QueryCommandOptions options, JsonSerializerOptions jsonOptions, bool userExact)
+    private static int RunSearchRecipeCount(QueryCommandOptions options, JsonSerializerOptions jsonOptions, bool userExact, CancellationToken cancellationToken)
     {
         if (!TryResolveSearchRecipeSelection(options, out var selection, out var selectionError))
         {
@@ -2221,7 +2226,7 @@ public static partial class QueryCommandRunner
 
         var recipe = selection.Recipe;
         var scope = BuildSearchRecipeScope(recipe, options, selection.Queries);
-        return WithDb(options, jsonOptions, reader =>
+        return WithSearchDb(options, jsonOptions, cancellationToken, reader =>
         {
             var freshnessContext = options.SummaryOnly
                 ? BuildSearchRecipeFreshnessContext(reader, recipe, selection.Queries, options)
@@ -2263,6 +2268,7 @@ public static partial class QueryCommandRunner
                                 freshnessObservations),
                             summaryQueries),
                         CliJsonSerializerContextFactory.Create(jsonOptions).SearchRecipeCountSummaryRunJsonResult);
+                    reader.ThrowIfCancellationRequested();
                     return CompleteSearchRecipeOutput(
                         WriteJsonObjectWithOptionalByteLimit(
                             summaryJson,
@@ -2283,6 +2289,7 @@ public static partial class QueryCommandRunner
                         fileCount,
                         queryCounts),
                     CliJsonSerializerContextFactory.Create(jsonOptions).SearchRecipeCountRunJsonResult);
+                reader.ThrowIfCancellationRequested();
                 return WriteJsonObjectWithOptionalByteLimit(
                     json,
                     options,
@@ -2321,7 +2328,7 @@ public static partial class QueryCommandRunner
                 options.InvocationContext.CommandName);
         var preflight = preflightResult.Preflight;
 
-        return WithDb(options, jsonOptions, reader =>
+        return WithSearchDb(options, jsonOptions, cancellationToken, reader =>
         {
             var resultLimit = GetAdHocIssueDraftResultLimit(options);
             var sourceTotalCountAuthoritative = options.GuardFilters.Count == 0
@@ -2335,7 +2342,7 @@ public static partial class QueryCommandRunner
                 exact,
                 sourceFetchLimit,
                 guardRequestedLimit: resultLimit);
-            var sourceRows = BuildSearchDisplayRows(results, options, exact);
+            var sourceRows = BuildSearchDisplayRows(results, options, exact, cancellationToken: reader.Cancellation);
             var outputSelection = ApplySearchOutputSelection(
                 sourceRows,
                 options,
@@ -2416,6 +2423,7 @@ public static partial class QueryCommandRunner
                     drafts,
                     BuildSearchIssueDraftSelectionAccounting(null, [queryResult])),
                 CliJsonSerializerContextFactory.Create(jsonOptions).SearchIssueDraftExportJsonResult);
+            reader.ThrowIfCancellationRequested();
             return WriteJsonObjectWithOptionalByteLimit(
                 json,
                 options,
@@ -2472,7 +2480,10 @@ public static partial class QueryCommandRunner
         if (taskResultClassifier != null)
         {
             foreach (var row in rows)
+            {
+                reader.ThrowIfCancellationRequested();
                 AddSearchRecipeAuditClassification(row, TryClassifyTaskResultIntent(taskResultClassifier, row));
+            }
         }
 
         var appliesJsonTrustBoundary = jsonTrustBoundaryClassifier != null
@@ -2494,6 +2505,7 @@ public static partial class QueryCommandRunner
         var parserGuardLexicalContextCache = new ParserGuardLexicalContextCache();
         foreach (var fileRows in rows.GroupBy(row => row.Result.Path, StringComparer.Ordinal))
         {
+            reader.ThrowIfCancellationRequested();
             var groupedRows = fileRows.ToList();
             var maximumJsonTrustRequiredLine = groupedRows
                 .Select(row => appliesJsonTrustBoundary ? GetJsonTrustRequiredLine(row) : 0)
@@ -2523,6 +2535,7 @@ public static partial class QueryCommandRunner
             }
             foreach (var row in groupedRows)
             {
+                reader.ThrowIfCancellationRequested();
                 if (parserGuardClassifier != null)
                 {
                     AddSearchRecipeAuditClassification(
@@ -5027,6 +5040,7 @@ public static partial class QueryCommandRunner
         total = 0;
         foreach (var namedQuery in options.NamedSearchQueries)
         {
+            reader.ThrowIfCancellationRequested();
             var selectRows = HasSearchRowSelectors(options);
             // Use a fixed candidate population so output limits cannot change sampling.
             var candidateWindowExhausted = false;
@@ -5050,7 +5064,8 @@ public static partial class QueryCommandRunner
                 candidateWindowObserver: exhausted => candidateWindowExhausted = exhausted);
             var originCoverageComplete = true;
             var rows = BuildSearchDisplayRows(results, options, userExact, namedQuery.Query,
-                originCoverageObserver: complete => originCoverageComplete &= complete);
+                originCoverageObserver: complete => originCoverageComplete &= complete,
+                cancellationToken: reader.Cancellation);
             SearchOutputSelection? selection = null;
             bool truncated;
             if (selectRows)
@@ -5088,6 +5103,7 @@ public static partial class QueryCommandRunner
             });
         }
 
+        reader.ThrowIfCancellationRequested();
         return queryResults;
     }
 
@@ -5110,6 +5126,7 @@ public static partial class QueryCommandRunner
         hasFailures = false;
         foreach (var namedQuery in options.NamedSearchQueries)
         {
+            reader.ThrowIfCancellationRequested();
             try
             {
                 var results = reader.Search(
@@ -5131,7 +5148,7 @@ public static partial class QueryCommandRunner
                     tokenBoundary: options.TokenBoundary);
                 var originCoverage = new SearchCountOriginCoverage(options);
                 var rows = BuildSearchDisplayRows(results, options, userExact, namedQuery.Query,
-                    countOriginCoverage: originCoverage);
+                    countOriginCoverage: originCoverage, cancellationToken: reader.Cancellation);
                 queryOriginCoverage.Add(namedQuery.Name, originCoverage);
                 var count = rows.Count;
                 var fileCountForQuery = rows.Select(row => row.Result.Path).Distinct(StringComparer.Ordinal).Count();
@@ -5176,6 +5193,7 @@ public static partial class QueryCommandRunner
         }
 
         fileCount = paths.Count;
+        reader.ThrowIfCancellationRequested();
         return queryCounts;
     }
 

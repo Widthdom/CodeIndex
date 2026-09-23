@@ -41,6 +41,7 @@ public static partial class QueryCommandRunner
     private static SearchRecipeQueryMaterializationResult MaterializeSearchRecipeQuery(
         in SearchRecipeQueryMaterializationRequest request)
     {
+        request.Reader.ThrowIfCancellationRequested();
         EnsureSearchRecipeCoverage(request.Reader, request.Scope, request.Options);
         var queryScope = BuildSearchRecipeQueryScope(request.Scope, request.RecipeQuery);
         var guardFilters = BuildSearchRecipeGuardFilters(request.Options, request.RecipeQuery);
@@ -92,7 +93,8 @@ public static partial class QueryCommandRunner
             request.RecipeQuery.Query,
             rawFtsOverride: request.RawFtsOverride,
             recipeQuery: request.RecipeQuery,
-            originCoverageObserver: complete => originCoverageComplete &= complete);
+            originCoverageObserver: complete => originCoverageComplete &= complete,
+            cancellationToken: request.Reader.Cancellation);
         if (!originCoverageComplete) coverageRestriction = "origin_classification_incomplete";
         var sourceTotalAuthoritative = request.ResultLimit.HasValue && coverageRestriction == null;
         rows = ApplySearchRecipeSemanticFilter(
@@ -101,6 +103,7 @@ public static partial class QueryCommandRunner
             request.RecipeQuery,
             rows);
         ApplyXmlSettingsAuditClassifications(request.Reader, request.RecipeQuery, rows);
+        request.Reader.ThrowIfCancellationRequested();
         MarkSearchRecipeQueryExecuted(request.Scope, request.RecipeQuery.Name);
         return new SearchRecipeQueryMaterializationResult(rows, sourceTotalAuthoritative, candidateWindowExhausted, coverageRestriction);
     }
@@ -130,6 +133,7 @@ public static partial class QueryCommandRunner
         hasFailures = false;
         foreach (var recipeQuery in recipeQueries)
         {
+            reader.ThrowIfCancellationRequested();
             try
             {
                 var exact = ResolveSearchRecipeMatchMode(recipeQuery, options).Exact;
@@ -260,6 +264,7 @@ public static partial class QueryCommandRunner
             }
         }
 
+        reader.ThrowIfCancellationRequested();
         return queryResults;
     }
 
@@ -280,6 +285,7 @@ public static partial class QueryCommandRunner
         hasFailures = false;
         foreach (var recipeQuery in recipeQueries)
         {
+            reader.ThrowIfCancellationRequested();
             try
             {
                 var exact = ResolveSearchRecipeMatchMode(recipeQuery, options).Exact;
@@ -372,6 +378,7 @@ public static partial class QueryCommandRunner
             }
         }
 
+        reader.ThrowIfCancellationRequested();
         return queryResults;
     }
 
@@ -416,6 +423,7 @@ public static partial class QueryCommandRunner
         hasFailures = false;
         foreach (var recipeQuery in recipeQueries)
         {
+            reader.ThrowIfCancellationRequested();
             try
             {
                 var exact = ResolveSearchRecipeMatchMode(recipeQuery, options).Exact;
@@ -472,6 +480,7 @@ public static partial class QueryCommandRunner
         }
 
         fileCount = paths.Count;
+        reader.ThrowIfCancellationRequested();
         return queryCounts;
     }
 
@@ -490,6 +499,7 @@ public static partial class QueryCommandRunner
         total = 0;
         foreach (var recipeQuery in recipeQueries)
         {
+            reader.ThrowIfCancellationRequested();
             var exact = ResolveSearchRecipeMatchMode(recipeQuery, options).Exact;
             var materializationRequest = new SearchRecipeQueryMaterializationRequest(
                 reader,
@@ -504,7 +514,7 @@ public static partial class QueryCommandRunner
             foreach (var path in rows.Select(row => row.Result.Path))
                 paths.Add(path);
 
-            var groups = BuildSearchGroupedCounts(groupBy, rows);
+            var groups = BuildSearchGroupedCounts(groupBy, rows, reader.Cancellation);
             var selection = ApplySearchGroupOutputSelection(groups, options);
             total += rows.Count;
             queryResults.Add(new SearchRecipeAggregationQueryJsonResult(
@@ -522,6 +532,7 @@ public static partial class QueryCommandRunner
         }
 
         fileCount = paths.Count;
+        reader.ThrowIfCancellationRequested();
         return queryResults;
     }
 
