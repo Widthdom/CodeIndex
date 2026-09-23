@@ -70,6 +70,40 @@ public class BatchChildErrorParserTests
     }
 
     [Fact]
+    public void Parse_PreservesPublicOptionListsWithoutExemptingPaths_Issue5423()
+    {
+        var source = JsonNode.Parse(ErrorJson)!.AsObject();
+        foreach (var options in new[]
+        {
+            "--limit/--max-json-bytes", "--json/--compact/--pretty", "-h/--help",
+            "`--limit/--max-json-bytes`", "(--limit/--max-json-bytes)",
+            "[--limit/--max-json-bytes]", "'--limit/--max-json-bytes'",
+            "\"--limit/--max-json-bytes\"", "--limit/--max-json-bytes.",
+        })
+        {
+            source["hint"] = $"Use {options} with /private/secret/file.cs and C:\\private\\secret.cs; --token hidden-value";
+            var parsed = Assert.IsType<JsonObject>(BatchChildErrorParser.Parse(source.ToJsonString(), "search", 1));
+            Assert.Equal($"Use {options} with <path> and <path>; --token <redacted>", parsed["hint"]!.GetValue<string>());
+        }
+
+        foreach (var path in new[]
+        {
+            "/private/--limit/--max-json-bytes", "/--limit/--max-json-bytes", "C:\\--limit\\--max-json-bytes",
+            "//server/--limit/--max-json-bytes", "./--limit/--max-json-bytes", "../--limit/--max-json-bytes",
+            "--limit/--max-json-bytes/private", "--limit/--max-json-bytes.private", "--limit/--private",
+            "--private/--max-json-bytes", "--path=--limit/--max-json-bytes", "prefix--limit/--max-json-bytes",
+        })
+        {
+            source["hint"] = $"Retry {path} later";
+            var parsed = Assert.IsType<JsonObject>(BatchChildErrorParser.Parse(source.ToJsonString(), "search", 1));
+            var hint = parsed["hint"]!.GetValue<string>();
+            Assert.Contains("<path>", hint);
+            Assert.DoesNotContain("/--max-json-bytes", hint);
+            Assert.DoesNotContain("/--private", hint);
+        }
+    }
+
+    [Fact]
     public void Parse_RejectsMalformedMismatchedAndOverBudgetOutput()
     {
         foreach (var invalid in new[]

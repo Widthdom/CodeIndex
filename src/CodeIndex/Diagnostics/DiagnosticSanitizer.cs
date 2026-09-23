@@ -65,8 +65,8 @@ internal static class DiagnosticSanitizer
     public static string ForMessage(string? message)
         => ForMessage(message, MaxDiagnosticFieldLength);
 
-    public static string ForMessage(string? message, int maxLength)
-        => ForMessage(message, RedactAbsolutePaths, maxLength);
+    public static string ForMessage(string? message, int maxLength, IReadOnlySet<string>? publicOptionNames = null)
+        => ForMessage(message, value => RedactAbsolutePaths(value, publicOptionNames), maxLength);
 
     internal static string ForMessage(string? message, Func<string, string> redactPaths)
         => ForMessage(message, redactPaths, MaxDiagnosticFieldLength);
@@ -198,11 +198,19 @@ internal static class DiagnosticSanitizer
         return collapsed.ToString();
     }
 
-    private static string RedactAbsolutePaths(string value)
+    private static string RedactAbsolutePaths(string value, IReadOnlySet<string>? publicOptionNames)
     {
         var redacted = new System.Text.StringBuilder(value.Length);
         for (int index = 0; index < value.Length;)
         {
+            if (publicOptionNames is not null
+                && TryGetPublicOptionListEnd(value, index, publicOptionNames, out var optionEnd))
+            {
+                redacted.Append(value, index, optionEnd - index);
+                index = optionEnd;
+                continue;
+            }
+
             if (!TryGetAbsolutePathEnd(value, index, out var end))
             {
                 redacted.Append(value[index]);
@@ -215,6 +223,37 @@ internal static class DiagnosticSanitizer
         }
 
         return redacted.ToString();
+    }
+
+    private static bool TryGetPublicOptionListEnd(string value, int start, IReadOnlySet<string> optionNames, out int end)
+    {
+        end = start;
+        if (value[start] != '-'
+            || (start > 0 && !char.IsWhiteSpace(value[start - 1]) && value[start - 1] is not ('\'' or '"' or '`' or '(' or '[' or '{')))
+            return false;
+
+        // Only complete, catalogued option lists qualify. Assignments, path prefixes,
+        // unknown names and path/filename suffixes must keep the normal redaction.
+        var count = 0;
+        while (end < value.Length)
+        {
+            var optionStart = end;
+            while (end < value.Length && (char.IsAsciiLetterOrDigit(value[end]) || value[end] == '-'))
+                end++;
+            if (!optionNames.Contains(value[optionStart..end]))
+                return false;
+            count++;
+            if (end >= value.Length || value[end] != '/')
+                break;
+            end++;
+            if (end >= value.Length)
+                return false;
+        }
+
+        return count >= 2 && (end == value.Length
+            || char.IsWhiteSpace(value[end])
+            || value[end] is '\'' or '"' or '`' or ')' or ']' or '}' or ',' or ';' or ':'
+            || (value[end] == '.' && (end + 1 == value.Length || char.IsWhiteSpace(value[end + 1]))));
     }
 
     private static bool TryGetAbsolutePathEnd(string value, int start, out int end)
