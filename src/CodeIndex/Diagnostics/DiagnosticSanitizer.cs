@@ -250,10 +250,12 @@ internal static class DiagnosticSanitizer
                 return false;
         }
 
-        return count >= 2 && (end == value.Length
-            || char.IsWhiteSpace(value[end])
-            || value[end] is '\'' or '"' or '`' or ')' or ']' or '}' or ',' or ';' or ':'
-            || (value[end] == '.' && (end + 1 == value.Length || char.IsWhiteSpace(value[end + 1]))));
+        // Closing punctuation must terminate the token, not introduce a private
+        // filename suffix such as --limit/--max-json-bytes]customer-project.cs.
+        var boundary = end;
+        while (boundary < value.Length && value[boundary] is '\'' or '"' or '`' or ')' or ']' or '}' or ',' or ';' or ':' or '.' or '!' or '?')
+            boundary++;
+        return count >= 2 && (boundary == value.Length || char.IsWhiteSpace(value[boundary]));
     }
 
     private static bool TryGetAbsolutePathEnd(string value, int start, out int end)

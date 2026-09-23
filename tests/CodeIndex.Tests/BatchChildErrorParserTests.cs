@@ -79,6 +79,7 @@ public class BatchChildErrorParserTests
             "`--limit/--max-json-bytes`", "(--limit/--max-json-bytes)",
             "[--limit/--max-json-bytes]", "'--limit/--max-json-bytes'",
             "\"--limit/--max-json-bytes\"", "--limit/--max-json-bytes.",
+            "{--limit/--max-json-bytes}", "(`--limit/--max-json-bytes`).",
         })
         {
             source["hint"] = $"Use {options} with /private/secret/file.cs and C:\\private\\secret.cs; --token hidden-value";
@@ -92,6 +93,10 @@ public class BatchChildErrorParserTests
             "//server/--limit/--max-json-bytes", "./--limit/--max-json-bytes", "../--limit/--max-json-bytes",
             "--limit/--max-json-bytes/private", "--limit/--max-json-bytes.private", "--limit/--private",
             "--private/--max-json-bytes", "--path=--limit/--max-json-bytes", "prefix--limit/--max-json-bytes",
+            "'--limit/--max-json-bytes]customer-project.cs'",
+            "'--limit/--max-json-bytes}customer-project.cs'",
+            "'--limit/--max-json-bytes`customer-project.cs'",
+            "--limit/--max-json-bytes]}.customer-project.cs",
         })
         {
             source["hint"] = $"Retry {path} later";
@@ -100,6 +105,7 @@ public class BatchChildErrorParserTests
             Assert.Contains("<path>", hint);
             Assert.DoesNotContain("/--max-json-bytes", hint);
             Assert.DoesNotContain("/--private", hint);
+            Assert.DoesNotContain("customer-project", hint);
         }
     }
 
