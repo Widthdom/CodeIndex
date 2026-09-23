@@ -10,6 +10,22 @@ namespace CodeIndex.Cli;
 
 public static partial class QueryCommandRunner
 {
+    private static readonly AsyncLocal<Action?> ScopedSearchAggregationGroupPreparedForTesting = new();
+
+    internal static Action? SearchAggregationGroupPreparedForTesting
+    {
+        get => ScopedSearchAggregationGroupPreparedForTesting.Value;
+        set => ScopedSearchAggregationGroupPreparedForTesting.Value = value;
+    }
+
+    private static SearchGroupedCountItemJsonResult CheckSearchAggregationGroup(
+        SearchGroupedCountItemJsonResult group, CancellationToken cancellationToken)
+    {
+        SearchAggregationGroupPreparedForTesting?.Invoke();
+        cancellationToken.ThrowIfCancellationRequested();
+        return group;
+    }
+
     private static int RunGroupedSearchCount(DbReader reader, QueryCommandOptions options, JsonSerializerOptions jsonOptions, bool exact, SearchQueryHint? exactSubstringHint)
     {
         if (options.GroupBy == "file" && !HasSearchOriginFilters(options))
@@ -27,9 +43,11 @@ public static partial class QueryCommandRunner
                     null,
                     null,
                     null))
+                .Select(group => CheckSearchAggregationGroup(group, reader.Cancellation))
                 .ToList();
             var normalizedGroupBy = NormalizeSearchAggregationKey(options.GroupBy!);
             var fileGroupSelection = ApplySearchGroupOutputSelection(fileCountGroups, options);
+            reader.ThrowIfCancellationRequested();
 
             if (options.Json)
             {
@@ -46,6 +64,7 @@ public static partial class QueryCommandRunner
                             options.Limit,
                             fileGroupSelection.Groups),
                         CliJsonSerializerContextFactory.Create(jsonOptions).SearchGroupedCountJsonResult);
+                reader.ThrowIfCancellationRequested();
                 return WriteJsonObjectWithOptionalByteLimit(
                     json,
                     options,
@@ -64,11 +83,12 @@ public static partial class QueryCommandRunner
 
         var results = reader.Search(options.Query!, int.MaxValue, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank, guardFilters: options.GuardFilters, guardWindow: options.GuardWindow, guardScope: options.GuardScope, tokenBoundary: options.TokenBoundary);
         var originCoverage = new SearchCountOriginCoverage(options);
-        var displayRows = BuildSearchDisplayRows(results, options, exact, countOriginCoverage: originCoverage);
+        var displayRows = BuildSearchDisplayRows(results, options, exact, countOriginCoverage: originCoverage, cancellationToken: reader.Cancellation);
         var groupBy = NormalizeSearchAggregationKey(options.GroupBy!);
-        var groups = BuildSearchGroupedCounts(groupBy, displayRows);
+        var groups = BuildSearchGroupedCounts(groupBy, displayRows, reader.Cancellation);
         var fallbackGroupSelection = ApplySearchGroupOutputSelection(groups, options);
         var fileCount = displayRows.Select(row => row.Result.Path).Distinct(StringComparer.Ordinal).Count();
+        reader.ThrowIfCancellationRequested();
 
         if (options.Json)
         {
@@ -85,8 +105,10 @@ public static partial class QueryCommandRunner
                         options.Limit,
                         fallbackGroupSelection.Groups),
                     CliJsonSerializerContextFactory.Create(jsonOptions).SearchGroupedCountJsonResult);
+            json = originCoverage.EnrichJson(json, jsonOptions);
+            reader.ThrowIfCancellationRequested();
             return originCoverage.ExitCode(WriteJsonObjectWithOptionalByteLimit(
-                originCoverage.EnrichJson(json, jsonOptions),
+                json,
                 options,
                 "grouped search count",
                 "Reduce --limit or increase --max-json-bytes.",
@@ -102,9 +124,12 @@ public static partial class QueryCommandRunner
         return originCoverage.ExitCode();
     }
 
-    private static List<SearchGroupedCountItemJsonResult> BuildSearchGroupedCounts(string groupBy, List<SearchDisplayRow> rows)
-        => groupBy == "file"
-            ? rows
+    private static List<SearchGroupedCountItemJsonResult> BuildSearchGroupedCounts(
+        string groupBy, List<SearchDisplayRow> rows, CancellationToken cancellationToken = default)
+    {
+        var checkedRows = EnumerateSearchRowsWithCancellation(rows, cancellationToken);
+        var groups = groupBy == "file"
+            ? checkedRows
                 .GroupBy(row => row.Result.Path, StringComparer.Ordinal)
                 .Select(group => new SearchGroupedCountItemJsonResult(
                     group.Key,
@@ -120,7 +145,7 @@ public static partial class QueryCommandRunner
                 .ThenBy(group => group.Key, StringComparer.Ordinal)
                 .ToList()
             : groupBy == "origin"
-                ? rows
+                ? checkedRows
                     .SelectMany(row => row.Compact.MatchOrigins.Count == 0
                         ? [SearchMatchClassifier.Unknown]
                         : row.Compact.MatchOrigins)
@@ -139,7 +164,7 @@ public static partial class QueryCommandRunner
                     .ThenBy(group => group.Key, StringComparer.Ordinal)
                     .ToList()
             : groupBy == "return_type"
-                ? rows
+                ? checkedRows
                     .GroupBy(row => NormalizeSearchReturnTypeGroupKey(row.Result.EnclosingSymbolReturnType), StringComparer.Ordinal)
                     .Select(group => new SearchGroupedCountItemJsonResult(
                         group.Key,
@@ -155,7 +180,7 @@ public static partial class QueryCommandRunner
                     .ThenBy(group => group.Key, StringComparer.Ordinal)
                     .ToList()
             : groupBy == "subsystem"
-                ? rows
+                ? checkedRows
                     .GroupBy(row => BuildSearchSubsystemGroupKey(row.Result.Path), StringComparer.Ordinal)
                     .Select(group => new SearchGroupedCountItemJsonResult(
                         group.Key,
@@ -171,7 +196,7 @@ public static partial class QueryCommandRunner
                     .OrderByDescending(group => group.Count)
                     .ThenBy(group => group.Key, StringComparer.Ordinal)
                     .ToList()
-            : rows
+            : checkedRows
                 .GroupBy(row => BuildSearchSymbolGroupKey(row.Result), StringComparer.Ordinal)
                 .Select(group =>
                 {
@@ -191,6 +216,23 @@ public static partial class QueryCommandRunner
                 .OrderByDescending(group => group.Count)
                 .ThenBy(group => group.Key, StringComparer.Ordinal)
                 .ToList();
+
+        foreach (var group in groups)
+            CheckSearchAggregationGroup(group, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        return groups;
+    }
+
+    private static IEnumerable<SearchDisplayRow> EnumerateSearchRowsWithCancellation(
+        IEnumerable<SearchDisplayRow> rows, CancellationToken cancellationToken)
+    {
+        foreach (var row in rows)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            yield return row;
+        }
+        cancellationToken.ThrowIfCancellationRequested();
+    }
 
     private const string NoSearchReturnTypeGroupKey = "<no return type>";
     private const string NoSearchSubsystemGroupKey = "<unknown subsystem>";
@@ -307,12 +349,13 @@ public static partial class QueryCommandRunner
     {
         var results = reader.Search(options.Query!, int.MaxValue, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank, guardFilters: options.GuardFilters, guardWindow: options.GuardWindow, guardScope: options.GuardScope, tokenBoundary: options.TokenBoundary);
         var originCoverage = new SearchCountOriginCoverage(options);
-        var rows = BuildSearchDisplayRows(results, options, exact, countOriginCoverage: originCoverage);
+        var rows = BuildSearchDisplayRows(results, options, exact, countOriginCoverage: originCoverage, cancellationToken: reader.Cancellation);
         var groupBy = NormalizeSearchAggregationKey(options.CountBy ?? options.UniqueBy!);
-        var groups = BuildSearchGroupedCounts(groupBy, rows);
+        var groups = BuildSearchGroupedCounts(groupBy, rows, reader.Cancellation);
         var selection = ApplySearchGroupOutputSelection(groups, options);
         var uniqueOnly = options.UniqueBy != null;
         var fileCount = rows.Select(row => row.Result.Path).Distinct(StringComparer.Ordinal).Count();
+        reader.ThrowIfCancellationRequested();
 
         if (options.Json)
         {
@@ -331,8 +374,10 @@ public static partial class QueryCommandRunner
                         options.Limit,
                         selection.Groups),
                     CliJsonSerializerContextFactory.Create(jsonOptions).SearchAggregationJsonResult);
+            json = originCoverage.EnrichJson(json, jsonOptions);
+            reader.ThrowIfCancellationRequested();
             return originCoverage.ExitCode(WriteJsonObjectWithOptionalByteLimit(
-                originCoverage.EnrichJson(json, jsonOptions),
+                json,
                 options,
                 "search aggregation",
                 "Reduce --limit or increase --max-json-bytes.",
@@ -343,7 +388,10 @@ public static partial class QueryCommandRunner
             if (uniqueOnly)
             {
                 foreach (var group in selection.Groups)
+                {
+                    reader.ThrowIfCancellationRequested();
                     Console.WriteLine(group.Key);
+                }
                 var truncation = selection.Truncated
                     ? $"showing {selection.Groups.Count} of {selection.TotalGroups}"
                     : selection.Groups.Count.ToString(CultureInfo.InvariantCulture);
@@ -581,7 +629,8 @@ public static partial class QueryCommandRunner
         var rows = BuildSearchDisplayRows(
             ReadSearchResults(reader, options, exact, int.MaxValue),
             options,
-            exact);
+            exact,
+            cancellationToken: reader.Cancellation);
         return CountAdHocSearchSarifResultUnits(rows, options.Query!, exact, authoritative: true);
     }
 
@@ -1151,8 +1200,10 @@ public static partial class QueryCommandRunner
         bool? rawFtsOverride = null,
         SearchAuditRecipeQuery? recipeQuery = null,
         Action<bool>? originCoverageObserver = null,
-        SearchCountOriginCoverage? countOriginCoverage = null)
+        SearchCountOriginCoverage? countOriginCoverage = null,
+        CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var rows = new List<SearchDisplayRow>(results.Count);
         var seenMatchLocations = options.NoDedup ? null : new HashSet<string>(StringComparer.Ordinal);
         var displayQuery = queryOverride ?? options.Query!;
@@ -1164,6 +1215,7 @@ public static partial class QueryCommandRunner
             : SearchSnippetFormatter.PrepareQueryContext(displayQuery);
         foreach (var result in results)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var compact = SearchSnippetFormatter.ToCompactResult(
                 result,
                 queryContext,
@@ -1217,6 +1269,7 @@ public static partial class QueryCommandRunner
                 var keptLines = new List<int>(compact.MatchLines.Count);
                 foreach (var line in compact.MatchLines)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     var key = result.Path + "\0" + line.ToString(CultureInfo.InvariantCulture);
                     if (seenMatchLocations.Add(key))
                         keptLines.Add(line);
@@ -1232,6 +1285,7 @@ public static partial class QueryCommandRunner
             rows.Add(new SearchDisplayRow(result, compact));
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
         return rows;
     }
 
@@ -1335,7 +1389,8 @@ public static partial class QueryCommandRunner
                         SearchOriginFilterMaxCandidates,
                         guardRequestedLimit: options.Limit),
                     options,
-                    exact);
+                    exact,
+                    cancellationToken: reader.Cancellation);
             }
             else
             {
@@ -1386,7 +1441,8 @@ public static partial class QueryCommandRunner
             rows = BuildSearchDisplayRows(
                 ReadSearchResults(reader, options, exact, requestedThroughOffset),
                 options,
-                exact);
+                exact,
+                cancellationToken: reader.Cancellation);
         }
         else
         {
@@ -1463,7 +1519,8 @@ public static partial class QueryCommandRunner
 
             candidates.AddRange(page);
             displayRows = BuildSearchDisplayRows(candidates, options, exact,
-                recipeQuery: recipeQuery, originCoverageObserver: originCoverageObserver, countOriginCoverage: countOriginCoverage);
+                recipeQuery: recipeQuery, originCoverageObserver: originCoverageObserver, countOriginCoverage: countOriginCoverage,
+                cancellationToken: reader.Cancellation);
 
             var last = page[^1];
             if (last.NextOffset <= currentOffset)
@@ -1508,7 +1565,7 @@ public static partial class QueryCommandRunner
     private static QueryCountResult CountFilteredSearchResults(DbReader reader, QueryCommandOptions options, bool exact, SearchCountOriginCoverage? originCoverage)
     {
         var results = ReadSearchResults(reader, options, exact, int.MaxValue);
-        var rows = BuildSearchDisplayRows(results, options, exact, countOriginCoverage: originCoverage);
+        var rows = BuildSearchDisplayRows(results, options, exact, countOriginCoverage: originCoverage, cancellationToken: reader.Cancellation);
         if (options.GuardFilters.Count > 0 && !options.TokenBoundary)
             return CountFilteredSearchResultUnits(rows);
 

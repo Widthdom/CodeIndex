@@ -396,7 +396,7 @@ public partial class DbReader
                      .GroupBy(r => r.Path, StringComparer.Ordinal))
         {
             var generation = ReadOriginGeneration();
-            var token = cancellationToken.CanBeCanceled ? cancellationToken : _cancellation;
+            var token = cancellationToken.CanBeCanceled ? cancellationToken : Cancellation;
             var retainedLines = new Dictionary<int, string>();
             var conflictingContext = false;
             var origins = new SearchMatchClassifier.CSharpOriginContext(group.Key,
