@@ -130,6 +130,38 @@ Recent releases (v1.41.0 onward) remain below. Older releases retain both langua
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.51.0] - 2026-09-23
+
+#### Added
+
+- **Classify Python origins in search and regex find (#5398)** — bounded indexed lexical context separates code, comments and strings, including executable f-string expressions, while preserving UTF-16 coordinates, fixtures, unknown/partial authority and CLI/MCP recovery diagnostics. CLI `--origin-passes` also continues Python context; no reindex or schema migration is required.
+- **Opt-in bounded multiline regex find (#5399)** — CLI `find --regex --multiline` and MCP `find`/`find_in_file` with `multiline:true` search indexed source windows with configurable line/byte limits, original UTF-16 start/end coordinates, non-overlapping continuation and count parity. Execution caps preserve partial/non-authoritative results; snippets and response budgets remain bounded. Ordinary regex stays line-local. See `docs/find-multiline.md` for window semantics and incompatible options.
+
+#### Fixed
+
+- **Dependency cycles respect persisted target identities (#5391)** — CLI and MCP cycle candidates and evidence now select confirmed target IDs and recorded ambiguous/grouped candidates, preventing unrelated same-name entrypoints from forming resolved cycles. Legacy name fallback remains explicitly unavailable; SQL qualified-name behavior and C# partial-type grouping are preserved. Current indexes require no reindex or migration.
+- Python import cycles retain module/alias matching; a resolved local import binding does not label the imported definition as resolved. Resolution filters use the resulting evidence state before graph budgets.
+- **LSP references no longer silently stop at 50 locations (#5392)** — Reference requests preserve the selected target while reading bounded pages, return complete arrays or deterministic partial-result chunks, and explicitly fail with recovery guidance when delivery limits are exceeded. Recovery distinguishes selected definitions from definitionless file-scoped references. Cancellation ends work-done progress, and document highlights retain their separate bound.
+- `files`, `symbols`, and `find` honor `--strict-not-found` after printing authoritative zero counts. Empty discovery NDJSON emits its bounded completion record unless `--results-only` suppresses it, preserving count authority, cursor semantics, and error/partial-result precedence.
+- **Capped LSP completion lists now report incomplete results (#5394)** — Completion probes at most 101 candidates per source and returns at most 100 items. Truncated or unexhausted candidate sources set `isIncomplete: true`, including duplicate-heavy overlap, so clients can request omitted candidates as input narrows. Exhaustively acquired lists of exactly 100 items remain complete; ordering, identities, and completion kinds are preserved.
+- **LSP document symbols honor client hierarchy support (#5395)** — Normal requests return hierarchical `DocumentSymbol` items only when the client explicitly advertises `hierarchicalDocumentSymbolSupport: true`; otherwise indexed and live-buffer symbols use flat `SymbolInformation` items with document locations and container names. Partial results remain consistently flat, preserving existing limits, progress, and cancellation.
+- **MCP suggestion discovery now discloses conditional GitHub publication (#5396)** — `suggest_improvement` advertises `openWorldHint: true` and describes local storage plus upstream GitHub issue publication when `CDIDX_GITHUB_TOKEN` is configured, consistently across default, compact, full, selected and paged tool lists. Existing opt-in and submission behavior are unchanged.
+- **Compact inspect candidate bundles respect the advertised limit (#5397)** — CLI inspect and MCP compact symbol analysis retain aligned definitions and candidate bundles, omit the extra truncation probe, and distinguish observed lower-bound counts from complete totals. Collection omission metadata survives candidate field projection while retained selectors, graph cursors and child limits remain usable.
+- **Ordinary dependency evidence respects target identity (#5400)** — CLI/MCP `deps` uses confirmed target and candidate IDs for applicable non-C# references, preventing Java/JavaScript self-calls from creating dependencies on unrelated same-name definitions. Python import/module edges remain visible, while import-binding resolution is distinguished from definition resolution and evidence filters use the selected target's state. Candidate groups count each reference once per destination, and reused readers recheck identity metadata. Current indexes need no reindex.
+- **Python dependency matching preserves indented call sites (#5401)** — `deps` and `deps --cycles` now match import bindings using the original indexed source line, so trimmed display contexts no longer drop dependencies or confuse same-line member calls. Aliases, relative imports and CLI/LSP source coordinates are preserved; current indexes with source chunks need no reindex.
+- Plain `search --count` and `search --format count` now honor `--strict-not-found`: authoritative zero counts retain their numeric or JSON output and exit with code `2`. Incomplete origin classification and potentially stale snapshots remain non-authoritative, including with `--allow-partial`; output errors keep precedence.
+- **Bounded find cursor errors honor machine output (#5412)** — JSON, envelope, field and compact requests now receive versioned structured validation errors on stdout with cursor categories and recovery hints. Errors that cannot fit the requested UTF-8 byte budget report a measured minimum and retain the original validation error. Human diagnostics and standalone count continuation keep their existing behavior.
+- **Line-local find no longer sorts source content (#5415)** — literal and line-regex queries read chunks in index order, with bounded metadata pages for older indexes. Source content is fetched separately per chunk, preserving overlap ownership, missing-source behavior, counts, scan limits and continuation without requiring reindexing.
+- **Allow local DLL paths in quoted review prompts (#5417)** — the shared Codex/Claude command guard now recognizes data arguments in direct review, GitHub document and simple display commands. Required reviews can mention the repository-built `cdidx.dll`; unknown DLL-bearing command forms, execution wrappers and active shell syntax remain conservatively blocked.
+- **Plain search now honors caller cancellation (#5421)** — cancellation reaches database setup, running SQLite queries, managed origin classification and aggregation for rows and counts, including batch execution. Cancellation remains an interruption instead of becoming a strict zero-result exit or an accepted partial success.
+- **Batch recovery hints preserve slash-separated CLI flags (#5423)** — Public option lists such as `--limit/--max-json-bytes` retain their spelling and punctuation while actual filesystem paths and secret values remain redacted in structured child errors.
+- **Named-query and recipe search honor caller cancellation (#5427)** — propagate cancellation through database setup, SQLite execution and managed row/count/aggregation processing, including issue-draft exports and serial/parallel batch execution. Cancelled child queries interrupt the invocation instead of producing a degraded success or zero count, and reused readers restore their previous cancellation scope.
+
+#### Internal
+
+- **Stabilized parallel-update stall diagnostic coverage (#5403)** — the regression test arms its three-second progress watchdog after the intended file is blocked and peer extraction has completed, independently of isolated-worker timeouts. Partial persistence, worker cleanup, and successful recovery remain covered; production timeout and diagnostic behavior are unchanged.
+- **Isolated utility API-version workspace tests from the live checkout (#5404)** — The fixture owns its working directory, configuration home, data directory, and active workspace selection. It checks inactive and fixture-selected workspace JSON alongside the existing success/error API-version assertions, so a concurrent repository index refresh cannot select the checkout database.
+
 ### [1.50.3] - 2026-09-21
 
 #### Internal
@@ -870,6 +902,38 @@ v1.41.0 以降はこのファイルに、それ以前の日英の履歴は次の
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.51.0] - 2026-09-23
+
+#### 追加
+
+- **search と正規表現 find で Python の origin を分類 (#5398)** — 索引済みの字句文脈を上限付きで読み、f-string の実行式を含むコード・コメント・文字列を区別します。UTF-16 座標、fixture、不明・部分結果の確定性と CLI／MCP の復旧情報を保持します。CLI の `--origin-passes` で Python 文脈も継続でき、再索引やスキーマ移行は不要です。
+- **上限付きの複数行正規表現 find を明示指定で利用可能に (#5399)** — CLI の `find --regex --multiline` と MCP の `find` / `find_in_file` の `multiline:true` が、行数・バイト数を指定した索引ソースの窓を検索します。元の UTF-16 開始・終了座標、重複のない再開、件数の整合性を保持し、実行上限では部分結果と非確定性を明示します。スニペットと応答サイズも上限内に保ち、通常の正規表現は行単位のままです。窓の意味と併用できない指定は `docs/find-multiline.md` を参照してください。
+
+#### 修正
+
+- **依存循環で保存済みの参照先識別情報を尊重するよう修正しました (#5391)** — CLI/MCP の循環候補と証拠が、確定した参照先 ID と保存済みの曖昧・グループ候補を選び、無関係な同名エントリーポイントによる解決済み循環を防ぎます。旧形式の名前照合は識別情報が利用不能であることを明示し、SQL 修飾名と C# partial 型グループ化の動作を維持します。現行索引の再作成や移行は不要です。
+- Python の import による循環はモジュール・別名照合を維持し、参照元の import 定義が解決済みでも、import 先の定義へ解決済みの表示を引き継ぎません。解決状態フィルターは、グラフ上限の適用前にこの証拠状態を使います。
+- **LSP の参照結果が通知なく 50 件で途切れる問題を修正しました (#5392)** — 選択対象を維持して上限付きページを取得し、完全な配列または決定的な部分結果チャンクを返します。配送上限を超えた場合は、選択済み定義と定義を持たないファイル範囲の参照を区別した復旧手順付きの明示的なエラーを返し、取消時には作業進捗を終了します。ドキュメントハイライトは独立した上限を維持します。
+- `files`、`symbols`、`find` は確定した 0 件を出力した後も `--strict-not-found` を適用します。空の検索結果の NDJSON も、`--results-only` で抑制しない限りバイト上限内で終端レコードを出力し、件数の確実性・カーソルの意味・エラーと部分結果の優先順位を維持します。
+- **上限に達したLSP補完リストが不完全な結果を通知するようになりました (#5394)** — 各検索元から最大101件を確認し、最大100件を返します。候補の省略または未取得候補の可能性がある場合は、重複が多いケースも含めて `isIncomplete: true` とし、入力を絞り込んだ際にクライアントが省略候補を再要求できるようにします。全件取得済みでちょうど100件のリストは完全として扱い、順序・候補の識別・補完の種類は維持します。
+- **LSP の文書シンボルがクライアントの階層対応能力を尊重するようになりました (#5395)** — 通常要求はクライアントが `hierarchicalDocumentSymbolSupport: true` を明示した場合だけ階層形式の `DocumentSymbol` を返し、それ以外は索引・ライブバッファとも文書位置とコンテナー名を持つフラット形式の `SymbolInformation` を返します。部分結果は引き続きフラット形式で統一し、既存の上限・進捗・取消動作を維持します。
+- **MCP の提案ツール一覧が条件付きの GitHub 公開を明示するようになりました (#5396)** — `suggest_improvement` は `openWorldHint: true` を公開し、ローカル保存と、`CDIDX_GITHUB_TOKEN` 設定時の上流 GitHub Issue 公開を、既定・compact・full・ツール選択・ページ付きの一覧で一貫して説明します。既存の明示的な許可と送信動作は変わりません。
+- **compact inspect の候補 bundle が表示上限を守るよう修正 (#5397)** — CLI inspect と MCP の compact シンボル解析で定義と候補 bundle の対応を維持し、省略検出用の追加候補を出力から除き、観測件数の下限と確定した総件数を区別します。候補 field の投影でも集合の省略情報を保持し、selector・graph cursor・各子配列の上限を引き続き利用できます。
+- **通常の依存検索が参照先の識別情報を尊重するようになりました (#5400)** — CLI / MCP の `deps` は対象となる非 C# 参照の確定 ID・候補 ID を使い、Java / JavaScript の自己呼び出しが無関係な同名定義への依存になることを防ぎます。Python の import・モジュールへの依存は残しつつ、import binding の解決と定義の解決を区別し、選択された参照先の状態で証拠フィルターを適用します。候補グループの各参照は宛先ごとに一度だけ数え、再利用した Reader も識別情報の契約を再確認します。現行 index の再作成は不要です。
+- **Python の依存照合でインデント付き呼び出しを維持 (#5401)** — `deps` と `deps --cycles` は索引内の元のソース行で import を照合し、空白除去済みの表示文脈による依存の欠落や同一行のメンバー呼び出しの混同を防ぎます。別名・相対 import・CLI/LSP のソース座標を維持し、ソースチャンクを持つ現在の索引では再索引は不要です。
+- 通常の `search --count` と `search --format count` が `--strict-not-found` に対応し、確定したゼロ件の数値・JSON 出力を維持したまま終了コード `2` を返します。検索元の分類が未完了の場合や古い可能性があるスナップショットは、`--allow-partial` 指定時も不在の根拠とせず、出力エラーの優先順位を維持します。
+- **上限付き find のカーソルエラーが機械向け出力に対応 (#5412)** — JSON・envelope・フィールド投影・compact の指定時、バージョン付き構造化エラーを stdout に返し、カーソルの理由と復旧案内を保持します。指定された UTF-8 バイト上限に収まらない場合は必要な最小サイズと元の検証エラーを示します。人向け診断と独立した件数取得の継続処理は既存の動作を維持します。
+- **行単位の find で本文をソートしなくなりました (#5415)** — リテラル・行単位正規表現検索は索引順にチャンクを読み、旧索引では上限付きのメタデータページを使います。本文はチャンクごとに別途取得し、重複行の優先順、本文欠落時の挙動、件数、走査上限、継続取得を維持します。再索引は不要です。
+- **引用されたレビュー文中のローカル DLL パスを許可 (#5417)** — Codex／Claude の共有コマンドガードが、直接のレビュー、GitHub 文書、単純な表示コマンドのデータ引数を識別するようになりました。必須レビューでリポジトリ内ビルドの `cdidx.dll` に言及でき、DLL を含む未対応のコマンド形式、実行ラッパー、有効なシェル構文は引き続き保守的に拒否します。
+- **通常検索が呼出元の取消に従うよう修正 (#5421)** — バッチ内の検索を含め、行・件数の DB 準備、実行中の SQLite 検索、管理コード側の検索元分類と集計に取消を伝播します。取消を strict のゼロ件終了や許容された部分成功へ変換せず、中断として扱います。
+- **batchの復旧ヒントでスラッシュ連結されたCLIフラグを保持 (#5423)** — `--limit/--max-json-bytes` のような公開オプション一覧の綴りと句読点を保持し、構造化された子エラー内の実パスや秘密値は引き続き伏せます。
+- **名前付き検索とレシピ検索で呼出元の取消を反映 (#5427)** — Issue draft の出力と直列・並列バッチを含め、DB の準備、SQLite 実行、管理コードでの行・件数・集計処理に取消を伝播します。子クエリの取消は不完全な成功やゼロ件に変換せず呼出し全体を中断し、再利用する reader の取消スコープを元に戻します。
+
+#### 内部変更
+
+- **並列更新の停止診断テストを安定化しました (#5403)** — 意図したファイルの停止と他ファイルの抽出完了を確認してから、分離ワーカーのタイムアウトとは独立して3秒の進捗監視を有効にします。部分保存、ワーカー終了、再実行による回復の検証を維持し、本番のタイムアウトと診断の動作は変更していません。
+- **utility API-versionテストのworkspace選択を実チェックアウトから分離しました (#5404)** — 作業ディレクトリ、設定保存先、データディレクトリ、active workspaceの選択を一時fixture内に固定しました。既存の成功・エラー応答のAPI-version検証に加えて、workspaceの未選択状態とfixtureのDBを選択した状態のJSONを確認し、リポジトリのインデックス更新と並行実行しても実チェックアウトのDBを選択しないようにしました。
+
 ### [1.50.3] - 2026-09-21
 
 #### 内部変更
@@ -1484,7 +1548,8 @@ v1.41.0 以降はこのファイルに、それ以前の日英の履歴は次の
 - **読取不能な marker fixture が target framework 間の並列テストへ干渉しないようになりました (#5019)** — MCP の marker-fingerprint fixture を repository の build output 外にある独立した一時 workspace へ移し、別 target framework の source-policy scan が意図的に unreadable にした directory へ再帰進入しないようにしました。
 - **parallel detached-snapshot fixture が thread-pool timing や広範な status diagnostics に依存しなくなりました (#5033)** — interactive batch loop を専用 test thread で実行し、非同期 completion signal と軽量な file-count query で generation refresh を確認するため、suite 負荷下でも net8 test が安定して完了します。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.50.3...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.51.0...HEAD
+[1.51.0]: https://github.com/Widthdom/CodeIndex/compare/v1.50.3...v1.51.0
 [1.50.3]: https://github.com/Widthdom/CodeIndex/compare/v1.50.2...v1.50.3
 [1.50.2]: https://github.com/Widthdom/CodeIndex/compare/v1.50.1...v1.50.2
 [1.50.1]: https://github.com/Widthdom/CodeIndex/compare/v1.50.0...v1.50.1
