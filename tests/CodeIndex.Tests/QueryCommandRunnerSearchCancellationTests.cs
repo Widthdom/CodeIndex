@@ -285,31 +285,31 @@ public class QueryCommandRunnerSearchCancellationTests
                 ["--group-by", "file", "--count"], ["--group-by", "symbol", "--count"],
                 ["--count-by", "path"], ["--unique", "path"],
             })
-                foreach (var json in new[] { false, true })
-                    foreach (var allowPartial in new[] { false, true })
-                        foreach (var cancelAt in new[] { 1, 2 })
-                        {
-                            using var cancellation = new CancellationTokenSource();
-                            var groupsPrepared = 0;
-                            QueryCommandRunner.SearchAggregationGroupPreparedForTesting = () =>
+                    foreach (var json in new[] { false, true })
+                        foreach (var allowPartial in new[] { false, true })
+                            foreach (var cancelAt in new[] { 1, 2 })
                             {
-                                if (++groupsPrepared == cancelAt)
-                                    cancellation.Cancel();
-                            };
-                            var (_, stdout, stderr) = CaptureConsole(() =>
-                            {
-                                var error = Assert.ThrowsAny<OperationCanceledException>(() => QueryCommandRunner.RunSearch(
-                                    [.. route, "--db", dbPath, "--strict-not-found", .. mode,
+                                using var cancellation = new CancellationTokenSource();
+                                var groupsPrepared = 0;
+                                QueryCommandRunner.SearchAggregationGroupPreparedForTesting = () =>
+                                {
+                                    if (++groupsPrepared == cancelAt)
+                                        cancellation.Cancel();
+                                };
+                                var (_, stdout, stderr) = CaptureConsole(() =>
+                                {
+                                    var error = Assert.ThrowsAny<OperationCanceledException>(() => QueryCommandRunner.RunSearch(
+                                        [.. route, "--db", dbPath, "--strict-not-found", .. mode,
                                         .. json ? new[] { "--json" } : Array.Empty<string>(),
                                         .. allowPartial ? new[] { "--allow-partial" } : Array.Empty<string>()],
-                                    JsonOptions, cancellation.Token));
-                                Assert.Equal(cancellation.Token, error.CancellationToken);
-                                return 0;
-                            });
-                            Assert.Equal(cancelAt, groupsPrepared);
-                            Assert.Empty(stdout);
-                            Assert.Empty(stderr);
-                        }
+                                        JsonOptions, cancellation.Token));
+                                    Assert.Equal(cancellation.Token, error.CancellationToken);
+                                    return 0;
+                                });
+                                Assert.Equal(cancelAt, groupsPrepared);
+                                Assert.Empty(stdout);
+                                Assert.Empty(stderr);
+                            }
         }
         finally
         {
