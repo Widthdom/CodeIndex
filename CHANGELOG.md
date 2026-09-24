@@ -130,6 +130,13 @@ Recent releases (v1.41.0 onward) remain below. Older releases retain both langua
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.51.1] - 2026-09-25
+
+#### Fixed
+
+- Fixed SQL indexing failures when saving `@@ROWCOUNT`, `@@IDENTITY`, and other `system_variable` references. Existing database kind constraints upgrade automatically on the next index run while preserving stored rows.
+- Avoid repeatedly rescanning preceding seed statements at `GO` boundaries and between independent INSERT/UPDATE/DELETE statements without semicolons. Multiline SQL and compound-statement context remain intact.
+
 ### [1.51.0] - 2026-09-23
 
 #### Added
@@ -902,6 +909,13 @@ v1.41.0 以降はこのファイルに、それ以前の日英の履歴は次の
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.51.1] - 2026-09-25
+
+#### 修正
+
+- `@@ROWCOUNT`、`@@IDENTITY` などの `system_variable` 参照を保存する際にSQLインデックスが失敗する問題を修正しました。既存DBの種別制約は次回のインデックス実行時に保存済みの行を維持して自動更新します。
+- `GO` 区切りやセミコロンのない独立した INSERT／UPDATE／DELETE 文で、過去の初期データ文を繰り返し再解析する問題を修正しました。複数行SQLと複合文の文脈は維持します。
+
 ### [1.51.0] - 2026-09-23
 
 #### 追加
@@ -1548,7 +1562,8 @@ v1.41.0 以降はこのファイルに、それ以前の日英の履歴は次の
 - **読取不能な marker fixture が target framework 間の並列テストへ干渉しないようになりました (#5019)** — MCP の marker-fingerprint fixture を repository の build output 外にある独立した一時 workspace へ移し、別 target framework の source-policy scan が意図的に unreadable にした directory へ再帰進入しないようにしました。
 - **parallel detached-snapshot fixture が thread-pool timing や広範な status diagnostics に依存しなくなりました (#5033)** — interactive batch loop を専用 test thread で実行し、非同期 completion signal と軽量な file-count query で generation refresh を確認するため、suite 負荷下でも net8 test が安定して完了します。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.51.0...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.51.1...HEAD
+[1.51.1]: https://github.com/Widthdom/CodeIndex/compare/v1.51.0...v1.51.1
 [1.51.0]: https://github.com/Widthdom/CodeIndex/compare/v1.50.3...v1.51.0
 [1.50.3]: https://github.com/Widthdom/CodeIndex/compare/v1.50.2...v1.50.3
 [1.50.2]: https://github.com/Widthdom/CodeIndex/compare/v1.50.1...v1.50.2
