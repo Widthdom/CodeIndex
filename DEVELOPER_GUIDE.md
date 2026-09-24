@@ -2349,6 +2349,22 @@ TypeScript decorators emit `annotation` rows for the decorator name and must not
 
 C# named-argument labels such as `overwrite:` are syntax, not type positions, and must not emit `type_reference` rows. The declaration-type scanner skips a leading single-colon label inside an argument fragment, including comma-terminated multiline argument lines, while preserving expression references, named `out` declaration types, explicitly typed lambda and anonymous-method parameters, and typed LINQ range variables in the argument value. Multiline property subpatterns likewise keep the type after their property label. Alias-qualified names (`Alias::Type`), statement and `case` labels, nullable types, and ternary expressions remain distinct colon-bearing constructs.
 
+### SQL reference persistence and statement carry
+
+SQL `@@` references use the registered `system_variable` kind in both writer
+validation and SQLite CHECK constraints. Opening an existing database for indexing
+upgrades older kind constraints while preserving its reference rows. After an older
+writer fails on these references, rerun normal `cdidx index <projectPath>` with the
+fixed binary; deleting the database or forcing `--rebuild` is unnecessary.
+
+SQL reference extraction clears statement carry at standalone `GO` batch separators
+(including positive repeat counts and trailing comments). It also clears a preceding
+INSERT, UPDATE, DELETE, or SET prefix before an unambiguous independent data statement
+when parentheses are balanced. This prevents repeated seed statements without
+semicolons from rescanning all preceding statements. Compound WITH/MERGE/CREATE
+prefixes, nested expressions, and upsert continuation clauses retain their context;
+temporary-object names survive batch boundaries.
+
 ### GPU and shader reference extraction
 
 CUDA, GLSL, HLSL, Metal, and WGSL use a request-scoped, stateless reference
@@ -6940,6 +6956,19 @@ inspect 以外の各 command は実行前にその cursor family を拒否しな
 TypeScript decorator は decorator 名を `annotation` 行として出力し、decorated declaration の型位置エッジを隠してはならない。たとえば `constructor(@Inject() svc: Service)` は `Inject` を `annotation`、`Service` を `type_reference` として記録し、`@Input() profile: UserProfile` も decorator と field type の両方を記録する。
 
 C# の `overwrite:` のような named-argument label は構文であり、型位置ではないため `type_reference` 行を出力してはならない。declaration-type scanner は argument fragment の先頭にある単一 colon の label を、comma で終わる複数行 argument も含めて読み飛ばし、argument value 内の式参照、named `out` declaration の型、明示型 lambda / anonymous method の parameter、および型付き LINQ range variable を維持する。複数行 property subpattern でも property label 後の型を維持する。alias-qualified name（`Alias::Type`）、statement / `case` label、nullable type、ternary expression は別の colon 構文として扱う。
+
+### SQL 参照の保存と文の持ち越し
+
+SQL の `@@` 参照は、writer の検証と SQLite CHECK 制約の両方に登録した
+`system_variable` 種別で保存します。既存DBをインデックス用に開く際、古い種別制約は
+参照行を保持して更新します。旧版がこの参照の保存に失敗した場合は、修正版で通常の
+`cdidx index <projectPath>` を再実行してください。DBの削除や `--rebuild` は不要です。
+
+SQL 参照抽出は、独立した `GO` バッチ区切り（正の繰り返し回数、末尾コメントも含む）
+で文の持ち越しを解消します。先行文が INSERT／UPDATE／DELETE／SET で括弧が閉じている
+場合も、明確に独立したデータ操作文の前で解消します。これにより、セミコロンのない
+初期データ文が過去の全文を繰り返し解析するのを防ぎます。WITH／MERGE／CREATE、
+入れ子の式、upsert の継続句は文脈を維持し、一時オブジェクト名もバッチをまたいで保持します。
 
 ### GPU / shader の参照抽出
 

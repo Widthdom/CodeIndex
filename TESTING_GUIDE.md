@@ -1,5 +1,16 @@
 # Testing Guide
 
+SQL indexing regressions in `IndexCommandRunnerSqlTests`, `DbSchemaConstraintTests`
+and `ReferenceExtractorTests.Extract_SQL_SystemVariablesEmitsSystemVariableReferences`
+cover `@@` kind validation, fresh/full/scoped persistence, coordinates and existing
+CHECK-constraint migration without losing reference rows. `SqlReferenceStatementBoundaryTests`
+checks bounded carry and exact target counts for repeated DML with semicolons, GO,
+or neither; retain multiline, CTE, MERGE, upsert, literal and temp-object controls.
+Run these with SQL symbol/graph and raw/fresh reference persistence tests on net8/net9.
+SQL の `@@` 種別・新規／全体／限定更新・座標・既存DBの制約更新を両runtimeで検証します。
+繰り返しDMLの性能回帰は時間の閾値ではなく持ち越し量と参照件数で検出し、複数行SQLの
+文脈と一時オブジェクト、文字列内の GO を維持してください。
+
 Run `python3 -m unittest discover -s .agent_harness/tests` for shared command-guard
 changes. The existing policy-contract matrix checks the core, Codex PreToolUse and
 PermissionRequest, and Claude PreToolUse without executing the tested commands.

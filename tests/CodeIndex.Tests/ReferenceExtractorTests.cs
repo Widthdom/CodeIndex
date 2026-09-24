@@ -9741,6 +9741,7 @@ public partial class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "@@ERROR" && r.ReferenceKind == "system_variable");
         Assert.Contains(references, r => r.SymbolName == "@@session.sql_mode" && r.ReferenceKind == "system_variable");
         Assert.Contains(references, r => r.SymbolName == "@@global.max_connections" && r.ReferenceKind == "system_variable");
+        Assert.All(references, r => Assert.True(SymbolKindCatalog.IsValidReferenceKind(r.ReferenceKind), r.ReferenceKind));
     }
 
     [Fact]
