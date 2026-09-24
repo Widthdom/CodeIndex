@@ -104,7 +104,7 @@ public class DbSchemaConstraintTests
                 db.InitializeSchema();
 
             using (var conn = new SqliteConnection(new SqliteConnectionStringBuilder
-                   { DataSource = dbPath, Pooling = false }.ConnectionString))
+            { DataSource = dbPath, Pooling = false }.ConnectionString))
             {
                 conn.Open();
                 var legacySql = ReadCreateSql(conn, "symbol_references")
