@@ -94,6 +94,59 @@ public class DbSchemaConstraintTests
     }
 
     [Fact]
+    public void InitializeSchema_AddsSqlSystemVariableKindToExistingReferenceChecks()
+    {
+        var dbDir = TestProjectHelper.CreateTempProject("codeindex_sql_kind_migration");
+        var dbPath = Path.Combine(dbDir, "codeindex.db");
+        try
+        {
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+                db.InitializeSchema();
+
+            using (var conn = new SqliteConnection(new SqliteConnectionStringBuilder
+                   { DataSource = dbPath, Pooling = false }.ConnectionString))
+            {
+                conn.Open();
+                var legacySql = ReadCreateSql(conn, "symbol_references")
+                    .Replace("'system_variable', ", "", StringComparison.Ordinal);
+                Exec(conn, "PRAGMA foreign_keys=OFF; DROP TABLE symbol_references;");
+                Exec(conn, legacySql);
+                Exec(conn, """
+                    PRAGMA foreign_keys=ON;
+                    INSERT INTO files (id, path, lang) VALUES (1, 'SampleData.sql', 'sql');
+                    INSERT INTO reference_lines (id, file_id, line, context) VALUES (9, 1, 1, 'EXEC SaveOrder;');
+                    INSERT INTO symbol_references (id, file_id, symbol_name, reference_kind, line, reference_line_id)
+                    VALUES (7, 1, 'SaveOrder', 'call', 1, 9);
+                    """);
+                Assert.Throws<SqliteException>(() => Exec(conn, """
+                    INSERT INTO symbol_references (file_id, symbol_name, reference_kind, line)
+                    VALUES (1, '@@ROWCOUNT', 'system_variable', 2)
+                    """));
+            }
+
+            using var migrated = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            migrated.InitializeSchema();
+            var writer = new DbWriter(migrated.Connection);
+            writer.InsertReferences([
+                new ReferenceRecord { FileId = 1, SymbolName = "@@ROWCOUNT", ReferenceKind = "system_variable", Line = 2 }
+            ]);
+            Assert.Equal(1L, CountRows(migrated.Connection, "symbol_references", "id = 7 AND reference_line_id = 9 AND reference_kind = 'call'"));
+            Assert.Equal(1L, CountRows(migrated.Connection, "symbol_references", "symbol_name = '@@ROWCOUNT' AND reference_kind = 'system_variable'"));
+            AssertSameSet(SymbolKindCatalog.ReferenceKinds,
+                ExtractCheckValues(ReadCreateSql(migrated.Connection, "symbol_references"), "reference_kind"));
+            using var check = migrated.Connection.CreateCommand();
+            check.CommandText = "PRAGMA foreign_key_check";
+            Assert.Null(check.ExecuteScalar());
+            check.CommandText = "PRAGMA integrity_check";
+            Assert.Equal("ok", check.ExecuteScalar());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(dbDir);
+        }
+    }
+
+    [Fact]
     public void InitializeSchema_PublicTaxonomyMutationCannotSplitCanonicalContracts()
     {
         var canonicalSymbolKinds = SymbolKindCatalog.PersistedSymbolKinds.ToArray();

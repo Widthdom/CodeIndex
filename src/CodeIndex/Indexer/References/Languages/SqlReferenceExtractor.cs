@@ -142,11 +142,16 @@ internal static partial class SqlReferenceExtractor
         if (string.IsNullOrWhiteSpace(lineFragment))
             return suppressedCallIndices;
 
-        if (ShouldFlushTempObjectPrefixAtLineBoundary(state.StatementPrefix, lineFragment))
+        var isBatchSeparator = IsBatchSeparator(lineFragment);
+        if (isBatchSeparator
+            || ShouldFlushDataStatementPrefixAtLineBoundary(state.StatementPrefix, lineFragment)
+            || ShouldFlushTempObjectPrefixAtLineBoundary(state.StatementPrefix, lineFragment))
         {
             CollectTempObjectNamesFromStatement(state.StatementPrefix, state.EstablishedTempObjectNames);
             state.StatementPrefix = string.Empty;
         }
+        if (isBatchSeparator)
+            return suppressedCallIndices;
 
         var combinedLine = CombineStatementPrefix(state.StatementPrefix, lineFragment, out var lineOffset);
         int statementStart = 0;
