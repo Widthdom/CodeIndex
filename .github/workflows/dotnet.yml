@@ -192,7 +192,7 @@ jobs:
 
       - name: Upload test results
         if: always() && steps.test.outcome != 'skipped' && (steps.test.outputs.summarize == 'true' || failure())
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: TestResults-${{ matrix.os }}-${{ matrix.test-framework }}-${{ matrix.test-shard }}
           if-no-files-found: warn
@@ -206,7 +206,7 @@ jobs:
 
       - name: Upload diagnostic dumps
         if: failure() && steps.test.outcome != 'skipped'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         continue-on-error: true
         with:
           name: DiagnosticDumps-${{ matrix.os }}-${{ matrix.test-framework }}-${{ matrix.test-shard }}
@@ -220,7 +220,7 @@ jobs:
 
       - name: Upload coverage reports
         if: always() && matrix.collect_coverage && steps.test.outcome != 'skipped' && hashFiles('TestResults/**/coverage.cobertura.xml') != ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: Coverage-${{ matrix.os }}-${{ matrix.test-framework }}-${{ matrix.test-shard }}
           if-no-files-found: warn
@@ -234,7 +234,7 @@ jobs:
 
       - name: Upload build artifact
         if: matrix.primary_lane && github.event_name != 'pull_request'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: CodeIndex
           overwrite: true
